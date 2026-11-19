@@ -71,6 +71,14 @@ const str = (v: unknown, max = 40): string | undefined => (typeof v === 'string'
 const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
 const int = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) ? v : undefined);
 
+/** The doc's own key for a language code ("HI", "hi-IN" → "hi"): the original, else the edition it names; undefined when the doc has neither. */
+function docLanguageKey(doc: ComicDoc, lang: string): string | undefined {
+  const source = doc.format?.language || 'en';
+  if (sameLanguage(lang, source)) return source;
+  return Object.keys(doc.i18n?.editions || {}).find((e) => sameLanguage(e, lang));
+}
+
+/** The languages the model named, each as the doc's own key (readiness and the server look editions up by key). */
 function readLanguages(doc: ComicDoc, raw: unknown): string[] | undefined {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw) || !raw.length) throw toolArgError('languages must be a non-empty list of language codes like ["en","hi"].');
@@ -79,12 +87,14 @@ function readLanguages(doc: ComicDoc, raw: unknown): string[] | undefined {
     if (typeof l !== 'string' || !LANG_RE.test(l)) throw toolArgError(`"${String(l).slice(0, 20)}" is not a language code.`);
     if (!out.some((x) => sameLanguage(x, l))) out.push(l);
   }
-  if (out.length > 12) throw toolArgError('At most 12 languages.');
-  const source = doc.format.language;
-  const editions = Object.keys(doc.i18n?.editions || {});
-  const unknown = out.filter((l) => !sameLanguage(l, source) && !editions.some((e) => sameLanguage(e, l)));
-  if (unknown.length) throw toolArgError(`No ${unknown.map(langName).join(', ')} edition exists yet. Editions: ${[source, ...editions].map(langName).join(', ')}.`);
-  return out;
+  if (out.length > MAX_CARD_LANGUAGES) throw toolArgError(`At most ${MAX_CARD_LANGUAGES} languages.`);
+  const unknown = out.filter((l) => !docLanguageKey(doc, l));
+  if (unknown.length) {
+    const source = doc.format.language;
+    const editions = Object.keys(doc.i18n?.editions || {});
+    throw toolArgError(`No ${unknown.map(langName).join(', ')} edition exists yet. Editions: ${[source, ...editions].map(langName).join(', ')}.`);
+  }
+  return [...new Set(out.map((l) => docLanguageKey(doc, l)!))];
 }
 
 type PublishCardData = Extract<Card, { type: 'publish' }>;
@@ -97,8 +107,8 @@ const publishCard = (mode: PublishCardData['mode'], request?: PublishRequest): P
   status: 'pending'
 });
 
-/** The most languages one publication carries, the original included (the server's MAX_LANGUAGES, publication.ts). */
-const MAX_CARD_LANGUAGES = 12;
+/** The most languages one publication carries, the original included (the server's MAX_LANGUAGES, publication.ts; publish.test.ts ties the two). */
+export const MAX_CARD_LANGUAGES = 12;
 
 /** Why a card left an edition out: the edition's first blocking readiness issue, or the per-link cap. */
 export type LeftOutWhy = 'missing' | 'stale' | 'unreviewed' | 'major_issue' | 'in_art_pages' | 'cap';
@@ -116,11 +126,13 @@ const WHY_WORDS: Record<Exclude<LeftOutWhy, 'cap'>, [string, string]> = {
   in_art_pages: ['needs overlay lettering', 'need overlay lettering']
 };
 
-const andList = (items: string[]): string => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+/** "a", "a and b", "a, b and c". */
+export const andList = (items: string[]): string => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 
 /**
  * The sentence that names the editions a Publish card left out ("Telugu isn't reviewed yet, so the card leaves it
- * out. Add it to the link with one tap once it's ready."), or '' when it left none out. Free of prices.
+ * out. Add it from the Share sheet once it's ready."), or '' when it left none out. Free of prices. The Share sheet
+ * route holds for every account (Edit languages…); the one-tap "Add to the link" row is staged (EDITION_ON_LINK).
  */
 export function leftOutLine(leftOut: readonly LeftOutEdition[]): string {
   const unready = leftOut.filter((x) => x.why !== 'cap');
@@ -134,7 +146,7 @@ export function leftOutLine(leftOut: readonly LeftOutEdition[]): string {
     }
     const clauses = [...groups].map(([why, names]) => `${andList(names)} ${WHY_WORDS[why][names.length === 1 ? 0 : 1]}`);
     const one = unready.length === 1;
-    out.push(`${andList(clauses)}, so the card leaves ${one ? 'it' : 'them'} out. Add ${one ? 'it' : 'them'} to the link with one tap once ${one ? "it's" : "they're"} ready.`);
+    out.push(`${andList(clauses)}, so the card leaves ${one ? 'it' : 'them'} out. Add ${one ? 'it' : 'them'} from the Share sheet once ${one ? "it's" : "they're"} ready.`);
   }
   if (capped.length) out.push(`One link carries at most ${MAX_CARD_LANGUAGES} languages, so the card leaves out ${andList(capped.map((x) => langName(x.lang)))}.`);
   return out.join(' ');
@@ -151,7 +163,8 @@ export function leftOutLine(leftOut: readonly LeftOutEdition[]): string {
  * - A link exists (live, or paused): `languages` as given, or none, so a plain Update keeps the link's
  *   languages; an unready one stays a blocker the caller names.
  *
- * `languages` must already be validated (readLanguages).
+ * `languages` must already be validated (readLanguages); a code spelled differently from the doc's ("HI") is read as
+ * the doc's own edition.
  */
 export function publishCardFor(doc: ComicDoc, visibility: PublishRequest['visibility'], languages?: string[]): { card: PublishCardData; request: PublishRequest; leftOut: LeftOutEdition[] } {
   const request: PublishRequest = { visibility };
@@ -159,10 +172,11 @@ export function publishCardFor(doc: ComicDoc, visibility: PublishRequest['visibi
   if (!doc.publication?.slug) {
     const source = doc.format?.language || 'en';
     const named = languages?.length ? languages : null;
-    const candidates = (named ?? Object.keys(doc.i18n?.editions || {})).filter((l) => !sameLanguage(l, source));
+    // Each as the doc's own key: editionReadiness looks the edition up by its exact key.
+    const candidates = (named ?? Object.keys(doc.i18n?.editions || {})).map((l) => docLanguageKey(doc, l) ?? l).filter((l) => !sameLanguage(l, source));
     const ready: string[] = [];
     for (const lang of candidates) {
-      if (ready.some((l) => sameLanguage(l, lang))) continue;
+      if (ready.includes(lang) || leftOut.some((x) => x.lang === lang)) continue;
       const r = editionReadiness(doc, lang);
       if (!r.publishable) leftOut.push({ lang, why: (r.issues.find((i) => i.blocking)?.code as LeftOutWhy | undefined) || 'missing' });
       else if (ready.length >= MAX_CARD_LANGUAGES - 1) leftOut.push({ lang, why: 'cap' });
@@ -171,7 +185,7 @@ export function publishCardFor(doc: ComicDoc, visibility: PublishRequest['visibi
     if (named || ready.length) request.languages = [source, ...ready];
     if (named && !named.some((l) => sameLanguage(l, source)) && ready.length) request.defaultLang = ready[0];
   } else if (languages) {
-    request.languages = languages;
+    request.languages = languages.map((l) => docLanguageKey(doc, l) ?? l);
   }
   return { card: publishCard(isLive(doc) ? 'update' : 'publish', request), request, leftOut };
 }
@@ -211,8 +225,11 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       const def = str(args.default_language, 20);
       if (def) {
         if (!LANG_RE.test(def)) throw toolArgError('default_language must be a language code.');
-        // An edition the card left out cannot be where readers start; the server's default applies instead.
-        if (!leftOut.some((x) => sameLanguage(x.lang, def))) request.defaultLang = def;
+        // Readers can only start in an edition the card publishes: one it left out, or one it does not carry at all
+        // (a slip like "fr"), keeps the card's own start (the first named ready edition, else the server's default).
+        // The server always adds the original, so it counts as on the card.
+        const onCard = request.languages ? [d.format?.language || 'en', ...request.languages].find((l) => sameLanguage(l, def)) : def;
+        if (onCard && !leftOut.some((x) => sameLanguage(x.lang, def))) request.defaultLang = onCard;
       }
       const start = int(args.start_page);
       if (start !== undefined) request.startPage = Math.max(1, Math.min(500, start));

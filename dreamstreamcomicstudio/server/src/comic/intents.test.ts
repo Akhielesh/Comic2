@@ -226,7 +226,14 @@ describe('publish_card: the common publish and share phrases show the card with 
     live.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: T_PUB, languages: ['en'] };
     const shared = routeIntent(live, 'share it')!;
     expect(shared).toMatchObject({ kind: 'publish_card', reply: "Here's your link.", cards: [{ type: 'share', id: expect.any(String) }], nextSteps: [] });
-    expect(routeIntent(live, 'publish it')).toMatchObject({ kind: 'publish_card', cards: [{ type: 'share' }] });
+    // "publish it" on a live link: the Share card, and the reply says edits since publishing are not live yet.
+    expect(routeIntent(live, 'publish it')).toMatchObject({
+      kind: 'publish_card',
+      reply: "Here's your link. Any edits since you published stay private until you tap Update in the Share sheet.",
+      cards: [{ type: 'share' }]
+    });
+    expect(routeIntent(live, 'publish')!.reply).toMatch(/stay private until you tap Update/);
+    expect(routeIntent(live, 'share the comic')!.reply).toBe("Here's your link.");
 
     const paused = lakeDrawnDoc();
     paused.publication = { ...live.publication, status: 'suspended' };
@@ -252,7 +259,7 @@ describe('publish_card: the common publish and share phrases show the card with 
     doc.i18n = { editions: { hi: edition('hi', 'reviewed'), te: edition('te', 'machine') }, glossary: [] };
     const r = routeIntent(doc, 'publish it')!;
     expect(r.cards).toEqual([expect.objectContaining({ type: 'publish', request: { visibility: 'unlisted', languages: [doc.format.language, 'hi'] } })]);
-    expect(r.reply).toBe(`${CARD_REPLY} Telugu isn't reviewed yet, so the card leaves it out. Add it to the link with one tap once it's ready.`);
+    expect(r.reply).toBe(`${CARD_REPLY} Telugu isn't reviewed yet, so the card leaves it out. Add it from the Share sheet once it's ready.`);
   });
 
   it('a page still drawing is said up front (publishing waits for it)', () => {
@@ -261,7 +268,14 @@ describe('publish_card: the common publish and share phrases show the card with 
     expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Page 2 is still drawing; tap Publish once it's done.`);
     doc.pages[2].render = { ...doc.pages[2].render, status: 'queued' };
     doc.cover.render = { ...doc.cover.render, status: 'rendering' };
-    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Pages 2 and 3 and the cover are still drawing; tap Publish once they're done.`);
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Pages 2, 3 and the cover are still drawing; tap Publish once they're done.`);
+    doc.cover.render = { ...doc.cover.render, status: 'ready' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Pages 2 and 3 are still drawing; tap Publish once they're done.`);
+    doc.pages[2].render = { ...doc.pages[2].render, status: 'ready' };
+    doc.cover.render = { ...doc.cover.render, status: 'queued' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Page 2 and the cover are still drawing; tap Publish once they're done.`);
+    doc.pages[1].render = { ...doc.pages[1].render, status: 'ready' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} The cover is still drawing; tap Publish once it's done.`);
   });
 
   it('a governed user sees no $ (nothing here mentions money)', () => {

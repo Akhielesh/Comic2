@@ -8,7 +8,7 @@ import * as publication from '../publication/publication.js';
 import { createMemoryPublicationStore } from '../publication/store.js';
 import { PUBLISH_ACTIONS } from '../actions/publish.js';
 import { lineSourceHash } from '../../../../shared/comic/i18n.js';
-import { leftOutLine, publicationSummary, publishCardFor, publishToolGroup } from './publish.js';
+import { leftOutLine, MAX_CARD_LANGUAGES, publicationSummary, publishCardFor, publishToolGroup } from './publish.js';
 import { configureSafety } from '../safety/deps.js';
 import { installSafetyFakes, resetSafety } from '../safety/testkit.js';
 
@@ -119,7 +119,8 @@ const withEditions = (doc: ComicDoc, ready: string[], unready: string[] = []): C
   doc.i18n = { editions: Object.fromEntries([...ready.map((l) => [l, edition(l, 'reviewed')]), ...unready.map((l) => [l, edition(l, 'machine')])]), glossary: [] };
   return doc;
 };
-const LEFT_OUT_TELUGU = "Telugu isn't reviewed yet, so the card leaves it out. Add it to the link with one tap once it's ready.";
+// The Share sheet adds a finished language for every account (Edit languages…); the one-tap row is staged.
+const LEFT_OUT_TELUGU = "Telugu isn't reviewed yet, so the card leaves it out. Add it from the Share sheet once it's ready.";
 
 describe('publish_comic asks only for finished languages (PUB-5)', () => {
   it('first publish, nothing named: the original plus every finished edition; an unfinished one is named, never a blocker', async () => {
@@ -153,12 +154,56 @@ describe('publish_comic asks only for finished languages (PUB-5)', () => {
     expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' } })]);
   });
 
+  it('a code the model spells differently ("HI", "hi-IN") is the doc\'s own edition: a finished Hindi is published, never called untranslated', async () => {
+    for (const spelling of ['HI', 'hi-IN', 'Hi']) {
+      const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+      const text = await tools.publish_comic.execute({ visibility: 'unlisted', languages: [spelling] });
+      expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' } })]);
+      expect(text).not.toMatch(/Hindi isn't/);
+      expect(text).not.toMatch(/leaves/);
+    }
+    // The original spelled differently is still the original; the request carries the doc's own keys.
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    await tools.publish_comic.execute({ visibility: 'unlisted', languages: ['EN', 'HI'] });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'] } })]);
+    // A live link keeps the model's languages, in the doc's own keys (the server looks editions up by key).
+    const doc = withEditions(drawn(), ['hi'], ['te']);
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };
+    const live = toolsFor(doc);
+    const liveText = await live.tools.publish_comic.execute({ visibility: 'unlisted', languages: ['en', 'HI'] });
+    expect(live.turn.cards).toEqual([expect.objectContaining({ mode: 'update', request: { visibility: 'unlisted', languages: ['en', 'hi'] } })]);
+    expect(liveText).not.toMatch(/Heads-up/);
+  });
+
+  it('default_language that is not on the card never moves readers off the edition the card starts them in', async () => {
+    // Telugu is unfinished (left out); French has no edition at all (a model slip). Readers still start in Hindi.
+    for (const def of ['te', 'fr']) {
+      const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+      await tools.publish_comic.execute({ visibility: 'unlisted', languages: ['hi'], default_language: def });
+      expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' } })]);
+    }
+    // An edition on the card is honoured, in the card's own spelling.
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi', 'ta'], ['te']));
+    await tools.publish_comic.execute({ visibility: 'unlisted', default_language: 'TA' });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi', 'ta'], defaultLang: 'ta' } })]);
+    const orig = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    await orig.tools.publish_comic.execute({ visibility: 'unlisted', languages: ['hi'], default_language: 'en' });
+    expect(orig.turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'en' } })]);
+  });
+
+  it('the card cap is the server\'s own: parsePublishRequest takes MAX_CARD_LANGUAGES languages and refuses one more', () => {
+    const codes = ['en', 'hi', 'te', 'ta', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ur', 'es', 'fr', 'de'];
+    expect(codes.length).toBeGreaterThan(MAX_CARD_LANGUAGES);
+    expect(publication.parsePublishRequest({ visibility: 'unlisted', languages: codes.slice(0, MAX_CARD_LANGUAGES) }).languages).toHaveLength(MAX_CARD_LANGUAGES);
+    expect(() => publication.parsePublishRequest({ visibility: 'unlisted', languages: codes.slice(0, MAX_CARD_LANGUAGES + 1) })).toThrow();
+  });
+
   it('several unfinished editions are named together; a comic with no editions keeps the plain request', async () => {
     const doc = withEditions(drawn(), [], ['te', 'ta']);
     const { tools, turn } = toolsFor(doc);
     const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
     expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted' } })]);
-    expect(text).toContain("Telugu and Tamil aren't reviewed yet, so the card leaves them out. Add them to the link with one tap once they're ready.");
+    expect(text).toContain("Telugu and Tamil aren't reviewed yet, so the card leaves them out. Add them from the Share sheet once they're ready.");
     const plain = toolsFor(drawn());
     expect(await plain.tools.publish_comic.execute({ visibility: 'unlisted' })).not.toMatch(/leaves/);
     expect(plain.turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted' } })]);
@@ -227,6 +272,18 @@ describe('publish_comic after a moderation pause', () => {
     expect(publicationSummary(suspendedDoc())[0]).not.toMatch(/new link/i);
     expect(publicationSummary(suspendedDoc())[0]).toMatch(/same link/i);
     expect(text).not.toMatch(/new link/i);
+  });
+
+  it('once the hold is lifted, the paused link keeps its own languages: finished editions are never added to the republish', async () => {
+    const fakes = installSafetyFakes();
+    fakes.store.projects.set('proj-1', { ownerUserId: 'user-1', isForcedPrivate: false });
+    const doc = withEditions(drawn(), ['hi']);
+    doc.publication = { visibility: 'unlisted', status: 'suspended', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };
+    const { tools, turn } = toolsFor(doc);
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(turn.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted' } })]);
+    expect(text).not.toMatch(/leaves/);
+    expect(text).not.toMatch(/Hindi/);
   });
 
   it("can't tell (lookup failed, no row, someone else's project): stays refused, honestly", async () => {

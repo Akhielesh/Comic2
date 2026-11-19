@@ -28,7 +28,7 @@ import { drawnBookLine, nothingNextSteps } from './replies.js';
 import { drawnPages } from './publication/snapshot.js';
 import { breakdownCardFor } from './tools/breakdown.js';
 import { sanitizeLetteringOps } from './tools/lettering.js';
-import { leftOutLine, publishCardFor } from './tools/publish.js';
+import { andList, leftOutLine, publishCardFor } from './tools/publish.js';
 import type { StudioContext } from './types.js';
 
 export interface RoutedIntent {
@@ -91,7 +91,8 @@ const DRAW_ALL_BOOK_RE = [
 ];
 
 /** "publish it", "share the comic" — these whole messages only; "publish it in Hindi" and longer go to the director. */
-const PUBLISH_CARD_RE = [/^publish(?: (?:it|this|my comic|the comic|the book))?$/, /^share(?: (?:it|my comic|the comic))?$/];
+const PUBLISH_PHRASE_RE = /^publish(?: (?:it|this|my comic|the comic|the book))?$/;
+const SHARE_PHRASE_RE = /^share(?: (?:it|my comic|the comic))?$/;
 
 const anyMatch = (list: RegExp[], t: string) => list.some((re) => re.test(t));
 
@@ -151,29 +152,34 @@ function breakdownNextSteps(doc: ComicDoc, byok: boolean): NextStep[] {
 }
 
 const PUBLISH_CARD_REPLY = "Here's your Publish card. Nothing is published until you tap Publish. Readers can read and download, never edit.";
+/** "publish it" on a live link: the Share card carries no Update, so say where edits since publishing go live. */
+const LIVE_PUBLISH_REPLY = "Here's your link. Any edits since you published stay private until you tap Update in the Share sheet.";
 
-/** "Page 2 is still drawing; tap Publish once it's done." ('' when nothing is drawing): publishing waits for every page. */
+/** "Pages 2, 3 and the cover are still drawing; tap Publish once they're done." ('' when nothing is drawing): publishing waits for every page. */
 function stillDrawingLine(doc: ComicDoc): string {
   const isBusy = (status: string | undefined) => status === 'queued' || status === 'rendering';
   const pages = doc.pages.filter((p) => isBusy(p.render.status)).map((p) => p.n);
   const cover = isBusy(doc.cover?.render?.status);
   if (!pages.length && !cover) return '';
-  const pageWords = pages.length ? `${pages.length === 1 ? 'Page' : 'Pages'} ${pages.length === 1 ? pages[0] : `${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`}` : '';
-  const what = [pageWords, cover ? (pageWords ? 'the cover' : 'The cover') : ''].filter(Boolean).join(' and ');
-  const many = pages.length + (cover ? 1 : 0) > 1;
+  const items = [...pages.map(String), ...(cover ? ['the cover'] : [])];
+  const what = pages.length ? `${pages.length === 1 ? 'Page' : 'Pages'} ${andList(items)}` : 'The cover';
+  const many = items.length > 1;
   return `${what} ${many ? 'are' : 'is'} still drawing; tap Publish once ${many ? "they're" : "it's"} done.`;
 }
 
 /**
- * "publish it" / "share it" (PUB-5): the card, for free. A live link → the Share card. Not published and at least one
+ * "publish it" / "share it" (PUB-5): the card, for free. A live link → the Share card (for "publish…", the reply says
+ * edits since publishing go live only through Update in the Share sheet). Not published and at least one
  * page drawn → a pending Publish card, Link only, carrying only finished languages (publishCardFor, the director tool's
  * own builder) and naming any it left out. Paused by moderation, or nothing drawn → null: the director answers, and
  * its publish_comic reads the live moderation hold, which the doc mirror alone cannot decide.
  */
-function publishCardIntent(doc: ComicDoc): RoutedIntent | null {
+function publishCardIntent(doc: ComicDoc, asked: 'publish' | 'share'): RoutedIntent | null {
   const m = doc.publication;
   if (m?.status === 'suspended') return null;
-  if (m?.status === 'live' && m.slug) return { kind: 'publish_card', reply: "Here's your link.", cards: [{ type: 'share', id: newId('card') }], nextSteps: [] };
+  if (m?.status === 'live' && m.slug) {
+    return { kind: 'publish_card', reply: asked === 'publish' ? LIVE_PUBLISH_REPLY : "Here's your link.", cards: [{ type: 'share', id: newId('card') }], nextSteps: [] };
+  }
   if (!drawnPages(doc).length) return null;
   const { card, leftOut } = publishCardFor(doc, 'unlisted');
   const reply = [PUBLISH_CARD_REPLY, leftOutLine(leftOut), stillDrawingLine(doc)].filter(Boolean).join(' ');
@@ -191,7 +197,8 @@ export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean;
   // Prices in the user's terms (governed users: "≈2% of your usage").
   const cost = opts.cost ?? costFormatter();
 
-  if (anyMatch(PUBLISH_CARD_RE, t)) return publishCardIntent(doc);
+  if (PUBLISH_PHRASE_RE.test(t)) return publishCardIntent(doc, 'publish');
+  if (SHARE_PHRASE_RE.test(t)) return publishCardIntent(doc, 'share');
 
   if (anyMatch(DRAW_ALL_PAGES_RE, t) || anyMatch(DRAW_ALL_BOOK_RE, t)) {
     const wantsBook = anyMatch(DRAW_ALL_BOOK_RE, t);
