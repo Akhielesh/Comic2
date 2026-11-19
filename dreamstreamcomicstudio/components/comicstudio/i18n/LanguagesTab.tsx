@@ -483,9 +483,16 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
           title="Readers in their own language"
           action={
             hasLines ? (
-              <PrimaryButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
-                Add a language
-              </PrimaryButton>
+              // While an approval is open its Approve is the one primary action on the screen.
+              doc.gate?.status === 'open' ? (
+                <GhostButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
+                  Add a language
+                </GhostButton>
+              ) : (
+                <PrimaryButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
+                  Add a language
+                </PrimaryButton>
+              )
             ) : undefined
           }
         >

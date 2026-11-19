@@ -9,7 +9,7 @@ import { turnstileEnabled } from '../../../services/clientConfig';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { StudioApiError, reportPublicComic, type ReportReason } from '../studioApi';
 
-import { FOCUS_RING } from '../../chat/studioDesign';
+import { FIELD, FOCUS_RING } from '../../chat/studioDesign';
 export const REPORT_REASON_OPTIONS: { value: ReportReason; label: string }[] = [
   { value: 'sexual', label: 'Sexual content or nudity' },
   { value: 'violent', label: 'Graphic violence or gore' },
@@ -116,8 +116,8 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               void send();
             }}
           >
-            <h2 className="text-[15px] font-semibold">Report this comic</h2>
-            <p className="mt-0.5 text-[13px] text-[var(--ds-muted)]">What&apos;s wrong with it?</p>
+            {/* The sheet's header carries the title; the form opens on the question. */}
+            <p className="text-[13px] text-[var(--ds-muted)]">What&apos;s wrong with it?</p>
             <fieldset className="mt-3 min-w-0" aria-labelledby={legendId}>
               <legend id={legendId} className="sr-only">
                 Reason
@@ -159,7 +159,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               aria-describedby={counterId}
               onChange={(e) => setNote(e.target.value.slice(0, REPORT_NOTE_MAX))}
               rows={3}
-              className={`mt-1 block w-full min-w-0 resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] ${FOCUS_RING}`}
+              className={`mt-1 block w-full min-w-0 resize-none px-3 py-2 text-[14px] ${FIELD}`}
               placeholder="A few words help us find it faster"
             />
             <div id={counterId} className="mt-0.5 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">

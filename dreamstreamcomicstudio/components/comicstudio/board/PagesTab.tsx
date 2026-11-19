@@ -518,6 +518,8 @@ const PlanHeader: React.FC<{
   const drawn = doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length;
   const panels = totalPanels(doc);
   const draft = doc.planStatus !== 'approved';
+  // While an approval is open its Approve is the screen's one primary action, so drawing everything steps back.
+  const DrawAllButton = doc.gate?.status === 'open' ? GhostButton : PrimaryButton;
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
@@ -550,7 +552,7 @@ const PlanHeader: React.FC<{
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {toDraw > 0 && (
           <>
-            <PrimaryButton
+            <DrawAllButton
               size="sm"
               busy={busyKey === 'all'}
               onClick={() => fire('all', () => studio.act({ type: 'render_pages', ...(quote.cover ? { includeCover: true } : {}) }))}
@@ -558,7 +560,7 @@ const PlanHeader: React.FC<{
               aria-describedby="pages-draw-all-price"
             >
               {draft ? 'Approve & render all' : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`}
-            </PrimaryButton>
+            </DrawAllButton>
             <PriceNote id="pages-draw-all-price">
               {cost.quote(quote.usd)} · {what}
             </PriceNote>

@@ -147,7 +147,7 @@ export const ProductAccessPanel: React.FC = () => {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="user@example.com"
             type="email"
-            className={cn(FIELD, 'mt-1 block h-9 w-full px-2 font-mono text-sm', DENSITY.coarse)}
+            className={cn(FIELD, 'mt-1 block h-9 w-full px-2 text-sm', DENSITY.coarse)}
           />
         </label>
         <Button type="submit" disabled={lookup.status === 'loading'}>

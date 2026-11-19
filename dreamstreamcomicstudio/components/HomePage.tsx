@@ -14,7 +14,7 @@ import {
   FONT_DISPLAY,
   HAIRLINE,
   INK_TILE,
-  INVERSE_ACTION,
+  INVERSE_ACTION_QUIET,
   INVERSE_SURFACE,
   LIFT,
   OVERLINE,
@@ -161,7 +161,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <a
                 href={liveAppUrl('/live.html')}
                 onClick={(e) => followLiveLink(e, '/live.html')}
-                className={buttonClasses({ variant: 'secondary', size: 'lg', className: cn(CTA_LG, INVERSE_ACTION) })}
+                className={buttonClasses({ variant: 'outline', size: 'lg', className: cn(CTA_LG, INVERSE_ACTION_QUIET) })}
               >
                 Try beta
               </a>
@@ -409,18 +409,19 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               ))}
             </div>
 
-            {/* Visualizer (Mock) */}
-            <div className={cn('bg-[var(--ds-well)] h-[500px] flex items-center justify-center relative overflow-hidden', HAIRLINE, SHADOW_SOFT, RADIUS_FEATURE)}>
+            {/* The stage in focus: its icon, title and what happens there */}
+            <div className={cn('bg-[var(--ds-well)] min-h-80 lg:min-h-[420px] flex items-center justify-center relative overflow-hidden', HAIRLINE, SHADOW_SOFT, RADIUS_FEATURE)}>
               <div className={cn(CHIP, CHIP_VARIANT.outline, 'absolute top-4 left-4')}>
-                Stage {activeStage} Preview
+                Stage {activeStage} of {PROCESS_STAGES.length}
               </div>
               <div className="text-center p-8">
                 {activeStage === 1 && <Sparkles size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
                 {activeStage === 2 && <BookOpen size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
                 {activeStage === 3 && <Zap size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
-                <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>{PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title}</h3>
+                {activeStage === 4 && <Check size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
+                <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>{(PROCESS_STAGES[activeStage - 1] || PROCESS_STAGES[0]).title}</h3>
                 <p className={cn(PUBLIC_BODY, 'max-w-xs mx-auto')}>
-                  Simulated interface for {(PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title).toLowerCase()} goes here.
+                  {(PROCESS_STAGES[activeStage - 1] || PROCESS_STAGES[0]).desc}
                 </p>
               </div>
             </div>

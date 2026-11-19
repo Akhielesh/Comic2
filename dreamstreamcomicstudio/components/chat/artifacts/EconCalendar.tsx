@@ -1,6 +1,6 @@
 import React from 'react';
 import type { EconCalendarArtifact, EconEvent } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, relativeTime, shortDate, useCompact, useLiveData, withAlpha, BULL, BEAR, NEUTRAL, PALETTES } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, relativeTime, shortDate, useCompact, useLiveData, withAlpha, BULL, BEAR, NEUTRAL } from './kit';
 
 // Economic calendar — the day's (or week's) data prints on a timeline.
 //  • detailed — a horizontal "today strip" SVG spanning min→max event time: one dot
@@ -15,7 +15,8 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, relativeTime, shortDate,
 
 const DAY_MS = 86_400_000;
 /** Importance dots tint (amber, from the kit sunset ramp). */
-const IMPORTANCE_TINT = PALETTES.sunset.series[2]; // #f59e0b
+// Importance is a count, not a status: filled dots in ink, the rest on the hairline.
+const IMPORTANCE_TINT = 'var(--ds-ink)';
 
 /** Parse "3.2%", "-0.4", 3.2 → number; undefined when it doesn't look numeric. */
 const parseNum = (v?: string | number): number | undefined => {

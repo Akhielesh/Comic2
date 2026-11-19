@@ -212,7 +212,7 @@ const DailyTable: React.FC<{ report: CostCentreReport }> = ({ report }) => {
 const Methodology: React.FC<{ report: CostCentreReport }> = ({ report }) => {
   const [open, setOpen] = useState(false);
   return (
-    <Surface className="!my-0">
+    <Surface className="my-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -395,7 +395,7 @@ export const CostCentre: React.FC = () => {
     body = <LoadingSkeleton />;
   } else if (!report || !derived) {
     body = (
-      <Surface className="!my-0">
+      <Surface className="my-0">
         <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
           <TriangleAlert className={`h-5 w-5 ${TONE_TEXT.danger}`} aria-hidden />
           <div className="text-sm font-semibold text-[var(--ds-ink)]">Couldn't load the cost report</div>
@@ -479,7 +479,7 @@ export const CostCentre: React.FC = () => {
         {/* Daily chart + where it goes */}
         <div className="grid gap-3 lg:grid-cols-3">
           <Surface
-            className="!my-0 lg:col-span-2"
+            className="my-0 lg:col-span-2"
             header={
               <div>
                 <SurfaceTitle>Daily cost by category</SurfaceTitle>
@@ -491,7 +491,7 @@ export const CostCentre: React.FC = () => {
             <div className="px-3 pb-3">{view === 'Chart' ? <StackedDailyChart daily={report.daily} height={250} /> : <DailyTable report={report} />}</div>
           </Surface>
           <Surface
-            className="!my-0"
+            className="my-0"
             header={
               <div>
                 <SurfaceTitle>Where it goes</SurfaceTitle>
@@ -509,7 +509,7 @@ export const CostCentre: React.FC = () => {
 
         {/* Detail tables */}
         <Surface
-          className="!my-0"
+          className="my-0"
           header={
             <div>
               <SurfaceTitle>Details</SurfaceTitle>
@@ -647,7 +647,7 @@ export const CostCentre: React.FC = () => {
   }
 
   return (
-    <div className={`space-y-4 p-1 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
+    <div className={`space-y-4 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
       {header}
       {body}
       {/* Per-user usage budgets ($10 lifetime per user, all studios) — independent of the report above. */}

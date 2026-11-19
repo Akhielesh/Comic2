@@ -714,7 +714,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             aria-readonly="true"
                             aria-labelledby="account-email-label"
                             tabIndex={0}
-                            className={cn(FIELD, 'mt-1.5 min-h-10 w-full select-text bg-[var(--ds-well)] px-3 py-2', WRAP_TEXT, FOCUS_RING)}
+                            className={cn(FIELD, 'mt-1.5 min-h-10 w-full select-text bg-[var(--ds-well)] px-3 py-2 text-base md:text-[length:var(--ds-text-base)]', WRAP_TEXT, FOCUS_RING)}
                         >
                             {user?.email || ''}
                         </div>

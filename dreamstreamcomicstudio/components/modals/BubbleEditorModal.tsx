@@ -238,7 +238,7 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                                     onClick={handleAutoStyle}
                                     title="Let the app pick a bubble style for every line from its wording"
                                 >
-                                    AI auto-style
+                                    Auto-style
                                 </Button>
                                 <Button
                                     variant="secondary"

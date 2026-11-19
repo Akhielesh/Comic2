@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import type { ChartArtifact, DataChartSeries } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, resolveTheme, withAlpha, compactNumber, useCompact } from './kit';
 import type { PaletteName } from './kit';
+import { useMeasure } from './kit/Chart';
 
 // The universal, schema-driven data-viz card. One artifact shape renders line, area,
 // bar (plain / grouped / stacked), pie, donut and scatter — with a toggleable legend,
@@ -11,7 +12,10 @@ import type { PaletteName } from './kit';
 // Two densities: compact reduces the chart to a glance card (headline values per
 // series + one sparkline, or top slices for pie/donut); detailed is the full chart.
 
-const W = 560;
+// The drawing width before the card is measured (tests, first paint). Once measured, the viewBox is the card's real
+// pixel width, so the 9 to 10 px axis and category labels stay that size on a phone instead of shrinking with a scaled box.
+const DEFAULT_W = 560;
+const MIN_W = 240;
 // Currency-like units read as a PREFIX ("$1.2K"), everything else as a suffix ("12%").
 const CURRENCY_PREFIX = new Set(['$', '€', '£', '¥', '₹', '₩']);
 const fmt = (n: number, unit?: string): string => {
@@ -47,6 +51,9 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
   const colorOf = (s: DataChartSeries, i: number) => s.color || theme.series[i % theme.series.length];
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{ i: number; cat: number } | null>(null);
+  const [attachPlot, plotBox] = useMeasure<HTMLDivElement>();
+  // The plot box has px-2 (8 px a side) around the svg.
+  const W = plotBox.width > 16 ? Math.max(MIN_W, Math.round(plotBox.width - 16)) : DEFAULT_W;
 
   const series = data.series ?? [];
   const visible = series.map((s, i) => ({ s, i })).filter(({ i }) => !hidden.has(i));
@@ -189,7 +196,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
     >
       {(series.length > 1 || isRadial) && Legend}
 
-      <div className="relative px-2 pb-2 pt-1">
+      <div ref={attachPlot} className="relative px-2 pb-2 pt-1">
         {isRadial ? (
           // --- Pie / Donut — calm-studio styling: theme-aware slice gaps (canvas-color
           //     strokes, not hardcoded white), a slim ring, soft hover dimming, and an
@@ -336,7 +343,10 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
 
             {/* x labels */}
             {cats.map((cat, ci) => {
-              if (cats.length > 12 && ci % Math.ceil(cats.length / 8) !== 0) return null;
+              // One label per 44 px of plot at most (a phone keeps every other one), and at most 8 on a long axis.
+              const roomStep = Math.ceil(cats.length / Math.max(2, Math.floor(plotW / 44)));
+              const step = Math.max(roomStep, cats.length > 12 ? Math.ceil(cats.length / 8) : 1);
+              if (ci % step !== 0) return null;
               const x = isBar ? padL + (plotW / cats.length) * (ci + 0.5) : padL + (plotW / Math.max(1, cats.length - 1)) * ci;
               return <text key={ci} x={x} y={H - 10} textAnchor="middle" fontSize="9" fill="var(--ds-muted)">{cat.length > 8 ? `${cat.slice(0, 7)}…` : cat}</text>;
             })}

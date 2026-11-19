@@ -27,7 +27,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController } from '../types';
 import { boardTabsFor } from './boardNavigation';
-import { ACCENT_SOFT_BG, CLIP_TEXT, FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_PANEL, STATUS_SURFACE, WRAP_TEXT } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_PANEL, STATUS_SURFACE, TWO_LINE_TEXT, WRAP_TEXT } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -105,6 +105,8 @@ export const GateBanner: React.FC<{
     );
   };
   const price = cost.quote(gate.estimateUsd);
+  // A governed price is usage words, not an amount: closed, the strip leaves it to the details so the title keeps the line.
+  const priceIsAmount = /\d/.test(price);
   // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
   const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
   const images = `${gate.imageCount} ${gate.imageCount === 1 ? 'image' : 'images'} on ${modelName}`;
@@ -141,18 +143,22 @@ export const GateBanner: React.FC<{
             title={`${gate.title} · ${price} · ${images}${overBudget}`}
             data-gate-summary={details ? 'open' : 'closed'}
             className={cx(
-              'flex min-h-[36px] min-w-0 flex-1 gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
+              'flex min-h-[36px] min-w-0 flex-1 gap-1 text-left text-[12.5px] leading-snug coarse:min-h-[44px]',
+              FOCUS_RING,
               // Opened (one tap; a phone has no hover title): the whole label and the whole price, wrapped onto as
               // many lines as they need — closed it was "Draw the re… · ≈ $1.…" (the phone gate label).
               details ? 'flex-wrap items-start py-1' : 'items-center'
             )}
           >
-            <span className={cx('font-semibold', details ? WRAP_TEXT : CLIP_TEXT)}>{gate.title}</span>
-            <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[45%] shrink-0 truncate')}>
-              {/* Closed, the price shares the title's line ("Title · price"). Opened, it may wrap onto its own line, so it
-                  drops the separator rather than start a line with a dangling "·"; the gap still parts the two. */}
-              {details ? price : `· ${price}`}
-            </span>
+            {/* Closed, the title (the decision) may take two lines; the amount is capped so it never squeezes the title. */}
+            <span className={cx('font-semibold', details ? WRAP_TEXT : TWO_LINE_TEXT)}>{gate.title}</span>
+            {(details || priceIsAmount) && (
+              <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[30%] shrink-0 truncate')}>
+                {/* Closed, the price shares the title's line ("Title · price"). Opened, it may wrap onto its own line, so it
+                    drops the separator rather than start a line with a dangling "·"; the gap still parts the two. */}
+                {details ? price : `· ${price}`}
+              </span>
+            )}
             <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'mt-0.5 rotate-180')} aria-hidden />
             <span className="sr-only">{details ? 'Hide details' : 'Show details'}</span>
           </button>

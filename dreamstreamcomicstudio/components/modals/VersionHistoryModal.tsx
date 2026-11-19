@@ -2,9 +2,12 @@ import React, { useId } from 'react';
 import { ProjectVersion } from '../../types';
 import { Clock, RotateCcw, Trash2, X } from 'lucide-react';
 import { buttonClasses } from '../ds/Button';
-import { CHIP, CHIP_VARIANT, DIALOG_TITLE, HAIRLINE, INK, MUTED, OVERLAY, RADIUS_PANEL, SCRIM, Z } from '../chat/studioDesign';
+import { CHIP, CHIP_VARIANT, DIALOG_TITLE, HAIRLINE, INK, MUTED, OVERLAY, RADIUS_PANEL, SCRIM, TONE_TEXT, Z } from '../chat/studioDesign';
+import { cn } from '../../lib/utils';
 
+// Restore and Delete stay visible on every pointer: a row never hides its actions behind hover.
 const ROW_ACTION = buttonClasses({ variant: 'outline', size: 'icon', className: 'size-9' });
+const ROW_ACTION_DANGER = buttonClasses({ variant: 'outline', size: 'icon', className: cn('size-9', TONE_TEXT.danger) });
 
 interface VersionHistoryModalProps {
     versions: ProjectVersion[];
@@ -52,7 +55,7 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex shrink-0 gap-2 opacity-100 transition-opacity duration-[var(--ds-motion-medium)] focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
+                                <div className="flex shrink-0 gap-2">
                                     <button
                                         onClick={() => {
                                             if (confirm(`Restore "${v.name}"? Current unsaved changes will be lost.`)) {
@@ -71,7 +74,7 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
                                                 onDelete(v.id);
                                             }
                                         }}
-                                        className={`${ROW_ACTION} text-[var(--ds-danger-text)]`}
+                                        className={ROW_ACTION_DANGER}
                                         aria-label="Delete version"
                                         title="Delete version"
                                     >

@@ -277,7 +277,7 @@ export const EmailConsole: React.FC = () => {
             <div>
               <label className={labelCls}>Recipients (comma / newline separated, ≤100)</label>
               <textarea
-                className={cn(fieldBase, 'min-h-[60px] font-mono text-xs')}
+                className={cn(fieldBase, 'min-h-[60px] text-sm')}
                 value={recipients}
                 onChange={(e) => setRecipients(e.target.value)}
                 placeholder="a@example.com, b@example.com"

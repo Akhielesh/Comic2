@@ -659,7 +659,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     value={adminUserQuery}
                     onChange={(e) => setAdminUserQuery(e.target.value)}
                     placeholder="Search by username or email"
-                    className={cn(FIELD, 'h-9 w-full px-3 font-mono text-sm md:w-72', DENSITY.coarse)}
+                    className={cn(FIELD, 'h-9 w-full px-3 text-sm md:w-72', DENSITY.coarse)}
                 />
             </div>
 
@@ -839,7 +839,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             </div>
 
             {/* Section navigation: a single scrollable rail replaces the old wall of stacked panels. */}
-            <div className="flex max-w-full gap-0.5 overflow-x-auto rounded-[var(--ds-radius-control)] border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5" role="tablist" aria-label="Admin console sections">
+            <div className="ds-fade-edge-x flex max-w-full gap-0.5 overflow-x-auto rounded-[var(--ds-radius-control)] border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Admin console sections">
                 {visibleSections.map((entry) => {
                     const active = section === entry.id;
                     const badge = entry.id === 'moderation' && pendingModeration > 0 ? pendingModeration : null;

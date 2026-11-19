@@ -18,6 +18,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { API_BASE_URL } from '../../services/clientConfig';
 import { useIsAdmin } from '../../hooks/useIsAdmin';
 import { platformDocsVisible } from '../../services/platformFlags';
+import { FOCUS_RING, MUTED, RADIUS_CONTROL, SECTION_CARD, TWO_LINE_TEXT, WRAP_TEXT } from './studioDesign';
 
 // Server-side provider usage row (mirrors server/src/lib/providerUsage.ts snapshot).
 interface ProviderUsageRow {
@@ -308,22 +309,27 @@ export const ToolsDashboard: React.FC = () => {
         />
       </div>
 
-      <p className="text-[11px] text-[var(--ds-muted)] flex items-start gap-1.5">
-        <Zap className="w-3.5 h-3.5 text-[var(--ds-warning-text)] shrink-0 mt-0.5" />
-        These are <span className="font-semibold text-[var(--ds-ink)]">automatic backend tools</span> — the AI always has them and picks the right
-        ones for each message (it <span className="font-semibold text-[var(--ds-ink)]">smart-routes</span> by relevance instead of calling everything).
-        You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
+      {/* The icon is the only flex child beside one span, so the sentence wraps as one paragraph */}
+      <p className={`text-[11px] ${MUTED} flex items-start gap-1.5`}>
+        <Zap className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${MUTED}`} aria-hidden="true" />
+        <span className={WRAP_TEXT}>
+          These are <span className="font-semibold text-[var(--ds-ink)]">automatic backend tools</span> — the AI always has them and picks the right
+          ones for each message (it <span className="font-semibold text-[var(--ds-ink)]">smart-routes</span> by relevance instead of calling everything).
+          You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
+        </span>
       </p>
 
       {/* Connector upgrades — the audited "set these keys" checklist. Informational:
           the env vars live on the server, not in the browser. */}
-      <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
-        <div className="flex items-center gap-1.5 mb-1">
-          <ShieldCheck className="w-4 h-4 text-[var(--ds-success-text)]" />
-          <span className="font-semibold text-sm text-[var(--ds-ink)]">Connector upgrades</span>
-          <span className="text-[10px] text-[var(--ds-muted)]">
+      <div className={`${SECTION_CARD} p-3`}>
+        <div className="mb-2">
+          <div className="flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 shrink-0 text-[var(--ds-success-text)]" aria-hidden="true" />
+            <span className="font-semibold text-sm text-[var(--ds-ink)]">Connector upgrades</span>
+          </div>
+          <p className={`mt-0.5 text-[11px] ${MUTED} ${WRAP_TEXT}`}>
             Free keys that raise reliability and keep commercial use compliant — set them in the server environment
-          </span>
+          </p>
         </div>
         <div className="flex flex-wrap gap-1.5 mb-2">
           {(Object.keys(LICENSE_META) as ToolLicense[]).map((l) => (
@@ -332,25 +338,27 @@ export const ToolsDashboard: React.FC = () => {
             </span>
           ))}
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {/* The grid follows its own width (the settings column), not the viewport */}
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-2">
           {CONNECTOR_KEYS.map((k) => (
-            <div key={k.env} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <KeyRound className="w-3.5 h-3.5 text-[var(--ds-muted)] shrink-0" />
-                  <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{k.provider}</span>
+            <div key={k.env} className={`min-w-0 ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-1.5 min-w-0">
+                  <KeyRound className="mt-0.5 w-3.5 h-3.5 text-[var(--ds-muted)] shrink-0" aria-hidden="true" />
+                  <span className={`font-semibold text-sm text-[var(--ds-ink)] ${TWO_LINE_TEXT}`} title={k.provider}>{k.provider}</span>
                 </div>
                 <a
                   href={k.signupUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="shrink-0 text-[var(--ds-muted)] opacity-80 hover:text-[var(--ds-ink)] transition-colors duration-200"
+                  className={`shrink-0 text-[var(--ds-muted)] opacity-80 hover:text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] ${RADIUS_CONTROL} ${FOCUS_RING}`}
                   title={`${k.provider} — get a key`}
+                  aria-label={`${k.provider}: get a key`}
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </div>
-              <code className="text-[9px] text-[var(--ds-muted)]">{k.env}</code>
+              <code className={`block text-[9px] text-[var(--ds-muted)] ${WRAP_TEXT}`}>{k.env}</code>
               <div className="text-[11px] text-[var(--ds-ink)] mt-1">{k.unlocks}</div>
               <div className="text-[10px] text-[var(--ds-muted)] mt-1">{k.cost}</div>
             </div>
@@ -362,7 +370,7 @@ export const ToolsDashboard: React.FC = () => {
           the backend meter (every upstream call, all users), unlike the local
           per-device tool analytics below. */}
       {usage && usage.length > 0 && (
-        <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+        <div className={`${SECTION_CARD} p-3`}>
           <div className="flex items-center gap-1.5 mb-2">
             <Activity className="w-4 h-4 text-[var(--ds-accent)]" />
             <span className="font-semibold text-sm text-[var(--ds-ink)]">Provider usage today (server)</span>
@@ -477,7 +485,7 @@ export const ToolsDashboard: React.FC = () => {
       </div>
 
       {/* Curated MCP marketplace — one-click connect (Phase 10), grouped by category */}
-      <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+      <div className={`${SECTION_CARD} p-3`}>
         <div className="flex items-center gap-1.5 mb-2">
           <Boxes className="w-4 h-4 text-[var(--ds-muted)]" />
           <span className="font-semibold text-sm text-[var(--ds-ink)]">MCP marketplace</span>

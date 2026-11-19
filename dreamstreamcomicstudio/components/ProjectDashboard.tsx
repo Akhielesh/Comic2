@@ -32,7 +32,8 @@ import { SmartImage } from './common/SmartImage';
 import { LoadingState } from './ds/LoadingState';
 import { streamStudio } from './comicstudio/studioApi';
 import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../services/studioDeepLink';
-import { ComicIdeaForm, ComicWorkspaceFrame } from './comicstudio/ComicCreationWorkspace';
+import { ComicIdeaForm, ComicWorkspaceFrame, WORKSPACE_NAV_DRAWER_BELOW } from './comicstudio/ComicCreationWorkspace';
+import { useFormFactor } from './comicstudio/mobile/useFormFactor';
 import { useComicIdeaDraft } from './comicstudio/comicIdeaDraft';
 
 /** How a new comic starts: the conversational Comic Studio (default) or a classic pipeline. */
@@ -153,6 +154,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   projects, projectsLoaded = true, openNewComic = false, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
   const [isCreating, setIsCreating] = useState(openNewComic || (comicWorkspace && projectsLoaded && !projects.length));
+  const ff = useFormFactor();
   const initialEntryChosen = useRef(openNewComic || projectsLoaded);
   const [classicForm, setClassicForm] = useState(false);
   useEffect(() => {
@@ -337,7 +339,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         <p className="text-[length:var(--ds-text-lg)] leading-7 text-[var(--ds-muted)]">Describe your idea and the studio plans, draws and letters it with you.</p>
       </div>
       <div className="flex justify-center gap-6">
-        <Button size="lg" onClick={beginNewComic}><Sparkles aria-hidden /> Create New Comic</Button>
+        <Button size="lg" onClick={beginNewComic}><Sparkles aria-hidden /> Create a new comic</Button>
       </div>
 
     </div>
@@ -354,9 +356,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               <h1 className={cn(TEXT_3XL, HEADING)}>My comics</h1>
               <p className="mt-1 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Manage your studio projects</p>
             </div>
-            <div className="flex items-center gap-4">
-              <Button onClick={beginNewComic}><Plus aria-hidden /> New Comic</Button>
-            </div>
+            {/* One New comic per screen: the open form owns Create; in the comics workspace the frame's sidebar owns it,
+                and only where that sidebar folds into a drawer does the header keep a quiet outline one. */}
+            {!isCreating && (!comicWorkspace || ff.width < WORKSPACE_NAV_DRAWER_BELOW) && (
+              <div className="flex items-center gap-4">
+                <Button variant={comicWorkspace ? 'outline' : 'default'} onClick={beginNewComic}><Plus aria-hidden /> New comic</Button>
+              </div>
+            )}
           </div>
 
         </>
@@ -429,12 +435,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 aria-label="Search projects"
                 className="lg:flex-1"
               />
-              <div className="flex flex-wrap items-center gap-2">
+              {/* Below sm the controls sit on a two-column grid so the row reads aligned, not ragged */}
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
                 <button
                   type="button"
                   aria-pressed={filterFeatured}
                   onClick={() => setFilterFeatured((prev) => !prev)}
-                  className={filterToggle(filterFeatured)}
+                  className={cn(filterToggle(filterFeatured), 'justify-center')}
                 >
                   <Star className="w-4 h-4" aria-hidden /> Featured
                 </button>
@@ -442,14 +449,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   type="button"
                   aria-pressed={filterRecent}
                   onClick={() => setFilterRecent((prev) => !prev)}
-                  className={filterToggle(filterRecent)}
+                  className={cn(filterToggle(filterRecent), 'justify-center')}
                 >
                   <Clock className="w-4 h-4" aria-hidden /> Recent Changes
                 </button>
                 <Select
                   size="sm"
                   aria-label="Date range"
-                  wrapperClassName="w-auto"
+                  wrapperClassName="w-full sm:w-auto"
                   value={dateRange}
                   onChange={(e) => setDateRange(e.target.value as any)}
                 >
@@ -461,7 +468,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 <Select
                   size="sm"
                   aria-label="Sort by"
-                  wrapperClassName="w-auto"
+                  wrapperClassName="w-full sm:w-auto"
                   value={sortOption}
                   onChange={(e) => setSortOption(e.target.value as any)}
                 >
@@ -475,6 +482,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   variant="outline"
                   aria-expanded={advancedOpen}
                   onClick={() => setAdvancedOpen((prev) => !prev)}
+                  className="col-span-2"
                 >
                   <Filter aria-hidden /> More Filters
                 </Button>

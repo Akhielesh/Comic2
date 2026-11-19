@@ -231,7 +231,7 @@ export const UsageBudgetsPanel: React.FC = () => {
 
   return (
     <Surface
-      className="!my-0"
+      className="my-0"
       header={
         <div>
           <SurfaceTitle>

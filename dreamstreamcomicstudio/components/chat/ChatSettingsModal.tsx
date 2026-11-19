@@ -16,7 +16,7 @@ import {
   MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent, memoryImportNothingFoundNotice,
   type MemoryImportSource
 } from '../../services/memoryImport';
-import { FOCUS_RING, RADIUS_CONTROL, TONE_TEXT } from './studioDesign';
+import { FIELD as FIELD_RECIPE, FOCUS_RING, OVERLAY, RADIUS_CONTROL, SCRIM, TONE_TEXT } from './studioDesign';
 import { useTheme, type ThemePreference } from '../../services/theme';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import {
@@ -56,10 +56,8 @@ const TABS = [
 /** Admin-only tabs — the Tools dashboard, System dashboard, and component Gallery. */
 const ADMIN_TABS = new Set<Tab>(['tools', 'system', 'gallery']);
 
-// Shared field styles: recessed wells, ≥16px font on mobile.
-const FIELD =
-  'rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-base sm:text-sm ' +
-  'text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none focus:border-[var(--ds-accent)]';
+// Shared field styles: the FIELD recipe (a 3:1 edge, the control radius, the 2 px focus ring), ≥16px font on mobile.
+const FIELD = `${FIELD_RECIPE} px-3 py-2 text-base sm:text-sm`;
 
 const SectionLabel: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
   <div className={`text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ds-muted)] ${className}`}>
@@ -94,9 +92,9 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className={`fixed inset-0 z-[70] flex items-center justify-center ${SCRIM} p-4`} onClick={onClose}>
         <div
-          className="flex h-[min(92vh,44rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-ink)] shadow-[0_24px_60px_-12px_rgba(0,0,0,0.35)] backdrop-blur"
+          className={`flex h-[min(92vh,44rem)] w-full max-w-3xl flex-col overflow-hidden ${OVERLAY}`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Mobile: title bar + scrollable segmented tabs */}
@@ -105,7 +103,8 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
               <h2 className="text-base font-semibold">Settings</h2>
               {closeBtn}
             </div>
-            <div className="flex gap-1 overflow-x-auto px-3 pb-2">
+            {/* The strip scrolls sideways on a phone: its edges fade while there is more to see. */}
+            <div className="ds-fade-edge-x flex gap-1 overflow-x-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {visibleTabs.map(([id, label, Icon]) => (
                 <button
                   key={id}
@@ -174,13 +173,16 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; Icon: typeof Sun }
   { value: 'system', label: 'System', Icon: Monitor }
 ];
 
-/** Fixed-palette mini mockup of each theme (intentionally not token-driven: it depicts the theme itself). */
+/**
+ * Fixed-palette mini mockup of each theme (intentionally not token-driven: it depicts the theme itself, whichever theme
+ * is on now). The Atlas neutrals: white paper and #0a0a0a ink in light, #0a0a0a paper and #fafafa ink in dark.
+ */
 const ThemePreviewSwatch: React.FC<{ value: ThemePreference }> = ({ value }) => {
   const pane = (dark: boolean) => (
-    <div key={dark ? 'dark' : 'light'} className={`flex-1 p-2 ${dark ? 'bg-stone-800' : 'bg-stone-100'}`}>
-      <div className={`h-1.5 w-8 rounded-full ${dark ? 'bg-stone-600' : 'bg-stone-300'}`} />
-      <div className={`mt-1.5 h-1.5 w-12 rounded-full ${dark ? 'bg-stone-700' : 'bg-stone-200'}`} />
-      <div className={`mt-1.5 h-1.5 w-6 rounded-full ${dark ? 'bg-stone-200' : 'bg-stone-800'}`} />
+    <div key={dark ? 'dark' : 'light'} className={`flex-1 p-2 ${dark ? 'bg-neutral-950' : 'bg-white'}`}>
+      <div className={`h-1.5 w-8 rounded-full ${dark ? 'bg-neutral-700' : 'bg-neutral-300'}`} />
+      <div className={`mt-1.5 h-1.5 w-12 rounded-full ${dark ? 'bg-neutral-800' : 'bg-neutral-200'}`} />
+      <div className={`mt-1.5 h-1.5 w-6 rounded-full ${dark ? 'bg-neutral-50' : 'bg-neutral-950'}`} />
     </div>
   );
   return (
@@ -316,18 +318,18 @@ const GeneralTab: React.FC = () => {
                     key={value}
                     onClick={() => setPreference(value)}
                     aria-pressed={active}
-                    className={`rounded-xl border p-1.5 text-left transition-colors ${
+                    className={`${RADIUS_CONTROL} border p-1.5 text-left transition-colors ${FOCUS_RING} ${
                       active
                         ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]'
                         : 'border-[var(--ds-hairline)] hover:bg-[var(--ds-hover)]'
                     }`}
                   >
                     <ThemePreviewSwatch value={value} />
-                    <div className="flex items-center justify-between px-1 pb-0.5 pt-1.5">
+                    <div className="flex items-center justify-between gap-1 px-1 pb-0.5 pt-1.5">
                       <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--ds-ink)]">
                         <Icon className="h-3.5 w-3.5 text-[var(--ds-muted)]" /> {label}
                       </span>
-                      {active && <Check className="h-3.5 w-3.5 text-[var(--ds-accent)]" />}
+                      {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden="true" />}
                     </div>
                   </button>
                 );
@@ -735,7 +737,7 @@ const AgentEditor: React.FC<{ agent: CustomAgentDef; onSave: (a: CustomAgentDef)
           onChange={(e) => setSystemPrompt(e.target.value)}
           rows={5}
           placeholder="You are a specialist in… Use the tools to… Always cite sources and dates."
-          className={`w-full resize-y rounded-xl leading-relaxed ${FIELD}`}
+          className={`w-full resize-y leading-relaxed ${FIELD}`}
         />
       </div>
       <div>

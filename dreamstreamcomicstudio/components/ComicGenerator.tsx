@@ -354,7 +354,11 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
     <AgentStageShell
       eyebrow="Build agent"
       title={headline}
-      description="The agent is planning pages, rendering panels, and preparing the requested outputs from the locked story context."
+      description={isFailed
+        ? 'The run stopped before every panel was drawn. Retry continues from where it stopped.'
+        : isDone
+          ? 'The pages are ready. Read them, fix any panel, then export.'
+          : 'The agent is planning pages, rendering panels, and preparing the requested outputs from the locked story context.'}
       icon={<Activity className="h-5 w-5" />}
       actions={actions}
       sidebar={sidebar}

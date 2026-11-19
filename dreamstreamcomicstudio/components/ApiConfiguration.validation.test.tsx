@@ -143,8 +143,8 @@ describe('API Configuration key validation', () => {
   it('a newly added key is checked once, on add', async () => {
     render(<ApiConfiguration />);
     // With no keys yet, the first provider (OpenRouter) opens by itself.
-    if (!screen.queryByPlaceholderText(/Paste OpenRouter API key/)) await act(async () => { openProvider('openrouter'); });
-    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-new' } });
+    if (!screen.queryByLabelText('OpenRouter API key')) await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByLabelText('OpenRouter API key'), { target: { value: 'sk-or-new' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(validateApiKey).toHaveBeenCalledTimes(1);
     expect(validateApiKey).toHaveBeenCalledWith('openrouter', 'sk-or-new');
@@ -155,7 +155,7 @@ describe('API Configuration key validation', () => {
     const original = seedKey('openrouter', 'sk-or-original', 0);
     render(<ApiConfiguration />);
     await act(async () => { openProvider('openrouter'); });
-    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-spare' } });
+    fireEvent.change(screen.getByLabelText('OpenRouter API key'), { target: { value: 'sk-or-spare' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(listKeys().find((key) => key.active)?.id).toBe(original.id);
     expect(reconcileProviderMirror).not.toHaveBeenCalled();
@@ -168,8 +168,8 @@ describe('API Configuration key validation', () => {
   it('surfaces a failed account sync and lets the user retry without re-entering the key', async () => {
     reconcileProviderMirror.mockResolvedValueOnce('failed');
     render(<ApiConfiguration />);
-    if (!screen.queryByPlaceholderText(/Paste OpenRouter API key/)) await act(async () => { openProvider('openrouter'); });
-    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-new' } });
+    if (!screen.queryByLabelText('OpenRouter API key')) await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByLabelText('OpenRouter API key'), { target: { value: 'sk-or-new' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(screen.getByRole('status')).toHaveTextContent('Your account key could not sync');
     expect(listKeys().find((key) => key.active)?.key).toBe('sk-or-new');
@@ -197,8 +197,8 @@ describe('API Configuration key validation', () => {
   it('a new key whose first check could not run reads Unchecked, not Invalid', async () => {
     validateApiKey.mockResolvedValueOnce({ ...UNAVAILABLE, message: 'Couldn’t check this key right now — try Verify.' } as never);
     render(<ApiConfiguration />);
-    if (!screen.queryByPlaceholderText(/Paste OpenRouter API key/)) await act(async () => { openProvider('openrouter'); });
-    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-new' } });
+    if (!screen.queryByLabelText('OpenRouter API key')) await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByLabelText('OpenRouter API key'), { target: { value: 'sk-or-new' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(screen.getByText('Unchecked')).toBeInTheDocument();
     expect(screen.queryByText('Invalid')).not.toBeInTheDocument();

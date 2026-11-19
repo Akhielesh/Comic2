@@ -9,7 +9,10 @@ import {
   Wand2,
   LayoutGrid,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  BookOpen,
+  Palette,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Project, PageStudioState, PageStudioPage, AspectRatio, ImageResolution } from '../../types';
 import {
@@ -443,13 +446,23 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
               </div>
             </div>
 
+            {/* Once a reading exists, "Yes, this is the direction" is the one primary; reading again is quiet */}
             <div className="flex flex-wrap gap-2 mt-4">
-              <PrimaryButton
-                onClick={runStyleAnalysis}
-                disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
-              >
-                <Wand2 className="w-4 h-4" /> Understand this style
-              </PrimaryButton>
+              {ps.style.brief ? (
+                <GhostButton
+                  onClick={runStyleAnalysis}
+                  disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
+                >
+                  <Wand2 className="w-4 h-4" /> Read again
+                </GhostButton>
+              ) : (
+                <PrimaryButton
+                  onClick={runStyleAnalysis}
+                  disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
+                >
+                  <Wand2 className="w-4 h-4" /> Understand this style
+                </PrimaryButton>
+              )}
             </div>
 
             {ps.style.brief && (
@@ -549,10 +562,10 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
               One model call renders the whole page — panels, gutters and lettering baked in. Edit it afterward.
             </p>
             <ul className={`mb-4 space-y-1 text-sm [overflow-wrap:anywhere] ${INK}`}>
-              <li>📖 <b>Story:</b> {ps.brief.slice(0, 140) || '—'}</li>
-              <li>🎨 <b>Style:</b> {ps.style.brief ? `${ps.style.brief.slice(0, 120)}…` : ps.style.prompt || 'Auto'}</li>
-              <li>🔲 <b>Layout:</b> {ps.layout.brief || (layoutFragment ?? 'AI decides')}</li>
-              <li>🖼️ <b>Output:</b> {ps.aspectRatio} · {ps.resolution}</li>
+              <li className="flex items-start gap-2"><BookOpen size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Story:</b> {ps.brief.slice(0, 140) || '—'}</span></li>
+              <li className="flex items-start gap-2"><Palette size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Style:</b> {ps.style.brief ? `${ps.style.brief.slice(0, 120)}…` : ps.style.prompt || 'Auto'}</span></li>
+              <li className="flex items-start gap-2"><LayoutGrid size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Layout:</b> {ps.layout.brief || (layoutFragment ?? 'AI decides')}</span></li>
+              <li className="flex items-start gap-2"><ImageIcon size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Output:</b> {ps.aspectRatio} · {ps.resolution}</span></li>
             </ul>
             <PrimaryButton onClick={runGenerate} disabled={!!busy || !ps.brief.trim()}>
               <Sparkles className="w-4 h-4" /> Generate page

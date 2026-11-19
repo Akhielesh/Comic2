@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X, Plus } from 'lucide-react';
+import { Check, AlertCircle, ArrowLeft, ArrowRight, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X, Plus } from 'lucide-react';
 import { suggestStyle, suggestFormFactor } from '../../services/geminiService';
 import { classifyStoryMood, moodHintLine } from '../../services/storyMood';
 import { generateImage } from '../../services/imageService';
@@ -1234,22 +1234,6 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                             <Check className="h-4 w-4" strokeWidth={3} aria-hidden />
                           </div>
                         )}
-                        <div className="pointer-events-none absolute inset-0 flex items-end p-3 opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100">
-                          <div className="pointer-events-auto w-full">
-                            <Button
-                              size="sm"
-                              variant={isSelected ? 'outline' : 'default'}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onStyleConfirmed(variant);
-                              }}
-                              className={cn('w-full', SHADOW_SOFT)}
-                            >
-                              <Check className="w-4 h-4" aria-hidden />
-                              {isSelected ? 'Selected' : 'Use this style'}
-                            </Button>
-                          </div>
-                        </div>
                       </div>
                       <div className={cn('space-y-2 p-3 text-center', isSelected && ACCENT_SOFT_BG)}>
                         <div className={cn('line-clamp-1 text-xs font-semibold', INK)} title={variant.category}>{variant.category}</div>
@@ -1264,6 +1248,16 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                           )}
                           <span className={META_CHIP}>{variant.resolution}</span>
                         </div>
+                        {/* The way forward is always visible: the chosen look continues, any other can be chosen */}
+                        <Button
+                          size="sm"
+                          variant={isSelected ? 'default' : 'outline'}
+                          onClick={() => onStyleConfirmed(variant)}
+                          className="w-full"
+                        >
+                          {isSelected ? <ArrowRight className="w-4 h-4" aria-hidden /> : <Check className="w-4 h-4" aria-hidden />}
+                          {isSelected ? 'Continue' : 'Use this style'}
+                        </Button>
                       </div>
                     </div>
                       );

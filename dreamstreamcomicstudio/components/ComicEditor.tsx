@@ -856,7 +856,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className={cn('min-h-screen flex flex-col', CANVAS_BG)}>
       {newStudioBanner}
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
       <div className={cn('px-4 py-2 border-b border-[var(--ds-hairline)] flex items-center gap-3', CANVAS_BG)}>

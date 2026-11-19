@@ -54,6 +54,7 @@ import {
   STATUS_SURFACE,
   TEXT_XL,
   TONE_TEXT,
+  TWO_LINE_TEXT,
   Z,
   type StatusState
 } from './chat/studioDesign';
@@ -339,7 +340,7 @@ const FindingRow: React.FC<{
         {finding.status}
       </span>
       <span className={cn('font-mono text-xs', MUTED)}>conf {(finding.confidence * 100).toFixed(0)}%</span>
-      <span className="min-w-0 truncate font-semibold">{finding.title}</span>
+      <span className={cn(TWO_LINE_TEXT, 'font-semibold')} title={finding.title}>{finding.title}</span>
     </button>
     {expanded && (
       <div className="space-y-3 border-t border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">

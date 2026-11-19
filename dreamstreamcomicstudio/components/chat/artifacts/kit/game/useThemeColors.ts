@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { BULL, BEAR } from '../theme';
 
 // Canvas can't read CSS variables, so a themed game has to resolve the `--ds-*`
 // tokens to concrete color strings and re-read them whenever the user flips between
@@ -24,6 +23,10 @@ export interface GameColors {
   ramp: string[];
 }
 
+// Canvas needs concrete colours: the kit's up / down are tokens now, so the games keep their
+// own fixed pair for the snake food and the paddle hit (game art, not chrome).
+const GAME_UP = '#059669';
+const GAME_DOWN = '#dc2626';
 const RAMP = ['#3B82F6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4'];
 
 const read = (el: HTMLElement | null): GameColors => {
@@ -39,8 +42,8 @@ const read = (el: HTMLElement | null): GameColors => {
     well: v('--ds-well', 'rgba(0,0,0,0.03)'),
     raised: v('--ds-raised', '#ffffff'),
     accent: v('--ds-accent', '#1a1915'),
-    up: BULL,
-    down: BEAR,
+    up: GAME_UP,
+    down: GAME_DOWN,
     ramp: RAMP
   };
 };

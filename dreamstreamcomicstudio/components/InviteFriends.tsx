@@ -144,7 +144,6 @@ export const InviteFriends: React.FC = () => {
         <label htmlFor={emailsId} className={cn('block', FIELD_LABEL)}>Or email them directly (up to 10)</label>
         <Textarea
           id={emailsId}
-          className="font-mono md:text-[length:var(--ds-text-sm)]"
           value={emails}
           onChange={(e) => setEmails(e.target.value)}
           placeholder="Email addresses, separated by commas"
@@ -153,7 +152,7 @@ export const InviteFriends: React.FC = () => {
           value={note}
           onChange={(e) => setNote(e.target.value)}
           aria-label="A short personal note (optional)"
-          placeholder="Add a short personal note (optional)"
+          placeholder="Personal note (optional)"
           maxLength={240}
         />
         <Button onClick={handleSend} disabled={busy || !emails.trim()}>

@@ -7,6 +7,7 @@ import {
   Surface, SurfaceTitle, SurfaceSubtitle, Badge, useCompact, DetailPopover, anchorFromEvent,
   type PopoverAnchor, BULL, BEAR, NEUTRAL, withAlpha
 } from './kit';
+import { TONE_CHIP } from '../studioDesign';
 import { fetchAgenda, mutateEvent, type CalendarAction } from '../../../services/calendarApi';
 
 // The connected Google Calendar, as a calm-studio widget.
@@ -52,7 +53,9 @@ const COLOR_BY_ID: Record<string, string> = {
 };
 const eventColor = (ev: CalendarEventView): string => (ev.colorId && COLOR_BY_ID[ev.colorId]) || 'var(--ds-accent)';
 
-const RSVP_TINT: Record<string, string> = { accepted: BULL, declined: BEAR, tentative: '#f59e0b' };
+// RSVP is status: Going / Maybe / Declined read the status inks (words beside them), never a spelled hue.
+const RSVP_TINT: Record<string, string> = { accepted: BULL, declined: BEAR, tentative: 'var(--ds-warning-text)' };
+const RSVP_TONE = { accepted: 'success', tentative: 'warning', declined: 'danger' } as const;
 const rsvpLabel: Record<string, string> = { accepted: 'Going', declined: 'Declined', tentative: 'Maybe', needsAction: 'Invited' };
 
 type View = 'agenda' | 'week' | 'month';
@@ -196,8 +199,8 @@ const Detail: React.FC<{
                 key={r}
                 disabled={busy}
                 onClick={() => onRsvp(r)}
-                className={`flex-1 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50 ${active ? 'border-transparent text-white' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'}`}
-                style={active ? { backgroundColor: RSVP_TINT[r] } : undefined}
+                className={`flex-1 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50 ${active ? `border-transparent ${TONE_CHIP[RSVP_TONE[r]]}` : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'}`}
+                aria-pressed={active}
               >
                 {r === 'accepted' ? 'Yes' : r === 'tentative' ? 'Maybe' : 'No'}
               </button>

@@ -3,7 +3,7 @@ import React, { useId, useState } from 'react';
 import { X, Star, MessageSquare } from 'lucide-react';
 import { Review } from '../../types';
 import { buttonClasses } from '../ds/Button';
-import { DIALOG_TITLE, FIELD, FOCUS_RING, HAIRLINE, INK, MUTED, OVERLAY, OVERLINE, RADIUS_PANEL, SCRIM, Z } from '../chat/studioDesign';
+import { DIALOG_TITLE, FIELD, FOCUS_RING, HAIRLINE, INK, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, RADIUS_PANEL, SCRIM, Z } from '../chat/studioDesign';
 
 interface ReviewModalProps {
     isOpen: boolean;
@@ -73,22 +73,31 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
                 </div>
 
                 <div className="p-6 space-y-6">
-                    {/* Main Star Rating Display (Read Only) */}
-                    <div className="flex justify-center gap-2 pointer-events-none opacity-90">
+                    {/* Overall rating: one button per star */}
+                    <div role="group" aria-label="Overall rating" className="flex justify-center gap-1">
                         {[1, 2, 3, 4, 5].map((starIdx) => {
                             const fill = Math.max(0, Math.min(1, rating - starIdx + 1));
                             return (
-                                <div key={starIdx} className="relative w-10 h-10">
-                                    <Star className="h-full w-full fill-[var(--ds-well-strong)] text-[var(--ds-well-strong)]" aria-hidden="true" />
-                                    <div className="absolute inset-0 overflow-hidden" style={{ width: `${fill * 100}%` }}>
-                                        <Star className="h-full w-full fill-[var(--ds-ink)] text-[var(--ds-ink)]" aria-hidden="true" />
-                                    </div>
-                                </div>
+                                <button
+                                    key={starIdx}
+                                    type="button"
+                                    onClick={() => handleStarClick(starIdx, false)}
+                                    aria-label={starIdx === 1 ? '1 star' : `${starIdx} stars`}
+                                    aria-pressed={rating >= starIdx}
+                                    className={`group/star relative flex size-11 items-center justify-center ${RADIUS_CONTROL} ${FOCUS_RING}`}
+                                >
+                                    <span aria-hidden="true" className="relative size-9">
+                                        <Star className="h-full w-full fill-transparent text-ds-ink/25 transition-colors duration-[var(--ds-motion-medium)] group-hover/star:text-ds-ink/50" />
+                                        <span className="absolute inset-0 overflow-hidden" style={{ width: `${fill * 100}%` }}>
+                                            <Star className="h-full w-9 max-w-none fill-[var(--ds-ink)] text-[var(--ds-ink)]" />
+                                        </span>
+                                    </span>
+                                </button>
                             );
                         })}
                     </div>
-                    <div className={`text-center text-xl font-semibold tabular-nums ${INK}`}>
-                        {rating > 0 ? rating.toFixed(1) : "Rate the categories below!"}
+                    <div className={`text-center ${rating > 0 ? `text-xl font-semibold tabular-nums ${INK}` : `text-sm ${MUTED}`}`}>
+                        {rating > 0 ? rating.toFixed(1) : 'Choose a star rating, then score each part'}
                     </div>
 
                     {/* Sub Scores Input */}

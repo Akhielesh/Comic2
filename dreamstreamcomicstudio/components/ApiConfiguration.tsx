@@ -159,8 +159,8 @@ const McpServersPanel: React.FC = () => {
 
       <div className="grid sm:grid-cols-2 gap-2">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. My Tools)" className={INPUT} />
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://server.example.com/mcp" aria-invalid={urlValid ? undefined : true} className={`${INPUT} font-mono aria-[invalid=true]:border-[var(--ds-danger-mark)]`} />
-        <input value={auth} onChange={(e) => setAuth(e.target.value)} placeholder="Authorization header (optional, e.g. Bearer …)" className={`${INPUT} font-mono sm:col-span-2`} />
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://server.example.com/mcp" aria-invalid={urlValid ? undefined : true} className={`${INPUT} aria-[invalid=true]:border-[var(--ds-danger-mark)]`} />
+        <input value={auth} onChange={(e) => setAuth(e.target.value)} placeholder="Authorization header (optional, e.g. Bearer …)" className={`${INPUT} sm:col-span-2`} />
       </div>
       {!urlValid && <p className={cn('mt-1 flex items-center gap-1 text-[11px] font-medium', TONE_TEXT.danger)}><AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />MCP server URL must start with https://</p>}
       <div className="flex justify-end mt-2">
@@ -405,12 +405,15 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void; onA
     <div className={cn('space-y-2 border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3', RADIUS_CONTROL)}>
       <div className="flex flex-col sm:flex-row gap-2">
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Personal)" className={INPUT} />
-        <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Limit $/mo (optional)" className={`${INPUT} sm:w-44 font-mono`} />
+        <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Limit $/mo (optional)" aria-label="Monthly limit in dollars (optional)" className={`${INPUT} tabular-nums sm:w-52`} />
       </div>
       <div className="flex gap-2">
-        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key${prefix ? ` (${prefix}…)` : ''}`} className={cn(INPUT, 'font-mono', prefixMismatch && 'border-[var(--ds-warning)] hover:border-[var(--ds-warning)]')} />
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" aria-label={`${PROVIDER_META[provider].label} API key`} className={cn(INPUT, prefixMismatch && 'border-[var(--ds-warning)] hover:border-[var(--ds-warning)]')} />
         <PrimaryBtn onClick={add} disabled={!key.trim()}><Plus className="w-3.5 h-3.5" /> Add</PrimaryBtn>
       </div>
+      {prefix && !prefixMismatch && (
+        <p className={cn('text-[11px]', MUTED, WRAP_TEXT)}>{PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span></p>
+      )}
       {prefixMismatch && (
         <p className={cn('flex items-start gap-1 text-[11px]', TONE_TEXT.warning, WRAP_TEXT)}><AlertTriangle className="mt-0.5 w-3 h-3 shrink-0" /> Most {PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span> — double-check you pasted the right one.</p>
       )}
@@ -630,8 +633,8 @@ const ProviderCard: React.FC<{
               : <span className="w-2.5 h-2.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />}
           </span>
           <span className="min-w-0">
-            <span className="flex items-center gap-2">
-              <span className={`font-semibold text-sm truncate ${INK}`}>{meta.label}</span>
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className={`min-w-0 max-w-full font-semibold text-sm truncate ${INK}`}>{meta.label}</span>
               {def?.freeTier && <span className={cn(CHIP, CHIP_VARIANT.filled)}>Free tier</span>}
             </span>
             <span className={`block text-[11px] ${MUTED} truncate`}>
@@ -643,7 +646,8 @@ const ProviderCard: React.FC<{
         {typeof count === 'number' && count > 0 && (
           <span className={`text-[11px] ${MUTED} shrink-0 hidden sm:inline tabular-nums`}>{count} model{count === 1 ? '' : 's'}</span>
         )}
-        <span className={cn(statusChip(status.state), 'shrink-0')}>{status.label}</span>
+        {/* Below sm a quiet "Off" / "No key" / "Key saved" is left to the switch and the hint, so the name keeps the row */}
+        <span className={cn(statusChip(status.state), 'shrink-0', status.state === 'waiting' && 'hidden sm:inline-flex')}>{status.label}</span>
 
         {/* Governance on/off toggle */}
         <button
@@ -668,7 +672,7 @@ const ProviderCard: React.FC<{
         <div className="border-t border-[var(--ds-hairline)] p-3 space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className={`text-[11px] ${MUTED} max-w-md`}>{meta.hint}</p>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-1.5">
               <LinkPill href={meta.keysUrl} icon={<Key className="w-3 h-3" />} accent>Get a key</LinkPill>
               {def?.fundsUrl && <LinkPill href={def.fundsUrl} icon={<Wallet className="w-3 h-3" />}>Add funds</LinkPill>}
               {def?.docsUrl && <LinkPill href={def.docsUrl} icon={<BookOpen className="w-3 h-3" />}>Models</LinkPill>}

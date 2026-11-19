@@ -20,7 +20,7 @@ import { isProviderEnabled } from '../../../services/sourceGovernance';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, translationBudget } from '../../../shared/comic/translationPlan';
 import { textSourceHash } from '../../../shared/comic/i18n';
 import { ComicPageView } from '../board/ComicPageView';
-import { OVERLINE, STATUS_EDGE, STATUS_INK, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { FIELD, OVERLINE, STATUS_EDGE, STATUS_INK, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { GhostButton, Segmented, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { LanguageSwitch } from './LanguageSwitch';
@@ -190,7 +190,9 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         placeholder={`Not translated yet — type the ${spec?.english || lang} line`}
         aria-label={`${spec?.english || lang} translation of: ${source}${where ? ` (${where})` : ''}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
-        className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] coarse:text-[16px] focus:border-[var(--ds-focus)] focus:outline-none focus:ring-2 focus:ring-ds-focus/15"
+        /* The FIELD recipe (a 3:1 edge, the control radius, the 2 px focus ring), so the line to type reads as a field.
+           The script face is for the value; the placeholder stays in the sans face and the muted ink. */
+        className={cx(FIELD, 'mt-1.5 block w-full min-w-0 resize-y px-2.5 py-2 text-[15px] leading-relaxed coarse:text-[16px] placeholder:font-[family-name:var(--ds-font-sans)] placeholder:font-normal')}
       />
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
         {sarvam && !draft.trim() && <GhostButton size="xs" title="Sends this line to Sarvam using your API key" busy={sarvamState === 'working'} onClick={() => void suggestWithSarvam()}>

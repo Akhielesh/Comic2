@@ -19,7 +19,7 @@ import { useCostFormat } from '../cost';
 import type { StudioActOutcome } from '../../types';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
-import { FOCUS_RING } from '../../../chat/studioDesign';
+import { FOCUS_RING, TWO_LINE_TEXT } from '../../../chat/studioDesign';
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
 export const presetOps = (doc: ComicDoc, preset: StylePreset): DocOp[] => {
   const patch: Partial<Omit<StyleBible, 'options'>> & { board?: null } = {
@@ -186,8 +186,8 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                   />
                 </span>
                 <span className="block bg-[var(--ds-surface-strong)] px-2.5 py-2">
-                  <span className="flex items-center gap-1 text-[12px] font-semibold text-[var(--ds-ink)]">
-                    <span className="truncate">{preset.name}</span>
+                  <span className="flex items-start gap-1 text-[12px] font-semibold leading-snug text-[var(--ds-ink)]">
+                    <span className={TWO_LINE_TEXT} title={preset.name}>{preset.name}</span>
                     {on && (locked ? <Lock className="h-3 w-3 shrink-0 text-[var(--ds-accent)]" aria-label="locked" /> : <Check className="h-3 w-3 shrink-0 text-[var(--ds-accent)]" aria-hidden />)}
                   </span>
                   <span className="mt-0.5 line-clamp-2 block text-[10.5px] leading-snug text-[var(--ds-muted)]">{preset.tagline}</span>
