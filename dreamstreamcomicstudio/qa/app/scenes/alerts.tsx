@@ -1,6 +1,7 @@
-// QA scene `alerts` (notify NF-4; the scene contract is in qa/app/index.tsx): every alert the core can raise, as the
-// static toast card the person sees (fixed phrases around invented titles), the summary toast, and the two chimes on
-// Play buttons. Nothing here reaches the network; the chimes play only from a press (that press unlocks the audio).
+// QA scene `alerts` (notify NF-4, NF-5; the scene contract is in qa/app/index.tsx): every alert the core can raise, as
+// the static toast card the person sees (fixed phrases around invented titles), the summary toast, the Alerts settings
+// card on in-memory prefs (this browser's are never touched, nothing is counted), and the two chimes on Play buttons.
+// Nothing here reaches the network; the chimes play only from a press (that press unlocks the audio).
 import React from 'react';
 import { BellRing, Volume2 } from 'lucide-react';
 import { Button } from '../../../components/ds/Button';
@@ -10,6 +11,8 @@ import { ToastCard } from '../../../components/ds/Toast';
 import { alertCopy, summaryCopy } from '../../../services/alerts/copy';
 import { toneOf, type AlertDraft } from '../../../services/alerts/types';
 import { playChimeNow } from '../../../services/alerts/bus';
+import { AlertSettingsCard } from '../../../components/alerts/AlertSettingsCard';
+import { createMemoryPrefsStore } from '../../../services/alerts/prefs';
 
 const STACK = 'flex min-w-0 flex-col gap-3';
 const ROW = 'flex min-w-0 flex-wrap items-center gap-2';
@@ -43,6 +46,8 @@ const ALERT_SAMPLES: readonly AlertDraft[] = [
 const SUMMARY: readonly AlertDraft[] = [ALERT_SAMPLES[0], ALERT_SAMPLES[13], { ...ALERT_SAMPLES[1], title: 'Night Shift' }];
 
 const noop = () => undefined;
+/** The card's prefs in this scene: memory only. */
+const scenePrefs = createMemoryPrefsStore();
 
 function AlertCards() {
   return (
@@ -95,6 +100,7 @@ function AlertsScene() {
         <div className="grid min-w-0 gap-6 lg:grid-cols-2">
           <AlertCards />
           <div className="flex min-w-0 flex-col gap-6">
+            <AlertSettingsCard store={scenePrefs} onChanged={noop} />
             <SummaryCard />
             <Chimes />
           </div>
