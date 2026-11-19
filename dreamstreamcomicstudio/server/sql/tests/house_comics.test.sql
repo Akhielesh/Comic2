@@ -10,10 +10,14 @@
 --   * house_reserve refuses at every cap boundary (comic, finishing reserve, run day, payer day, runway-adjusted
 --     payer day, credit expiry, lifetime stop), refuses a rehearsal any estimate above 0, refuses when switched off,
 --     and raises on bad input (the server then refuses: fail closed);
---   * a hold older than 15 minutes expires, is counted as spent and is never released; a late settle never books less;
---   * settle books the served payer, moves the amount and says when a cap is now passed;
+--   * a hold older than 15 minutes expires, is counted as spent and is never released; a late settle never books less
+--     (settle runs the expiry itself);
+--   * settle books the served payer, moves the amount, books a BYOK fee row in the same step and says when a cap is
+--     now passed; a platform row stays platform;
 --   * the day is the run's day (p_day), never now(): a step after midnight for yesterday's run counts against
---     yesterday.
+--     yesterday;
+--   * one money decision at a time: a second session's reserve waits for this one's reserve, settle or release
+--     (the house_config row lock) and then sees it, so two sessions can never pass a cap together (dblink).
 \set ON_ERROR_STOP 1
 set client_min_messages = warning;
 
@@ -35,7 +39,9 @@ insert into public.projects (id, user_id, name) values
   ('00000000-0000-4000-8000-00000000b002', '00000000-0000-4000-8000-00000000a001', 'House comic two');
 
 \ir ../house_comics.sql
+\ir ../house_comics_grants.sql
 \ir ../house_comics.sql
+\ir ../house_comics_grants.sql
 
 -- ── Test helpers (schema t; plain SECURITY INVOKER functions, so they run with the caller's rights) ─────────────
 create schema t;
@@ -138,7 +144,7 @@ begin
   end loop;
   assert n = 7, format('seven house functions, no stray overloads (found %s)', n);
   assert has_function_privilege('service_role', 'public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean)', 'EXECUTE'), 'service_role reserves';
-  assert has_function_privilege('service_role', 'public.house_settle(uuid, numeric, text, text)', 'EXECUTE'), 'service_role settles';
+  assert has_function_privilege('service_role', 'public.house_settle(uuid, numeric, text, text, numeric)', 'EXECUTE'), 'service_role settles';
   assert has_function_privilege('service_role', 'public.house_release(uuid)', 'EXECUTE'), 'service_role releases';
   assert has_function_privilege('service_role', 'public.house_expire_holds()', 'EXECUTE'), 'service_role expires holds';
   assert has_function_privilege('service_role', 'public.house_payers_ok(jsonb)', 'EXECUTE'), 'service_role passes the payers CHECK';
@@ -158,11 +164,44 @@ begin
     'house OpenRouter: $10 a day, no credit stop (its key has its own daily limit)';
   assert not (c.payers ? 'platform'), 'the platform payer is never capped here';
 
-  foreach r in array array['house_spend_day_payer_idx', 'house_spend_comic_idx', 'house_spend_payer_idx', 'house_spend_pending_idx',
+  foreach r in array array['house_spend_day_payer_idx', 'house_spend_comic_idx', 'house_spend_payer_day_idx', 'house_spend_pending_idx',
                            'house_comics_day_idx', 'house_comics_project_key'] loop
     assert exists (select 1 from pg_indexes where schemaname = 'public' and indexname = r), 'index ' || r;
   end loop;
   assert exists (select 1 from pg_indexes where indexname = 'house_spend_day_payer_idx' and indexdef like '%(day, payer)%'), 'spend (day, payer)';
+  assert exists (select 1 from pg_indexes where indexname = 'house_spend_payer_day_idx'
+                 and indexdef like '%(payer, day) INCLUDE (status, est_usd, cost_usd)%'), 'spend (payer, day) covering the lifetime sums';
+end $$;
+
+-- The grants file alone gives the service role its rights (whatever the platform's default privileges are).
+revoke all on table public.house_config, public.house_runs, public.house_comics, public.house_spend from service_role;
+revoke all on function public.house_payers_ok(jsonb), public.house_expire_holds(),
+  public.house_cap_refusal(public.house_config, uuid, date, text, numeric, boolean),
+  public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean),
+  public.house_settle(uuid, numeric, text, text, numeric), public.house_release(uuid) from service_role;
+do $$
+begin
+  assert not has_table_privilege('service_role', 'public.house_spend', 'INSERT'), 'revoked for the check below';
+  assert not has_function_privilege('service_role', 'public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean)', 'EXECUTE'),
+    'revoked for the check below';
+end $$;
+\ir ../house_comics_grants.sql
+do $$
+declare
+  tbl text;
+  f text;
+begin
+  foreach tbl in array array['public.house_config', 'public.house_runs', 'public.house_comics', 'public.house_spend'] loop
+    assert has_table_privilege('service_role', tbl, 'SELECT, INSERT, UPDATE, DELETE'), 'the grants file gives the server ' || tbl;
+  end loop;
+  foreach f in array array['public.house_payers_ok(jsonb)', 'public.house_expire_holds()',
+                           'public.house_cap_refusal(public.house_config, uuid, date, text, numeric, boolean)',
+                           'public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean)',
+                           'public.house_settle(uuid, numeric, text, text, numeric)', 'public.house_release(uuid)'] loop
+    assert has_function_privilege('service_role', f, 'EXECUTE'), 'the grants file gives the server ' || f;
+  end loop;
+  assert not has_table_privilege('anon', 'public.house_spend', 'SELECT') and not has_table_privilege('authenticated', 'public.house_spend', 'SELECT'),
+    'the grants file gives clients nothing';
 end $$;
 
 -- ── 2. Ceilings and lists (CHECKs; the $7 per comic ceiling is one of them) ────────────────────────────────────
@@ -204,6 +243,13 @@ begin
   assert t.err($q$update public.house_config set payers = payers #- '{openai_credit,credit_usd}'$q$) = '23514', 'the credit is stated (null = none)';
   assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{openai_credit,runway_until}', '"2031-13-01"')$q$) = '23514', 'a runway date is a date';
   assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{openai_credit,expires_on}', '20310101')$q$) = '23514', 'an expiry is a date string';
+  -- A date that matches the pattern but is not on the calendar: stored, it would make every reserve and settle of the
+  -- payer raise (the money functions cast it), so a paid call's settle would be lost.
+  assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{house_openrouter,expires_on}', '"2031-02-30"')$q$) = '23514', 'no 30 February';
+  assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{house_openrouter,expires_on}', '"2031-04-31"')$q$) = '23514', 'no 31 April';
+  assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{anthropic_credit,runway_until}', '"2031-02-29"')$q$) = '23514', 'no 29 February outside a leap year';
+  assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{anthropic_credit,runway_until}', '"2032-02-29"')$q$) is null, '29 February of a leap year is allowed';
+  assert t.err($q$update public.house_config set payers = jsonb_set(payers, '{anthropic_credit,runway_until}', 'null')$q$) is null, 'and cleared again';
   assert t.err($q$update public.house_config set payers = payers || '{"platform": {"day_cap_usd": 1, "credit_usd": null, "stop_fraction": 0.9}}'$q$) = '23514',
     'the platform payer is never capped here';
   assert t.err($q$update public.house_config set payers = payers - 'house_openrouter'$q$) = '23514', 'every capped payer is present';
@@ -349,6 +395,7 @@ end $$;
 update public.house_config set cap_day_usd = 33 where id = 1;
 create temporary table before_reapply as select (select count(*) from public.house_spend) as spend_rows, (select count(*) from public.house_comics) as comics;
 \ir ../house_comics.sql
+\ir ../house_comics_grants.sql
 do $$
 begin
   assert exists (select 1 from pg_constraint where conname = 'house_config_cap_comic_check'), 'the $7 CHECK is back';
@@ -521,6 +568,14 @@ begin
   update public.house_spend set reserved_at = now() - interval '20 minutes' where id = s2;
   j := public.house_settle(s2, 0.80);
   assert t.ok(j) and t.num(j, 'cost_usd') = 0.80, 'a stale hold settled late books the higher actual cost: ' || j::text;
+
+  -- Settle runs the expiry itself: a hold gone stale with no reserve since is still never undercut by a cheaper settle.
+  s2 := t.sid(t.reserve(i3, 'house_openrouter', 0.50));
+  update public.house_spend set reserved_at = now() - interval '20 minutes' where id = s2;
+  assert (select status from public.house_spend where id = s2) = 'pending', 'still pending: nothing has expired it yet';
+  j := public.house_settle(s2, 0.20);
+  assert t.ok(j) and t.num(j, 'cost_usd') = 0.50, 'settle expired the stale hold first and kept its $0.50: ' || j::text;
+  assert (select cost_usd from public.house_spend where id = s2) = 0.50, 'booked at the hold';
 end $$;
 
 -- ── 10. Settle: the served payer, the amount moves, `over` when a cap is now passed ────────────────────────────
@@ -581,10 +636,56 @@ begin
     'a settle after a release books the cost: ' || j::text;
 
   -- Bad input raises (the server refuses on any error).
+  assert t.err(format('select public.house_settle(%L, 0.1, null, null, -0.01)', s)) = 'P0001', 'a negative fee raises';
   assert t.err(format('select public.house_settle(%L, -0.01)', s)) = 'P0001', 'a negative cost raises';
   assert t.err(format('select public.house_settle(%L, null)', s)) = 'P0001', 'a missing cost raises';
   assert t.err(format($q$select public.house_settle(%L, 0.1, 'someone')$q$, s)) = 'P0001', 'an unknown payer raises';
   assert t.err($q$select public.house_settle('00000000-0000-4000-8000-00000000ffff', 0.1)$q$) = 'P0001', 'an unknown row raises';
+end $$;
+
+-- ── 10b. The BYOK fee: booked by the settle, in the same step, never refused ───────────────────────────────────
+do $$
+declare
+  c uuid;
+  s uuid;
+  j jsonb;
+  f public.house_spend;
+  r public.house_spend;
+begin
+  perform t.reset();
+  c := t.comic('2031-08-05');
+  s := t.sid(t.reserve(c, 'openai_credit', 1.00));
+  j := public.house_settle(s, 0.80, 'openai_credit', 'openai/test-image-model', 0.04);
+  assert t.ok(j) and t.num(j, 'fee_usd') = 0.04 and j ->> 'fee_spend_id' is not null and not (j ->> 'over')::boolean, 'the fee is booked: ' || j::text;
+  select * into f from public.house_spend where id = (j ->> 'fee_spend_id')::uuid;
+  select * into r from public.house_spend where id = s;
+  assert f.payer = 'house_openrouter' and f.status = 'settled' and f.cost_usd = 0.04 and f.est_usd = 0.04 and f.kind = 'byok_fee'
+     and f.comic_id = r.comic_id and f.run_id = r.run_id and f.day = r.day and f.model = 'openai/test-image-model' and f.settled_at is not null,
+    'one settled house OpenRouter row on the call''s comic, run and day';
+  assert r.payer = 'openai_credit' and r.cost_usd = 0.80, 'the call itself stays on its own payer';
+
+  -- A retried settle books no second fee.
+  j := public.house_settle(s, 0.80, 'openai_credit', null, 0.04);
+  assert not t.ok(j) and j ->> 'reason' = 'already_settled', 'a second settle is refused: ' || j::text;
+  assert (select count(*) from public.house_spend where kind = 'byok_fee') = 1, 'one fee row only';
+
+  -- The fee counts in the house caps: 0.84 on the comic, so 5.76 more reaches the finishing line and 5.77 does not.
+  j := t.reserve(c, 'house_openrouter', 5.77);
+  assert not t.ok(j) and j ->> 'reason' = 'comic_finish_reserve' and t.num(j, 'total_usd') = 0.84, 'the fee counts in the comic cap: ' || j::text;
+
+  -- Never refused at a cap (the money is spent); `over` says when the fee's payer is now past its day.
+  perform t.payer('house_openrouter', '{"day_cap_usd": 0.05}');
+  s := t.sid(t.reserve(c, 'openai_credit', 0.50));
+  j := public.house_settle(s, 0.50, null, null, 0.02);
+  assert t.ok(j) and t.num(j, 'fee_usd') = 0.02 and (j ->> 'over')::boolean and j ->> 'over_reason' = 'payer_day_cap',
+    'booked past the fee payer''s day cap, and said: ' || j::text;
+  assert (select count(*) from public.house_spend where kind = 'byok_fee') = 2, 'the second fee is booked';
+
+  -- No fee, no row.
+  s := t.sid(t.reserve(c, 'openai_credit', 0.10));
+  j := public.house_settle(s, 0.10, null, null, 0);
+  assert t.ok(j) and j ->> 'fee_spend_id' is null and t.num(j, 'fee_usd') = 0, 'a zero fee books nothing: ' || j::text;
+  assert (select count(*) from public.house_spend where kind = 'byok_fee') = 2, 'still two fee rows';
 end $$;
 
 -- ── 11. The day key is the run's day (p_day), never now() ──────────────────────────────────────────────────────
@@ -634,7 +735,15 @@ begin
   s := t.sid(j);
   assert t.ok(t.reserve(p1, 'house_openrouter', 0.40, true)), 'platform spend does not count in the comic cap';
   assert t.ok(t.reserve(t.comic('2031-09-01'), 'house_openrouter', 3.00, true)), 'nor in the run day''s cap';
-  assert t.err(format($q$select public.house_settle(%L, 5, 'house_openrouter')$q$, s)) = 'P0001', 'platform spend never moves to a capped payer';
+  -- A platform-key call stays platform whatever the served model's payer is (the billing passes the served model's
+  -- payer, which is always a capped one): booked, never moved onto a cap.
+  j := public.house_settle(s, 5, 'house_openrouter', 'google/test-text-model');
+  assert t.ok(j) and j ->> 'payer' = 'platform' and j ->> 'from_payer' = 'platform' and not (j ->> 'over')::boolean,
+    'a platform row settles on platform: ' || j::text;
+  assert (select payer from public.house_spend where id = s) = 'platform' and (select cost_usd from public.house_spend where id = s) = 5,
+    'the platform cost is booked';
+  j := t.reserve(t.comic('2031-09-01'), 'house_openrouter', 0.01, true);
+  assert not t.ok(j) and j ->> 'reason' = 'day_cap' and t.num(j, 'total_usd') = 10, 'the settled platform $5 is not in the run day''s total: ' || j::text;
   s := t.sid(t.reserve(t.comic('2031-09-02'), 'house_openrouter', 0.10));
   assert t.err(format($q$select public.house_settle(%L, 0.1, 'platform')$q$, s)) = 'P0001', 'capped spend never moves to the platform payer';
   update public.house_config set enabled = false where id = 1;
@@ -767,5 +876,85 @@ begin
   update public.house_config set updated_at = '2000-01-01' where id = 1;
   assert (select updated_at from public.house_config) > '2001-01-01', 'house_config.updated_at follows every update';
 end $$;
+
+-- ── 17. One money decision at a time, across sessions (the house_config row lock) ──────────────────────────────
+-- A second session (c2, over dblink) reserves while this session holds the lock in an open transaction. It must wait,
+-- then decide on what this session committed. Without the lock both would read the old totals and pass a cap together.
+-- Set-up rows are committed in their own statements first: c2 sees only committed rows, and a set-up transaction still
+-- open on house_config would block c2 for good. Never read c2's result before this session commits (that would wait on
+-- c2 while c2 waits on us).
+create extension if not exists dblink with schema t;
+create table t.conc (k text primary key, id uuid not null);
+create function t.c2_result() returns jsonb language plpgsql as $$
+declare
+  j jsonb;
+begin
+  select x.r::jsonb into j from t.dblink_get_result('c2') as x(r text);
+  perform 1 from t.dblink_get_result('c2') as x(r text); -- the closing empty result frees the connection
+  return j;
+end $$;
+select t.reset();
+insert into t.conc (k, id) values ('a', t.comic('2032-02-01'));
+insert into t.conc (k, id) values ('b', t.comic('2032-02-01'));
+insert into t.conc (k, id) values ('c', t.comic('2032-02-01'));
+insert into t.conc (k, id) select 'b_hold', t.sid(t.reserve((select id from t.conc where k = 'b'), 'house_openrouter', 1.00));
+insert into t.conc (k, id) select 'c_hold', t.sid(t.reserve((select id from t.conc where k = 'c'), 'house_openrouter', 6.00));
+select t.dblink_connect('c2', format('dbname=%s host=%s port=%s user=%s', current_database(),
+                                     split_part(current_setting('unix_socket_directories'), ',', 1), current_setting('port'), current_user));
+select t.dblink_exec('c2', $q$set lock_timeout = '20s'$q$);
+
+-- (a) Reserve against reserve: c1 holds $6.00 on comic a; c2 asks $6.00 more on the same comic.
+begin;
+do $$ begin assert t.ok(t.reserve((select id from t.conc where k = 'a'), 'house_openrouter', 6.00)), 'c1 reserves $6.00'; end $$;
+do $$ begin
+  assert t.dblink_send_query('c2', $q$select t.reserve((select id from t.conc where k = 'a'), 'house_openrouter', 6.00)::text$q$) = 1, 'sent';
+  perform pg_sleep(0.3);
+  assert t.dblink_is_busy('c2') = 1, 'c2''s reserve waits for c1''s';
+end $$;
+commit;
+do $$
+declare
+  j jsonb := t.c2_result();
+begin
+  assert not t.ok(j) and j ->> 'reason' = 'comic_cap' and t.num(j, 'limit_usd') = 7 and t.num(j, 'total_usd') = 6,
+    'after c1 commits, c2 sees its $6.00 and is refused: ' || j::text;
+  assert (select sum(est_usd) from public.house_spend where comic_id = (select id from t.conc where k = 'a')) <= 7, 'the $7 cap holds across sessions';
+end $$;
+
+-- (b) Settle against reserve: comic b holds $1.00; c1 settles it at $6.50 while c2 asks $1.00 (finishing) more.
+begin;
+do $$ begin assert t.ok(public.house_settle((select id from t.conc where k = 'b_hold'), 6.50)), 'c1 settles above the hold'; end $$;
+do $$ begin
+  assert t.dblink_send_query('c2', $q$select t.reserve((select id from t.conc where k = 'b'), 'house_openrouter', 1.00, true)::text$q$) = 1, 'sent';
+  perform pg_sleep(0.3);
+  assert t.dblink_is_busy('c2') = 1, 'c2''s reserve waits for c1''s settle';
+end $$;
+commit;
+do $$
+declare
+  j jsonb := t.c2_result();
+begin
+  assert not t.ok(j) and j ->> 'reason' = 'comic_cap' and t.num(j, 'total_usd') = 6.50,
+    'c2 counts the settled $6.50, not the $1.00 hold: ' || j::text;
+end $$;
+
+-- (c) Release against reserve: comic c holds $6.00; c1 releases it while c2 asks $6.00 on the same comic.
+begin;
+do $$ begin assert t.ok(public.house_release((select id from t.conc where k = 'c_hold'))), 'c1 releases'; end $$;
+do $$ begin
+  assert t.dblink_send_query('c2', $q$select t.reserve((select id from t.conc where k = 'c'), 'house_openrouter', 6.00)::text$q$) = 1, 'sent';
+  perform pg_sleep(0.3);
+  assert t.dblink_is_busy('c2') = 1, 'c2''s reserve waits for c1''s release';
+end $$;
+commit;
+do $$
+declare
+  j jsonb := t.c2_result();
+begin
+  assert t.ok(j), 'c2 uses the room the release freed: ' || j::text;
+  assert (select sum(case status when 'pending' then est_usd else cost_usd end) from public.house_spend
+           where comic_id = (select id from t.conc where k = 'c')) = 6, 'only c2''s $6.00 counts on comic c';
+end $$;
+select t.dblink_disconnect('c2');
 
 \echo HOUSE_COMICS_OK

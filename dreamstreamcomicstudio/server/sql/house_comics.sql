@@ -20,8 +20,9 @@
 --                         finishing), the run day's cap, the payer's day budget (runway-aware), the payer's credit
 --                         expiry or the payer's credit stop. Otherwise book a pending hold. The day is always the
 --                         run's day (p_day), never now().
---   * house_settle(...)   after the call: book the cost to the payer of the model that served it (the hold moves) and
---                         say whether a cap is now passed (`over`).
+--   * house_settle(...)   after the call: book the cost to the payer of the model that served it (the hold moves), book
+--                         the OpenRouter fee of a BYOK call (p_fee_usd) as its own row in the same step, and say whether
+--                         a cap is now passed (`over`).
 --   * house_release(...)  only for a call that was never sent: a pending hold goes to $0. An expired hold stays spent.
 --   * house_expire_holds() the 15-minute expiry on its own (the three above run it first).
 -- Every bad input raises; the server refuses the call on any error (fail closed).
@@ -30,7 +31,9 @@
 -- `platform` rows (the safety checks on the platform key) are recorded for information only: never capped here and
 -- never counted in a house cap.
 --
--- Access: see the PRIVILEGES section at the end (RLS on, no policies, clients revoked, the service role granted).
+-- Access: each table and function is locked away from public, anon and authenticated the moment it is created (RLS on,
+-- no policies, every client privilege revoked), so none of them ever exists open, even when an apply stops part-way.
+-- The service role's grants are in house_comics_grants.sql, applied after this file.
 -- Idempotent: safe to re-run; the config row is created once and never reset. Needs auth.users and public.projects.
 
 do $guard$
@@ -44,8 +47,9 @@ $guard$;
 -- ── 1. Config ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 -- The CHECK on house_config.payers: exactly the three capped payers, each with a bounded day cap, a stated credit
--- (null = no credit stop), a stop fraction in (0, 0.95] and optional ISO dates. Mirrors HOUSE_LIMITS
--- (capDayMaxUsd 70, creditMaxUsd 5000, stopFractionMax 0.95).
+-- (null = no credit stop), a stop fraction in (0, 0.95] and optional ISO dates that exist on the calendar (2031-02-30
+-- is refused: the money functions cast these dates, so a stored impossible one would make every reserve and settle of
+-- that payer raise). Mirrors HOUSE_LIMITS (capDayMaxUsd 70, creditMaxUsd 5000, stopFractionMax 0.95) and isHouseDay.
 create or replace function public.house_payers_ok(p jsonb)
 returns boolean
 language plpgsql
@@ -96,15 +100,23 @@ begin
       if coalesce(jsonb_typeof(v -> f), 'null') not in ('null', 'string') then
         return false;
       end if;
-      if jsonb_typeof(v -> f) = 'string'
-         and (v ->> f) !~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' then
-        return false;
+      if jsonb_typeof(v -> f) = 'string' then
+        if (v ->> f) !~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' then
+          return false;
+        end if;
+        -- The same cast house_cap_refusal makes (the pattern above keeps it to ISO, whatever the DateStyle).
+        begin
+          perform (v ->> f)::date;
+        exception when others then
+          return false;
+        end;
       end if;
     end loop;
   end loop;
   return true;
 end;
 $$;
+revoke all on function public.house_payers_ok(jsonb) from public, anon, authenticated;
 
 create table if not exists public.house_config (
   id smallint primary key default 1,
@@ -127,6 +139,8 @@ create table if not exists public.house_config (
   updated_at timestamptz not null default now(),
   updated_by uuid references auth.users(id) on delete set null
 );
+alter table public.house_config enable row level security;
+revoke all on table public.house_config from public, anon, authenticated;
 
 -- Checks (re-created on every apply, so the ceilings are always in place).
 alter table public.house_config drop constraint if exists house_config_single_row_check;
@@ -173,6 +187,8 @@ create table if not exists public.house_runs (
   constraint house_runs_day_key unique (day),
   constraint house_runs_id_day_key unique (id, day)
 );
+alter table public.house_runs enable row level security;
+revoke all on table public.house_runs from public, anon, authenticated;
 
 alter table public.house_runs drop constraint if exists house_runs_mode_check;
 alter table public.house_runs add constraint house_runs_mode_check check (mode in ('rehearsal', 'calibration', 'daily'));
@@ -217,6 +233,8 @@ create table if not exists public.house_comics (
   constraint house_comics_run_slot_key unique (run_id, slot),
   constraint house_comics_id_run_day_key unique (id, run_id, day)
 );
+alter table public.house_comics enable row level security;
+revoke all on table public.house_comics from public, anon, authenticated;
 
 alter table public.house_comics drop constraint if exists house_comics_slot_check;
 alter table public.house_comics add constraint house_comics_slot_check check (slot between 1 and 10);
@@ -271,6 +289,8 @@ create table if not exists public.house_spend (
   -- The row's run and day are its comic's. No cascade: money rows are never deleted with a comic.
   constraint house_spend_comic_fkey foreign key (comic_id, run_id, day) references public.house_comics (id, run_id, day)
 );
+alter table public.house_spend enable row level security;
+revoke all on table public.house_spend from public, anon, authenticated;
 
 alter table public.house_spend drop constraint if exists house_spend_payer_check;
 alter table public.house_spend add constraint house_spend_payer_check
@@ -300,7 +320,8 @@ alter table public.house_spend add constraint house_spend_text_check
 
 create index if not exists house_spend_day_payer_idx on public.house_spend (day, payer);
 create index if not exists house_spend_comic_idx on public.house_spend (comic_id);
-create index if not exists house_spend_payer_idx on public.house_spend (payer);
+-- The credit payers' lifetime sums (house_cap_refusal): one payer's rows only, with the summed columns in the index.
+create index if not exists house_spend_payer_day_idx on public.house_spend (payer, day) include (status, est_usd, cost_usd);
 create index if not exists house_spend_pending_idx on public.house_spend (reserved_at) where status = 'pending';
 create index if not exists house_comics_day_idx on public.house_comics (day);
 -- A project belongs to at most one house comic (the admin pages route looks house comics up by project).
@@ -318,6 +339,7 @@ begin
   return new;
 end;
 $$;
+revoke all on function public.house_touch_updated_at() from public, anon, authenticated;
 
 drop trigger if exists house_config_touch on public.house_config;
 create trigger house_config_touch before update on public.house_config
@@ -346,6 +368,7 @@ begin
   return n;
 end;
 $$;
+revoke all on function public.house_expire_holds() from public, anon, authenticated;
 
 -- The first house cap that `p_est` more on this comic, run day and payer would pass, or null when it fits.
 -- Internal: the callers hold the house_config row lock. `platform` is never capped.
@@ -355,6 +378,9 @@ $$;
 --             > the payer's day budget: min(day_cap, room) and, with a runway date, room / days left (run day and the
 --             runway's last day included; the runway ends at the expiry when that is sooner), where room is the stop
 --             less what the payer spent on other run days.
+-- A payer without a credit (credit_usd null: the house OpenRouter key) reads only its run day; a credit payer reads its
+-- whole ledger. The credit is cumulative: credit_usd is everything ever bought for that payer (a top-up is added to it
+-- and the expiry moved), so one payer's lifetime spend can never pass 5000 × 0.95 = $4,750.
 create or replace function public.house_cap_refusal(
   p_cfg public.house_config,
   p_comic uuid,
@@ -417,18 +443,23 @@ begin
     return jsonb_build_object('reason', 'payer_expired', 'limit_usd', 0, 'total_usd', 0);
   end if;
 
-  select coalesce(sum(case when s.day = p_day then
-                        case s.status when 'pending' then s.est_usd when 'released' then 0 else s.cost_usd end end), 0),
-         coalesce(sum(case when s.day <> p_day then
-                        case s.status when 'pending' then s.est_usd when 'released' then 0 else s.cost_usd end end), 0)
-    into v_payer_day, v_payer_other
-    from public.house_spend s
-   where s.payer = p_payer;
-
   v_day_cap := least(greatest(coalesce((v_p ->> 'day_cap_usd')::numeric, 0), 0), 70);
   v_credit := (v_p ->> 'credit_usd')::numeric;
   v_budget := v_day_cap;
-  if v_credit is not null then
+  if v_credit is null then
+    -- No credit stop: the run day alone (house_spend_day_payer_idx), never a scan of the payer's whole ledger.
+    select coalesce(sum(case s.status when 'pending' then s.est_usd when 'released' then 0 else s.cost_usd end), 0)
+      into v_payer_day
+      from public.house_spend s
+     where s.day = p_day and s.payer = p_payer;
+  else
+    select coalesce(sum(case when s.day = p_day then
+                          case s.status when 'pending' then s.est_usd when 'released' then 0 else s.cost_usd end end), 0),
+           coalesce(sum(case when s.day <> p_day then
+                          case s.status when 'pending' then s.est_usd when 'released' then 0 else s.cost_usd end end), 0)
+      into v_payer_day, v_payer_other
+      from public.house_spend s
+     where s.payer = p_payer;
     v_stop := greatest(v_credit, 0) * least(greatest(coalesce((v_p ->> 'stop_fraction')::numeric, 0), 0), 0.95);
     if v_payer_day + v_payer_other + p_est > v_stop then
       return jsonb_build_object('reason', 'payer_stop', 'limit_usd', round(v_stop, 6), 'total_usd', round(v_payer_day + v_payer_other, 6));
@@ -447,6 +478,7 @@ begin
   return null;
 end;
 $$;
+revoke all on function public.house_cap_refusal(public.house_config, uuid, date, text, numeric, boolean) from public, anon, authenticated;
 
 -- Before every paid house call. Returns {"ok": true, "spend_id", "payer", "expired"} or
 -- {"ok": false, "reason", "payer", "limit_usd"?, "total_usd"?, "expired"}. Reasons: switched_off, rehearsal,
@@ -526,16 +558,24 @@ begin
   return jsonb_build_object('ok', true, 'spend_id', v_id, 'payer', p_payer, 'expired', v_expired);
 end;
 $$;
+revoke all on function public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean) from public, anon, authenticated;
 
 -- After a paid call. p_payer is the payer of the model that served it (null keeps the reserved payer); the row and
--- its amount move there. A late settle of an expired hold never books less than the hold. Returns
--- {"ok": true, "payer", "from_payer", "cost_usd", "over", "over_reason"} or {"ok": false, "reason": "already_settled"}.
--- Raises on bad input, and on any move to or from the `platform` payer.
+-- its amount move there. A late settle of an expired hold never books less than the hold.
+--   * A `platform` row (a safety check on the platform key) stays `platform` whatever p_payer says: the key paid, not
+--     the served model's payer. Capped spend never moves to `platform` (that would hide it from the caps): raises.
+--   * p_fee_usd (BYOK calls only): OpenRouter's fee for the call, booked in the same step as its own settled
+--     `house_openrouter` row (kind byok_fee) on the same comic, run and day. Never refused (the money is spent); a
+--     second settle of the row books no second fee.
+-- Returns {"ok": true, "payer", "from_payer", "cost_usd", "fee_usd", "fee_spend_id", "over", "over_reason"} (`over`
+-- when the served payer, or the fee's payer, is now past a cap) or {"ok": false, "reason": "already_settled"}. Raises
+-- on bad input.
 create or replace function public.house_settle(
   p_spend uuid,
   p_cost numeric,
   p_payer text default null,
-  p_model text default null
+  p_model text default null,
+  p_fee_usd numeric default null
 )
 returns jsonb
 language plpgsql
@@ -547,10 +587,15 @@ declare
   v_row public.house_spend;
   v_payer text;
   v_cost numeric;
+  v_fee numeric := coalesce(p_fee_usd, 0);
+  v_fee_id uuid;
   v_over jsonb;
 begin
   if p_cost is null or p_cost < 0 then
     raise exception 'house_settle: the cost must be 0 or more';
+  end if;
+  if v_fee < 0 then
+    raise exception 'house_settle: the fee must be 0 or more';
   end if;
   if p_payer is not null and p_payer not in ('openai_credit', 'anthropic_credit', 'house_openrouter', 'platform') then
     raise exception 'house_settle: unknown payer';
@@ -566,9 +611,13 @@ begin
   if v_row.status = 'settled' then
     return jsonb_build_object('ok', false, 'reason', 'already_settled', 'payer', v_row.payer);
   end if;
-  v_payer := coalesce(p_payer, v_row.payer);
-  if v_payer <> v_row.payer and 'platform' in (v_payer, v_row.payer) then
-    raise exception 'house_settle: platform spend never moves to or from a capped payer';
+  if v_row.payer = 'platform' then
+    v_payer := 'platform';
+  else
+    v_payer := coalesce(p_payer, v_row.payer);
+    if v_payer = 'platform' then
+      raise exception 'house_settle: capped spend never moves to the platform payer';
+    end if;
   end if;
   v_cost := case when v_row.status = 'expired' then greatest(v_row.est_usd, p_cost) else p_cost end;
 
@@ -576,15 +625,28 @@ begin
      set status = 'settled', cost_usd = v_cost, payer = v_payer, model = coalesce(left(p_model, 200), model), settled_at = now()
    where id = p_spend;
 
+  if v_fee > 0 then
+    -- est_usd keeps the per-call CHECK (a fee is a small fraction of one call, so this never clips in practice).
+    insert into public.house_spend (comic_id, run_id, day, payer, provider, model, kind, stage, est_usd, cost_usd, status, settled_at)
+    values (v_row.comic_id, v_row.run_id, v_row.day, 'house_openrouter', 'openrouter', coalesce(left(p_model, 200), v_row.model),
+            'byok_fee', v_row.stage, least(v_fee, 7), v_fee, 'settled', now())
+    returning id into v_fee_id;
+  end if;
+
   if v_cfg.id is null then
     v_over := jsonb_build_object('reason', 'switched_off');
   else
     v_over := public.house_cap_refusal(v_cfg, v_row.comic_id, v_row.day, v_payer, 0, true);
+    if v_over is null and v_fee > 0 then
+      v_over := public.house_cap_refusal(v_cfg, v_row.comic_id, v_row.day, 'house_openrouter', 0, true);
+    end if;
   end if;
   return jsonb_build_object('ok', true, 'payer', v_payer, 'from_payer', v_row.payer, 'cost_usd', round(v_cost, 6),
+                            'fee_usd', round(v_fee, 6), 'fee_spend_id', v_fee_id,
                             'over', v_over is not null, 'over_reason', v_over ->> 'reason');
 end;
 $$;
+revoke all on function public.house_settle(uuid, numeric, text, text, numeric) from public, anon, authenticated;
 
 -- Only for a call that was never sent: a pending hold goes to $0. Returns {"ok": true} or
 -- {"ok": false, "reason": <the row's status>} (an expired hold stays spent). Raises on an unknown row.
@@ -611,42 +673,9 @@ begin
   return jsonb_build_object('ok', true);
 end;
 $$;
-
--- ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
--- PRIVILEGES (grants, revokes and row level security; review this section on its own)
---   * RLS on all four tables, with no policies: a client role sees and writes nothing even if a grant reappears.
---   * Every privilege of public, anon and authenticated revoked on the tables and the functions.
---   * The service role (the server) granted the tables and the functions it calls. Supabase's default privileges
---     already give it these; the grants make the file stand on its own.
--- ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
-alter table public.house_config enable row level security;
-alter table public.house_runs enable row level security;
-alter table public.house_comics enable row level security;
-alter table public.house_spend enable row level security;
-
-revoke all on table public.house_config, public.house_runs, public.house_comics, public.house_spend
-  from public, anon, authenticated;
-grant select, insert, update, delete on table public.house_config, public.house_runs, public.house_comics, public.house_spend
-  to service_role;
-
-revoke all on function public.house_payers_ok(jsonb) from public, anon, authenticated;
-revoke all on function public.house_touch_updated_at() from public, anon, authenticated;
-revoke all on function public.house_expire_holds() from public, anon, authenticated;
-revoke all on function public.house_cap_refusal(public.house_config, uuid, date, text, numeric, boolean) from public, anon, authenticated;
-revoke all on function public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean) from public, anon, authenticated;
-revoke all on function public.house_settle(uuid, numeric, text, text) from public, anon, authenticated;
 revoke all on function public.house_release(uuid) from public, anon, authenticated;
 
--- house_payers_ok runs inside the house_config CHECK, which needs EXECUTE for the writer.
-grant execute on function public.house_payers_ok(jsonb) to service_role;
-grant execute on function public.house_expire_holds() to service_role;
-grant execute on function public.house_cap_refusal(public.house_config, uuid, date, text, numeric, boolean) to service_role;
-grant execute on function public.house_reserve(uuid, uuid, date, text, text, text, text, numeric, boolean) to service_role;
-grant execute on function public.house_settle(uuid, numeric, text, text) to service_role;
-grant execute on function public.house_release(uuid) to service_role;
-
--- ── Post-apply checks (read-only) ───────────────────────────────────────────────────────────────────────────────
+-- ── Post-apply checks (read-only; after house_comics_grants.sql) ────────────────────────────────────────────────
 -- 1) RLS on, no policies, no client privilege:
 --    select relname, relrowsecurity from pg_class where relname in ('house_config', 'house_runs', 'house_comics', 'house_spend');
 --    select count(*) from pg_policies where tablename like 'house\_%';                                              -- 0
