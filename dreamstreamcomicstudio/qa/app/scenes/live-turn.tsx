@@ -1,8 +1,8 @@
 // QA scene `live-turn` (liveturn LT-2; the scene contract is in qa/app/index.tsx): the Director's turn survives leaving
 // the comic. The real studio controller (useStudio) runs over a fake transport that streams a scripted turn:
 //
-//   1. The page opens on the comic and sends one message: the Director reads the brief and starts planning
-//      ("Thinking…", with the steps under "Director activity").
+//   1. The page opens on the comic, still, as the studio opens. "Send the sample message" sends one message: the
+//      Director reads the brief and starts planning ("Thinking…", with the steps under "Director activity").
 //   2. "Settings" unmounts the studio, as App does when you open Settings, My comics or another comic. While you are
 //      there the Director finishes planning and starts checking the cast: the stream keeps reading, held by
 //      components/comicstudio/live/studioStreams.ts.
@@ -10,8 +10,11 @@
 //      finished while you were away.
 //   4. "Let the Director finish" streams the reply in. The last line names the moments an alert would hear.
 //
-// `?step=away` opens on step 2 and `?step=back` on step 3 (each plays the earlier steps first), so a screenshot needs
-// no clicks. Nothing reaches the network and nothing spends: the "server" lives in this page, and so do its timers.
+// `?step=start` sends at once (step 1 done), `?step=away` opens on step 2 and `?step=back` on step 3 (each plays the
+// earlier steps first), so a screenshot needs no clicks. Without a step nothing changes until a press, so the layout
+// smoke measures a page that starts still under reduced motion (the composer's controls change state once a turn
+// runs). The studio column clips its overflow as the studio's own root does (ComicStudio.tsx). Nothing reaches the
+// network and nothing spends: the "server" lives in this page, and so do its timers.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '../../../lib/utils';
@@ -36,7 +39,7 @@ const STEP_MS = 160;
 
 type Phase = 'idle' | 'planning' | 'checking' | 'replying' | 'done';
 type View = 'comic' | 'settings';
-type Step = 'start' | 'away' | 'back';
+type Step = 'still' | 'start' | 'away' | 'back';
 
 /** A render the fixture left queued or drawing, as finished. */
 const settled = <R extends RenderState>(r: R): R => (r.status === 'queued' || r.status === 'rendering' ? { ...r, status: 'ready' } : r);
@@ -174,20 +177,33 @@ class ScriptedServer {
 }
 
 /** The studio, mounted only while the comic is the view (as in App): leaving unmounts it. */
-const StudioView: React.FC<{ server: ScriptedServer; sent: React.MutableRefObject<boolean> }> = ({ server, sent }) => {
+const StudioView: React.FC<{ server: ScriptedServer; sent: React.MutableRefObject<boolean>; sendWanted: boolean; onSent: () => void }> = ({ server, sent, sendWanted, onSent }) => {
   const studio = useStudio(PROJECT_ID, { transport: server.transport });
   const sendRef = useRef(studio.send);
   sendRef.current = studio.send;
+  const onSentRef = useRef(onSent);
+  onSentRef.current = onSent;
   const loaded = !!studio.doc;
-  // The sample message goes once per page, on the first load (a remount after Settings never sends it again).
+  // The sample message goes once per page, once it is asked for and the comic has loaded (a remount after Settings
+  // never sends it again).
   useEffect(() => {
-    if (!loaded || sent.current) return;
+    if (!loaded || !sendWanted || sent.current) return;
     sent.current = true;
+    onSentRef.current();
     void sendRef.current(SAMPLE_MESSAGE);
-  }, [loaded, sent]);
+  }, [loaded, sendWanted, sent]);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <ConversationPane studio={studio} />
+    // As the studio itself does (ComicStudio.tsx): the pane mounts once the comic has loaded (a still line until then,
+    // so the composer never fades from its loading state), and the root clips its overflow, so the composer's chip
+    // strip never widens the page on a phone in landscape while it first measures itself.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {loaded ? (
+        <ConversationPane studio={studio} />
+      ) : (
+        <p role="status" className={cn('m-0 px-4 py-6 text-center text-[length:var(--ds-text-sm)]', MUTED)}>
+          Opening the comic…
+        </p>
+      )}
     </div>
   );
 };
@@ -206,9 +222,9 @@ const MOMENT_WORDS: Record<StudioMoment['phase'], string> = { replied: 'The Dire
 const momentLine = (m: StudioMoment): string => (m.phase === 'settled' ? `${MOMENT_WORDS.settled} (${m.outcome ?? 'done'})` : MOMENT_WORDS.replied);
 
 const wantedStep = (): Step => {
-  if (typeof window === 'undefined') return 'start';
+  if (typeof window === 'undefined') return 'still';
   const v = new URLSearchParams(window.location.search).get('step');
-  return v === 'away' || v === 'back' ? v : 'start';
+  return v === 'start' || v === 'away' || v === 'back' ? v : 'still';
 };
 
 function LiveTurnScene() {
@@ -218,6 +234,9 @@ function LiveTurnScene() {
   const [heard, setHeard] = useState<string[]>([]);
   const sentRef = useRef(false);
   const [step] = useState(wantedStep);
+  // Without a step the page stays still until "Send the sample message"; any step sends at once.
+  const [sendWanted, setSendWanted] = useState(step !== 'still');
+  const [sent, setSent] = useState(false);
 
   useEffect(() => server.onChange(() => setPhase(server.phase)), [server]);
   useEffect(() => () => server.dispose(), [server]);
@@ -225,7 +244,7 @@ function LiveTurnScene() {
 
   // ?step=away / ?step=back: play the earlier steps without clicks.
   useEffect(() => {
-    if (step === 'start') return;
+    if (step === 'still' || step === 'start') return;
     if (phase === 'planning' && view === 'comic') {
       setView('settings');
       server.away();
@@ -263,6 +282,9 @@ function LiveTurnScene() {
               { value: 'settings', label: 'Settings' }
             ]}
           />
+          <Button variant="outline" size="sm" disabled={sendWanted || sent || view !== 'comic'} onClick={() => setSendWanted(true)}>
+            Send the sample message
+          </Button>
           <Button variant="outline" size="sm" disabled={!canFinish} onClick={() => server.finish()}>
             Let the Director finish
           </Button>
@@ -271,7 +293,7 @@ function LiveTurnScene() {
           {heard.length ? `What an alert would hear: ${heard.join(' · ')}` : 'What an alert would hear: nothing yet'}
         </p>
       </header>
-      {view === 'comic' ? <StudioView server={server} sent={sentRef} /> : <SettingsView />}
+      {view === 'comic' ? <StudioView server={server} sent={sentRef} sendWanted={sendWanted} onSent={() => setSent(true)} /> : <SettingsView />}
     </main>
   );
 }
