@@ -52,6 +52,8 @@ interface ChatSidebarProps {
   activeId: string | null;
   /** Ids of chats currently generating an answer (shows a spinner). */
   generatingIds?: ReadonlySet<string>;
+  /** Ids of chats with an answer the person has not seen yet (an ink dot until the chat is opened). */
+  unseenIds?: ReadonlySet<string>;
   hasMemory: boolean;
   /** Which main view is showing — used to highlight Library/Dashboards rows. */
   view?: 'chat' | 'home' | 'library' | 'dashboards' | 'gallery';
@@ -87,11 +89,13 @@ const SessionRow: React.FC<{
   projects: ChatProject[];
   active: boolean;
   generating?: boolean;
+  /** An answer landed while the person was elsewhere. */
+  unseen?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onRename: (title: string) => void;
   onMoveToProject: (projectId: string | null) => void;
-}> = ({ session, projects, active, generating, onSelect, onDelete, onRename, onMoveToProject }) => {
+}> = ({ session, projects, active, generating, unseen, onSelect, onDelete, onRename, onMoveToProject }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
@@ -147,9 +151,16 @@ const SessionRow: React.FC<{
         className={`flex flex-1 min-w-0 items-center gap-1.5 self-stretch rounded-md text-left ${FOCUS_RING}`}
       >
         {generating && <Loader2 aria-hidden className={`w-3.5 h-3.5 shrink-0 ${ACCENT_TEXT} animate-spin`} />}
-        {!generating && session.parentSessionId && <GitBranch aria-hidden className="w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)]" />}
+        {/* The answer landed while the person was elsewhere: an ink dot in the spinner's place until the chat is opened. */}
+        {!generating && unseen && (
+          <span data-chat-unseen="" className="inline-flex w-3.5 h-3.5 shrink-0 items-center justify-center" aria-hidden>
+            <span className="block size-2 rounded-full bg-[var(--ds-ink)]" />
+          </span>
+        )}
+        {!generating && !unseen && session.parentSessionId && <GitBranch aria-hidden className="w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)]" />}
         <span className={`flex-1 min-w-0 truncate ${active ? `font-medium ${INK}` : 'text-[var(--ds-ink)]'}`}>{session.title}</span>
         {generating && <span className="sr-only">(answering)</span>}
+        {!generating && unseen && <span className="sr-only">(new answer)</span>}
       </button>
 
       <div ref={menuRef} className="relative shrink-0">
@@ -347,7 +358,7 @@ const FooterAccount: React.FC<{
 // ---------------------------------------------------------------------------
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
-  sessions, projects, activeId, generatingIds, hasMemory, isAdmin = false, view = 'chat',
+  sessions, projects, activeId, generatingIds, unseenIds, hasMemory, isAdmin = false, view = 'chat',
   userName, userEmail, planLabel,
   onSelect, onNew, onDelete, onRename, onMoveToProject,
   onNewProject, onEditProject, onDeleteProject, onEditMemory, onBack,
@@ -421,6 +432,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       projects={projects}
       active={s.id === activeId}
       generating={generatingIds?.has(s.id)}
+      unseen={s.id !== activeId && !!unseenIds?.has(s.id)}
       onSelect={() => onSelect(s.id)}
       onDelete={() => onDelete(s.id)}
       onRename={(title) => onRename(s.id, title)}
