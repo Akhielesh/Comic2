@@ -701,7 +701,7 @@ excluded; `live/**` excluded until DS-11):
 | Guard | Fails on |
 | --- | --- |
 | `legacyKitGuard` | `border-black`, `shadow-comic`, `font-comic`, `brand-*`, Tailwind `font-display` (Bangers); a never rule since the Atlas conversion (content pinned in its `ALLOWLIST`) |
-| `terracottaGuard` | the terracotta literal and its hover hex |
+| `terracottaGuard` | the terracotta literal and its hover hex; the Comic Studio app icons off ink and paper (mark, icon script, PNGs) |
 | `localCxGuard` | a local `const cx =` |
 | `zLadderGuard` | `z-[…]` / `z-NN` outside the `Z` recipe (`components/ds/**` and `studioDesign.ts` are excluded from this one guard only) |
 | `statusInkGuard` | raw chromatic text colours (content and data-viz allowlisted, one line of reason each) |
