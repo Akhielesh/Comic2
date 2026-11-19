@@ -1,0 +1,158 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`planDailySlate > prints 14 days of slates for a read-through 1`] = `
+"2026-12-01
+  #1 · webtoon 8p silent · graphic-novel-painterly (color) · gpt-image-2.6-flare standard 1K 9:16 · general PG · en · comedy
+  #2 · comic 8p dialogue · woodcut (bw) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · en · coming-of-age
+  #3 · strip 1p silent · retrofuturism (color) · gpt-image-2.6-sunburst standard 1K 16:9 · general PG · en · sci-fi
+  #4 · manga 7p dialogue · dieselpunk (color) · nano-banana-2.1 standard 2K 2:3 · teen PG-13 · ja +en · animal-tales
+  #5 · storybook 4p dialogue · watercolor-storybook (color) · nano-banana-pro pro 2K 4:5 · children G · hi +en · inventions
+  #6 · manga 8p dialogue · dieselpunk (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · fr +en · mystery
+  #7 · comic 7p dialogue · noir-ink (bw) · nano-banana-2.1 standard 2K 2:3 · teen PG-13 · en +hi · survival
+  #8 · comic 6p dialogue · graphic-novel-painterly (color) · nano-banana-pro pro 2K 2:3 · children PG · en +ja · fable
+  #9 · strip 2p silent · retro-pop (limited) · gpt-image-2.6-sunburst standard 1K 16:9 · general PG · en · sports
+  #10 · storybook 6p dialogue · watercolor-storybook (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · adventure
+2026-12-02
+  #1 · comic 7p dialogue · surreal-dream (color) · nano-banana-2.1 standard 2K 2:3 · general PG · en +fr · heist
+  #2 · webtoon 12p dialogue · ink-one-colour (limited) · nano-banana-pro pro 2K 9:16 · teen PG-13 · pt +en · food
+  #3 · strip 3p silent · ligne-claire (color) · gpt-image-2.6-flare standard 1K 16:9 · general PG · en · animal-tales
+  #4 · comic 7p dialogue · surreal-dream (color) · nano-banana-2.1 standard 2K 2:3 · children PG · hi +en · slice-of-life
+  #5 · comic 6p silent · ligne-claire (color) · gpt-image-2.6-flare standard 1K 2:3 · children PG · en · nature
+  #6 · short 2p silent · indie-risograph (limited) · nano-banana-2.1 standard 2K 5:4 · general PG · en · friendship
+  #7 · storybook 4p dialogue · surreal-dream (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · en · fantasy
+  #8 · webtoon 12p dialogue · webtoon-cel (color) · gpt-image-2.6-flare standard 1K 9:16 · general PG · en · mystery
+  #9 · manga 8p dialogue · mono-wash (limited) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · en · horror-lite
+  #10 · manga 7p dialogue · cozy-anime (color) · nano-banana-pro pro 2K 2:3 · teen PG-13 · fr +en · music
+2026-12-03
+  #1 · comic 7p dialogue · manga-screentone (bw) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · es +en · adventure
+  #2 · webtoon 12p dialogue · ink-wash (bw) · gpt-image-2.6-sunburst standard 1K 9:16 · teen PG-13 · en · inventions
+  #3 · strip 2p silent · cartoon-strip (color) · gpt-image-2.6-flare standard 1K 16:9 · teen PG-13 · en · comedy
+  #4 · comic 4p dialogue · modern-heroic (color) · nano-banana-2.1 standard 2K 2:3 · general PG · en +fr · music
+  #5 · short 3p silent · modern-heroic (color) · nano-banana-pro pro 2K 5:4 · general PG · en · survival
+  #6 · webtoon 10p dialogue · modern-heroic (color) · gpt-image-2.6-flare standard 1K 9:16 · general PG · en · coming-of-age
+  #7 · manga 8p dialogue · cyberpunk (color) · gpt-image-2.6-flare standard 1K 2:3 · children PG · ja +en · sci-fi
+  #8 · comic 5p dialogue · brutalist (limited) · nano-banana-2.1 standard 2K 2:3 · general PG · en · fantasy
+  #9 · webtoon 10p dialogue · chalk-pastel (color) · nano-banana-2.1 standard 2K 9:16 · children PG · en +pt · sports
+  #10 · storybook 4p dialogue · modern-heroic (color) · nano-banana-pro pro 2K 4:5 · children G · fr +en · fable
+2026-12-04
+  #1 · comic 6p dialogue · woodcut (bw) · nano-banana-pro pro 2K 2:3 · general PG · en · comedy
+  #2 · manga 8p silent · retro-pop (limited) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · en · heist
+  #3 · short 2p silent · dieselpunk (color) · nano-banana-2.1 standard 2K 5:4 · general PG · en · mystery
+  #4 · storybook 6p dialogue · graphic-novel-painterly (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en +hi · slice-of-life
+  #5 · webtoon 10p dialogue · dieselpunk (color) · nano-banana-pro pro 2K 9:16 · teen PG-13 · es +en · horror-lite
+  #6 · comic 5p silent · retrofuturism (color) · gpt-image-2.6-flare standard 1K 2:3 · children PG · en · food
+  #7 · webtoon 9p dialogue · retrofuturism (color) · gpt-image-2.6-sunburst standard 1K 9:16 · children PG · fr +en · friendship
+  #8 · strip 1p silent · retrofuturism (color) · nano-banana-2.1 standard 2K 16:9 · teen PG-13 · en · nature
+  #9 · manga 8p dialogue · dark-fantasy (color) · nano-banana-2.1 standard 2K 2:3 · general PG · en +hi · sci-fi
+  #10 · manga 6p dialogue · noir-ink (bw) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · pt +en · animal-tales
+2026-12-05
+  #1 · storybook 6p dialogue · ligne-claire (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · inventions
+  #2 · strip 3p silent · indie-risograph (limited) · nano-banana-pro pro 2K 16:9 · teen PG-13 · en · sports
+  #3 · webtoon 12p dialogue · ink-one-colour (limited) · gpt-image-2.6-sunburst standard 1K 9:16 · general PG · en +ja · fable
+  #4 · short 2p silent · cozy-anime (color) · gpt-image-2.6-flare standard 1K 4:3 · children G · en · fantasy
+  #5 · comic 8p dialogue · cozy-anime (color) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · en · coming-of-age
+  #6 · comic 6p dialogue · cozy-anime (color) · nano-banana-2.1 standard 2K 2:3 · teen PG-13 · pt +en · music
+  #7 · webtoon 8p dialogue · mono-wash (limited) · gpt-image-2.6-sunburst standard 1K 9:16 · general PG · en +pt · friendship
+  #8 · webtoon 9p dialogue · webtoon-cel (color) · nano-banana-pro pro 2K 9:16 · general PG · fr +en · food
+  #9 · storybook 6p dialogue · watercolor-storybook (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · adventure
+  #10 · manga 8p dialogue · cozy-anime (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · ja +en · survival
+2026-12-06
+  #1 · storybook 5p dialogue · chalk-pastel (color) · nano-banana-pro pro 2K 4:5 · children G · en +fr · nature
+  #2 · strip 2p silent · cartoon-strip (color) · nano-banana-2.1 standard 2K 16:9 · teen PG-13 · en · heist
+  #3 · strip 1p silent · modern-heroic (color) · nano-banana-pro pro 2K 16:9 · children G · en · mystery
+  #4 · webtoon 9p dialogue · ink-wash (bw) · gpt-image-2.6-sunburst standard 1K 9:16 · general PG · pt +en · sci-fi
+  #5 · comic 8p dialogue · modern-heroic (color) · gpt-image-2.6-flare standard 1K 2:3 · general PG · en +es · sports
+  #6 · comic 4p dialogue · chalk-pastel (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · fr +en · horror-lite
+  #7 · comic 8p silent · chalk-pastel (color) · nano-banana-2.1 standard 2K 2:3 · teen PG-13 · en · comedy
+  #8 · comic 7p dialogue · brutalist (limited) · nano-banana-2.1 standard 2K 2:3 · general PG · hi +en · adventure
+  #9 · manga 7p silent · manga-screentone (bw) · gpt-image-2.6-flare standard 1K 2:3 · general PG · en · animal-tales
+  #10 · storybook 4p dialogue · surreal-dream (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · en · slice-of-life
+2026-12-07
+  #1 · strip 3p silent · cyberpunk (color) · gpt-image-2.6-flare standard 1K 16:9 · general PG · en · heist
+  #2 · comic 5p dialogue · dark-fantasy (color) · gpt-image-2.6-flare standard 1K 2:3 · teen PG-13 · fr +en · music
+  #3 · storybook 6p dialogue · graphic-novel-painterly (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en · fable
+  #4 · comic 5p dialogue · woodcut (bw) · nano-banana-2.1 standard 2K 2:3 · general PG · es +en · inventions
+  #5 · comic 8p dialogue · cyberpunk (color) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · en +hi · coming-of-age
+  #6 · webtoon 12p silent · noir-ink (bw) · nano-banana-pro pro 2K 9:16 · teen PG-13 · en · survival
+  #7 · storybook 6p dialogue · graphic-novel-painterly (color) · nano-banana-pro pro 2K 4:5 · children G · en · food
+  #8 · manga 6p dialogue · dark-fantasy (color) · nano-banana-2.1 standard 2K 2:3 · general PG · hi +en · nature
+  #9 · storybook 4p dialogue · retrofuturism (color) · nano-banana-2.1 standard 2K 4:5 · children G · en +ja · fantasy
+  #10 · short 3p silent · retro-pop (limited) · gpt-image-2.6-sunburst standard 1K 4:3 · teen PG-13 · en · friendship
+2026-12-08
+  #1 · storybook 6p dialogue · ligne-claire (color) · nano-banana-2.1 standard 2K 4:5 · children G · en +ja · mystery
+  #2 · comic 5p dialogue · cozy-anime (color) · nano-banana-pro pro 2K 2:3 · general PG · en · inventions
+  #3 · short 2p silent · cozy-anime (color) · gpt-image-2.6-sunburst standard 1K 4:3 · general PG · en · sports
+  #4 · webtoon 8p dialogue · mono-wash (limited) · nano-banana-pro pro 2K 9:16 · general PG · es +en · comedy
+  #5 · strip 2p silent · cozy-anime (color) · nano-banana-2.1 standard 2K 16:9 · teen PG-13 · en · animal-tales
+  #6 · storybook 4p dialogue · dieselpunk (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · sci-fi
+  #7 · storybook 4p dialogue · watercolor-storybook (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · fr +en · slice-of-life
+  #8 · webtoon 8p dialogue · ink-one-colour (limited) · gpt-image-2.6-sunburst standard 1K 9:16 · general PG · en · fable
+  #9 · comic 6p silent · dieselpunk (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · en · horror-lite
+  #10 · manga 8p dialogue · indie-risograph (limited) · gpt-image-2.6-flare standard 1K 2:3 · teen PG-13 · hi +en · adventure
+2026-12-09
+  #1 · comic 8p dialogue · ink-wash (bw) · nano-banana-2.1 standard 2K 2:3 · teen PG-13 · en +ja · friendship
+  #2 · storybook 6p dialogue · modern-heroic (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · es +en · fantasy
+  #3 · strip 1p silent · modern-heroic (color) · gpt-image-2.6-flare standard 1K 16:9 · general PG · en · heist
+  #4 · manga 6p silent · manga-screentone (bw) · gpt-image-2.6-flare standard 1K 2:3 · general PG · en · slice-of-life
+  #5 · manga 6p dialogue · surreal-dream (color) · nano-banana-pro pro 2K 2:3 · general PG · hi +en · coming-of-age
+  #6 · manga 8p dialogue · chalk-pastel (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · ja +en · music
+  #7 · webtoon 10p silent · brutalist (limited) · gpt-image-2.6-flare standard 1K 9:16 · general PG · en · adventure
+  #8 · manga 7p silent · chalk-pastel (color) · nano-banana-pro pro 2K 2:3 · teen PG-13 · en · survival
+  #9 · storybook 5p dialogue · surreal-dream (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · food
+  #10 · strip 1p silent · cartoon-strip (color) · nano-banana-2.1 standard 2K 16:9 · children G · en · nature
+2026-12-10
+  #1 · manga 8p dialogue · graphic-novel-painterly (color) · gpt-image-2.6-flare standard 1K 2:3 · children PG · ja +en · fable
+  #2 · comic 7p dialogue · graphic-novel-painterly (color) · nano-banana-2.1 standard 2K 2:3 · general PG · fr +en · sci-fi
+  #3 · strip 2p silent · retrofuturism (color) · gpt-image-2.6-flare standard 1K 16:9 · children G · en · inventions
+  #4 · webtoon 12p dialogue · retrofuturism (color) · gpt-image-2.6-sunburst standard 1K 9:16 · general PG · en +es · mystery
+  #5 · webtoon 12p dialogue · webtoon-cel (color) · nano-banana-2.1 standard 2K 9:16 · general PG · en +ja · nature
+  #6 · storybook 6p dialogue · graphic-novel-painterly (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en · sports
+  #7 · strip 2p silent · dark-fantasy (color) · nano-banana-2.1 standard 2K 16:9 · teen PG-13 · en · comedy
+  #8 · manga 6p silent · noir-ink (bw) · nano-banana-pro pro 2K 2:3 · teen PG-13 · en · horror-lite
+  #9 · webtoon 11p dialogue · woodcut (bw) · gpt-image-2.6-sunburst standard 1K 9:16 · teen PG-13 · es +en · animal-tales
+  #10 · comic 8p dialogue · retro-pop (limited) · nano-banana-pro pro 2K 2:3 · general PG · en · friendship
+2026-12-11
+  #1 · comic 8p dialogue · ligne-claire (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · pt +en · slice-of-life
+  #2 · storybook 6p dialogue · watercolor-storybook (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · en · music
+  #3 · manga 6p dialogue · dieselpunk (color) · nano-banana-2.1 standard 2K 2:3 · general PG · en · heist
+  #4 · manga 7p dialogue · mono-wash (limited) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · en · mystery
+  #5 · manga 7p dialogue · indie-risograph (limited) · nano-banana-pro pro 2K 2:3 · teen PG-13 · en +fr · survival
+  #6 · storybook 4p dialogue · ligne-claire (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · en · fantasy
+  #7 · short 3p silent · ligne-claire (color) · nano-banana-2.1 standard 2K 5:4 · teen PG-13 · en · coming-of-age
+  #8 · webtoon 10p dialogue · cyberpunk (color) · nano-banana-2.1 standard 2K 9:16 · general PG · fr +en · fable
+  #9 · strip 2p silent · ink-one-colour (limited) · nano-banana-pro pro 2K 16:9 · general PG · en · adventure
+  #10 · storybook 5p dialogue · ligne-claire (color) · gpt-image-2.6-flare standard 1K 3:4 · children G · es +en · food
+2026-12-12
+  #1 · storybook 4p dialogue · surreal-dream (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · hi +en · sci-fi
+  #2 · comic 5p dialogue · ink-wash (bw) · gpt-image-2.6-sunburst standard 1K 2:3 · general PG · en · nature
+  #3 · webtoon 12p dialogue · modern-heroic (color) · nano-banana-2.1 standard 2K 9:16 · general PG · en · heist
+  #4 · comic 7p dialogue · surreal-dream (color) · nano-banana-pro pro 2K 2:3 · teen PG-13 · fr +en · inventions
+  #5 · comic 5p dialogue · brutalist (limited) · nano-banana-pro pro 2K 2:3 · general PG · en +es · animal-tales
+  #6 · manga 8p dialogue · chalk-pastel (color) · gpt-image-2.6-flare standard 1K 2:3 · children PG · en · friendship
+  #7 · storybook 5p dialogue · modern-heroic (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en · sports
+  #8 · webtoon 11p dialogue · cozy-anime (color) · nano-banana-2.1 standard 2K 9:16 · general PG · ja +en · music
+  #9 · short 2p silent · cozy-anime (color) · nano-banana-2.1 standard 2K 5:4 · teen PG-13 · en · horror-lite
+  #10 · strip 3p silent · manga-screentone (bw) · gpt-image-2.6-flare standard 1K 16:9 · teen PG-13 · en · comedy
+2026-12-13
+  #1 · webtoon 11p dialogue · webtoon-cel (color) · gpt-image-2.6-flare standard 1K 9:16 · general PG · en · mystery
+  #2 · short 3p silent · woodcut (bw) · nano-banana-pro pro 2K 5:4 · teen PG-13 · en · coming-of-age
+  #3 · storybook 5p dialogue · retrofuturism (color) · nano-banana-2.1 standard 2K 4:5 · children G · ja +en · food
+  #4 · manga 7p silent · dark-fantasy (color) · gpt-image-2.6-sunburst standard 1K 2:3 · teen PG-13 · en · survival
+  #5 · comic 5p dialogue · graphic-novel-painterly (color) · nano-banana-2.1 standard 2K 2:3 · general PG · pt +en · adventure
+  #6 · webtoon 9p silent · retro-pop (limited) · nano-banana-pro pro 2K 9:16 · general PG · en · fable
+  #7 · comic 5p dialogue · retrofuturism (color) · gpt-image-2.6-flare standard 1K 2:3 · teen PG-13 · es +en · horror-lite
+  #8 · strip 3p silent · noir-ink (bw) · gpt-image-2.6-sunburst standard 1K 16:9 · general PG · en · animal-tales
+  #9 · storybook 4p dialogue · graphic-novel-painterly (color) · nano-banana-2.1 standard 2K 4:5 · children G · en +fr · slice-of-life
+  #10 · storybook 4p dialogue · graphic-novel-painterly (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en +pt · fantasy
+2026-12-14
+  #1 · storybook 4p dialogue · watercolor-storybook (color) · gpt-image-2.6-sunburst standard 1K 3:4 · children G · en · inventions
+  #2 · webtoon 12p dialogue · dieselpunk (color) · gpt-image-2.6-sunburst standard 1K 9:16 · teen PG-13 · es +en · nature
+  #3 · webtoon 12p dialogue · cyberpunk (color) · nano-banana-pro pro 2K 9:16 · teen PG-13 · en · friendship
+  #4 · comic 7p dialogue · cyberpunk (color) · nano-banana-2.1 standard 2K 2:3 · general PG · en +es · heist
+  #5 · manga 6p dialogue · mono-wash (limited) · gpt-image-2.6-flare standard 1K 2:3 · general PG · en +ja · comedy
+  #6 · strip 3p silent · indie-risograph (limited) · nano-banana-2.1 standard 2K 16:9 · general PG · en · survival
+  #7 · strip 3p silent · cartoon-strip (color) · gpt-image-2.6-flare standard 1K 16:9 · children G · en · sci-fi
+  #8 · storybook 4p dialogue · watercolor-storybook (color) · nano-banana-2.1 standard 2K 4:5 · children G · en · sports
+  #9 · comic 5p dialogue · dieselpunk (color) · gpt-image-2.6-flare standard 1K 2:3 · teen PG-13 · fr +en · music
+  #10 · webtoon 12p dialogue · ink-one-colour (limited) · nano-banana-pro pro 2K 9:16 · general PG · hi +en · coming-of-age"
+`;

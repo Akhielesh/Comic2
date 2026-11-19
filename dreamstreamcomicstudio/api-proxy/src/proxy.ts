@@ -16,6 +16,10 @@
  * the backend's per-IP rate limiting keys on real visitors, not this
  * worker's egress IPs.
  *
+ * Chat's approximate place rides X-DS-Geo (geoHeader.ts): set here from
+ * request.cf for the main host's /api/chat routes and /api/recipes/run only,
+ * and deleted from every incoming request first.
+ *
  * Agent gate (see agent-gate.ts): AI agents are answered here at the edge and
  * never reach (or wake) the backend:
  *   GET  /api/agent-gate           the check-in page (the Pages middleware sends agents here)
@@ -39,6 +43,7 @@
 import { AGENT_HEADERS, AGENT_POLICY, AGENT_QUESTIONS, AGENT_TIER_LABELS, buildDecoy, detectAgent, newCanary, renderGateHtml } from './agent-gate';
 import { logVisit, parseAnswers, storeCheckin, type D1Like } from './agent-log';
 import { handleCspReport, type CspReportEnv } from './cspReport';
+import { GEO_HEADER, geoHeaderFor } from './geoHeader';
 import { handlePublicComic, type PublicComicEnv } from './publicComic';
 import { handlePublicDiscover } from './publicDiscover';
 import { readCappedText } from './readCapped';
@@ -165,6 +170,11 @@ export default {
     if (publicComic) return publicComic;
 
     const headers = new Headers(req.headers);
+    // Chat's approximate place (geoHeader.ts): only this Worker writes it, from Cloudflare's own request data, and
+    // only for the main host's Chat routes. Whatever a request brought is dropped on every path and host.
+    headers.delete(GEO_HEADER);
+    const place = geoHeaderFor(req, url);
+    if (place) headers.set(GEO_HEADER, place);
     const clientIp = req.headers.get('CF-Connecting-IP');
     if (clientIp) {
       headers.set('X-Forwarded-For', clientIp);

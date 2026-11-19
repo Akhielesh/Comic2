@@ -19,7 +19,6 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
     throw new Error('no database in tests');
   }
 }));
-vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
 vi.mock('../services/mcpRegistry.js', () => ({ enabledMcpConfigs: async () => [] }));
 vi.mock('../ai/tools/mcpClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/tools/mcpClient.js')>()),
