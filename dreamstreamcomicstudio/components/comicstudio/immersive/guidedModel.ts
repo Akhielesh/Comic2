@@ -9,12 +9,10 @@
 
 import type { Box, ComicDoc } from '../../../shared/comic/doc';
 import { panelAtPoint, panelBoxesFor } from '../../../shared/comic/pageGeometry';
-import { GUIDED_MAX_ZOOM, GUIDED_PAD } from '../../../shared/comic/guidedCamera';
 import { readingOrder } from '../../../shared/comic/readingOrder';
 import type { ReaderItem } from '../reader/readerModel';
 
 export { readingOrder, READING_ROW_TOLERANCE as ROW_TOLERANCE } from '../../../shared/comic/readingOrder';
-export { GUIDED_MAX_ZOOM, GUIDED_PAD } from '../../../shared/comic/guidedCamera';
 
 export interface GuidedStop {
   itemIndex: number;
@@ -42,6 +40,8 @@ export interface Camera {
 }
 
 export const FULL_BOX: Box = { x: 0, y: 0, w: 1, h: 1 };
+export const GUIDED_MAX_ZOOM = 4;
+export const GUIDED_PAD = 0.05;
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
