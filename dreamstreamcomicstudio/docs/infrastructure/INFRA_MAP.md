@@ -309,7 +309,7 @@ Pixazo/Flux (`PIXAZO_API_KEY`), Ideogram (`IDEOGRAM_API_KEY`), Gemini image, NVI
   FX Frankfurter/ECB (keyless); macro Treasury FiscalData (keyless), FRED (`FRED_API_KEY`),
   Finnhub (`FINNHUB_API_KEY`).
 - **Weather/geo/places/travel:** MET Norway → Open-Meteo; Nominatim; Foursquare → OSM
-  Overpass; Amadeus flights; OSRM; IPinfo → ip-api; Jina Reader.
+  Overpass; Amadeus flights; OSRM; IPinfo (no keyless fallback); Wikidata country facts; Jina Reader.
 - **Other keys in code (not yet in the 58-var set):** `NASA_API_KEY`, `GITHUB_TOKEN`,
   `YOUTUBE_API_KEY`, `NANGO_SECRET_KEY`/`NANGO_HOST`.
 
