@@ -3,7 +3,9 @@
 // `translate` is a SPEND action: jobs.ts runFeatureAction() quotes it with estimateTranslation, runs
 // gateDecision, then calls runTranslation (actions/i18n.ts). The run is software-first:
 //   1. free paths (copies, punctuation, glossary-only lines, duplicates, loose matches) + glossary seed
-//   2. the translator — the WRITER-CLASS chain — per chunk, languages 3 at a time, validated + repaired
+//   2. the translator — the WRITER-CLASS chain — per chunk, languages up to TRANSLATE_CONCURRENCY (6) at a
+//      time, validated + repaired; a chunk that hits a rate limit or a provider 5xx is retried once; a "no"
+//      from the spending allowance stops every language
 //   3. the linguist review with a gloss — ALWAYS
 //   4. duplicates of the fresh lines copied for free, spend recorded, an APPENDED completion message
 // A rerun over unchanged text makes no model call at all (caching by sourceHash in planTranslation).
@@ -190,7 +192,7 @@ export function quoteTranslation(doc: ComicDoc, keys: StudioKeys, action: Pick<T
     if (usd > 0) lines.push({ label: englishName(lang), count: translated + plan.coverTexts.length + (plan.toReview?.length || 0), usd });
   }
   const usd = round4(lines.reduce((s, l) => s + l.usd, 0));
-  // Languages run 3 at a time.
+  // Languages run up to TRANSLATE_CONCURRENCY at a time; that changes the wait, never the price.
   return {
     estimate: { usd, imageCount: 0, model: `${modelName(trModel)} + review`, lines },
     plans,
@@ -250,23 +252,88 @@ interface LanguageResult {
   error?: string;
   usd: number;
   byok: boolean;
+  /** Chunks of this language that were asked a second time (rate limit / provider 5xx). */
+  retries?: number;
+  /** Wall time of this language in the run. */
+  ms?: number;
+  /** Set when the spending allowance said no in this or another lane: no more chunks were started. */
+  stoppedBy?: 'billing';
 }
 
-/** Simple promise pool (languages run with concurrency ≤ 3). */
-async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
+/**
+ * Simple promise pool (languages run with concurrency ≤ `limit`). Once `halted()` is true no worker takes
+ * another item; the items never started stay `undefined`.
+ */
+async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, halted: () => boolean = () => false): Promise<(R | undefined)[]> {
+  const out: (R | undefined)[] = new Array(items.length).fill(undefined);
   let next = 0;
   const worker = async () => {
-    while (next < items.length) {
+    while (next < items.length && !halted()) {
       const i = next++;
       out[i] = await fn(items[i]);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, Math.floor(limit) || 1), items.length) }, worker));
   return out;
 }
 
-export const TRANSLATE_CONCURRENCY = 3;
+/**
+ * Languages translated at once (3 before 2026-11-19). Each lane holds at most one allowance hold and one
+ * provider call; lower it if the `comic_translate_timing` line shows rate-limit retries on people's own keys.
+ */
+export const TRANSLATE_CONCURRENCY = 6;
+
+/** Run knobs (tests shorten the wait): the lanes, and the wait before a chunk's one retry (min..max, jittered). */
+export const TRANSLATE_TIMINGS = { lanes: TRANSLATE_CONCURRENCY, retryMinMs: 1500, retryMaxMs: 3000 };
+
+/** The wait before a chunk is asked again: uniformly between retryMinMs and retryMaxMs. */
+export const chunkRetryDelayMs = (random: () => number = Math.random): number => {
+  const lo = Math.max(0, TRANSLATE_TIMINGS.retryMinMs);
+  const hi = Math.max(lo, TRANSLATE_TIMINGS.retryMaxMs);
+  return Math.round(lo + (hi - lo) * Math.min(1, Math.max(0, random())));
+};
+
+/**
+ * Failures that never get a second ask: Stop, the allowance, no key, and a timeout (it already waited the
+ * role's full time and was billed an estimate; asking again could bill a second one).
+ */
+const NEVER_RETRY = new Set(['CANCELLED', 'BILLING_DENIED', 'NO_TEXT_KEY', 'TIMEOUT']);
+
+/**
+ * True for a chunk failure worth one more ask: a provider rate limit (429) or a provider 5xx, as the text
+ * client's error carries it, or NOT_AVAILABLE. The text client marks its permanent failures (a rejected key,
+ * a key out of credits) `retryable: false`; those are not provider 5xx and are not asked again.
+ */
+export function chunkRetryable(err: unknown): boolean {
+  if (err instanceof StudioError) {
+    if (NEVER_RETRY.has(err.code)) return false;
+    if (err.code === 'RATE_LIMIT' || err.code === 'NOT_AVAILABLE') return true;
+    return err.retryable && (err.status === 429 || (err.status >= 500 && err.status < 600));
+  }
+  if (!err || typeof err !== 'object') return false;
+  const tagged = err as { status?: unknown; statusCode?: unknown };
+  const status = Number(tagged.status ?? tagged.statusCode);
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+/** Wait `ms`, ending early when Stop is pressed (the caller checks the signal after). */
+const waitUnlessStopped = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted || ms <= 0) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+
+/** Run-wide state shared by every lane: once the allowance says no anywhere, no lane starts another call. */
+interface RunStop {
+  /** The allowance's own words, from the first lane it refused. */
+  billing?: string;
+}
 
 const ratingOf = (ctx: StudioContext) => ctx.rating ?? effectiveRating(ctx.session.doc, (ctx.caps ?? DEFAULT_CAPS).ratingCeiling).rating;
 
@@ -284,10 +351,41 @@ const extrasFor = (doc: ComicDoc, fields: EditionTextField[]): TranslatorItem[] 
   return out;
 };
 
-async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, signal: AbortSignal, onPage: (label: string) => (ok: boolean) => void): Promise<LanguageResult> {
+/** The chunk's pages as they are in `doc` now (a page deleted meanwhile drops out). */
+const chunkPages = (doc: ComicDoc, chunk: ReturnType<typeof chunkTranslation>[number]) =>
+  chunk
+    .map((g) => ({ page: doc.pages.find((p) => p.id === g.pageId), lineIds: new Set(g.lineIds) }))
+    .filter((g): g is { page: NonNullable<typeof g.page>; lineIds: Set<string> } => !!g.page);
+
+const cancelledError = () => new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
+
+const emptyResult = (lang: string): LanguageResult => ({
+  lang,
+  translated: 0,
+  free: 0,
+  reviewed: 0,
+  autoFixed: 0,
+  failed: 0,
+  unsafe: 0,
+  tooLong: 0,
+  reviewSkipped: 0,
+  cancelled: false,
+  usd: 0,
+  byok: false,
+  retries: 0,
+  ms: 0
+});
+
+/** The allowance said no: every lane stops (the first refusal's words are kept for the run's message). */
+const stopForBilling = (stop: RunStop, res: LanguageResult, message: string) => {
+  if (stop.billing === undefined) stop.billing = message;
+  res.stoppedBy = 'billing';
+};
+
+async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, signal: AbortSignal, onPage: (label: string) => (ok: boolean) => void, stop: RunStop = {}): Promise<LanguageResult> {
   const spec = languageSpec(lang)!;
   const tracker: TextSpendTracker = newTextSpendTracker();
-  const res: LanguageResult = { lang, translated: 0, free: 0, reviewed: 0, autoFixed: 0, failed: 0, unsafe: 0, tooLong: 0, reviewSkipped: 0, cancelled: false, usd: 0, byok: false };
+  const res: LanguageResult = emptyResult(lang);
   const llmT = billedLlm(ctx, { stage: 'translate', operation: 'comic.text.translator', tracker });
   const llmL = billedLlm(ctx, { stage: 'translate', operation: 'comic.text.linguist', tracker });
   const rating = ratingOf(ctx);
@@ -305,16 +403,36 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
         res.cancelled = true;
         break;
       }
-      const doc = ctx.session.doc;
-      const pages = chunk
-        .map((g) => ({ page: doc.pages.find((p) => p.id === g.pageId), lineIds: new Set(g.lineIds) }))
-        .filter((g): g is { page: NonNullable<typeof g.page>; lineIds: Set<string> } => !!g.page);
-      const first = pages[0]?.page.n;
+      // Another lane (or this one) heard "no" from the allowance: no lane starts another chunk.
+      if (stop.billing !== undefined) {
+        res.stoppedBy = 'billing';
+        break;
+      }
+      const first = chunkPages(ctx.session.doc, chunk)[0]?.page.n;
       const end = onPage(first ? `Translating page ${first} into ${spec.endonym}…` : `Translating the title into ${spec.endonym}…`);
+      // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
+      // paid for, so its lines are kept), exactly like a render that is already drawing. Each ask reads the
+      // doc as it is then (the author may have edited lines during a retry's wait).
+      const ask = () => {
+        const doc = ctx.session.doc;
+        return translateChunk(llmT, { doc, lang, pages: chunkPages(doc, chunk), extras: i === 0 ? extras : [], rating });
+      };
       try {
-        // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
-        // paid for, so its lines are kept), exactly like a render that is already drawing.
-        const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating });
+        let result: Awaited<ReturnType<typeof translateChunk>>;
+        try {
+          result = await ask();
+        } catch (err) {
+          // A rate limit or a provider 5xx gets ONE more ask after a short jittered wait, before the chunk's
+          // lines count as failed. A failed call held nothing back (billedLlm released its hold), so the
+          // success path and its price are unchanged.
+          if (!chunkRetryable(err)) throw err;
+          await waitUnlessStopped(chunkRetryDelayMs(), signal);
+          if (cancelled(signal)) throw cancelledError();
+          if (stop.billing !== undefined) throw err;
+          res.retries = (res.retries || 0) + 1;
+          logger.warn('comic_translate_chunk_retry', { projectId: ctx.projectId, lang, code: err instanceof StudioError ? err.code : 'PROVIDER', status: err instanceof StudioError ? err.status : undefined });
+          result = await ask();
+        }
         // Ops against the doc as it is NOW (the author may have edited lines while the chunk was out).
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
         if (ops.length) ctx.session.commit(ops, { origin: 'job' });
@@ -338,15 +456,22 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
           break;
         }
         res.error = err instanceof StudioError ? err.userMessage : 'The translator did not answer.';
+        // Every lane stops BEFORE this is logged, so nothing new starts once the allowance said no.
+        if (code === 'BILLING_DENIED') stopForBilling(stop, res, res.error);
         logger.warn('comic_translate_chunk_failed', { projectId: ctx.projectId, lang, code: code || 'INTERNAL', message: (err as Error)?.message });
         res.failed += chunk.reduce((n, g) => n + g.lineIds.length, 0);
         if (code === 'BILLING_DENIED' || code === 'NO_TEXT_KEY') break;
       }
     }
 
-    // The linguist review — always (the lines just written + any current line still waiting for review).
+    // The linguist review — always (the lines just written + any current line still waiting for review) —
+    // unless the allowance said no in some lane: then no new paid call starts, and the written lines wait
+    // for review (the next run reviews them: they stay in plan.toReview).
     const reviewIds = [...new Set([...translatedIds, ...(plan.toReview || [])])];
-    if (reviewIds.length && !res.cancelled) {
+    if (reviewIds.length && !res.cancelled && stop.billing !== undefined) {
+      res.stoppedBy = 'billing';
+      res.reviewSkipped += reviewIds.length;
+    } else if (reviewIds.length && !res.cancelled) {
       const end = onPage(`Reviewing the ${spec.english} translation…`);
       const run = await reviewTranslations(llmL, ctx.session.doc, lang, reviewIds, signal);
       const outcome = applyReview(ctx.session.doc, lang, run.verdicts, rating, Date.now());
@@ -356,6 +481,11 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
       res.reviewSkipped += Math.max(0, reviewIds.length - run.verdicts.size);
       if (run.error?.code === 'CANCELLED') res.cancelled = true;
       else if (run.error && !res.error) res.error = run.error.userMessage;
+      if (run.error?.code === 'BILLING_DENIED') {
+        // The allowance's words win over an earlier chunk error: they are why nothing more runs.
+        res.error = run.error.userMessage;
+        stopForBilling(stop, res, run.error.userMessage);
+      }
       end(!run.error);
     }
   } finally {
@@ -370,7 +500,7 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
     res.usd = tracker.usd;
     res.byok = tracker.byok;
     // Only a run that did all its work is a fair comparison (a stopped or failed one billed less than planned).
-    if (!res.cancelled && !res.error) calibrate(lang, quoted, tracker.usd);
+    if (!res.cancelled && !res.error && !res.stoppedBy) calibrate(lang, quoted, tracker.usd);
   }
   return res;
 }
@@ -422,7 +552,9 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
     if (editionReadiness(doc, r.lang).publishable) ready.push(languageSpec(r.lang)?.endonym || r.lang);
   }
   const anyCancelled = results.some((r) => r.cancelled);
-  const errors = [...new Set(results.map((r) => r.error).filter((e): e is string => !!e))];
+  // The allowance's "no" stopped every lane: its words lead (once), whatever else a lane reported.
+  const billingStop = results.some((r) => r.stoppedBy === 'billing') ? results.find((r) => r.stoppedBy === 'billing' && r.error)?.error : undefined;
+  const errors = [...new Set([billingStop, ...results.map((r) => r.error)].filter((e): e is string => !!e))];
   const usd = round4(results.reduce((s, r) => s + r.usd, 0));
   let head: string;
   if (anyCancelled) head = 'Stopped — the finished pages are kept.';
@@ -436,7 +568,10 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
       ? ` Cost ${formatUsd(usd)}${textByok ? ' on your key' : ''}.`
       : ' Cost $0 — done by the editor, no AI cost.';
   const lines = [head, ...parts];
-  if (errors.length) lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'} Translate again to retry — only the missing lines are charged.`);
+  if (errors.length) {
+    const stopped = billingStop && results.length > 1 ? ' Every language stopped there; the lines already written are kept.' : '';
+    lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'}${stopped} Translate again to retry — only the missing lines are charged.`);
+  }
   const fix = overlayFix(doc, byok);
   if (fix && fix.pages.length) {
     lines.push(`Your pages have the lettering painted into the art, so readers would still see the original words. Translated editions need overlay lettering: redrawing ${plural(fix.pages.length, 'page')} without text ${fmt.governed ? `uses ${fmt.approx(fix.usd)}` : `costs ≈ ${formatUsd(fix.usd)}`}, and after that every language is free.`);
@@ -582,14 +717,28 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   for (const lang of codes) running.add(lang);
   const work = (async () => {
     let results: LanguageResult[] = [];
+    // Shared by every lane: once the allowance says no anywhere, no lane starts another chunk or language.
+    const stop: RunStop = {};
+    const lanes = Math.min(Math.max(1, Math.floor(TRANSLATE_TIMINGS.lanes) || TRANSLATE_CONCURRENCY), codes.length);
+    const runStarted = Date.now();
     try {
-      results = await pool(codes, TRANSLATE_CONCURRENCY, async (lang) => {
-        try {
-          return await runLanguage(ctx, lang, { ...action, languages: [lang] }, signal, (label) => activity(ctx, label));
-        } finally {
-          running.delete(lang);
-        }
-      });
+      const out = await pool(
+        codes,
+        lanes,
+        async (lang) => {
+          const t0 = Date.now();
+          try {
+            const r = await runLanguage(ctx, lang, { ...action, languages: [lang] }, signal, (label) => activity(ctx, label), stop);
+            r.ms = Date.now() - t0;
+            return r;
+          } finally {
+            running.delete(lang);
+          }
+        },
+        () => stop.billing !== undefined
+      );
+      // A language the stop kept from starting is reported honestly: nothing of it was asked or charged.
+      results = codes.map((lang, i) => out[i] ?? { ...emptyResult(lang), stoppedBy: 'billing' as const });
     } catch (err) {
       logger.error('comic_translate_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
     } finally {
@@ -615,6 +764,17 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     }
     const usd = round4(results.reduce((s, r) => s + r.usd, 0));
     logger.info('comic_translate_done', { projectId: ctx.projectId, langs: codes, usd, translated: results.reduce((n, r) => n + r.translated, 0), free: freeCount + results.reduce((n, r) => n + r.free, 0) });
+    // Counts and milliseconds only (no words, no user): tells whether 6 lanes meet rate limits on own keys.
+    logger.info('comic_translate_timing', {
+      projectId: ctx.projectId,
+      langs: codes.length,
+      lanes,
+      ms: Date.now() - runStarted,
+      perLangMs: Object.fromEntries(results.map((r) => [r.lang, r.ms ?? 0])),
+      retries: results.reduce((n, r) => n + (r.retries || 0), 0),
+      failedLines: results.reduce((n, r) => n + r.failed, 0),
+      stoppedBy: stop.billing !== undefined ? 'billing' : results.some((r) => r.cancelled) ? 'user' : null
+    });
   })();
   const done = ctx.track(work).then(
     () => undefined,
