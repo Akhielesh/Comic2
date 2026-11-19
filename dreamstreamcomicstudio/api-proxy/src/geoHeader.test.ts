@@ -1,8 +1,8 @@
 // @vitest-environment node
 // Chat's approximate place comes from Cloudflare's own request data (request.cf), which the API Worker writes into
 // one header for the backend. The backend never looks an IP up anywhere. These tests pin who gets the header (main
-// host, Chat routes only), that a header sent by anyone else never survives the Worker, the caps on what it holds,
-// and that the backend reads exactly what the Worker writes.
+// host, Chat routes and the recipe run only), that a header sent by anyone else never survives the Worker, the caps
+// on what it holds, and that the backend reads exactly what the Worker writes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker, { type BackendNamespace } from './proxy';
 import { GEO_HEADER, GEO_HEADER_MAX_BYTES, geoHeaderFor } from './geoHeader';
@@ -24,8 +24,10 @@ const placeFor = (cf: unknown, url = 'https://dreamstreamstudio.ai/api/chat') =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe('geoHeaderFor: who gets an approximate place', () => {
-  it('main-host Chat routes get the place from request.cf, coordinates rounded to 2 decimals', () => {
-    for (const path of ['/api/chat', '/api/chat/stream', '/api/chat/swarm', '/api/chat/tool-refresh']) {
+  it('main-host Chat routes and the recipe run get the place from request.cf, coordinates rounded to 2 decimals', () => {
+    // A recipe run from Chat (the Live Monitor's weather, a recipe asking for places near me) needs the place as much
+    // as a chat turn: both go through prepareChat.
+    for (const path of ['/api/chat', '/api/chat/stream', '/api/chat/swarm', '/api/chat/tool-refresh', '/api/recipes/run']) {
       expect(placeFor(CF, `https://dreamstreamstudio.ai${path}`)).toEqual(PLACE);
     }
   });
@@ -36,6 +38,12 @@ describe('geoHeaderFor: who gets an approximate place', () => {
       'https://dreamstreamstudio.ai/api/chats',
       'https://dreamstreamstudio.ai/api/chatter',
       'https://dreamstreamstudio.ai/api/comic/projects/p1/research',
+      'https://dreamstreamstudio.ai/api/recipes',
+      'https://dreamstreamstudio.ai/api/recipes/distill',
+      'https://dreamstreamstudio.ai/api/recipes/validate',
+      'https://dreamstreamstudio.ai/api/recipes/run/extra',
+      'https://dreamstreamstudio.ai/api/recipes/runs',
+      'https://comics.dreamstreamstudio.ai/api/recipes/run',
       'https://dreamstreamstudio.ai/api',
       'https://dreamstreamstudio.ai/chat',
       'https://comics.dreamstreamstudio.ai/api/chat',
@@ -69,7 +77,17 @@ describe('geoHeaderFor: what the place may hold', () => {
   });
 
   it('a character is never cut in half at the 80-character limit, and broken text never throws', () => {
-    expect(placeFor({ city: `${'a'.repeat(79)}😀z`, country: 'NZ' }).city).toBe(`${'a'.repeat(79)}😀`);
+    // 80 UTF-16 units, the chat route's own cap, so that cap never has to cut what the Worker kept.
+    expect(placeFor({ city: `${'a'.repeat(78)}😀z`, country: 'NZ' }).city).toBe(`${'a'.repeat(78)}😀`);
+    expect(placeFor({ city: `${'a'.repeat(79)}😀z`, country: 'NZ' }).city).toBe('a'.repeat(79));
+    for (const city of [`${'a'.repeat(70)}${'😀'.repeat(6)}`, `${'a'.repeat(77)}😀😀`, `a${'𝔸'.repeat(20)}${'b'.repeat(60)}`]) {
+      const place = placeFor({ city, country: 'NZ' });
+      expect(place.city, city).toBeTruthy();
+      expect(place.city.length).toBeLessThanOrEqual(80);
+      expect(place.city.length).toBeGreaterThanOrEqual(79);
+      expect(place.city).toBe(place.city.slice(0, 80));
+      expect(place.city).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
     expect(() => headerFor('https://dreamstreamstudio.ai/api/chat', { city: 'Port\ud800 Town', country: 'NZ' })).not.toThrow();
     expect(placeFor({ city: 'Port\ud800 Town', country: 'NZ' })).toEqual({ city: 'Port Town', country: 'NZ' });
   });
@@ -144,8 +162,12 @@ describe('the API Worker', () => {
     const { ns, seen } = fakeContainer();
     const spoofed = { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', 'x-ds-geo': encodeURIComponent(JSON.stringify({ city: 'Elsewhere' })) } };
     await forward(withCf('https://dreamstreamstudio.ai/api/chat/stream', CF, spoofed), { BACKEND: ns });
+    await forward(withCf('https://dreamstreamstudio.ai/api/recipes/run', CF, spoofed), { BACKEND: ns });
+    await forward(withCf('https://dreamstreamstudio.ai/api/recipes/distill', CF, spoofed), { BACKEND: ns });
     expect(decoded(seen[0].headers.get(GEO_HEADER))).toEqual(PLACE);
     expect(await seen[0].text()).toBe('{}');
+    expect(decoded(seen[1].headers.get(GEO_HEADER))).toEqual(PLACE);
+    expect(seen[2].headers.get(GEO_HEADER)).toBeNull();
   });
 
   it('the external origin path (BACKEND_TARGET=origin) strips and sets it the same way', async () => {
@@ -163,7 +185,14 @@ describe('the API Worker', () => {
 
 describe('the backend reads exactly what the Worker writes', () => {
   it('round trip', () => {
-    for (const cf of [CF, { ...CF, city: 'São Tomé', region: 'Água Grande', country: 'ST' }, { country: 'NZ' }, { latitude: '1.234', longitude: '5.678' }]) {
+    for (const cf of [
+      CF,
+      { ...CF, city: 'São Tomé', region: 'Água Grande', country: 'ST' },
+      { country: 'NZ' },
+      { latitude: '1.234', longitude: '5.678' },
+      { ...CF, city: `${'a'.repeat(79)}😀z`, region: '😀'.repeat(60) },
+      { city: 'Port\ud800 Town', country: 'XX' }
+    ]) {
       const value = headerFor('https://dreamstreamstudio.ai/api/chat', cf);
       expect(geoFromEdgeHeader({ [GEO_HEADER]: value ?? undefined })).toEqual(decoded(value));
     }

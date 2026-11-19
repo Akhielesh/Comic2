@@ -89,12 +89,14 @@ model call are involved (`server/src/routes/chat.ts:747-749`).
 }
 ```
 
-Behavior (`routes/chat.ts:752-780`):
+Behavior (the `/tool-refresh` handler in `routes/chat.ts`):
 - Non-allowlisted tool → `400 { error: { message: 'This widget cannot be refreshed.' } }`.
-- `clientContext` is sanitized; if it has no location, the server best-effort
-  geo-resolves the client IP so "near me" tools keep working (`:761-770`).
+- `clientContext` is sanitized; if it has no location, the server uses the approximate
+  place the API Worker attached from Cloudflare's own request data (`X-DS-Geo`, main host
+  `/api/chat*` and `/api/recipes/run` only; `api-proxy/src/geoHeader.ts`, read with
+  `withEdgeLocation`), so "near me" tools keep working. No IP is looked up.
 - The single tool is resolved via `resolveTools([tool], ctx)` with that context and
-  executed with a **20-second timeout** (`AbortSignal.timeout(20_000)`, `:779`).
+  executed with a **20-second timeout** (`AbortSignal.timeout(20_000)`).
 
 **Response (200)**
 

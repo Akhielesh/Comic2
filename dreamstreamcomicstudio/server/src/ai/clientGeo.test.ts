@@ -62,6 +62,17 @@ describe('geoFromEdgeHeader', () => {
     expect(read(encode({ country: 'NZ', lat: 10 }))).toEqual({ country: 'NZ' });
   });
 
+  it('cleans a place exactly as the Worker does: no unknown country, no broken character, no cut one', () => {
+    // Cloudflare's "XX" means unknown; the Worker never writes it, and the reader does not take it either.
+    expect(read(encode({ country: 'XX' }))).toBeNull();
+    expect(read(encode({ city: 'Riverton', country: 'xx' }))).toEqual({ city: 'Riverton' });
+    // A lone surrogate can ride in as a JSON escape; it is removed, never passed on.
+    expect(read(encodeURIComponent('{"city":"Port\\ud800 Town","country":"NZ"}'))).toEqual({ city: 'Port Town', country: 'NZ' });
+    // At most 80 UTF-16 units, whole characters only: the chat route's own 80-unit cap never cuts one in half.
+    expect(read(encode({ city: `${'a'.repeat(79)}😀` }))).toEqual({ city: 'a'.repeat(79) });
+    expect(read(encode({ city: `${'a'.repeat(78)}😀` }))).toEqual({ city: `${'a'.repeat(78)}😀` });
+  });
+
   it('ignores every other field, so an IP or a postcode can never ride along', () => {
     expect(read(encode({ city: 'Riverton', ip: '203.0.113.9', postalCode: '6011', timezone: 'Pacific/Auckland' }))).toEqual({ city: 'Riverton' });
   });

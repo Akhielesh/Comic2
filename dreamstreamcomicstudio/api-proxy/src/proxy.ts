@@ -17,8 +17,8 @@
  * worker's egress IPs.
  *
  * Chat's approximate place rides X-DS-Geo (geoHeader.ts): set here from
- * request.cf for the main host's /api/chat routes only, and deleted from every
- * incoming request first.
+ * request.cf for the main host's /api/chat routes and /api/recipes/run only,
+ * and deleted from every incoming request first.
  *
  * Agent gate (see agent-gate.ts): AI agents are answered here at the edge and
  * never reach (or wake) the backend:
@@ -171,7 +171,7 @@ export default {
 
     const headers = new Headers(req.headers);
     // Chat's approximate place (geoHeader.ts): only this Worker writes it, from Cloudflare's own request data, and
-    // only for the main host's /api/chat routes. Whatever a request brought is dropped on every path and host.
+    // only for the main host's Chat routes. Whatever a request brought is dropped on every path and host.
     headers.delete(GEO_HEADER);
     const place = geoHeaderFor(req, url);
     if (place) headers.set(GEO_HEADER, place);

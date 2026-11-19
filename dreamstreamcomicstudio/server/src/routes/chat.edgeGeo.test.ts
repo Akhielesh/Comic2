@@ -96,6 +96,12 @@ describe('chat turn: approximate place from the edge', () => {
     const loc = await locationOf({ 'x-ds-geo': encode({ city: 'C'.repeat(300), country: 'nz', lat: 1.23456, lng: 2.34567 }) });
     expect(loc).toEqual({ city: 'C'.repeat(80), country: 'NZ', lat: 1.23, lng: 2.35, approximate: true });
   });
+
+  it('a long name with a character outside the BMP is never cut in half on its way into the prompt', async () => {
+    // 79 letters and an emoji is 81 UTF-16 units: the route's 80-unit cap used to split the emoji, leaving half of it.
+    const loc = await locationOf({ 'x-ds-geo': encode({ city: `${'a'.repeat(79)}😀`, region: `${'b'.repeat(78)}😀`, country: 'NZ' }) });
+    expect(loc).toEqual({ city: 'a'.repeat(79), region: `${'b'.repeat(78)}😀`, country: 'NZ', approximate: true });
+  });
 });
 
 describe('widget refresh: approximate place from the edge', () => {

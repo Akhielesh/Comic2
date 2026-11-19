@@ -190,8 +190,8 @@ const sanitizeClientContext = (raw: unknown): ChatClientContext | undefined => {
 };
 
 // When the browser shared no location, the approximate place the API Worker attached from Cloudflare's own request
-// data (X-DS-Geo, set only for the main host's /api/chat routes; api-proxy/src/geoHeader.ts). It goes through
-// sanitizeClientContext like a browser location, so the same caps apply. No IP is looked up anywhere.
+// data (X-DS-Geo, set only for the main host's /api/chat routes and /api/recipes/run; api-proxy/src/geoHeader.ts).
+// It goes through sanitizeClientContext like a browser location, so the same caps apply. No IP is looked up anywhere.
 const withEdgeLocation = (ctx: ChatClientContext | undefined, headers: Record<string, unknown> | undefined): ChatClientContext | undefined => {
   if (ctx?.location) return ctx;
   const location = sanitizeClientContext({ location: geoFromEdgeHeader(headers) })?.location;
