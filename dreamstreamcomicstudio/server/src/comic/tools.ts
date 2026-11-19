@@ -69,6 +69,7 @@ import { OFF_PANEL_SHOTS, PANEL_LIMITS, panelCountNote } from '../../../shared/c
 import { coverNeedsDraw, pageTargets as drawablePages } from '../../../shared/comic/plan.js';
 import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
+import { LIBRARY_IP_BLOCKLIST } from '../../../shared/comic/library.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
 import { costFormatterFor, governDollars } from './costText.js';
@@ -109,7 +110,8 @@ import { recentCommitsOf } from './session.js';
 import { LINE_TARGET_SCHEMA, balloonAtPosition, blockedLineIds, commitGuarded, lineIdsOfOp, sanitizeLetteringOps, styleArgsToPatch } from './tools/lettering.js';
 import { MODEL_ASK_RE } from './tools/models.js';
 import { LANGUAGE_HINT_RE } from './tools/languageAsk.js';
-import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
+import { SKIP_REVIEW_RE, detectNamedIp, joinList, nothingNextSteps } from './replies.js';
+import { DEFAULT_LOOKS, MAX_LOOKS, MIN_LOOKS, drawnLooksRedirect, styleLooksAsk } from './styleAsk.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
 
@@ -516,14 +518,18 @@ const neverDrawn = (doc: ComicDoc) => doc.pages.every((p) => p.render.status !==
  * Why a director-initiated spend must wait for the user's tap even below the 'big' threshold
  * (contract §12.3 gates): a redraw, an unreviewed plan, the first render, or no draw intent.
  * Never when the user turned confirmations off — except a redraw, which always asks.
+ * Style tests always wait (stylepick SC-0): 'policy' when the user asked for looks (a draw or redraw ask, or an ask
+ * to see looks the draw words miss: "show me 6 looks", "egernate 3 styles"), else 'no_intent' — a new comic's empty
+ * style included. Only "never ask" starts them at once (the daily house runner relies on it).
  */
 export function forcedGateReason(doc: ComicDoc, turn: DirectorTurn, kind: SpendKind, opts: { redraw?: boolean } = {}): Gate['reason'] | undefined {
   if (opts.redraw) return 'redraw';
   if (doc.settings.confirm === 'never') return undefined;
+  if (kind === 'style') return turn.drawIntent !== 'none' || styleLooksAsk(turn.userText) ? 'policy' : 'no_intent';
   const skip = SKIP_REVIEW_RE.test(turn.userText);
   if (kind === 'pages' && doc.planStatus === 'draft' && !skip) return 'plan_review';
   if (kind === 'pages' && doc.settings.reviewFirstRender !== false && neverDrawn(doc) && !skip) return 'first_render';
-  if (turn.drawIntent === 'none' && !(kind === 'style' && doc.style.status === 'empty')) return 'no_intent';
+  if (turn.drawIntent === 'none') return 'no_intent';
   return undefined;
 }
 
@@ -863,6 +869,25 @@ const panelBudgetNote = (d: ComicDoc, pageId: string, panelId: string): string |
   }
 };
 
+/** Accents folded ("Mœbius" → "Moebius", "Hergé" → "Herge") so the name lists below match every spelling. */
+const foldAccents = (text: string): string =>
+  text.normalize('NFKD').replace(/\p{M}/gu, '').replace(/œ/g, 'oe').replace(/Œ/g, 'Oe').replace(/æ/g, 'ae').replace(/Æ/g, 'Ae');
+/** Artists and titles the two shared lists miss, often asked for as a look. */
+const STYLE_NAME_RE =
+  /\b(?:junji ito|ito junji|mignola|hellboy|tezuka|astro boy|spider[- ]?verse|calvin (?:and|&) hobbes|watterson|frank miller|sin city|jim lee|alex ross|otomo|uderzo|goscinny|asterix|schulz|kirby)\b/i;
+/** "in the style of <Name>", "à la <Name>", "inspired by <Name>": a capitalised name after the phrase is someone's look. */
+const AFTER_NAME_RE = /\b(?:[Ii]n the style of|[Ii]n the manner of|[Ii]nspired by|[Aa] la)\s+(?:(?:[Tt]he|[Aa]n?)\s+)?([A-Z][\p{L}'’-]*)/gu;
+/** Capitalised words after those phrases that name a place, a period or a movement, not a person or a brand. */
+const GENERIC_STYLE_WORD_RE =
+  /^(?:Japanese|Chinese|Korean|Indian|Persian|Mughal|Arabic|French|Franco|Belgian|Italian|Spanish|Mexican|German|Dutch|Swiss|Nordic|Scandinavian|Celtic|Russian|Soviet|American|British|European|Asian|African|Western|Eastern|Art|Ukiyo|Renaissance|Baroque|Rococo|Victorian|Edwardian|Gothic|Medieval|Golden|Silver|Bronze|Modern|Classic|Classical|Vintage|Retro|Pop|Noir|Manga|Anime|Old|Early|Late|Mid|Bauhaus|Impressionist|Expressionist|Cubist|Futurist|Risograph|Riso|Woodblock|Watercolou?r|Ink|Sunday|Saturday)$/;
+
+/** Whether a style direction names an artist, studio or brand (assets.md §13): never sent to the image model. */
+const namesArtistOrBrand = (name: string, spec: string): boolean => {
+  const text = foldAccents(`${name}. ${spec}`);
+  if (LIBRARY_IP_BLOCKLIST.test(text) || STYLE_NAME_RE.test(text) || detectNamedIp(text).length) return true;
+  return [...text.matchAll(AFTER_NAME_RE)].some((m) => !GENERIC_STYLE_WORD_RE.test(m[1]));
+};
+
 export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): DirectorTool[] {
   const state =
     turn ||
@@ -1184,6 +1209,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (presetId) {
           const preset = getStylePreset(presetId);
           if (!preset) throw argError(`Unknown preset. Use one of: ${STYLE_PRESETS.map((p) => p.id).join(', ')}.`);
+          // An ask to see drawn looks comes before picking a free preset for the user (stylepick SC-0, R1): refused
+          // here, in code, so the precedence costs no prompt space.
+          const looksAsk = styleLooksAsk(state.userText);
+          if (looksAsk) throw argError(drawnLooksRedirect(looksAsk));
           Object.assign(patch, {
             name: preset.name,
             spec: preset.spec,
@@ -1229,20 +1258,56 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'propose_styles',
       'paid',
-      'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock.',
+      // Kept short: core tools sit in every director prompt (golden/scenarios.test.ts caps the median; the range and
+      // the default are said once, on count).
+      'Draw N looks of THIS comic; waits for Approve. count alone = your picks; directions/presetIds = looks the user named.',
       schema({
-        directions: A(
-          { type: 'object', properties: { name: S('2–4 words.'), spec: S('Concrete art direction, 35–80 words.') }, required: ['name', 'spec'] },
-          'Optional; omit and the art director proposes them.'
-        )
+        count: I(`${MIN_LOOKS}–${MAX_LOOKS}, default ${DEFAULT_LOOKS}`),
+        directions: { type: 'array', items: { type: 'object', properties: { name: S('2–4 words.'), spec: S('Technique, 35–80 words.') }, required: ['name', 'spec'] } },
+        presetIds: { type: 'array', items: { type: 'string' } }
       }),
       (args) => {
+        const d = doc();
+        const presetIds: string[] = [];
+        const unknown: string[] = [];
+        for (const raw of strList(args.presetIds, 12, 60)) {
+          if (!getStylePreset(raw)) unknown.push(raw.slice(0, 40));
+          else if (!presetIds.includes(raw)) presetIds.push(raw);
+        }
+        if (unknown.length) throw argError(`Unknown preset${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Use ids from: ${STYLE_PRESETS.map((p) => p.id).join(', ')}.`);
         const directions = (Array.isArray(args.directions) ? args.directions : [])
           .filter(isObject)
-          .map((d) => ({ name: text(d.name, 60), spec: text(d.spec, 1500) }))
-          .filter((d) => d.name && d.spec)
-          .slice(0, 4);
-        return spend(ctx, state, { type: 'render_style_options', ...(directions.length ? { directions } : {}) }, forcedGateReason(doc(), state, 'style'));
+          .map((x) => ({ name: text(x.name, 60), spec: text(x.spec, 1500) }))
+          .filter((x) => x.name && x.spec);
+        // An artist, studio or brand is never sent to the image model (assets.md §13; decisions-final #5): the
+        // Director's own words reach no screening, so they are checked here before anything is quoted.
+        if (directions.some((x) => namesArtistOrBrand(x.name, x.spec))) {
+          throw argError('Describe the technique, not the artist, studio or brand (for example "soft watercolour washes, loose ink lines") and call propose_styles again.');
+        }
+        const names = [...presetIds.map((id) => getStylePreset(id)!.name), ...directions.map((x) => x.name)].map((n) => n.trim().toLowerCase());
+        if (new Set(names).size !== names.length) throw argError('Give each look its own name (two looks share one) and call propose_styles again.');
+        const named = presetIds.length + directions.length;
+        const notes: string[] = [];
+        if (named > MAX_LOOKS) notes.push(`${MAX_LOOKS} looks is the most in one go; drawing the first ${MAX_LOOKS}.`);
+        const asked = int(args.count);
+        let count: number | undefined;
+        if (!named) {
+          count = Math.min(MAX_LOOKS, Math.max(MIN_LOOKS, asked ?? DEFAULT_LOOKS));
+          if (asked !== undefined && asked > MAX_LOOKS) notes.push(`${MAX_LOOKS} looks is the most in one go (asked for ${asked}).`);
+          else if (asked !== undefined && asked < MIN_LOOKS) notes.push(`A set is at least ${MIN_LOOKS} looks.`);
+        } else if (asked !== undefined && asked !== Math.min(named, MAX_LOOKS)) {
+          const n = Math.min(named, MAX_LOOKS);
+          notes.push(`count ignored: it draws the ${n} look${n === 1 ? '' : 's'} named.`);
+        }
+        const kept = presetIds.slice(0, MAX_LOOKS);
+        const keptDirections = directions.slice(0, Math.max(0, MAX_LOOKS - kept.length));
+        const action: SpendAction = {
+          type: 'render_style_options',
+          ...(kept.length ? { presetIds: kept } : {}),
+          ...(keptDirections.length ? { directions: keptDirections } : {}),
+          ...(count !== undefined ? { count } : {})
+        };
+        return spend(ctx, state, action, forcedGateReason(d, state, 'style')).then((out) => (notes.length ? `${out} ${notes.join(' ')}` : out));
       }
     ),
 

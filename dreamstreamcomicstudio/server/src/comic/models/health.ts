@@ -317,8 +317,12 @@ export const narrowBlockedAction = (action: StudioAction, failed: readonly Rende
     case 'render_style_options': {
       const wanted = idsOf('style_option');
       const directions = doc.style.options.filter((o) => wanted.includes(o.id)).map((o) => ({ name: o.name, spec: o.spec }));
+      // The failed looks by name and spec only: presetIds and count would draw the ready ones again (stylepick SC-0).
+      const { presetIds: _presets, count: _count, ...rest } = action;
+      void _presets;
+      void _count;
       // Every failed option must be found (else the re-send would be incomplete): no partial guess.
-      return wanted.length && directions.length === wanted.length ? { ...action, directions } : undefined;
+      return wanted.length && directions.length === wanted.length ? { ...rest, directions } : undefined;
     }
     default:
       return undefined;

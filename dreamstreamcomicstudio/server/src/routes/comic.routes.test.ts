@@ -28,7 +28,7 @@ import {
   type FakeImages,
   type ScriptedLlm
 } from '../comic/orchestrator.fakes.js';
-import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
+import { JOB_TIMINGS, MAX_STYLE_DIRECTIONS, noticeCard } from '../comic/jobs.js';
 import { actionHandlerFor } from '../comic/actions/index.js';
 import type { ActionHandler } from '../comic/extensions.js';
 import { CONSISTENCY_NOT_AVAILABLE } from '../comic/actions/consistency.js';
@@ -1711,6 +1711,12 @@ describe('actionInputText (S15)', () => {
     for (const action of [{ type: 'render_pages' }, { type: 'approve_gate', gateId: 'g' }, { type: 'safety_recheck', target: { kind: 'cover' }, note: 'x' }] as const) {
       expect(actionInputText(doc, action as never)).toBe('');
     }
+  });
+
+  it('screens every look a style run may draw (the screen bound stays at or above the job limit)', () => {
+    const directions = Array.from({ length: MAX_STYLE_DIRECTIONS }, (_, i) => ({ name: `Look ${i + 1}`, spec: `Spec ${i + 1}.` }));
+    const text = actionInputText(plannedDoc(), { type: 'render_style_options', directions });
+    for (const d of directions) expect(text).toContain(`${d.name}: ${d.spec}`);
   });
 });
 
