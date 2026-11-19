@@ -14,7 +14,7 @@ import { Undo2, X } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { StudioController } from '../types';
-import { claimToast, subscribeToastSlot, toastSlotOwner } from '../../ds/Toast';
+import { claimToast, endToastClaim, subscribeToastSlot, toastSlotOwner } from '../../ds/Toast';
 import { undoPlan } from './bookModel';
 import { cx, FOCUS_RING, useReducedMotion } from './ui';
 
@@ -103,6 +103,14 @@ export function useTimelineEdit(studio: StudioController): TimelineEdit {
     undo(last);
     return true;
   }, [undo]);
+
+  // The edit's claim ends when its toast closes, is replaced by a newer edit's, or this surface goes away: a waiting
+  // alert may take the slot then (ds Toast endToastClaim), never while the Undo is still on screen.
+  useEffect(() => {
+    if (!toast) return;
+    const id = toast.id;
+    return () => endToastClaim(id);
+  }, [toast]);
 
   const dismiss = useCallback(() => setToast(null), []);
   return { commit, undoLast, toast, dismiss, undo };

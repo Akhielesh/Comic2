@@ -1460,6 +1460,18 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
   return data as UserProfile;
 };
 
+/** The two fields the account menu shows (the @handle and the photo), and nothing else from the profile row. */
+export const getProfileFace = async (userId: string): Promise<Pick<UserProfile, 'username' | 'avatar_url'> | null> => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('username, avatar_url')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as Pick<UserProfile, 'username' | 'avatar_url'>;
+};
+
 export const getPrivateProfile = async (userId: string): Promise<UserPrivateProfile | null> => {
   const { data, error } = await supabase
     .from('profile_private')

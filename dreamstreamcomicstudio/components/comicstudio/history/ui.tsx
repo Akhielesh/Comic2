@@ -30,6 +30,7 @@ import { SideSheet } from '../mobile/sheets/SideSheet';
 import type { SheetDetent } from '../mobile/sheets/snap';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { claimUndoToast, UNDO_TOAST_MS } from '../timeline/UndoToast';
+import { endToastClaim } from '../../ds/Toast';
 import type { ActorIcon as ActorIconName } from './historyModel';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -219,15 +220,17 @@ export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'h
     const t = setTimeout(() => dismissRef.current(), UNDO_TOAST_MS);
     return () => clearTimeout(t);
   }, [message, paused, choice]);
-  // Each toast claims the shared slot as it appears; when a newer toast takes the slot, this one is dismissed.
+  // Each toast claims the shared slot as it appears; when a newer toast takes the slot, this one is dismissed. The claim
+  // ends when the toast closes or goes away (a waiting alert may show then, never over this one).
   useEffect(() => {
     if (!message) return;
     let mounted = true;
-    claimUndoToast(() => {
+    const claim = claimUndoToast(() => {
       if (mounted) dismissRef.current();
     });
     return () => {
       mounted = false;
+      endToastClaim(claim);
     };
   }, [message]);
   const tree = (

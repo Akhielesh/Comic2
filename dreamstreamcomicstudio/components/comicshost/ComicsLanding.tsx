@@ -38,7 +38,6 @@ export interface ComicsLandingProps {
   onBrowseGallery: () => void;
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
-  onOpenAccount?: () => void;
   onStartCreating?: () => void;
 }
 
@@ -67,7 +66,7 @@ function LookArtwork({ look }: { look: SampleLook }) {
   );
 }
 
-export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onOpenAccount, onStartCreating }: ComicsLandingProps) {
+export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onStartCreating }: ComicsLandingProps) {
   const { theme } = useComicTheme();
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [comparing, setComparing] = useState(false);
@@ -92,7 +91,6 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
         onOpenComics={onOpenComics}
         onBrowseGallery={onBrowseGallery}
         onShowSection={showSection}
-        onOpenAccount={onOpenAccount}
       />
       <main className="comics-shell-width comics-landing-column">
         <section id="top" aria-labelledby="comics-hero-title" className="comics-hero">

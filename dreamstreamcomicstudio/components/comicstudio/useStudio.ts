@@ -42,8 +42,20 @@
 // Live agent, presence (agent-editor plan §3 A2 "Presence", wave 2 A4): `presence` is where the director is working
 // right now, from the `where` of an activity start (studioReducer presenceOf). It clears on that activity's end, on its
 // stream's done or error, and on Stop. No event carries `where` → it stays null and nothing else changes. No timer.
+//
+// Live turns (liveturn LT-2): message and action streams are registered with the page-scope registry
+// (live/studioStreams.ts) and their events and end reach this reducer through it. Leaving the comic (Settings, My
+// comics, Chat, another comic) detaches them instead of aborting them: they keep reading, and the studio that mounts for
+// the same comic later adopts the reply so far, the steps and the busy state (`streams_adopt`, right after its load) and
+// hears the rest, once. Stop, the queue and steering work on adopted streams as on its own. Patch streams still flush
+// on unmount. A studio that has unmounted opens no new message or action stream: a card's sequence ("approve, then
+// draw") stops at the step that was running when the person left, as it did when leaving aborted that step. The
+// registry tells alerts when a reply lands or work settles, mounted or not (subscribeStudioMoments), and a sign-out
+// aborts what was left running. The account comes from useAuth (read, never changed).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../services/supabase';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
 import { STEER_LIMITS, type AttachmentTarget, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
 import {
@@ -98,6 +110,7 @@ import {
   presenceOf,
   queueOf,
   renderingCount,
+  replyLandedBeyond,
   studioReducer,
   tabForOps,
   urlIsFresh,
@@ -132,6 +145,29 @@ import {
   type QueuedNote
 } from './messageQueue';
 import { composeInStudio } from './conversation/composerBus';
+// --- live turns: the module-scope stream registry (liveturn LT-2) ---
+import {
+  begin as liveBegin,
+  claim as liveClaim,
+  detach as liveDetach,
+  end as liveEnd,
+  event as liveEvent,
+  noteStop as liveNoteStop,
+  noteStudioAccount,
+  studioStreamKey,
+  subscribe as liveSubscribe,
+  syncMirror as liveSyncMirror,
+  type LiveStreamKind,
+  type StudioSink
+} from './live/studioStreams';
+
+// The registry follows the account this tab acts as: a sign-out, or another account signing in on this tab, aborts the
+// streams left running for the old one (studioStreams noteStudioAccount). This only listens; auth is never changed.
+try {
+  supabase.auth.onAuthStateChange((_event, session) => noteStudioAccount(session?.user?.id ?? null));
+} catch {
+  /* no auth client in this environment: nothing to follow */
+}
 
 /**
  * What holds the live queue, read from the studio state: the one input the send path, the Up next line and the drain all
@@ -207,11 +243,29 @@ export interface ComicStudioController extends StudioController {
 /** The steer call (studioApi.steerStudio, A2): a note for the running director turn (plan §3 A2). */
 export type SteerStudioFn = (projectId: string, req: SteerRequest) => Promise<SteerResponse>;
 
+/** The studio's calls to the backend that a QA page or a test can answer itself (studioApi's functions by default). */
+export interface StudioTransport {
+  loadStudioProject: typeof loadStudioProject;
+  streamStudio: typeof streamStudio;
+  cancelStudio: typeof cancelStudio;
+  signStudioUrls: typeof signStudioUrls;
+}
+
 /** Injectable dependencies (tests; the live wiring uses the defaults). */
 export interface UseStudioDeps {
   /** Overrides the steer call; absent = DEFAULT_STEER. */
   steerStudio?: SteerStudioFn;
+  /** Overrides some backend calls (the QA `live-turn` scene streams a scripted turn); absent = studioApi's. */
+  transport?: Partial<StudioTransport>;
 }
+
+/** The transport in use: each call read at call time, so a test's module mock of studioApi still answers. */
+const transportOf = (deps: UseStudioDeps): StudioTransport => ({
+  loadStudioProject: deps.transport?.loadStudioProject ?? loadStudioProject,
+  streamStudio: deps.transport?.streamStudio ?? streamStudio,
+  cancelStudio: deps.transport?.cancelStudio ?? cancelStudio,
+  signStudioUrls: deps.transport?.signStudioUrls ?? signStudioUrls
+});
 
 /**
  * The steer call "Send now" uses while caps.liveAgent.steer is on: POST /projects/:id/steer (studioApi.steerStudio, A2).
@@ -437,6 +491,15 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
    * also go as a new message.
    */
   const steeringRef = useRef(new Set<string>());
+  // --- live turns (liveturn LT-2) ---
+  const { user } = useAuth();
+  const accountId = (user?.id ?? '').toLowerCase();
+  /** This comic's key in the stream registry (set with each load). */
+  const liveKeyRef = useRef(studioStreamKey(accountId, projectId));
+  /** This load's sink: where the registry delivers the events of the comic's message and action streams. */
+  const liveSinkRef = useRef<StudioSink | null>(null);
+  /** The load generation that has taken over the comic's running streams (once per load). */
+  const liveAdoptedRef = useRef(-1);
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
@@ -495,6 +558,37 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   }, []);
   const clearNotice = useCallback(() => setNotice(null), []);
 
+  /**
+   * Live turns: once this load has its doc, take over the comic's message and action streams that kept running while
+   * no studio showed it, and adopt what they did meanwhile (in the same tick as the subscribe, so no event falls
+   * between). Once per load; a later refresh after a failed load does it then.
+   */
+  const adoptLive = useCallback((generation: number, loadedCaps: StudioCaps | null | undefined, loadedDoc: ComicDoc | null | undefined) => {
+    const sink = liveSinkRef.current;
+    if (!sink || !mountedRef.current || generation !== generationRef.current || liveAdoptedRef.current === generation) return;
+    liveAdoptedRef.current = generation;
+    const snap = liveSubscribe(liveKeyRef.current, sink);
+    if (!snap) return;
+    for (const c of snap.controllers) controllersRef.current.set(c.id, { ctrl: c.ctrl, kind: c.kind });
+    // The composer waits for the adopted turn's reply, unless the GET already holds it (the stream will deliver that
+    // batch as already applied; studioReducer streams_adopt marks the turn answered the same way).
+    if (snap.awaitingReply && !replyLandedBeyond(loadedDoc, snap.doc)) messageInFlightRef.current = snap.awaitingReply;
+    dispatch({
+      type: 'streams_adopt',
+      streams: snap.streams,
+      drafts: snap.drafts,
+      activity: snap.activity,
+      presence: snap.presence,
+      doc: snap.doc,
+      urls: snap.urls,
+      pendingMessage: snap.pendingMessage,
+      error: snap.error,
+      now: Date.now()
+    });
+    // Notes a BUSY answer put back while the comic was closed: shown held, never sent on their own.
+    if (snap.notes.length && liveQueueOn(loadedCaps ?? null)) dispatch({ type: 'queue_restore', notes: snap.notes });
+  }, []);
+
   // ── Load ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -505,6 +599,17 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     const d = guarded(generation);
     const ctrl = new AbortController();
     abortStreams();
+    // Live turns: this comic is on screen. The registry routes its message and action streams to this load's sink;
+    // streams it kept running while the comic was closed are adopted once the doc has loaded (adoptLive).
+    const liveKey = studioStreamKey(accountId, projectId);
+    liveKeyRef.current = liveKey;
+    const sink: StudioSink = (action) => {
+      if (!mountedRef.current || generation !== generationRef.current) return;
+      if (action.type === 'stream_end') controllersRef.current.delete(action.streamId);
+      dispatch(action);
+    };
+    liveSinkRef.current = sink;
+    liveClaim(liveKey);
     messageInFlightRef.current = null;
     queueReadyRef.current = null;
     actionsInFlightRef.current.clear();
@@ -522,13 +627,15 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     setReaderRequest(null);
     dispatch({ type: 'load_start' });
 
-    loadStudioProject(projectId, { signal: ctrl.signal })
+    transportOf(depsRef.current)
+      .loadStudioProject(projectId, { signal: ctrl.signal })
       .then(({ doc, urls, caps: loadedCaps }) => {
         if (loadedCaps && mountedRef.current && generation === generationRef.current) {
           setCaps(loadedCaps);
           setCapsFromServer(true);
         }
         d({ type: 'load_success', doc, urls, now: Date.now() });
+        adoptLive(generation, loadedCaps, doc);
         // Live queue: notes this tab saved before a reload come back held ("2 notes were waiting"), never auto-sent.
         if (mountedRef.current && generation === generationRef.current) {
           if (liveQueueOn(loadedCaps ?? null)) {
@@ -545,8 +652,21 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
     return () => {
       ctrl.abort();
+      // Leaving this comic (unmount, or another comic in this studio): its message and action streams keep running,
+      // held by the registry for the studio that shows it next; only their controllers leave this one. Patch streams
+      // stay here (the unmount effect flushes them).
+      for (const [id, entry] of [...controllersRef.current]) if (entry.kind !== 'patch') controllersRef.current.delete(id);
+      if (liveSinkRef.current === sink) liveSinkRef.current = null;
+      liveDetach(liveKey, sink);
     };
-  }, [projectId, guarded, abortStreams]);
+  }, [projectId, accountId, guarded, abortStreams, adoptLive]);
+
+  // Live turns: the registry's copy of the doc follows this studio's server-confirmed one (a refetch that filled a gap),
+  // so a studio opening the comic later adopts the newest doc. A reference handed over; no request.
+  const liveBase = state.base;
+  useEffect(() => {
+    if (liveBase) liveSyncMirror(liveKeyRef.current, liveBase);
+  }, [liveBase]);
 
   // Pick a sensible board tab once the doc first arrives.
   const loadedDocId = state.base?.id;
@@ -563,13 +683,16 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     const d = guarded(generationRef.current);
     d({ type: 'refresh_start' });
     const generation = generationRef.current;
-    const work = loadStudioProject(id)
+    const work = transportOf(depsRef.current)
+      .loadStudioProject(id)
       .then(({ doc, urls, caps: loadedCaps }) => {
         if (loadedCaps && mountedRef.current && generation === generationRef.current) {
           setCaps(loadedCaps);
           setCapsFromServer(true);
         }
         d({ type: 'refresh_success', doc, urls, now: Date.now() });
+        // The first load failed and this is the doc arriving: take over the comic's running streams now.
+        adoptLive(generation, loadedCaps, doc);
       })
       .catch((err) => {
         const e = toStudioApiError(err, 'project');
@@ -580,7 +703,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       });
     refreshPromiseRef.current = work;
     return work;
-  }, [guarded]);
+  }, [guarded, adoptLive]);
 
   // ── Streams ────────────────────────────────────────────────────────────────
 
@@ -588,22 +711,43 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     async (
       kind: StreamKind,
       request: StreamRequest,
-      opts: { streamId?: string; actionType?: string; onEvent?: (event: StudioEvent) => void } = {}
+      opts: { streamId?: string; actionType?: string; onEvent?: (event: StudioEvent) => void; pending?: PendingUserMessage } = {}
     ): Promise<StreamOutcome> => {
+      // Live turns: a studio that has unmounted starts no Director turn and no action. Its running streams were handed
+      // to the registry; a card's next step ("approve, then draw") must not start a paid step after the person left
+      // (it would belong to nobody). The sequence stops here, as it did when leaving aborted the step before.
+      if (kind !== 'patch' && !mountedRef.current) return { ok: false, aborted: true, retryable: false };
       const generation = generationRef.current;
       const d = guarded(generation);
       const streamId = opts.streamId || localId('stream');
       const ctrl = new AbortController();
+      // Live turns: message and action streams go through the registry (it may outlive this studio); patch streams
+      // are silent saves and stay here.
+      const liveKind: LiveStreamKind | null = kind === 'patch' ? null : kind;
+      const liveKey = liveKeyRef.current;
       controllersRef.current.set(streamId, { ctrl, kind });
       d({ type: 'stream_start', streamId, kind, ...(opts.actionType ? { actionType: opts.actionType } : {}), now: Date.now() });
+      if (liveKind) {
+        liveBegin(liveKey, {
+          streamId,
+          kind: liveKind,
+          ...(opts.actionType ? { actionType: opts.actionType } : {}),
+          ctrl,
+          before: stateRef.current.base,
+          // This load's sink; between loads, whichever studio holds the comic (or nobody, and the next one adopts it).
+          ...(liveSinkRef.current ? { sink: liveSinkRef.current } : {}),
+          ...(opts.pending ? { pending: opts.pending } : {})
+        });
+      }
       let error: string | undefined;
       let code: string | undefined;
       let retryable = false;
       let reported: string | undefined;
       let reportedCode: string | undefined;
       let aborted = false;
+      let lost = false;
       try {
-        await streamStudio(
+        await transportOf(depsRef.current).streamStudio(
           projectRef.current,
           withTimeZone(request, capsRef.current),
           (raw) => {
@@ -616,7 +760,9 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
               reportedCode = event.code;
             }
             opts.onEvent?.(event);
-            d({ type: 'stream_event', streamId, event, now: Date.now() });
+            // A live stream's events reach whichever studio shows the comic now (this one, a later one, or none).
+            if (liveKind) liveEvent(liveKey, streamId, event);
+            else d({ type: 'stream_event', streamId, event, now: Date.now() });
           },
           ctrl.signal
         );
@@ -627,10 +773,12 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           error = e.message;
           code = e.code;
           retryable = e.retryable;
+          lost = e.kind === 'connection_lost';
         }
       } finally {
         controllersRef.current.delete(streamId);
-        d({ type: 'stream_end', streamId, ...(error ? { error } : {}), ...(code ? { code } : {}), aborted, now: Date.now() });
+        if (liveKind) liveEnd(liveKey, streamId, { ...(error ? { error } : {}), ...(code ? { code } : {}), aborted, ...(lost ? { lost } : {}) });
+        else d({ type: 'stream_end', streamId, ...(error ? { error } : {}), ...(code ? { code } : {}), aborted, now: Date.now() });
       }
       const finalCode = error ? code : reportedCode;
       return {
@@ -689,21 +837,21 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     if (patchQueueRef.current.length) void flushPatches();
   }, [guarded, refresh, runStream]);
 
-  // Unmount: stop everything, but flush pending edits instead of dropping them. A rename
-  // (or any blur-commit) followed immediately by Back queues an edit behind the 150 ms
-  // debounce; discarding it silently lost the user's change. flushPatches clears the timer
-  // and sends the queue now. An in-flight save is left running (abort everything but patch)
-  // so it finishes; its completion chains the remaining batch. Dispatches are guarded no-ops
+  // Unmount: flush pending edits instead of dropping them. A rename (or any blur-commit) followed
+  // immediately by Back queues an edit behind the 150 ms debounce; discarding it silently lost the
+  // user's change. flushPatches clears the timer and sends the queue now. An in-flight save is left
+  // running so it finishes; its completion chains the remaining batch. Dispatches are guarded no-ops
   // once unmounted, so the folded-in state updates are harmless — only the network save matters.
+  // The director's turn and running actions are not stopped either (liveturn LT-2): the load
+  // effect's cleanup handed them to the registry (live/studioStreams.ts) for the next studio.
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-      abortStreams((kind) => kind !== 'patch');
       void flushPatches();
     };
-  }, [abortStreams, flushPatches]);
+  }, [flushPatches]);
 
   /**
    * Queue a free content edit: applied optimistically now, saved in order (debounced, ≤ 200 ops per
@@ -893,23 +1041,21 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       const streamId = localId('stream');
       messageInFlightRef.current = streamId;
       const targets = m.targets && m.targets.length ? m.targets : undefined;
-      dispatch({
-        type: 'message_pending',
-        message: {
-          id: localId('pending'),
-          text: m.text,
-          attachments: m.files,
-          // Kept so "Try again" re-sends exactly this message (uploads, targets, what it was about).
-          ...(m.inbox.length ? { inboxPaths: m.inbox } : {}),
-          ...(targets ? { attachmentTargets: targets } : {}),
-          ...(m.focus ? { focus: m.focus } : {}),
-          ...(m.card ? { card: m.card } : {}),
-          ...(m.requeue ? { requeue: m.requeue } : {}),
-          at: Date.now(),
-          status: 'sending',
-          streamId
-        }
-      });
+      const pending: PendingUserMessage = {
+        id: localId('pending'),
+        text: m.text,
+        attachments: m.files,
+        // Kept so "Try again" re-sends exactly this message (uploads, targets, what it was about).
+        ...(m.inbox.length ? { inboxPaths: m.inbox } : {}),
+        ...(targets ? { attachmentTargets: targets } : {}),
+        ...(m.focus ? { focus: m.focus } : {}),
+        ...(m.card ? { card: m.card } : {}),
+        ...(m.requeue ? { requeue: m.requeue } : {}),
+        at: Date.now(),
+        status: 'sending',
+        streamId
+      };
+      dispatch({ type: 'message_pending', message: pending });
       const attachments = [...m.files, ...m.inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
       const request: StreamRequest & { card?: OptionCardAnswer } = {
@@ -920,7 +1066,9 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         ...(m.focus ? { focus: m.focus } : {}),
         ...(m.card ? { card: m.card } : {})
       };
-      return runStream('message', request, { streamId }).finally(() => {
+      // The bubble travels with the stream: a studio that opens this comic before the server records the message
+      // still shows it (or its failure).
+      return runStream('message', request, { streamId, pending }).finally(() => {
         // Only this stream's own marker: a later message may already be in flight (see below).
         if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
       });
@@ -1070,9 +1218,11 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     // started keep drawing) — or, with no turn in flight, every queued render. Images already
     // drawing finish (they are paid) and the streams close once they land.
     cancelScopeRef.current = isMessageBusy(stateRef.current) ? 'turn' : 'drawing';
+    // The server ends what it stops with an ordinary `done`: the registry settles those streams as stopped.
+    liveNoteStop(liveKeyRef.current, cancelScopeRef.current);
     cancelTimerRef.current = setTimeout(() => d({ type: 'cancel_end' }), CANCEL_SAFETY_MS);
     try {
-      await cancelStudio(projectRef.current);
+      await transportOf(depsRef.current).cancelStudio(projectRef.current);
       if (!controllersRef.current.size) d({ type: 'cancel_end' });
     } catch (err) {
       // Couldn't reach the server: stop listening locally and resync what really happened.
@@ -1196,7 +1346,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     /** A path was given up on in this round (isUnsignable turns true for it). */
     let gaveUp = false;
     try {
-      const signed = await signStudioUrls(projectRef.current, paths);
+      const signed = await transportOf(depsRef.current).signStudioUrls(projectRef.current, paths);
       if (generation !== generationRef.current) return;
       guarded(generation)({ type: 'urls_merge', urls: signed, now: Date.now() });
       Object.keys(signed).forEach((p) => signAttemptsRef.current.delete(p));
