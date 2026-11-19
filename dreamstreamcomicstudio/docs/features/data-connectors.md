@@ -41,7 +41,9 @@ Key properties you can rely on while researching:
 1. **Auth model** — key in query/header? OAuth? (OAuth = much more work; avoid
    unless necessary, e.g. Reddit.)
 2. **Rate limit on the FREE tier** — per minute and per month. Our refresh
-   pattern polls; a 100/month tier (aviationstack) supports ~3 lookups/day.
+   pattern polls (a pinned tile refreshes every few minutes), so a small monthly
+   quota goes fast. Check the free tier works over HTTPS at all: aviationstack's
+   does not, so only its paid HTTPS plans work (budgeted 5/min, 30/day by default).
 3. **Server-side friendly** — we call from Node (Railway), so CORS doesn't
    matter, but IP-based limits do (shared egress IPs can be pre-exhausted —
    exactly what happened with keyless GitHub in testing).

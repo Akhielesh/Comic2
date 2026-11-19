@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetProviderUsage } from '../../lib/providerUsage.js';
 import {
+  __resetCountryCache,
   isCountryEntity,
   isWikipediaHost,
   parseWikidataCountry,
@@ -53,15 +54,24 @@ const stubFetch = (route: (url: URL) => unknown): string[] => {
 
 const param = (url: string, name: string): string | null => new URL(url).searchParams.get(name);
 
-beforeEach(() => __resetProviderUsage());
+beforeEach(() => {
+  __resetProviderUsage();
+  __resetCountryCache();
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('isWikipediaHost', () => {
-  it('accepts language wikis and refuses look-alikes', () => {
-    for (const host of ['en.wikipedia.org', 'te.wikipedia.org', 'zh.wikipedia.org', 'zh-yue.wikipedia.org']) {
+  it('accepts the wikis of the language registry and refuses look-alikes', () => {
+    for (const host of ['en.wikipedia.org', 'te.wikipedia.org', 'hi.wikipedia.org', 'zh.wikipedia.org', 'ar.wikipedia.org']) {
       expect(isWikipediaHost(host), host).toBe(true);
     }
     for (const host of ['wikipedia.org', 'en.wikipedia.org.evil.test', 'evil.test', 'en.wikipedia.org:8080', 'EN.wikipedia.org', 'en.wikipedia.org/x', 'en wikipedia.org']) {
+      expect(isWikipediaHost(host), host).toBe(false);
+    }
+  });
+
+  it('refuses the portal, the API portal and codes outside the registry', () => {
+    for (const host of ['www.wikipedia.org', 'api.wikipedia.org', 'xyz.wikipedia.org', 'qq.wikipedia.org', 'zh-yue.wikipedia.org', 'zh-hans.wikipedia.org']) {
       expect(isWikipediaHost(host), host).toBe(false);
     }
   });
@@ -158,6 +168,8 @@ describe('wikiLanglink', () => {
   it('refuses a language code that is not one before anything is sent', async () => {
     const urls = stubFetch(() => LANGLINKS_REPLY);
     await expect(wikiLanglink('en.wikipedia.org', 'X', 'te.evil.test/')).rejects.toThrow();
+    await expect(wikiLanglink('en.wikipedia.org', 'X', 'www')).rejects.toThrow();
+    await expect(wikiLanglink('en.wikipedia.org', 'X', 'xyz')).rejects.toThrow();
     expect(urls).toEqual([]);
   });
 });
@@ -233,11 +245,14 @@ describe('wikidataCountry', () => {
           : entitiesReply(GERMANY);
     let urls = stubFetch(route);
     expect((await wikidataCountry('de'))?.name).toBe('Germany');
-    expect(param(urls[0], 'srsearch')).toBe('haswbstatement:P297=DE');
+    // One hit, already limited to countries: the entities call then reads one item, not three.
+    expect(param(urls[0], 'srsearch')).toBe('haswbstatement:P297=DE haswbstatement:P31=Q6256|P31=Q3624078');
+    expect(param(urls[0], 'srlimit')).toBe('1');
     expect(param(urls[1], 'ids')).toBe('Q183');
     urls = stubFetch(route);
     expect((await wikidataCountry('DEU'))?.name).toBe('Germany');
-    expect(param(urls[0], 'srsearch')).toBe('haswbstatement:P298=DEU');
+    expect(param(urls[0], 'srsearch')).toBe('haswbstatement:P298=DEU haswbstatement:P31=Q6256|P31=Q3624078');
+    expect(param(urls[0], 'srlimit')).toBe('1');
   });
 
   it('a code with no ISO match falls back to the title (UK → United Kingdom by redirect)', async () => {
@@ -287,5 +302,66 @@ describe('wikidataCountry', () => {
     await expect(wikidataCountry('France')).rejects.toThrow();
     stubFetch((u) => (u.searchParams.get('ids') ? RETIRED_API_REPLY : entitiesReply(FRANCE)));
     await expect(wikidataCountry('France')).rejects.toBeInstanceOf(WikidataUnavailableError);
+  });
+
+  it('remembers a country for a day: the same look-up again sends nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const urls = stubFetch((u) => (u.searchParams.get('ids') ? FRANCE_LABELS : entitiesReply(FRANCE)));
+      expect((await wikidataCountry('France'))?.name).toBe('France');
+      expect(urls).toHaveLength(2);
+      expect((await wikidataCountry('  France ', {}))?.capitals).toEqual(['Paris']);
+      expect(urls).toHaveLength(2);
+      vi.setSystemTime(Date.now() + 23 * 3_600_000);
+      await wikidataCountry('France');
+      expect(urls).toHaveLength(2);
+      vi.setSystemTime(Date.now() + 2 * 3_600_000);
+      await wikidataCountry('France');
+      expect(urls).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('remembers "no such country" for minutes only, and never remembers a failure', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let urls = stubFetch((u) => (u.searchParams.get('list') === 'search' ? searchReply() : MISSING_REPLY));
+      await expect(wikidataCountry('Atlantis')).resolves.toBeNull();
+      const sent = urls.length;
+      await expect(wikidataCountry('Atlantis')).resolves.toBeNull();
+      expect(urls).toHaveLength(sent);
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      await wikidataCountry('Atlantis');
+      expect(urls).toHaveLength(2 * sent);
+
+      stubFetch(() => new Error('network down'));
+      await expect(wikidataCountry('Germany')).rejects.toThrow();
+      urls = stubFetch((u) => (u.searchParams.get('props') === 'labels' ? GERMANY_LABELS : entitiesReply(GERMANY)));
+      expect((await wikidataCountry('Germany'))?.name).toBe('Germany');
+      expect(urls.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives each Wikidata call a 4 s deadline, not the 10 s default', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_input: unknown, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+            })
+        )
+      );
+      const outcome = expect(wikidataCountry('France')).rejects.toThrow(/timed out after 4s/);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

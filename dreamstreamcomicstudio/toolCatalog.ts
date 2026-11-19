@@ -360,7 +360,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
   {
     name: 'get_flight_status', label: 'Flight tracker', category: 'travel', kind: 'builtin', provider: 'aviationstack (HTTPS key only)',
     description: 'Track a flight — status, delays, terminal/gate and a route-progress arc, live from aviationstack. Without a live source the card shows the flight number and a link to check it on the web, never times, gates or delays.',
-    auth: 'optional', authEnv: 'AVIATIONSTACK_API_KEY', rateLimit: 'Per aviationstack plan; only plans with HTTPS work (a free HTTP-only key counts as no key)',
+    auth: 'optional', authEnv: 'AVIATIONSTACK_API_KEY', rateLimit: 'Per aviationstack plan; only plans with HTTPS work (a free HTTP-only key counts as no key); budgeted 5/min, 30/day (PROVIDER_BUDGETS raises it)',
     license: 'conditional', licenseNote: 'aviationstack data needs a paid plan for HTTPS; the key is never sent over plain HTTP.',
     dataShape: 'Tracker card: route arc with plane position, times, delays, gates (live); flight number + web link (no live source).', docsUrl: 'https://aviationstack.com/documentation',
     keywords: ['flight status', 'track flight', 'is my flight on time', 'flight delayed', 'where is flight', 'arrival time', 'departure status', 'flight tracker']
@@ -448,7 +448,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
   {
     name: 'country_info', label: 'Country facts', category: 'geo', kind: 'api', provider: 'Wikidata (+ flagcdn.com flag image)',
     description: 'Capital, population, continent, official languages, currency, area and flag of a country.',
-    auth: 'none', rateLimit: 'Keyless; budgeted 30/min, 1,000/day (2-4 calls a look-up)',
+    auth: 'none', rateLimit: 'Keyless; budgeted 30/min, 1,000/day (up to 6 calls a look-up, usually 2-3; answers cached a day)',
     license: 'commercial-ok', licenseNote: 'Wikidata data is CC0. When it does not answer, the tool says the source is offline, never "not found".',
     dataShape: 'Metric board: population, area, capital, continent, currency, languages + flag.', docsUrl: 'https://www.wikidata.org/wiki/Wikidata:Data_access',
     keywords: ['country', 'capital', 'population', 'currency of', 'flag', 'nation', 'demographics']

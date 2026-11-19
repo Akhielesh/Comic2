@@ -11,6 +11,7 @@ import {
   universitiesToTable
 } from './geo.js';
 import { __resetProviderUsage } from '../../lib/providerUsage.js';
+import { __resetCountryCache } from './wikipedia.js';
 import { entitiesReply, FRANCE, FRANCE_LABELS, MISSING_REPLY, RETIRED_API_REPLY, searchReply } from './__fixtures__/wikidata.js';
 
 /** Stub fetch with a router over the parsed URL; returns the list of requested URLs. */
@@ -38,7 +39,10 @@ const expectNoSecretOverHttp = (urls: string[]): void => {
   }
 };
 
-beforeEach(() => __resetProviderUsage());
+beforeEach(() => {
+  __resetProviderUsage();
+  __resetCountryCache();
+});
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();

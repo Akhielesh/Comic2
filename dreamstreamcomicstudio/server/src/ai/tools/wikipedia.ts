@@ -8,19 +8,26 @@
 // "not found".
 
 import { fetchJson } from './http.js';
+import { TtlCache } from '../../lib/cache.js';
+import { LANGUAGES } from '../../../../shared/comic/languages.js';
 
 export interface WikiFetchOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
 }
 
-const WIKI_HOST = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*\.wikipedia\.org$/;
-const WIKI_LANG = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/;
+/**
+ * The wikis of the language registry, `{lang}.wikipedia.org` (`zh-Hans` → `zh`). An explicit list: the
+ * portal (`www`), `api` and any code outside the registry are refused.
+ */
+const WIKI_HOSTS: ReadonlySet<string> = new Set(LANGUAGES.map((l) => `${l.code.split('-')[0].toLowerCase()}.wikipedia.org`));
 const THUMB_HOST = 'upload.wikimedia.org';
 const WIKIDATA_API = 'https://www.wikidata.org/w/api.php';
+/** Each Wikidata call's deadline (headers and body); a look-up makes several in a row. */
+const WIKIDATA_TIMEOUT_MS = 4_000;
 
-/** A language wiki's host, `{lang}.wikipedia.org` (lowercase; no port, path or other domain). */
-export const isWikipediaHost = (host: string): boolean => typeof host === 'string' && WIKI_HOST.test(host);
+/** The wiki of a language in the registry, `{lang}.wikipedia.org` (exact, lowercase; no port, path or other domain). */
+export const isWikipediaHost = (host: string): boolean => typeof host === 'string' && WIKI_HOSTS.has(host);
 
 const wikiHost = (host: string): string => {
   if (!isWikipediaHost(host)) throw new Error('Not a Wikipedia host.');
@@ -122,8 +129,8 @@ export const wikiLanglink = async (
   opts: WikiFetchOptions = {}
 ): Promise<WikiLanglink | undefined> => {
   const h = wikiHost(host);
-  if (typeof lang !== 'string' || !WIKI_LANG.test(lang)) throw new Error('Not a Wikipedia language code.');
-  const target = `${lang}.wikipedia.org`;
+  const target = `${typeof lang === 'string' ? lang : ''}.wikipedia.org`;
+  if (!isWikipediaHost(target)) throw new Error('Not a Wikipedia language code.');
   if (target === h) {
     const key = title.replace(/ /g, '_');
     return { lang, host: h, title, key, url: pageUrl(h, key) };
@@ -305,10 +312,10 @@ export const parseWikidataCountry = (entity: WikidataEntity, labels: Record<stri
   };
 };
 
-/** One Wikidata API call. A network failure or a spent budget throws as fetchJson threw it. */
+/** One Wikidata API call (4 s deadline unless the caller sets one). A network failure or a spent budget throws as fetchJson threw it. */
 const wikidataGet = async (params: Record<string, string>, opts: WikiFetchOptions): Promise<Record<string, unknown>> => {
   const query = new URLSearchParams({ format: 'json', ...params });
-  const data = await fetchJson<unknown>(`${WIKIDATA_API}?${query}`, fetchOpts(opts));
+  const data = await fetchJson<unknown>(`${WIKIDATA_API}?${query}`, { signal: opts.signal, timeoutMs: opts.timeoutMs ?? WIKIDATA_TIMEOUT_MS });
   if (!record(data) || record(data.error)) throw new WikidataUnavailableError();
   return data;
 };
@@ -345,13 +352,26 @@ const plainWords = (s: string): string =>
     .trim()
     .slice(0, 60);
 
+/** Search keyword: the item is (or was) a country or a sovereign state; isCountryEntity then checks it holds now. */
+const COUNTRY_FILTER = 'haswbstatement:P31=Q6256|P31=Q3624078';
+
+// Country facts change slowly; a name nothing matches is remembered briefly (it may be a typo the
+// model retries). Failures are never remembered. Per process, best-effort (lib/cache.ts).
+const COUNTRY_TTL_MS = 24 * 60 * 60_000;
+const COUNTRY_MISS_TTL_MS = 10 * 60_000;
+const countryCache = new TtlCache<CountryFacts | null>(COUNTRY_TTL_MS, 200);
+
+/** Test hook: forget remembered country look-ups. */
+export const __resetCountryCache = (): void => countryCache.clear();
+
 /**
  * Facts about a country from Wikidata (CC0). A 2- or 3-letter code is looked up by ISO 3166-1 alpha-2
  * (P297) or alpha-3 (P298); a name, or a code nothing matches, by its English Wikipedia title (redirects
  * followed); a title that is not a country (a disambiguation page, an island) by a search limited to
- * countries. Then one call labels the values. Null when the source answered and nothing is a country;
- * throws WikidataUnavailableError when its answer is not usable, and fetchJson's error (network, deadline,
- * provider budget) when there was none.
+ * countries. Then one call labels the values: 2 or 3 calls usually, up to 6. Answers are remembered for a
+ * day (a miss for 10 minutes). Null when the source answered and nothing is a country; throws
+ * WikidataUnavailableError when its answer is not usable, and fetchJson's error (network, 4 s deadline per
+ * call, provider budget) when there was none.
  */
 export const wikidataCountry = async (nameOrCode: string, opts: WikiFetchOptions = {}): Promise<CountryFacts | null> => {
   // "|" separates titles in the API: one name is one title.
@@ -361,18 +381,26 @@ export const wikidataCountry = async (nameOrCode: string, opts: WikiFetchOptions
     .trim()
     .slice(0, 80);
   if (!input) return null;
+  const remembered = countryCache.get(input);
+  if (remembered !== undefined) return remembered;
+  const facts = await lookUpCountry(input, opts);
+  countryCache.set(input, facts, facts ? COUNTRY_TTL_MS : COUNTRY_MISS_TTL_MS);
+  return facts;
+};
 
+const lookUpCountry = async (input: string, opts: WikiFetchOptions): Promise<CountryFacts | null> => {
   let entity: WikidataEntity | undefined;
   if (/^[A-Za-z]{2,3}$/.test(input)) {
+    // One hit, already limited to countries, so the entities call reads one item's statements, not three.
     const code = input.toUpperCase();
-    entity = await firstCountry(await searchItems(`haswbstatement:${code.length === 2 ? 'P297' : 'P298'}=${code}`, 3, opts), opts);
+    entity = await firstCountry(await searchItems(`haswbstatement:${code.length === 2 ? 'P297' : 'P298'}=${code} ${COUNTRY_FILTER}`, 1, opts), opts);
   }
   if (!entity) {
     entity = (await getEntities({ sites: 'enwiki', titles: input, normalize: '1' }, 'labels|claims', opts)).find(isCountryEntity);
   }
   if (!entity) {
     const words = plainWords(input);
-    if (words) entity = await firstCountry(await searchItems(`${words} haswbstatement:P31=Q6256|P31=Q3624078`, 1, opts), opts);
+    if (words) entity = await firstCountry(await searchItems(`${words} ${COUNTRY_FILTER}`, 1, opts), opts);
   }
   if (!entity) return null;
 

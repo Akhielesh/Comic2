@@ -150,8 +150,8 @@ items.**
 1. Phase 0 security items above (`PLATFORM_HEALTH_2026-06.md` §4 open list).
 2. Apply pending migrations so the shipped RAG foundation actually runs in
    production (it silently no-ops today).
-3. `country_info` migration off the deprecated REST Countries legacy API
-   (deadline was June 2026 — it's breaking now).
+3. ~~`country_info` migration off the deprecated REST Countries legacy API~~ —
+   done: `country_info` reads Wikidata (keyless, CC0; `docs/DATA_CONNECTORS.md`).
 
 **P1 — the vision, in order:** Google Phases 1 → 2 → 4(chat-time) → 3, each
 shipped thin and end-to-end (connect → tool → card → memory) before widening.
