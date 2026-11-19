@@ -2,7 +2,9 @@
 /**
  * Generates the Comic Studio (comics.dreamstreamstudio.ai) app icons from its brand mark,
  * public/icons/comics-mark.svg (an ink tile with a turning paper page, ComicsMark.tsx on the Atlas light
- * tokens). The PNGs take the light scheme; the mark's dark-scheme swap is for the tab favicon only.
+ * tokens). The PNGs always take the light drawing (sharp does not apply the mark's dark-scheme block). The
+ * SVG itself swaps tile and page under a dark colour scheme wherever a browser draws it: the tab favicon,
+ * and any other place that loads the SVG directly.
  * The link-preview cards (comics-og.png, comics-library-og.png) are made by scripts/og-cards.mjs instead.
  * Run from dreamstreamcomicstudio/:
  *
@@ -14,7 +16,9 @@
  *   comics-apple-touch-180.png       iOS home screen    — full bleed (iOS rounds the corners itself)
  *
  * Same approach as scripts/gen-icons.mjs (sharp, Apache-2.0, already a dependency).
+ * tests/config/terracottaGuard.test.ts imports renderIcons and checks the committed PNGs against it.
  */
+import { realpathSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +29,7 @@ const OUT_DIR = path.join(APP_ROOT, 'public', 'icons');
 const SRC = path.join(OUT_DIR, 'comics-mark.svg');
 
 // The mark's tile in the light scheme (Atlas --ds-ink): the full-bleed icons fill their corners with it.
-const TILE = '#0a0a0a';
+export const TILE = '#0a0a0a';
 
 async function renderMark(svg, px) {
   const meta = await sharp(svg).metadata();
@@ -50,24 +54,34 @@ async function fullBleedIcon(svg, size, scale) {
     .toBuffer();
 }
 
+/**
+ * Every icon this script writes, as [file name in public/icons/, PNG buffer], drawn from the mark's SVG source.
+ * @param {Buffer} svg
+ * @returns {Promise<Array<[string, Buffer]>>}
+ */
+export async function renderIcons(svg) {
+  return [
+    ['comics-192.png', await anyIcon(svg, 192)],
+    ['comics-512.png', await anyIcon(svg, 512)],
+    ['comics-maskable-512.png', await fullBleedIcon(svg, 512, 0.8)],
+    ['comics-apple-touch-180.png', await fullBleedIcon(svg, 180, 1)]
+  ];
+}
+
 async function main() {
   const svg = await readFile(SRC);
   await mkdir(OUT_DIR, { recursive: true });
-  const jobs = [
-    ['comics-192.png', () => anyIcon(svg, 192)],
-    ['comics-512.png', () => anyIcon(svg, 512)],
-    ['comics-maskable-512.png', () => fullBleedIcon(svg, 512, 0.8)],
-    ['comics-apple-touch-180.png', () => fullBleedIcon(svg, 180, 1)]
-  ];
-  for (const [name, make] of jobs) {
-    const buf = await make();
+  for (const [name, buf] of await renderIcons(svg)) {
     await writeFile(path.join(OUT_DIR, name), buf);
     const { width, height } = await sharp(buf).metadata();
     console.log(`public/icons/${name}  ${width}x${height}  ${buf.length} bytes`);
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Writes only when run as a script; importing it (the guard test) only renders.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

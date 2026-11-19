@@ -400,7 +400,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   exported comic page) is pinned line by line in its `ALLOWLIST`, and `tailwind.config.cjs` keeps only the comic
   shadow and the Comic Neue face that this content reads (the brand colours, Bangers and the hover shadow are gone).
 - `tests/config/terracottaGuard.test.ts` (DS-0) — the `#D97757` / `#c2643f` literals, against
-  `terracotta.json`; the third-party Anthropic logo fill is its one allowlisted use.
+  `terracotta.json`; the third-party Anthropic logo fill is its one allowlisted use. It also pins the Comic
+  Studio app icons: `public/icons/comics-mark.svg` paints only ink and paper (no terracotta, the old `#c2603f`
+  tile included), keeps the `ComicsMark.tsx` geometry and its dark-scheme swap, and the PNGs match a fresh
+  render by `comics-edge/scripts/gen-comics-icons.mjs` with no hued pixel.
 - `tests/config/localCxGuard.test.ts` (DS-0) — no local `cx` class joiner (it joins, it does not merge:
   the wave 8 ink bug); compose with `cn`.
 - `tests/config/zLadderGuard.test.ts` (DS-0) — no raw `z-NN` / `z-[…]` outside the `Z` recipe
