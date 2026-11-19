@@ -58,3 +58,35 @@ describe('PresetTile hint', () => {
     expect(screen.getByRole('radio', { name: 'Manga' })).not.toHaveAttribute('aria-describedby');
   });
 });
+
+describe('PresetTile check corner', () => {
+  const check = (name: string) => screen.getByRole('radio', { name }).querySelector('[data-slot="preset-check"]')!;
+
+  it('the chosen check sits top right by default and top left when the art asks for it', () => {
+    render(
+      <>
+        <PresetTile label="Right" art={<span />} selected onSelect={vi.fn()} />
+        <PresetTile label="Left" art={<span />} selected checkSide="left" onSelect={vi.fn()} />
+      </>
+    );
+    expect(check('Right').className).toMatch(/(^|\s)right-3(\s|$)/);
+    expect(check('Right').className).not.toMatch(/(^|\s)left-3(\s|$)/);
+    expect(check('Left').className).toMatch(/(^|\s)left-3(\s|$)/);
+    expect(check('Left').className).not.toMatch(/(^|\s)right-3(\s|$)/);
+  });
+
+  it('PresetGrid passes each option’s checkSide to its tile', () => {
+    render(
+      <PresetGrid
+        label="Lettering style"
+        value="a"
+        onChange={vi.fn()}
+        options={[
+          { value: 'a', label: 'Classic', checkSide: 'left', art: <span /> },
+          { value: 'b', label: 'Manga', art: <span /> }
+        ]}
+      />
+    );
+    expect(check('Classic').className).toMatch(/(^|\s)left-3(\s|$)/);
+  });
+});

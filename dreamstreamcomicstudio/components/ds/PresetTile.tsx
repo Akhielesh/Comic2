@@ -36,6 +36,11 @@ export interface PresetTileProps {
   onSelect: () => void;
   semantics?: PresetSemantics;
   badge?: React.ReactNode;
+  /**
+   * The top corner the chosen check sits in ('right' by default). Art that draws into its top-right corner asks for
+   * 'left' (a right-to-left lettering sample starts there); the badge sits top-left, so 'left' is for badge-less tiles.
+   */
+  checkSide?: 'right' | 'left';
   disabled?: boolean;
   /** Roving focus (PresetGrid): only one tile in the tab order. */
   tabIndex?: number;
@@ -47,7 +52,7 @@ export interface PresetTileProps {
 /** The tile control: the panel radius, a hairline, the chosen ring in ink. */
 export const PRESET_TILE = `group/preset relative flex w-full min-w-0 flex-col gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-2 text-left ${RADIUS_PANEL} ${LIFT} ${PRESS} disabled:cursor-not-allowed disabled:opacity-50 aria-checked:border-[var(--ds-ink)] aria-pressed:border-[var(--ds-ink)] aria-checked:ring-1 aria-checked:ring-[var(--ds-ink)] aria-pressed:ring-1 aria-pressed:ring-[var(--ds-ink)] ${DENSITY.coarse}`;
 
-export function PresetTile({ label, description, hint, art, aspect = '4 / 5', selected, onSelect, semantics = 'radio', badge, disabled = false, tabIndex, onKeyDown, buttonRef, className }: PresetTileProps) {
+export function PresetTile({ label, description, hint, art, aspect = '4 / 5', selected, onSelect, semantics = 'radio', badge, checkSide = 'right', disabled = false, tabIndex, onKeyDown, buttonRef, className }: PresetTileProps) {
   const hintId = React.useId();
   return (
     <button
@@ -71,7 +76,7 @@ export function PresetTile({ label, description, hint, art, aspect = '4 / 5', se
         {art}
       </MediaTile>
       {selected ? (
-        <span aria-hidden="true" data-slot="preset-check" className="ds-pop absolute right-3 top-3 inline-flex size-6 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-3.5">
+        <span aria-hidden="true" data-slot="preset-check" className={`ds-pop absolute ${checkSide === 'left' ? 'left-3' : 'right-3'} top-3 inline-flex size-6 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-3.5`}>
           <Check strokeWidth={3} />
         </span>
       ) : null}

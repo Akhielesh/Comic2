@@ -27,6 +27,8 @@ export interface PresetOption<T extends string> {
   hint?: string;
   art: React.ReactNode;
   badge?: React.ReactNode;
+  /** PresetTile `checkSide`: the top corner the chosen check sits in (art that draws top-right asks for 'left'). */
+  checkSide?: 'right' | 'left';
   disabled?: boolean;
 }
 
@@ -116,6 +118,7 @@ export function PresetGrid<T extends string>(props: PresetGridProps<T>) {
             art={o.art}
             aspect={aspect}
             badge={o.badge}
+            checkSide={o.checkSide}
             disabled={o.disabled}
             selected={isOn(o.value)}
             semantics={semantics}

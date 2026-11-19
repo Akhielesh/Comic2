@@ -22,11 +22,11 @@ import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
 import { IN_ART_LETTERING_NOTE } from '../../../shared/comic/pro/types';
 import type { StudioController } from '../types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
-import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
+import { INK, RADIUS_CONTROL, RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
 import { LibraryImage } from '../library/LibraryImage';
 import { PresetThumb } from '../library/procedural/PresetThumb';
-import { PresetGallery } from '../lettering/PresetGallery';
+import { LETTERING_STYLE_UNDO, PresetGallery } from '../lettering/PresetGallery';
 import { presetOps as letteringPresetOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { RefStrip } from '../refs/RefStrip';
@@ -469,9 +469,9 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         {/* Lettered into the art: a style would change nothing, so say so instead of offering one. A run of picks
             (arrowing through the grid) is one undo entry (PresetGallery's LETTERING_STYLE_UNDO). */}
         {doc.format.lettering === 'overlay' ? (
-          <PresetGallery value={letterPreset} lang={doc.format.language} onChange={(id) => void studio.patch(letteringPresetOps(id), { label: 'Change lettering style', coalesce: 'lettering-style' })} />
+          <PresetGallery value={letterPreset} lang={doc.format.language} onChange={(id) => void studio.patch(letteringPresetOps(id), LETTERING_STYLE_UNDO)} />
         ) : (
-          <div role="note" className="rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]">
+          <div role="note" className={`${RADIUS_CONTROL} bg-[var(--ds-well)] px-3 py-2 text-[12.5px] leading-snug ${INK}`}>
             {IN_ART_LETTERING_NOTE}
           </div>
         )}

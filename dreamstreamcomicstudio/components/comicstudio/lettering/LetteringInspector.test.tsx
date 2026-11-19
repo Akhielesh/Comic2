@@ -8,7 +8,7 @@ import { resolvePlacements } from './useLetterPlans';
 import { computeSnap, snapTargets } from './SnapGuides';
 import { nextSelection, useLetteringSelection } from './useLetteringSelection';
 import { CoverTitleLayer, planCoverTitle } from './CoverTitleLayer';
-import { PresetGallery } from './PresetGallery';
+import { EDITION_LETTERING_NOTE, PresetGallery } from './PresetGallery';
 import { LetteringSvg } from './LetteringSvg';
 import { ShapePicker, TailPicker } from './ShapePicker';
 import { BUBBLE_SHAPES, TAIL_STYLES } from '../../../shared/comic/lettering/style';
@@ -76,6 +76,21 @@ describe('LetteringInspector', () => {
     expect(within(panel).getByRole('radiogroup', { name: 'Lettering style' }).querySelectorAll('[role="radio"]')).toHaveLength(8);
     expect(within(panel).getByRole('radiogroup', { name: 'Balloon type' }).querySelectorAll('[role="radio"]')).toHaveLength(6);
     expect(within(panel).queryByRole('tablist')).toBeNull();
+    // The original language: the style chips are live and nothing says otherwise.
+    expect(within(within(panel).getByRole('radiogroup', { name: 'Lettering style' })).getAllByRole('radio').some((r) => (r as HTMLButtonElement).disabled)).toBe(false);
+    expect(within(panel).queryByText(EDITION_LETTERING_NOTE)).toBeNull();
+  });
+
+  it('Easy in a translated edition: the style chips are shown disabled with one line saying why, and a tap changes nothing', () => {
+    // The style is the whole comic's, in every language: a pick from an edition would restyle the original too.
+    const { apply } = inspector(['pg_1_l4'], { editionLang: 'te' });
+    const row = screen.getByRole('region', { name: 'Comic lettering style' });
+    const chips = within(within(row).getByRole('radiogroup', { name: 'Lettering style' })).getAllByRole('radio');
+    expect(chips).toHaveLength(8);
+    expect(chips.every((c) => (c as HTMLButtonElement).disabled)).toBe(true);
+    expect(within(row).getByText(EDITION_LETTERING_NOTE)).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('radio', { name: 'Manga' }));
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('Easy: transparent bubbles, opacity steps and preset switching are one free op each', () => {

@@ -88,9 +88,33 @@ describe('PresetGallery (grid)', () => {
     expect(radios[0]).toHaveAttribute('aria-checked', 'true');
     expect(radios[0].getAttribute('title')!.startsWith('Chosen by the Director')).toBe(true);
     expect(radios[0]).toHaveAccessibleDescription(DIRECTOR_STYLE_HINT);
-    // The Pro offer list (pro) does not duplicate it: a gallery that asks for Pro looks while they are not writable
-    // still shows 8 + the chosen one.
     expect(within(group()).getAllByRole('radio', { name: look.name })).toHaveLength(1);
+  });
+
+  it('a gallery that asks for the Pro styles while they are not writable (the Pro inspector) shows 8 + the Director’s one', () => {
+    const look = proLooks()[0];
+    render(<PresetGallery pro value={look.id as LetteringPresetId} onChange={vi.fn()} />);
+    const radios = within(group()).getAllByRole('radio');
+    expect(radios).toHaveLength(9);
+    expect(radios[0]).toHaveAccessibleName(look.name);
+    expect(radios[0]).toHaveAttribute('aria-checked', 'true');
+    expect(radios[0]).toHaveAccessibleDescription(DIRECTOR_STYLE_HINT);
+    expect(radios.slice(1).map((r) => r.getAttribute('aria-checked'))).toEqual(Array(8).fill('false'));
+    // Not offered twice, and none of the other Pro styles is offered.
+    expect(within(group()).getAllByRole('radio', { name: look.name })).toHaveLength(1);
+    LETTERING_PRESET_IDS.forEach((id, i) => expect(radios[i + 1]).toHaveAccessibleName(LETTERING_PRESETS[id].name));
+  });
+
+  it('right-to-left: the chosen tile’s check takes the top-left corner, which the mirrored sample leaves empty', () => {
+    const check = () => within(group()).getByRole('radio', { name: 'Classic comic' }).querySelector('[data-slot="preset-check"]')!;
+    const { unmount } = render(<PresetGallery value="classic" onChange={vi.fn()} lang="ar" />);
+    expect(check().className).toMatch(/(^|\s)left-3(\s|$)/);
+    expect(check().className).not.toMatch(/(^|\s)right-3(\s|$)/);
+    unmount();
+    // Left to right the caption starts at the top left, so the check stays top right.
+    render(<PresetGallery value="classic" onChange={vi.fn()} lang="en" />);
+    expect(check().className).toMatch(/(^|\s)right-3(\s|$)/);
+    expect(check().className).not.toMatch(/(^|\s)left-3(\s|$)/);
   });
 
   it('disabled: every tile is disabled and a tap changes nothing', () => {
@@ -151,6 +175,16 @@ describe('PresetGallery (chips)', () => {
       expect(r.className).toContain('min-w-[6.5rem]');
     }
     expect(within(group()).getByRole('radio', { name: 'Indie handwritten' })).toHaveAccessibleDescription(LETTERING_PRESETS.handwritten.blurb);
+  });
+
+  it('right-to-left: the chosen chip’s check sits top-left, clear of the mirrored caption', () => {
+    const check = () => within(group()).getByRole('radio', { name: 'Classic comic' }).querySelector('[data-slot="preset-chip-check"]')!;
+    const { unmount } = render(<PresetGallery variant="chips" value="classic" onChange={vi.fn()} lang="ar" />);
+    expect(check().className).toMatch(/(^|\s)left-1(\s|$)/);
+    expect(check().className).not.toMatch(/(^|\s)right-1(\s|$)/);
+    unmount();
+    render(<PresetGallery variant="chips" value="classic" onChange={vi.fn()} lang="en" />);
+    expect(check().className).toMatch(/(^|\s)right-1(\s|$)/);
   });
 
   it('disabled chips change nothing', () => {

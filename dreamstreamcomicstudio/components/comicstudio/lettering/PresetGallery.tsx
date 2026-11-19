@@ -185,6 +185,9 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
   const plans = usePresetPlans(lang, measure, ids);
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const hintId = useId();
+  // A right-to-left sample starts at the top right (its caption sits there), so the chosen check takes the top-left
+  // corner, which that sample leaves empty (a left-to-right sample leaves the top right empty).
+  const rtl = dirOf(lang) === 'rtl';
 
   // A Pro style people cannot pick yet is one the Director chose: its hint says so (and how to change it).
   const hintOf = (id: LetteringPresetId): string => (!writable && !offered.includes(id) && allPro.some((p) => p.id === id) ? DIRECTOR_STYLE_HINT : lookOf(id, allPro).blurb);
@@ -223,7 +226,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
                 {look.name}
               </span>
               {on && (
-                <span aria-hidden="true" className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-2.5">
+                <span aria-hidden="true" data-slot="preset-chip-check" className={`absolute ${rtl ? 'left-1' : 'right-1'} top-1 inline-flex size-4 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-2.5`}>
                   <Check strokeWidth={3} />
                 </span>
               )}
@@ -243,6 +246,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
     value: id,
     label: lookOf(id, allPro).name,
     hint: hintOf(id),
+    ...(rtl ? { checkSide: 'left' as const } : {}),
     disabled,
     art: (
       <span className="block h-full w-full bg-[var(--ds-reader-paper-back)] p-1.5">

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { IN_ART_LETTERING_NOTE } from '../../../shared/comic/pro/types';
 import { presetOps } from '../lettering/styleOps';
+import { LETTERING_STYLE_UNDO } from '../lettering/PresetGallery';
 import { StyleTab } from './StyleTab';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 
@@ -53,7 +54,9 @@ describe('StyleTab › Lettering', () => {
     const { studio, section } = openLettering();
     fireEvent.click(within(section).getByRole('radio', { name: /Manga/ }));
     expect(studio.patch).toHaveBeenCalledTimes(1);
-    expect(studio.patch).toHaveBeenCalledWith(presetOps('manga'), { label: 'Change lettering style', coalesce: 'lettering-style' });
+    // The same undo entry as a pick in the page editor (one shared constant), so the two fold together.
+    expect(studio.patch).toHaveBeenCalledWith(presetOps('manga'), LETTERING_STYLE_UNDO);
+    expect(LETTERING_STYLE_UNDO).toEqual({ label: 'Change lettering style', coalesce: 'lettering-style' });
     expect(studio.act).not.toHaveBeenCalled();
   });
 });
