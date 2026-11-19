@@ -4,7 +4,7 @@ import { getProviderDef } from '../../shared/providers';
 import { ProviderLogo, hasProviderLogo } from '../providerLogos';
 import { sourceShortLabel } from '../../services/modelCatalog';
 import { getActiveKey, usageFraction, usageColor, isModelSourceUsable, API_KEYS_CHANGED, type ApiKeyProvider } from '../../services/apiKeys';
-import { CONTROL_BTN, INK, ACCENT_TEXT } from './studioDesign';
+import { CONTROL_BTN, INK, ACCENT_TEXT, STATUS_INK } from './studioDesign';
 
 interface ChatModelChipProps {
   modelId: string | null;
@@ -55,7 +55,7 @@ export const ChatModelChip: React.FC<ChatModelChipProps> = ({ modelId, modelName
     if (!usable) {
       titleHint = `No ${def?.label || short} key — add one in Settings → API Configuration to use this model`;
       status = (
-        <span className="flex items-center gap-0.5 text-amber-600 font-semibold">
+        <span className={`flex items-center gap-0.5 font-semibold ${STATUS_INK.attention}`}>
           <KeyRound className="w-2.5 h-2.5 shrink-0" /> {short} · no key
         </span>
       );

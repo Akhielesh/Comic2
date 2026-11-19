@@ -56,7 +56,7 @@ export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; 
       <span className="block font-medium">{label}</span>
       {hint && <span className="block text-[12px] text-[var(--ds-muted)]">{hint}</span>}
     </span>
-    <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[#D97757]" />
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[var(--ds-accent)]" />
   </label>
 );
 
@@ -198,7 +198,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                   key={lang}
                   className={cx(
                     'inline-flex min-h-[44px] items-center gap-2 rounded-full border px-3 text-[13px]',
-                    on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
+                    on ? 'border-ds-accent/45 bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
                     !ready && 'opacity-60'
                   )}
                   title={isSource ? 'The original is always published' : ready || !known ? undefined : on ? 'Not ready any more: untick it to publish without it, or finish and review it first' : 'Finish and review this translation first'}
@@ -212,7 +212,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                       touched.current = true;
                       setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)));
                     }}
-                    className="h-4 w-4 accent-[#D97757]"
+                    className="h-4 w-4 accent-[var(--ds-accent)]"
                   />
                   {languageSpec(lang)?.endonym || lang}
                   {isSource && <span className="text-[11px] text-[var(--ds-muted)]">original</span>}
@@ -236,7 +236,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                 id={startInId}
                 value={startIn}
                 onChange={(e) => setDefaultLang(e.target.value)}
-                className="min-h-[44px] min-w-0 max-w-[60%] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+                className={`min-h-[44px] min-w-0 max-w-[60%] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] ${FOCUS_RING}`}
               >
                 {sent.map((l) => (
                   <option key={l} value={l}>
@@ -254,7 +254,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         <Toggle label="Show my username" hint="Off keeps you anonymous to readers" checked={showCreator} onChange={setShowCreator} />
       </div>
       {error && (
-        <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="alert" className={`rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
           {error}
         </p>
       )}
@@ -280,7 +280,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           disabled={busy || !!check || drawn === 0 || blocked.length > 0}
           aria-busy={busy || check === 'loading' || undefined}
           onClick={() => onPublish(request())}
-          className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-5 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+          className="min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-5 text-[14px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy ? 'Publishing…' : check === 'loading' ? 'Checking your comic…' : live ? 'Update published version' : 'Publish'}
         </button>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowDownRight, ArrowUpRight, Calculator, Gauge, Lock, Minus, OctagonAlert, TriangleAlert } from 'lucide-react';
-import { Badge, BEAR, BULL, NEUTRAL, Sparkline } from '../../chat/artifacts/kit';
+import { Badge, BEAR, BULL, NEUTRAL, Sparkline, withAlpha } from '../../chat/artifacts/kit';
 import type { CostCategory, CostSource } from '../../../shared/types/costCentre';
 import { CATEGORY_COLOR, STATUS } from './costPalette';
 import { fmtPct, fmtUsd } from './costFormat';
@@ -41,7 +41,7 @@ export const CostDelta: React.FC<{ pct: number | null; upIsGood?: boolean; label
     <span className="inline-flex items-center gap-1 text-[11px]">
       <span
         className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-semibold"
-        style={{ color, backgroundColor: `${color}1a` }}
+        style={{ color, backgroundColor: withAlpha(color, 0.1) }}
       >
         <Icon className="h-3 w-3" aria-hidden />
         {flat ? 'flat' : `${up ? '+' : ''}${pct.toFixed(Math.abs(pct) < 10 ? 1 : 0)}%`}

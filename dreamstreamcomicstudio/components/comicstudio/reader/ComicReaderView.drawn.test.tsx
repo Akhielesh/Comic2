@@ -1,6 +1,7 @@
 // One "drawn" definition (PROGRAM3 B25, declutter F7): the inline reader and the board's Pages badge agree on
 // how many pages are drawn — drawn AND current — and the reader names the out-of-date ones apart (they still
-// read: they have art). Its progress bar moves by transform only (reader.md §5.3).
+// read: they have art). That line is the author's working status: only the owner's studio Read tab asks for it
+// (showDrawnStatus); a shared or public reader never shows it. Its progress bar moves by transform only (reader.md §5.3).
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,7 +50,7 @@ describe('the reader and the board agree on "drawn"', () => {
     expect(board).toEqual({ ready: 3, total: doc.pages.length });
     // The reader still shows the out-of-date page (it has art): 4 readable pages.
     expect(readerItems(doc).filter((i) => i.kind === 'page')).toHaveLength(4);
-    render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" />);
+    render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" showDrawnStatus />);
     const chip = screen.getByTestId('reader-drawn');
     expect(chip.textContent).toBe(`3 of ${doc.pages.length} pages drawn · 1 out of date`);
     expect(chip.textContent).toContain(`${board.ready} of ${board.total}`);
@@ -64,8 +65,14 @@ describe('the reader and the board agree on "drawn"', () => {
 
   it('a fully drawn, current comic shows no drawn chip', () => {
     const doc = makeSampleDoc((d) => d.pages.forEach((p, i) => (p.render = { status: 'ready', history: [], asset: art(i + 1) })));
-    render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" />);
+    render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" showDrawnStatus />);
     expect(screen.queryByTestId('reader-drawn')).toBeNull();
+  });
+
+  it('without showDrawnStatus (every reader but the owner’s studio tab) the working status is never rendered, not even for screen readers', () => {
+    const { container } = render(<ComicReaderView doc={halfDrawn()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.queryByTestId('reader-drawn')).toBeNull();
+    expect(container.textContent).not.toMatch(/pages? drawn|out of date/);
   });
 });
 

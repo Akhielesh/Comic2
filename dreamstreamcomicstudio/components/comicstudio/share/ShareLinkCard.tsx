@@ -8,7 +8,7 @@ import type { PublicationOwnerView } from '../../../shared/comic/publication';
 import { languageSpec } from '../../../shared/comic/languages';
 import { shareLinkFor } from './shareModel';
 import { useShareCapabilities } from './useShareCapabilities';
-import { OVERLINE } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 
 export interface ShareLinkCardProps {
@@ -21,7 +21,7 @@ export interface ShareLinkCardProps {
 }
 
 const btn =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-4 text-[14px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 touch-manipulation';
+  `inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-4 text-[14px] font-semibold ${FOCUS_RING} touch-manipulation`;
 
 export const ShareLinkCard: React.FC<ShareLinkCardProps> = ({ view, title, description, onFallback, pageCount }) => {
   const caps = useShareCapabilities();
@@ -53,14 +53,14 @@ export const ShareLinkCard: React.FC<ShareLinkCardProps> = ({ view, title, descr
         readOnly
         value={url}
         onFocus={(e) => e.currentTarget.select()}
-        className="block h-11 w-full min-w-0 overflow-x-auto text-ellipsis rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 font-mono text-[13px] text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+        className={`block h-11 w-full min-w-0 overflow-x-auto text-ellipsis rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 font-mono text-[13px] text-[var(--ds-ink)] ${FOCUS_RING}`}
       />
       <div className="grid grid-cols-2 gap-2">
         <button type="button" onClick={copy} className={cx(btn, 'border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')}>
           {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button type="button" onClick={share} className={cx(btn, 'bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]')}>
+        <button type="button" onClick={share} className={cx(btn, 'bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]')}>
           <Share2 className="h-4 w-4" aria-hidden /> Share…
         </button>
       </div>
@@ -72,7 +72,7 @@ export const ShareLinkCard: React.FC<ShareLinkCardProps> = ({ view, title, descr
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-1 text-[13px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className={`inline-flex min-h-[44px] items-center gap-1 rounded-lg px-1 text-[13px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
         >
           <ChevronDown className={cx('h-4 w-4 transition-transform motion-reduce:transition-none', open && 'rotate-180')} aria-hidden /> Link options
         </button>

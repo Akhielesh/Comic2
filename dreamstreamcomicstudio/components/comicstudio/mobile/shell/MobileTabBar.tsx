@@ -5,11 +5,11 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { RADIUS_PILL } from '../../../chat/studioDesign';
+import { FOCUS_RING_FLUSH, RADIUS_PILL, STATUS_DOT } from '../../../chat/studioDesign';
 import { navItemName } from '../../../ds/TabBar';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
+import { cn } from '../../../../lib/utils';
 export type StudioNavId = 'chat' | 'board' | 'read';
 
 export interface StudioNavItem {
@@ -31,7 +31,7 @@ export interface StudioNavItem {
 
 const DOT_CLS: Record<NonNullable<StudioNavItem['dot']>, string> = {
   accent: 'bg-[var(--ds-accent)]',
-  amber: 'bg-amber-500',
+  amber: STATUS_DOT.attention,
   pulse: 'bg-[var(--ds-accent)] animate-pulse motion-reduce:animate-none'
 };
 
@@ -98,8 +98,8 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
       aria-label={spoken}
       title={item.disabled ? item.disabledReason : undefined}
       data-nav={item.id}
-      className={cx(
-        'press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
+      className={cn(
+        `press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors ${FOCUS_RING_FLUSH}`,
         orientation === 'bar' ? 'flex-1' : 'w-14 py-1.5',
         item.disabled ? 'cursor-not-allowed opacity-40' : '',
         item.current ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
@@ -107,17 +107,17 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
     >
       <span
         aria-hidden
-        className={cx(
+        className={cn(
           'relative grid h-7 w-14 place-items-center rounded-full transition-colors',
-          item.current ? 'bg-[#D97757]/[0.14]' : !item.disabled && 'group-hover:bg-[var(--ds-hover)]'
+          item.current ? 'bg-[var(--ds-accent-soft)]' : !item.disabled && 'group-hover:bg-[var(--ds-hover)]'
         )}
       >
         {item.icon}
-        {item.dot && <span className={cx('absolute right-3 top-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ds-surface-strong)]', DOT_CLS[item.dot])} />}
+        {item.dot && <span className={cn('absolute right-3 top-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ds-surface-strong)]', DOT_CLS[item.dot])} />}
       </span>
       {/* The rail is 56 px wide: the badge goes under the label there instead of squeezing it to "B…".
           The space between label and badge keeps them two words for the accessible-name check. */}
-      <span aria-hidden className={cx('flex max-w-full items-center gap-1', orientation === 'rail' && 'flex-col gap-0.5 [html.kb-open_&]:hidden')}>
+      <span aria-hidden className={cn('flex max-w-full items-center gap-1', orientation === 'rail' && 'flex-col [html.kb-open_&]:hidden')}>
         <span className="max-w-full truncate">{item.label}</span>{' '}
         {item.badge && (
           <span className={`whitespace-nowrap ${RADIUS_PILL} bg-[var(--ds-well-strong)] px-1 py-px text-[9.5px] font-semibold tabular-nums text-[var(--ds-muted)]`}>{item.badge}</span>

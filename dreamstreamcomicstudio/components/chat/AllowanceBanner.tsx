@@ -11,6 +11,7 @@ import {
   USAGE_EXHAUSTED_COPY
 } from '../../services/usageAllowance';
 import { useUsageAllowance } from '../usage/useUsageAllowance';
+import { ACCENT_FILL, ACCENT_FILL_HOVER, FOCUS_RING, ON_ACCENT_TEXT, STATUS_INK, STATUS_SURFACE } from './studioDesign';
 
 // Slim, dismissible "usage left" alert across the top of the chat shell (P1-LIMITS). Appears when
 // the user's DreamStream usage crosses 30/70/90/100% (info → warn → rose). At 100% it is the
@@ -61,9 +62,9 @@ export const AllowanceBanner: React.FC = () => {
 
   const toneClasses =
     tone === 'rose'
-      ? 'border-rose-500/40 bg-rose-500/10'
+      ? STATUS_SURFACE.error
       : tone === 'warn'
-        ? 'border-amber-500/40 bg-amber-500/10'
+        ? STATUS_SURFACE.attention
         : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]';
 
   const left = formatPctLeft(status.pctLeft);
@@ -76,12 +77,12 @@ export const AllowanceBanner: React.FC = () => {
   return (
     <div
       role="status"
-      className={`flex gap-x-2.5 gap-y-1 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${hardStop ? 'flex-wrap items-start sm:items-center' : 'items-center'} ${toneClasses}`}
+      className={`flex gap-x-2.5 gap-y-1 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] sm:px-4 ${hardStop ? 'flex-wrap items-start sm:items-center' : 'items-center'} ${toneClasses}`}
     >
       {tone === 'info' ? (
         <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" />
       ) : (
-        <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${tone === 'rose' ? 'text-rose-500' : 'text-amber-500'}`} />
+        <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${tone === 'rose' ? STATUS_INK.error : STATUS_INK.attention}`} />
       )}
 
       <span
@@ -117,7 +118,7 @@ export const AllowanceBanner: React.FC = () => {
           type="button"
           onClick={() => void consent()}
           disabled={saving}
-          className="shrink-0 rounded-full bg-rose-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-all duration-200 hover:bg-rose-700 disabled:opacity-50 coarse:min-h-11 coarse:px-3"
+          className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] disabled:opacity-50 coarse:min-h-11 coarse:px-3 ${ACCENT_FILL} ${ACCENT_FILL_HOVER} ${ON_ACCENT_TEXT} ${FOCUS_RING}`}
         >
           Continue with my key
         </button>

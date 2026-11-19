@@ -38,7 +38,7 @@ import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
 import { tileSources, type IsUnsignable, type TileSources } from './cards/renderTile';
 import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
-import { RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, INK_TILE, RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 const CLAMP_CHARS = 700;
@@ -48,7 +48,7 @@ export const DirectorMark: React.FC<{ className?: string }> = ({ className }) =>
   <span
     aria-hidden
     className={cx(
-      'grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[linear-gradient(135deg,#E8916F_0%,#D97757_55%,#B8573A_100%)] text-white shadow-[0_1px_3px_rgba(217,119,87,0.35)]',
+      `grid h-7 w-7 shrink-0 place-items-center rounded-full ${INK_TILE}`,
       className
     )}
   >
@@ -312,7 +312,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
                     }}
                     aria-haspopup="menu"
                     aria-label={`${name} is unassigned — assign it`}
-                    className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50"
+                    className={`block rounded-xl ${FOCUS_RING}`}
                   >
                     {img}
                   </button>
@@ -334,7 +334,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
             setAssigning(unassigned);
           }}
           aria-haspopup="menu"
-          className="inline-flex min-h-[28px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[12px] text-[var(--ds-ink)] transition-colors duration-150 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3.5"
+          className={`inline-flex min-h-[28px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[12px] text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] coarse:px-3.5`}
         >
           <UserRound className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
           <span className="min-w-0 truncate">

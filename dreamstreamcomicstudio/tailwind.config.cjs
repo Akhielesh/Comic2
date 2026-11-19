@@ -79,23 +79,19 @@ module.exports = {
       screens: { sm: "640px", md: "768px", lg: "1024px", xl: "1280px", "2xl": "1536px" }
     },
     extend: {
+      // The old comic kit is gone from the interface (tests/config/legacyKitGuard.test.ts is a never rule). Two of
+      // its entries stay because comic CONTENT reads them, pinned in that guard's ALLOWLIST: `font-comic` for the
+      // classic reader's lettering (PanelDialogue) and `shadow-comic` for the comic page captured into the PDF
+      // (ReviewExport). The brand colours, the Bangers `font-display` family and the hover shadow are removed.
       fontFamily: {
         sans: ["Inter", "sans-serif"],
-        comic: ["Comic Neue", "cursive"],
-        display: ["Bangers", "cursive"]
+        comic: ["Comic Neue", "cursive"]
       },
       colors: {
-        ds: dsColours,
-        brand: {
-          yellow: "#FACC15",
-          blue: "#3B82F6",
-          red: "#EF4444",
-          black: "#18181b"
-        }
+        ds: dsColours
       },
       boxShadow: {
-        comic: "4px 4px 0px 0px #000000",
-        "comic-hover": "2px 2px 0px 0px #000000"
+        comic: "4px 4px 0px 0px #000000"
       }
     }
   },

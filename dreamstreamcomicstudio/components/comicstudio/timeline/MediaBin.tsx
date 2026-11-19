@@ -50,7 +50,7 @@ const MediaTile: React.FC<{ item: MediaItem; studio: StudioController; onOpen():
       onClick={onOpen}
       aria-label={label}
       title={label}
-      className={cx('group relative block aspect-square w-full min-w-0 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] hover:border-[#D97757]/50', FOCUS_RING)}
+      className={cx('group relative block aspect-square w-full min-w-0 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] hover:border-ds-accent/50', FOCUS_RING)}
     >
       {item.blocked ? (
         <BlockedTile compact />
@@ -182,7 +182,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
                 className={cx(
                   'tap-target inline-flex h-8 shrink-0 items-center gap-1 rounded-full border px-3 text-[12px] font-medium',
                   FOCUS_RING,
-                  on ? 'border-[#D97757]/40 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                  on ? 'border-ds-accent/40 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 )}
               >
                 {f.label}
@@ -203,7 +203,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Page 3, MAYA, cover…"
-              className="h-9 w-full rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] pl-8 pr-3 text-[16px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none sm:text-[12.5px]"
+              className="h-9 w-full rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] pl-8 pr-3 text-[16px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none sm:text-[12.5px]"
             />
           </div>
           <label htmlFor={sortId} className="sr-only">
@@ -213,7 +213,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
             id={sortId}
             value={sort}
             onChange={(e) => setSort(e.target.value as MediaSort)}
-            className="h-9 shrink-0 rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:text-[12.5px]"
+            className={`h-9 shrink-0 rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] focus:outline-none ${FOCUS_RING} sm:text-[12.5px]`}
           >
             <option value="book">Book order</option>
             <option value="newest">Newest first</option>

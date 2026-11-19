@@ -1,6 +1,8 @@
 import React, { lazy, Suspense, useMemo, useState } from 'react';
 import { Copy, Check, Download, ChevronDown, ChevronUp, Eye, Code2, Play, Loader2 } from 'lucide-react';
 import { downloadTextFile, languageToExt } from '../../services/chatUtils';
+import { cn } from '../../lib/utils';
+import { DENSITY } from './studioDesign';
 
 const ReactPlayground = lazy(() => import('./ReactPlayground'));
 
@@ -54,7 +56,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
   const tabButton = (target: View, label: string, Icon: React.ComponentType<{ className?: string }>, activeClass: string) => (
     <button
       onClick={() => setView(target)}
-      className={`flex items-center gap-0.5 px-1.5 py-0.5 ${view === target ? activeClass : 'hover:text-white'}`}
+      className={cn('flex items-center gap-0.5 px-1.5 py-0.5', DENSITY.coarse, view === target ? activeClass : 'hover:text-white')}
     >
       <Icon className="w-3 h-3" /> {label}
     </button>
@@ -68,8 +70,8 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
           {(previewable || runnable) && (
             <div className="flex items-center rounded border border-zinc-600 overflow-hidden">
               {tabButton('code', 'Code', Code2, 'bg-zinc-600 text-white')}
-              {previewable && tabButton('preview', 'Preview', Eye, 'bg-emerald-600 text-white')}
-              {runnable && tabButton('run', 'Run', Play, 'bg-brand-blue text-white')}
+              {previewable && tabButton('preview', 'Preview', Eye, 'bg-zinc-600 text-white')}
+              {runnable && tabButton('run', 'Run', Play, 'bg-zinc-600 text-white')}
             </div>
           )}
         </div>

@@ -455,8 +455,9 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   it('every accent TEXT utility in the tree is routed to --ds-accent-text', () => {
     const found = classTokens(ACCENT_TEXT_UTILITY);
     expect(found).toContain('text-[var(--ds-accent)]');
-    expect(found).toContain('text-[#D97757]');
-    expect(found).toContain('text-[#c2643f]'); // TranslationReview's overflow fit label (3.84:1 on the paper as a literal)
+    // The literal terracotta text utilities are gone from the tree since the Atlas conversion (terracottaGuard holds it);
+    // a new one would still be routed by the shim, but the accent is spelled through the token now.
+    expect(found.filter((c) => /#(?:d97757|c2643f)/i.test(c))).toEqual([]);
     // An opacity-modified accent text utility cannot be routed (and `/NN` on a var() colour is invalid CSS anyway).
     expect(found.filter((c) => /\]\//.test(c)), 'use ACCENT_TEXT (fade the element with opacity-* if it must)').toEqual([]);
     for (const cls of found) {
@@ -491,8 +492,7 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     'group-hover:bg-[var(--ds-accent-hover)]': 'hover'
   };
   const DECORATIVE: Record<string, string> = {
-    'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle',
-    'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'
+    'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle'
   };
 
   it('every solid accent fill in the tree is either routed (when it carries text) or a documented mark', () => {
@@ -571,8 +571,9 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     }
     expect(problems).toEqual([]);
     expect(blockWins, 'the check compared real winners').toBeGreaterThan(5);
-    // The 85 % badge: the block makes it solid, so the skin section restores the shim's own 85 %.
-    expect(bodiesFor('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85.text-white:not(:disabled)')).toEqual(bodiesFor('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85'));
+    // The literal 85 % badge left the tree with the Atlas conversion, and with it the block's rule and the skin's restore.
+    expect(bodiesFor('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85.text-white:not(:disabled)')).toEqual([]);
+    expect(bodiesFor('.bg-\\[\\#D97757\\]\\/85.text-white:not(:disabled)')).toEqual([]);
   });
 
   it('the specificity counter is right', () => {

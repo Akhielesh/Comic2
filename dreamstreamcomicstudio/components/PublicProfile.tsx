@@ -3,7 +3,9 @@ import { UserProfile, Project } from '../types';
 import { getImageUrl, getProfileByUsername, getPublicProjectsByUser, isFollowing, followUser, unfollowUser, getFollowersCount } from '../services/db';
 import { UserAvatar } from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
-import { Button } from './Button';
+import { Button } from './ds';
+import { cn } from '../lib/utils';
+import { CANVAS_BG, FOCUS_RING, HEADING, LIFT, MUTED, OVERLINE, RADIUS_PANEL, RADIUS_PILL, SCRIM, SECTION_CARD, SHADOW_SOFT, TEXT_2XL, TEXT_3XL } from './chat/studioDesign';
 import { UserPlus, UserCheck, Grid, Heart, Eye, BookOpen } from 'lucide-react';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { isStudioV4Project } from '../services/studioDeepLink';
@@ -133,55 +135,55 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
     };
 
     if (loading) {
-        return <div className="flex h-screen items-center justify-center">Loading profile...</div>;
+        return <div className={cn('flex h-screen items-center justify-center', CANVAS_BG, MUTED)}>Loading profile...</div>;
     }
 
     if (!profile) {
-        return <div className="flex h-screen items-center justify-center">User not found.</div>;
+        return <div className={cn('flex h-screen items-center justify-center', CANVAS_BG, MUTED)}>User not found.</div>;
     }
 
     return (
-        <div className="min-h-screen bg-slate-100 pb-20">
+        <div className={cn('min-h-screen pb-20 text-[var(--ds-ink)]', CANVAS_BG)}>
             <div className="container mx-auto max-w-5xl p-4 md:p-6">
                 <div className="mb-6">
-                    <button onClick={() => onNavigate('gallery')} className="text-xs font-bold text-slate-500 hover:text-black">
+                    <Button variant="ghost" size="sm" onClick={() => onNavigate('gallery')} className={MUTED}>
                         Back to Library
-                    </button>
+                    </Button>
                 </div>
                 {/* Profile Card */}
-                <div className="bg-white border-4 border-black shadow-comic rounded-xl p-6 md:p-8 mb-10 flex flex-col md:flex-row items-center md:items-start gap-8">
+                <div className={cn(SECTION_CARD, 'mb-10 flex flex-col items-center gap-8 p-6 md:flex-row md:items-start md:p-8')}>
                     <div className="shrink-0">
                         <UserAvatar url={profile.avatar_url} name={profile.username} size="lg" className="w-32 h-32 text-4xl" />
                     </div>
                     <div className="flex-1 text-center md:text-left">
-                        <h1 className="font-display text-4xl mb-2">{profile.username}</h1>
-                        <p className="text-slate-600 mb-4 max-w-lg">{profile.bio || "This user hasn't written a bio yet."}</p>
+                        <h1 className={cn(HEADING, TEXT_3XL, 'mb-2 [overflow-wrap:anywhere]')}>{profile.username}</h1>
+                        <p className={cn('mb-4 max-w-lg', MUTED)}>{profile.bio || "This user hasn't written a bio yet."}</p>
 
-                        <div className="flex items-center justify-center md:justify-start gap-6 mb-6 text-sm font-bold">
+                        <div className="mb-6 flex items-center justify-center gap-6 md:justify-start">
                             <div className="flex flex-col items-center md:items-start">
-                                <span className="text-xl">{projects.length}</span>
-                                <span className="text-slate-500 uppercase text-xs">Comics</span>
+                                <span className="text-xl font-semibold tabular-nums">{projects.length}</span>
+                                <span className={OVERLINE}>Comics</span>
                             </div>
                             <div className="flex flex-col items-center md:items-start">
-                                <span className="text-xl">{followersCount}</span>
-                                <span className="text-slate-500 uppercase text-xs">Followers</span>
+                                <span className="text-xl font-semibold tabular-nums">{followersCount}</span>
+                                <span className={OVERLINE}>Followers</span>
                             </div>
                         </div>
 
                         {currentUser && currentUser.id !== profile.id && (
                             <Button
                                 onClick={handleFollowToggle}
-                                isLoading={actionLoading}
-                                variant={following ? "secondary" : "primary"}
+                                loading={actionLoading}
+                                variant={following ? 'secondary' : 'default'}
                                 className="w-full md:w-auto"
                             >
                                 {following ? (
                                     <>
-                                        <UserCheck className="w-4 h-4 mr-2" /> Following
+                                        <UserCheck aria-hidden="true" /> Following
                                     </>
                                 ) : (
                                     <>
-                                        <UserPlus className="w-4 h-4 mr-2" /> Follow
+                                        <UserPlus aria-hidden="true" /> Follow
                                     </>
                                 )}
                             </Button>
@@ -196,14 +198,14 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
 
                 {/* Comics Grid */}
                 <div>
-                    <h2 className="font-display text-2xl mb-6 flex items-center gap-2">
-                        <Grid className="w-6 h-6" />
+                    <h2 className={cn(HEADING, TEXT_2XL, 'mb-6 flex items-center gap-2')}>
+                        <Grid className="size-6 shrink-0" aria-hidden="true" />
                         Released Comics
                     </h2>
 
                     {projects.length === 0 ? (
-                        <div className="text-center py-20 bg-white border-2 border-dashed border-slate-300 rounded-xl">
-                            <p className="text-slate-400">No public comics yet.</p>
+                        <div className={cn('border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-20 text-center', RADIUS_PANEL)}>
+                            <p className={MUTED}>No public comics yet.</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -229,20 +231,20 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                         }
                                         aria-label={`Read ${project.name}`}
                                         data-share-slug={slug}
-                                        className="block bg-white border-4 border-black rounded-xl overflow-hidden shadow-comic hover:scale-[1.02] transition-transform cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]"
+                                        className={cn('group block cursor-pointer', SECTION_CARD, LIFT, FOCUS_RING)}
                                     >
-                                        <div className="aspect-[2/3] bg-slate-200 relative overflow-hidden text-center">
+                                        <div className="relative aspect-[2/3] overflow-hidden bg-[var(--ds-well)] text-center">
                                             <SmartImage
                                                 src={covers[0]}
                                                 fallbackSources={covers.slice(1)}
                                                 alt={project.name}
                                                 className="w-full h-full object-cover"
                                                 containerClassName="w-full h-full"
-                                                fallbackIcon={<BookOpen size={32} className="text-slate-400" />}
+                                                fallbackIcon={<BookOpen size={32} className={MUTED} aria-hidden="true" />}
                                             />
                                             {/* Hover Overlay */}
-                                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                <span className="bg-white text-black font-bold px-4 py-2 rounded-full border-2 border-black transform -rotate-3 text-sm">
+                                            <div className={cn('absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none', SCRIM)}>
+                                                <span className={cn('bg-[var(--ds-canvas)] px-4 py-2 text-sm font-semibold text-[var(--ds-ink)]', RADIUS_PILL, SHADOW_SOFT)}>
                                                     Read Comic
                                                 </span>
                                             </div>
@@ -256,12 +258,12 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                             )}
                                         </div>
                                         <div className="p-4">
-                                            <h3 className="font-display text-lg truncate mb-1">{project.name}</h3>
-                                            <div className="flex justify-between items-center text-xs font-bold text-slate-500">
+                                            <h3 className={cn(HEADING, 'mb-1 truncate text-base')}>{project.name}</h3>
+                                            <div className={cn('flex items-center justify-between text-xs font-medium tabular-nums', MUTED)}>
                                                 <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
                                                 <div className="flex gap-3">
-                                                    <span className="flex items-center gap-1"><Eye className="w-3 h-3" /> {(project as any).views || 0}</span>
-                                                    <span className="flex items-center gap-1"><Heart className="w-3 h-3" /> {(project as any).likes || 0}</span>
+                                                    <span className="flex items-center gap-1"><Eye className="size-3" aria-hidden="true" /> {(project as any).views || 0}</span>
+                                                    <span className="flex items-center gap-1"><Heart className="size-3" aria-hidden="true" /> {(project as any).likes || 0}</span>
                                                 </div>
                                             </div>
                                         </div>

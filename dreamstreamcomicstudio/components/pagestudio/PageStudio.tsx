@@ -9,7 +9,10 @@ import {
   Wand2,
   LayoutGrid,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  BookOpen,
+  Palette,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Project, PageStudioState, PageStudioPage, AspectRatio, ImageResolution } from '../../types';
 import {
@@ -21,6 +24,23 @@ import {
   LAYOUT_PRESETS
 } from '../../services/pageStudio';
 import { ApiError } from '../../services/apiClient';
+import { buttonClasses } from '../ds/Button';
+import {
+  CHIP,
+  CHIP_VARIANT,
+  FIELD,
+  FOCUS_RING,
+  HAIRLINE,
+  HEADING,
+  INK,
+  MUTED,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  SHADOW_SOFT,
+  STATUS_SURFACE,
+  TONE_TEXT,
+  Z
+} from '../chat/studioDesign';
 
 type Stage = NonNullable<PageStudioState['stage']>;
 
@@ -73,23 +93,31 @@ const fileToDataUrl = (file: File): Promise<string> =>
 const errMessage = (e: unknown) =>
   e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Something went wrong.';
 
+// The Atlas card: an opaque surface with a hairline, the soft shadow and the panel radius.
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <div className={`bg-white border-2 border-black rounded-xl shadow-comic p-5 ${className}`}>{children}</div>
+  <div className={`bg-[var(--ds-surface)] p-5 ${RADIUS_PANEL} ${HAIRLINE} ${SHADOW_SOFT} ${className}`}>{children}</div>
 );
 
+// Every step's action here asks the image model for work (it spends), so the primary is the ink fill, never a hue.
 const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', ...props }) => (
-  <button
-    {...props}
-    className={`inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-display tracking-wide bg-brand-blue text-white border-2 border-black shadow-comic disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5 transition-transform ${className}`}
-  />
+  <button {...props} className={buttonClasses({ size: 'lg', className })} />
 );
 
 const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', ...props }) => (
-  <button
-    {...props}
-    className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold bg-white text-black border-2 border-black hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${className}`}
-  />
+  <button {...props} className={buttonClasses({ variant: 'outline', className })} />
 );
+
+const SECTION_HEADING = `mb-1 text-[length:var(--ds-text-lg)] font-semibold leading-6 ${INK}`;
+const LEAD = `text-sm ${MUTED}`;
+const TEXT_AREA = `${FIELD} block w-full text-sm`;
+const SELECT = `${FIELD} mt-1 block h-10 px-2 text-sm`;
+const DROP_ZONE = `border border-dashed border-[var(--ds-control-border)] p-4 ${RADIUS_PANEL}`;
+const PICTURE = `${RADIUS_CONTROL} ${HAIRLINE}`;
+const NOTE_BOX = `bg-[var(--ds-well)] ${RADIUS_PANEL} ${HAIRLINE}`;
+/** A choice among several (the stepper, the layout presets): the chosen one on the ink edge and the active step. */
+const CHOSEN = 'border-[var(--ds-ink)] bg-[var(--ds-active)] hover:bg-[var(--ds-active)]';
+const choice = (on: boolean) =>
+  `flex flex-col items-start p-3 text-left ${RADIUS_PANEL} border transition-colors duration-[var(--ds-motion-medium)] text-[var(--ds-ink)] ${FOCUS_RING} ${on ? CHOSEN : 'border-[var(--ds-hairline)] bg-[var(--ds-raised)] hover:bg-[var(--ds-hover)]'}`;
 
 export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBack }) => {
   const ps: PageStudioState = useMemo(
@@ -292,16 +320,16 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
 
   // ---- Render ----------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-10 bg-brand-yellow border-b-2 border-black">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
-          <GhostButton onClick={onBack} className="!px-3">
+    <div className="min-h-screen bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
+      <header className={`sticky top-0 ${Z.header} border-b border-[var(--ds-hairline)] bg-[var(--ds-surface)]`}>
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+          <GhostButton onClick={onBack} className="px-3">
             <ArrowLeft className="w-4 h-4" /> Back
           </GhostButton>
-          <h1 className="font-display text-2xl tracking-wide flex items-center gap-2">
-            <Sparkles className="w-5 h-5" /> Page Studio
+          <h1 className={`flex items-center gap-2 text-xl ${HEADING}`}>
+            <Sparkles className="size-5" aria-hidden="true" /> Page Studio
           </h1>
-          <span className="text-sm text-black/60 truncate">· {project.name}</span>
+          <span className={`min-w-0 truncate text-sm ${MUTED}`}>· {project.name}</span>
         </div>
         {/* Stage stepper */}
         <div className="max-w-5xl mx-auto px-4 pb-3 flex flex-wrap gap-2">
@@ -309,9 +337,8 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
             <button
               key={s.id}
               onClick={() => goto(s.id)}
-              className={`px-3 py-1 rounded-full border-2 border-black text-sm font-semibold transition-colors ${
-                stage === s.id ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'
-              }`}
+              aria-current={stage === s.id ? 'step' : undefined}
+              className={buttonClasses({ variant: 'outline', size: 'sm', className: stage === s.id ? CHOSEN : '' })}
             >
               {i + 1}. {s.label}
             </button>
@@ -321,14 +348,14 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
 
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-5">
         {error && (
-          <div className="flex items-start gap-2 bg-red-50 border-2 border-red-500 text-red-800 rounded-lg p-3">
-            <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
-            <p className="text-sm">{error}</p>
+          <div className={`flex items-start gap-2 border p-3 ${RADIUS_PANEL} ${STATUS_SURFACE.error}`}>
+            <AlertTriangle className={`mt-0.5 size-5 shrink-0 ${TONE_TEXT.danger}`} aria-hidden="true" />
+            <p className={`min-w-0 text-sm [overflow-wrap:anywhere] ${INK}`}>{error}</p>
           </div>
         )}
         {busy && (
-          <div className="flex items-center gap-2 bg-blue-50 border-2 border-brand-blue text-brand-blue rounded-lg p-3">
-            <Loader2 className="w-5 h-5 animate-spin" />
+          <div className={`flex items-center gap-2 border p-3 ${RADIUS_PANEL} ${STATUS_SURFACE.active} ${INK}`}>
+            <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
             <p className="text-sm font-semibold">{busy}</p>
           </div>
         )}
@@ -336,8 +363,8 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
         {/* STORY */}
         {stage === 'brief' && (
           <Card>
-            <h2 className="font-display text-xl mb-1">What's this page about?</h2>
-            <p className="text-sm text-slate-600 mb-3">
+            <h2 className={SECTION_HEADING}>What's this page about?</h2>
+            <p className={`mb-3 ${LEAD}`}>
               Describe the scene(s) you want on this page — the action, characters and beats. The generator turns this
               into one full comic page.
             </p>
@@ -346,27 +373,27 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
               onChange={(e) => patch({ brief: e.target.value })}
               rows={6}
               placeholder="e.g. Detective Mara kicks open the warehouse door, three thugs scatter, she fires a warning shot — end on a close-up of her determined face."
-              className="w-full border-2 border-black rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-brand-blue"
+              className={`${TEXT_AREA} p-3`}
             />
             <div className="flex flex-wrap items-end gap-4 mt-4">
-              <label className="text-sm font-semibold">
+              <label className={`text-sm font-medium ${INK}`}>
                 Page shape
                 <select
                   value={ps.aspectRatio}
                   onChange={(e) => patch({ aspectRatio: e.target.value as AspectRatio })}
-                  className="block mt-1 border-2 border-black rounded-lg p-2"
+                  className={SELECT}
                 >
                   {ASPECT_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
                 </select>
               </label>
-              <label className="text-sm font-semibold">
+              <label className={`text-sm font-medium ${INK}`}>
                 Resolution
                 <select
                   value={ps.resolution}
                   onChange={(e) => patch({ resolution: e.target.value as ImageResolution })}
-                  className="block mt-1 border-2 border-black rounded-lg p-2"
+                  className={SELECT}
                 >
                   {RESOLUTION_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
@@ -385,20 +412,20 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
         {/* STYLE */}
         {stage === 'style' && (
           <Card>
-            <h2 className="font-display text-xl mb-1">Pin down the art style</h2>
-            <p className="text-sm text-slate-600 mb-4">
+            <h2 className={SECTION_HEADING}>Pin down the art style</h2>
+            <p className={`mb-4 ${LEAD}`}>
               Upload a reference image of a style you love, or describe it in words. We'll read it back so you can
               confirm the direction — and optionally run a quick sample.
             </p>
 
             <div className="grid md:grid-cols-2 gap-4">
               {/* Image path */}
-              <div className="border-2 border-dashed border-black rounded-lg p-4">
-                <div className="flex items-center gap-2 font-semibold mb-2"><ImageUp className="w-4 h-4" /> Reference image</div>
+              <div className={DROP_ZONE}>
+                <div className="mb-2 flex items-center gap-2 font-semibold"><ImageUp className="size-4" aria-hidden="true" /> Reference image</div>
                 {ps.style.referenceDataUrl ? (
-                  <img src={ps.style.referenceDataUrl} alt="style reference" className="w-full h-40 object-cover rounded-md border-2 border-black mb-2" />
+                  <img src={ps.style.referenceDataUrl} alt="style reference" className={`mb-2 h-40 w-full object-cover ${PICTURE}`} />
                 ) : (
-                  <div className="h-40 flex items-center justify-center text-slate-400 text-sm">No image yet</div>
+                  <div className={`flex h-40 items-center justify-center text-sm ${MUTED}`}>No image yet</div>
                 )}
                 <input ref={styleFileRef} type="file" accept="image/*" hidden onChange={(e) => onStyleFile(e.target.files?.[0])} />
                 <GhostButton onClick={() => styleFileRef.current?.click()} className="w-full">
@@ -407,40 +434,50 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
               </div>
 
               {/* Text path */}
-              <div className="border-2 border-dashed border-black rounded-lg p-4">
-                <div className="flex items-center gap-2 font-semibold mb-2"><Type className="w-4 h-4" /> Style in words</div>
+              <div className={DROP_ZONE}>
+                <div className="mb-2 flex items-center gap-2 font-semibold"><Type className="size-4" aria-hidden="true" /> Style in words</div>
                 <textarea
                   value={ps.style.prompt || ''}
                   onChange={(e) => patchStyle({ prompt: e.target.value })}
                   rows={5}
                   placeholder="e.g. Gritty 90s noir comic, heavy ink shadows, muted desaturated palette, rough hand-lettered captions."
-                  className="w-full border-2 border-black rounded-lg p-2"
+                  className={`${TEXT_AREA} p-2`}
                 />
               </div>
             </div>
 
+            {/* Once a reading exists, "Yes, this is the direction" is the one primary; reading again is quiet */}
             <div className="flex flex-wrap gap-2 mt-4">
-              <PrimaryButton
-                onClick={runStyleAnalysis}
-                disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
-              >
-                <Wand2 className="w-4 h-4" /> Understand this style
-              </PrimaryButton>
+              {ps.style.brief ? (
+                <GhostButton
+                  onClick={runStyleAnalysis}
+                  disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
+                >
+                  <Wand2 className="w-4 h-4" /> Read again
+                </GhostButton>
+              ) : (
+                <PrimaryButton
+                  onClick={runStyleAnalysis}
+                  disabled={!!busy || (!ps.style.referenceDataUrl && !ps.style.prompt?.trim())}
+                >
+                  <Wand2 className="w-4 h-4" /> Understand this style
+                </PrimaryButton>
+              )}
             </div>
 
             {ps.style.brief && (
-              <div className="mt-4 bg-amber-50 border-2 border-black rounded-lg p-4">
-                <div className="font-display text-lg mb-1">Here's the style we understood:</div>
-                <p className="text-sm text-slate-800">{ps.style.brief}</p>
+              <div className={`mt-4 p-4 ${NOTE_BOX}`}>
+                <div className={SECTION_HEADING}>Here's the style we understood:</div>
+                <p className={`text-sm ${INK}`}>{ps.style.brief}</p>
                 {!!ps.style.tags?.length && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {ps.style.tags.map((t) => (
-                      <span key={t} className="text-xs bg-white border border-black rounded-full px-2 py-0.5">{t}</span>
+                      <span key={t} className={`${CHIP} ${CHIP_VARIANT.outline}`}>{t}</span>
                     ))}
                   </div>
                 )}
                 {ps.style.sampleDataUrl && (
-                  <img src={ps.style.sampleDataUrl} alt="style sample" className="mt-3 w-48 rounded-md border-2 border-black" />
+                  <img src={ps.style.sampleDataUrl} alt="style sample" className={`mt-3 w-48 ${PICTURE}`} />
                 )}
                 <div className="flex flex-wrap gap-2 mt-3">
                   <GhostButton onClick={runStyleSample} disabled={!!busy}>
@@ -458,8 +495,8 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
         {/* LAYOUT */}
         {stage === 'layout' && (
           <Card>
-            <h2 className="font-display text-xl mb-1">How should the page be laid out?</h2>
-            <p className="text-sm text-slate-600 mb-4">
+            <h2 className={SECTION_HEADING}>How should the page be laid out?</h2>
+            <p className={`mb-4 ${LEAD}`}>
               Pick a preset, or upload a comic page whose panel layout / caption style you want us to match exactly.
             </p>
 
@@ -470,29 +507,31 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
                   <button
                     key={preset.id}
                     onClick={() => patchLayout({ source: 'preset', presetId: preset.id, referenceDataUrl: undefined, brief: undefined })}
-                    className={`text-left p-3 rounded-lg border-2 border-black transition-colors ${selected ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}
+                    aria-pressed={selected}
+                    className={choice(selected)}
                   >
-                    <div className="flex items-center gap-2 font-semibold"><LayoutGrid className="w-4 h-4" /> {preset.label}</div>
-                    <p className={`text-xs mt-1 ${selected ? 'text-white/80' : 'text-slate-500'}`}>{preset.description}</p>
+                    <div className="flex items-center gap-2 font-semibold"><LayoutGrid className="size-4" aria-hidden="true" /> {preset.label}</div>
+                    <p className={`mt-1 text-xs ${MUTED}`}>{preset.description}</p>
                   </button>
                 );
               })}
               <button
                 onClick={() => patchLayout({ source: 'auto', presetId: undefined, referenceDataUrl: undefined, brief: undefined })}
-                className={`text-left p-3 rounded-lg border-2 border-black transition-colors ${ps.layout.source === 'auto' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}
+                aria-pressed={ps.layout.source === 'auto'}
+                className={choice(ps.layout.source === 'auto')}
               >
-                <div className="flex items-center gap-2 font-semibold"><Sparkles className="w-4 h-4" /> Let AI decide</div>
-                <p className={`text-xs mt-1 ${ps.layout.source === 'auto' ? 'text-white/80' : 'text-slate-500'}`}>Best layout for the story beats.</p>
+                <div className="flex items-center gap-2 font-semibold"><Sparkles className="size-4" aria-hidden="true" /> Let AI decide</div>
+                <p className={`mt-1 text-xs ${MUTED}`}>Best layout for the story beats.</p>
               </button>
             </div>
 
-            <div className="border-2 border-dashed border-black rounded-lg p-4">
-              <div className="flex items-center gap-2 font-semibold mb-2"><ImageUp className="w-4 h-4" /> Match a reference page</div>
+            <div className={DROP_ZONE}>
+              <div className="mb-2 flex items-center gap-2 font-semibold"><ImageUp className="size-4" aria-hidden="true" /> Match a reference page</div>
               <div className="flex flex-col sm:flex-row gap-3">
                 {ps.layout.referenceDataUrl ? (
-                  <img src={ps.layout.referenceDataUrl} alt="layout reference" className="w-40 h-52 object-cover rounded-md border-2 border-black" />
+                  <img src={ps.layout.referenceDataUrl} alt="layout reference" className={`h-52 w-40 object-cover ${PICTURE}`} />
                 ) : (
-                  <div className="w-40 h-52 flex items-center justify-center text-slate-400 text-sm border-2 border-black rounded-md">No page</div>
+                  <div className={`flex h-52 w-40 items-center justify-center bg-[var(--ds-well-strong)] text-sm ${MUTED} ${PICTURE}`}>No page</div>
                 )}
                 <div className="flex-1 space-y-2">
                   <input ref={layoutFileRef} type="file" accept="image/*" hidden onChange={(e) => onLayoutFile(e.target.files?.[0])} />
@@ -503,7 +542,7 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
                     </GhostButton>
                   )}
                   {ps.layout.brief && (
-                    <p className="text-sm bg-amber-50 border-2 border-black rounded-lg p-2">{ps.layout.brief}</p>
+                    <p className={`p-2 text-sm ${NOTE_BOX}`}>{ps.layout.brief}</p>
                   )}
                 </div>
               </div>
@@ -518,15 +557,15 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
         {/* GENERATE */}
         {stage === 'generate' && (
           <Card>
-            <h2 className="font-display text-xl mb-1">Generate the full page</h2>
-            <p className="text-sm text-slate-600 mb-4">
+            <h2 className={SECTION_HEADING}>Generate the full page</h2>
+            <p className={`mb-4 ${LEAD}`}>
               One model call renders the whole page — panels, gutters and lettering baked in. Edit it afterward.
             </p>
-            <ul className="text-sm text-slate-700 space-y-1 mb-4">
-              <li>📖 <b>Story:</b> {ps.brief.slice(0, 140) || '—'}</li>
-              <li>🎨 <b>Style:</b> {ps.style.brief ? `${ps.style.brief.slice(0, 120)}…` : ps.style.prompt || 'Auto'}</li>
-              <li>🔲 <b>Layout:</b> {ps.layout.brief || (layoutFragment ?? 'AI decides')}</li>
-              <li>🖼️ <b>Output:</b> {ps.aspectRatio} · {ps.resolution}</li>
+            <ul className={`mb-4 space-y-1 text-sm [overflow-wrap:anywhere] ${INK}`}>
+              <li className="flex items-start gap-2"><BookOpen size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Story:</b> {ps.brief.slice(0, 140) || '—'}</span></li>
+              <li className="flex items-start gap-2"><Palette size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Style:</b> {ps.style.brief ? `${ps.style.brief.slice(0, 120)}…` : ps.style.prompt || 'Auto'}</span></li>
+              <li className="flex items-start gap-2"><LayoutGrid size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Layout:</b> {ps.layout.brief || (layoutFragment ?? 'AI decides')}</span></li>
+              <li className="flex items-start gap-2"><ImageIcon size={16} className={`mt-0.5 shrink-0 ${MUTED}`} aria-hidden /><span className="min-w-0"><b>Output:</b> {ps.aspectRatio} · {ps.resolution}</span></li>
             </ul>
             <PrimaryButton onClick={runGenerate} disabled={!!busy || !ps.brief.trim()}>
               <Sparkles className="w-4 h-4" /> Generate page
@@ -540,9 +579,9 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
             <div className="lg:col-span-2">
               <Card>
                 {activePage?.imageUrl ? (
-                  <img src={activePage.imageUrl} alt="generated page" className="w-full rounded-lg border-2 border-black" />
+                  <img src={activePage.imageUrl} alt="generated page" className={`w-full ${PICTURE}`} />
                 ) : (
-                  <div className="aspect-[3/4] flex items-center justify-center text-slate-400">No page yet — generate one first.</div>
+                  <div className={`flex aspect-[3/4] items-center justify-center text-center ${MUTED}`}>No page yet — generate one first.</div>
                 )}
               </Card>
               {ps.pages.length > 1 && (
@@ -551,7 +590,8 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
                     <button
                       key={p.id}
                       onClick={() => patch({ activePageId: p.id })}
-                      className={`w-14 h-18 rounded-md border-2 overflow-hidden ${p.id === activePage?.id ? 'border-brand-blue' : 'border-black'}`}
+                      aria-current={p.id === activePage?.id ? 'true' : undefined}
+                      className={`h-18 w-14 overflow-hidden ${RADIUS_CONTROL} ${p.id === activePage?.id ? 'border-2 border-[var(--ds-ink)]' : 'border border-[var(--ds-hairline)]'} ${FOCUS_RING}`}
                       title={`Page ${i + 1}`}
                     >
                       {p.imageUrl && <img src={p.imageUrl} alt={`page ${i + 1}`} className="w-full h-full object-cover" />}
@@ -563,14 +603,14 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
 
             <div className="space-y-4">
               <Card>
-                <h2 className="font-display text-lg mb-1 flex items-center gap-2"><Wand2 className="w-4 h-4" /> Edit this page</h2>
-                <p className="text-sm text-slate-600 mb-3">Describe a targeted change. An image-editing model patches just that, keeping the rest intact.</p>
+                <h2 className={`flex items-center gap-2 ${SECTION_HEADING}`}><Wand2 className="size-4" aria-hidden="true" /> Edit this page</h2>
+                <p className={`mb-3 ${LEAD}`}>Describe a targeted change. An image-editing model patches just that, keeping the rest intact.</p>
                 <textarea
                   value={editInstruction}
                   onChange={(e) => setEditInstruction(e.target.value)}
                   rows={3}
                   placeholder="e.g. Change the caption in panel 1 to 'MIDNIGHT'. Make the sky stormy. Add a speech bubble saying 'Freeze!'"
-                  className="w-full border-2 border-black rounded-lg p-2 mb-2"
+                  className={`${TEXT_AREA} mb-2 p-2`}
                 />
                 <div className="flex gap-2">
                   <PrimaryButton onClick={runEdit} disabled={!!busy || !editInstruction.trim() || !activePage?.imageUrl} className="flex-1">
@@ -586,17 +626,17 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
 
               <Card>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold">Edit history</h3>
-                  <GhostButton onClick={runGenerate} disabled={!!busy} className="!px-2 !py-1 text-xs" title="Generate a fresh page from the same brief">
-                    <Sparkles className="w-3 h-3" /> New page
+                  <h3 className={`font-semibold ${INK}`}>Edit history</h3>
+                  <GhostButton onClick={runGenerate} disabled={!!busy} className="h-8 px-2.5 text-xs" title="Generate a fresh page from the same brief">
+                    <Sparkles className="size-3.5" /> New page
                   </GhostButton>
                 </div>
                 {activePage?.edits.length ? (
-                  <ol className="text-sm space-y-1 list-decimal list-inside text-slate-700">
+                  <ol className={`list-inside list-decimal space-y-1 text-sm [overflow-wrap:anywhere] ${INK}`}>
                     {activePage.edits.map((ed) => <li key={ed.id}>{ed.instruction}</li>)}
                   </ol>
                 ) : (
-                  <p className="text-sm text-slate-400">No edits yet.</p>
+                  <p className={`text-sm ${MUTED}`}>No edits yet.</p>
                 )}
               </Card>
             </div>

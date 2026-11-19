@@ -321,7 +321,7 @@ track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a
 - `--ds-overlay-hover` in light is Atlas's item highlight (`bg-accent`, `#efefef`) rather than
   `--menu-hover` (`#f2f2f2`): menus under the light skin highlight one step deeper than before.
 
-**Deliberate differences from Atlas** (the colour layer and the shell, as of the Atlas design branch at `43b2f8ec`):
+**Deliberate differences from Atlas** (the colour layer and the shell, as of the Atlas design branch at `c36ef6fe`, unchanged since `43b2f8ec`):
 - **Diverging chart steps 4-7.** Ours are light `#d4d4d4 #aabbf5 #6a81f2 #3d44e8`, dark `#4a4a4a #404dc1 #7085ff
   #a2b2ff`; the Atlas design branch carries `#e5e5e5 #a3b4f2 #6279f1 #322cd3` / `#3d3d3d #3d48b5 #6275fc #a2b2ff`.
   `tests/config/chartRamps.test.ts` asks for a grey midpoint and two arms equal within 0.01 OKLab L; ours pass
@@ -395,7 +395,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   against `tests/config/baselines/<guard>.json` (DS-0): `statusInk.json`, `overline.json`,
   `dialogTitle.json`. The rules are in `tests/config/baselines/README.md`.
 - `tests/config/legacyKitGuard.test.ts` (DS-0) — `border-black`, `shadow-comic`, `font-comic`, the
-  `brand-*` colours and Tailwind's `font-display` (Bangers), ratcheted per file against `legacyKit.json`.
+  `brand-*` colours and Tailwind's `font-display` (Bangers). A never rule since the Atlas conversion wave:
+  `legacyKit.json` lists no file, the comic content that keeps the kit (the classic reader's lettering, the
+  exported comic page) is pinned line by line in its `ALLOWLIST`, and `tailwind.config.cjs` keeps only the comic
+  shadow and the Comic Neue face that this content reads (the brand colours, Bangers and the hover shadow are gone).
 - `tests/config/terracottaGuard.test.ts` (DS-0) — the `#D97757` / `#c2643f` literals, against
   `terracotta.json`; the third-party Anthropic logo fill is its one allowlisted use.
 - `tests/config/localCxGuard.test.ts` (DS-0) — no local `cx` class joiner (it joins, it does not merge:
@@ -434,7 +437,11 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- The Atlas repository, its design branch, commit **`43b2f8ec`** (2026-11-13): taken from it are the
+- The Atlas repository, its design branch, commit **`c36ef6fe`** (2026-11-13, checked 2026-11-18). No design
+  value changed since **`43b2f8ec`**: the 27 commits between them touch no colour, radius, shadow, motion, z-index
+  or primitive recipe (`app/globals.css`, `tailwind.config.js`, `ui-generated/**` and the UI guide are
+  byte-identical); the only design-list hits are the boot skeleton dropping its "Ask Atlas" placeholder and two
+  palette-search hooks, nothing to port. From `43b2f8ec` (2026-11-13) were taken the
   high-contrast hue and status overrides, the shorter entrances under the skin (200 / 240 ms, a 24 ms step) and the
   guard against a status colour or a chart step used as text; what differs on purpose is listed under "Deliberate
   differences from Atlas" above. Before it, commit **`c567c621`** (checked 2026-11-12). The
@@ -449,9 +456,9 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   12 commits since are security dependency bumps, connector fixes and public beta-copy pages, and the only
   design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
-  agreed with the Atlas session from `0677199b`. Previous syncs `7a6f3e16`, `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
+  agreed with the Atlas session from `0677199b`. Previous syncs `43b2f8ec`, `7a6f3e16`, `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
   `496f265c`, `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
-  `git diff 43b2f8ec <design branch> -- app/globals.css
+  `git diff c36ef6fe <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).

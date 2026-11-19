@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { cx } from '../conversation/ui';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 export interface LinkPreviewMockProps {
   title: string;
   description?: string;
@@ -56,7 +57,7 @@ export const LinkPreviewMock: React.FC<LinkPreviewMockProps> = ({ title, descrip
           type="button"
           onClick={() => setDark((d) => !d)}
           aria-pressed={dark}
-          className="min-h-[44px] shrink-0 rounded-lg px-2 font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className={`min-h-[44px] shrink-0 rounded-lg px-2 font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
         >
           {dark ? 'Light chat' : 'Dark chat'}
         </button>

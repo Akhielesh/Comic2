@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
     Activity,
     AlertTriangle,
@@ -19,7 +18,26 @@ import {
     Users,
     Wallet
 } from 'lucide-react';
-import { Button } from '../Button';
+import { cn } from '../../lib/utils';
+import { Button } from '../ds';
+import { CARD_TITLE } from '../ds/Card';
+import {
+    DENSITY,
+    FIELD,
+    FOCUS_RING,
+    MUTED,
+    OVERLINE,
+    RISE_IN,
+    SECTION_CARD,
+    SEGMENTED_ACTIVE,
+    STATUS_CHIP,
+    STATUS_CHIP_TONE,
+    STATUS_INK,
+    STATUS_SURFACE,
+    TEXT_XL,
+    TRANSITION,
+    type StatusState
+} from '../chat/studioDesign';
 import { VerificationCenter } from '../VerificationCenter';
 import { AdminAnalytics } from './AdminAnalytics';
 import { InviteManager } from './InviteManager';
@@ -112,40 +130,27 @@ interface AdminConsoleProps {
     onNavigate?: (view: string) => void;
 }
 
-/** Small framed stat used across the console. */
-const Stat: React.FC<{ label: string; value: React.ReactNode; tone?: string }> = ({ label, value, tone = 'bg-white' }) => (
-    <div className={`border-2 border-black rounded-xl px-3 py-2.5 ${tone}`}>
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</div>
-        <div className="font-display text-xl leading-tight mt-0.5">{value}</div>
+/** Small framed stat used across the console; a state that needs a look tints it (always with its label). */
+const Stat: React.FC<{ label: string; value: React.ReactNode; state?: StatusState }> = ({ label, value, state }) => (
+    <div className={cn(SECTION_CARD, 'px-3 py-2.5', state && STATUS_SURFACE[state])}>
+        <div className={OVERLINE}>{label}</div>
+        <div className={cn(TEXT_XL, 'mt-0.5 font-semibold tabular-nums', state ? STATUS_INK[state] : 'text-[var(--ds-ink)]')}>{value}</div>
     </div>
 );
 
-/** Health row: green when ok, amber when degraded, red when broken. */
+/** Health row: healthy when ok, attention when degraded, error when broken. */
 const HealthRow: React.FC<{ ok: boolean | null; label: string; detail: string; warn?: boolean }> = ({ ok, label, detail, warn }) => {
-    const tone = ok === null
-        ? 'bg-slate-100 text-slate-500 border-slate-300'
-        : ok
-            ? 'bg-green-50 text-green-800 border-green-500'
-            : warn
-                ? 'bg-amber-50 text-amber-800 border-amber-500'
-                : 'bg-red-50 text-red-700 border-red-500';
+    const state: StatusState = ok === null ? 'waiting' : ok ? 'healthy' : warn ? 'attention' : 'error';
     const Icon = ok === null ? Loader2 : ok ? CheckCircle2 : AlertTriangle;
     return (
-        <div className={`flex items-start gap-2.5 border-2 rounded-lg px-3 py-2 ${tone}`}>
-            <Icon size={16} className={`mt-0.5 shrink-0 ${ok === null ? 'animate-spin' : ''}`} />
+        <div className={cn('flex items-start gap-2.5 rounded-[var(--ds-radius-control)] border px-3 py-2', STATUS_SURFACE[state])}>
+            <Icon size={16} className={cn('mt-0.5 shrink-0', STATUS_INK[state], ok === null && 'motion-safe:animate-spin')} aria-hidden />
             <div className="min-w-0">
-                <div className="text-sm font-bold leading-tight">{label}</div>
-                <div className="text-xs opacity-80 leading-snug">{detail}</div>
+                <div className="text-sm font-semibold leading-tight text-[var(--ds-ink)]">{label}</div>
+                <div className={cn('text-xs leading-snug [overflow-wrap:anywhere]', MUTED)}>{detail}</div>
             </div>
         </div>
     );
-};
-
-const sectionMotion = {
-    initial: { opacity: 0, y: 8 },
-    animate: { opacity: 1, y: 0 },
-    exit: { opacity: 0, y: -6 },
-    transition: { duration: 0.18, ease: 'easeOut' as const }
 };
 
 export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate }) => {
@@ -431,18 +436,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         <div className="space-y-5">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <Stat label="Users loaded" value={adminUsers.length} />
-                <Stat label="Moderation queue" value={moderationQueue.length} tone={moderationQueue.length ? 'bg-amber-50' : 'bg-white'} />
-                <Stat label="Pending republish" value={pendingModeration} tone={pendingModeration ? 'bg-amber-50' : 'bg-white'} />
+                <Stat label="Moderation queue" value={moderationQueue.length} state={moderationQueue.length ? 'attention' : undefined} />
+                <Stat label="Pending republish" value={pendingModeration} state={pendingModeration ? 'attention' : undefined} />
                 {isAdmin
-                    ? <Stat label="Failures (24h)" value={failures24h ?? '—'} tone={failures24h ? 'bg-red-50' : 'bg-white'} />
-                    : <Stat label="Suspended users" value={suspendedUsers} tone={suspendedUsers ? 'bg-red-50' : 'bg-white'} />}
+                    ? <Stat label="Failures (24h)" value={failures24h ?? '—'} state={failures24h ? 'error' : undefined} />
+                    : <Stat label="Suspended users" value={suspendedUsers} state={suspendedUsers ? 'error' : undefined} />}
             </div>
 
             {isAdmin && (
-                <div className="border-2 border-black rounded-xl bg-white p-4 space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                        <h3 className="font-display text-xl flex items-center gap-2"><Activity size={18} /> System health</h3>
-                        <span className="text-[11px] text-slate-500">live checks against the platform services</span>
+                <div className={cn(SECTION_CARD, 'space-y-2.5 p-4')}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className={cn(CARD_TITLE, 'flex items-center gap-2')}><Activity size={18} aria-hidden /> System health</h3>
+                        <span className={cn('text-[11px]', MUTED)}>live checks against the platform services</span>
                     </div>
                     <div className="grid md:grid-cols-2 gap-2">
                         <HealthRow
@@ -471,13 +476,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             <div className="grid md:grid-cols-2 gap-3">
                 <button
                     onClick={() => selectSection('moderation')}
-                    className="group text-left border-2 border-black rounded-xl bg-white p-4 hover:bg-amber-50 transition-colors"
+                    className={cn(SECTION_CARD, 'group p-4 text-left hover:bg-[var(--ds-hover)]', TRANSITION, FOCUS_RING)}
                 >
-                    <div className="flex items-center justify-between">
-                        <h4 className="font-display text-lg flex items-center gap-2"><ShieldAlert size={17} /> Review moderation queue</h4>
-                        <ChevronRight size={16} className="transition-transform group-hover:translate-x-1" />
+                    <div className="flex items-center justify-between gap-2">
+                        <h4 className={cn(CARD_TITLE, 'flex items-center gap-2')}><ShieldAlert size={17} aria-hidden /> Review moderation queue</h4>
+                        <ChevronRight size={16} className="shrink-0 transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:group-hover:translate-x-0.5" aria-hidden />
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">
+                    <p className={cn('mt-1 text-xs', MUTED)}>
                         {pendingModeration > 0
                             ? `${pendingModeration} republish request${pendingModeration === 1 ? '' : 's'} awaiting review.`
                             : 'No pending republish requests.'}
@@ -490,12 +495,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
     // ── Users: one clean, compact table ─────────────────────────────────────────
     // Roles model: admin / moderator / per-studio access. No plans, no billing.
     const statusChip = (status: AdminUserRecord['moderationStatus']) => {
-        const tone = status === 'suspended'
-            ? 'bg-red-100 text-red-700'
-            : status === 'restricted'
-                ? 'bg-amber-100 text-amber-700'
-                : 'bg-green-100 text-green-700';
-        return <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${tone}`}>{status}</span>;
+        const state: StatusState = status === 'suspended' ? 'error' : status === 'restricted' ? 'attention' : 'healthy';
+        return <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[state])}>{status}</span>;
     };
 
     const studioChips = (adminUser: AdminUserRecord) => {
@@ -503,7 +504,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         if (grants.length === 0) {
             return (
                 <span
-                    className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600"
+                    className={cn(STATUS_CHIP, STATUS_CHIP_TONE.waiting)}
                     title="No grants — default access to every studio"
                 >
                     all
@@ -518,7 +519,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     return (
                         <span
                             key={product}
-                            className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold ${on ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400 line-through'}`}
+                            className={cn(STATUS_CHIP, on ? STATUS_CHIP_TONE.healthy : cn(STATUS_CHIP_TONE.waiting, 'line-through'))}
                             title={`${PRODUCT_LABELS[product]}: ${on ? 'granted' : grant ? 'revoked' : 'no grant (confined account — not allowed)'}`}
                         >
                             {PRODUCT_CHIP_LABEL[product]}
@@ -555,33 +556,34 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         const grants = adminUser.productAccess || [];
         const isDefault = grants.length === 0;
         return (
-            <tr className="bg-slate-50/70 border-b border-slate-100">
+            <tr className="border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-well)]">
                 <td colSpan={7} className="px-3 py-3">
                     <div className="space-y-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-[11px] text-slate-500">
+                            <p className={cn('text-[11px]', MUTED)}>
                                 {isDefault
                                     ? 'This account has FULL access (default — no grants). Granting a studio below switches it to confined mode: only explicitly granted studios stay open.'
                                     : 'This account is CONFINED to its granted studios. Use "Reset to full access" to reopen everything (back to default).'}
                                 {' '}Granting can send the branded studio-invite email.
                             </p>
                             {!isDefault && (
-                                <button
+                                <Button
+                                    variant="outline"
+                                    size="sm"
                                     disabled={busyStudioKey === `${adminUser.userId}:reset`}
                                     onClick={() => void resetStudioAccess(adminUser)}
-                                    className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-green-50 transition-colors disabled:opacity-40"
                                 >
-                                    {busyStudioKey === `${adminUser.userId}:reset` ? <Loader2 size={11} className="animate-spin" /> : 'Reset to full access (all studios)'}
-                                </button>
+                                    {busyStudioKey === `${adminUser.userId}:reset` ? <Loader2 size={11} className="motion-safe:animate-spin" /> : 'Reset to full access (all studios)'}
+                                </Button>
                             )}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-                            <label className="flex items-center gap-1.5 font-bold cursor-pointer">
+                            <label className={cn('flex cursor-pointer items-center gap-1.5 font-medium', DENSITY.coarse)}>
                                 <input
                                     type="checkbox"
                                     checked={sendInvite}
                                     onChange={(e) => setSendInvite(e.target.checked)}
-                                    className="w-3.5 h-3.5 accent-black"
+                                    className="w-3.5 h-3.5 accent-[var(--ds-accent)]"
                                 />
                                 <Mail size={13} /> Send invite email when granting
                             </label>
@@ -592,14 +594,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                                         onChange={(e) => setInviterName(e.target.value)}
                                         placeholder="Inviter name (optional)"
                                         maxLength={80}
-                                        className="border-2 border-black rounded px-2 py-1 bg-white"
+                                        className={cn(FIELD, 'h-8 px-2', DENSITY.coarse)}
                                     />
                                     <input
                                         value={personalNote}
                                         onChange={(e) => setPersonalNote(e.target.value)}
                                         placeholder="Personal note (optional)"
                                         maxLength={500}
-                                        className="border-2 border-black rounded px-2 py-1 bg-white w-64 max-w-full"
+                                        className={cn(FIELD, 'h-8 w-64 max-w-full px-2', DENSITY.coarse)}
                                     />
                                 </>
                             )}
@@ -611,35 +613,33 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                                 // Effective access, not just row state: default mode means every
                                 // studio is open; confined mode means a missing row = locked out.
                                 const label = state !== 'default' ? state : isDefault ? 'open (default)' : 'not allowed';
-                                const labelTone = state === 'granted'
-                                    ? 'text-green-700'
-                                    : state === 'revoked'
-                                        ? 'text-red-600'
-                                        : isDefault ? 'text-green-600' : 'text-red-500';
+                                const labelTone = STATUS_INK[state === 'granted' ? 'healthy' : state === 'revoked' ? 'error' : isDefault ? 'healthy' : 'error'];
                                 const studioBusy = busyStudioKey === `${adminUser.userId}:${product}`;
                                 return (
-                                    <div key={product} className="border border-slate-300 rounded-lg bg-white px-2.5 py-2 flex items-center justify-between gap-2">
+                                    <div key={product} className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-2.5 py-2">
                                         <div className="min-w-0">
-                                            <div className="text-xs font-bold truncate">{PRODUCT_LABELS[product]}</div>
-                                            <div className={`text-[10px] font-bold uppercase ${labelTone}`}>
+                                            <div className="truncate text-xs font-semibold">{PRODUCT_LABELS[product]}</div>
+                                            <div className={cn('text-[11px] font-medium', labelTone)}>
                                                 {label}
                                             </div>
                                         </div>
                                         <div className="flex gap-1 shrink-0">
-                                            <button
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
                                                 disabled={studioBusy || state === 'granted'}
                                                 onClick={() => void toggleStudioAccess(adminUser, product, true)}
-                                                className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40 disabled:pointer-events-none"
                                             >
-                                                {studioBusy ? <Loader2 size={11} className="animate-spin" /> : 'Grant'}
-                                            </button>
-                                            <button
+                                                {studioBusy ? <Loader2 size={11} className="motion-safe:animate-spin" /> : 'Grant'}
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
                                                 disabled={studioBusy || state === 'revoked'}
                                                 onClick={() => void toggleStudioAccess(adminUser, product, false)}
-                                                className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-slate-100 transition-colors disabled:opacity-40 disabled:pointer-events-none"
                                             >
                                                 Revoke
-                                            </button>
+                                            </Button>
                                         </div>
                                     </div>
                                 );
@@ -654,31 +654,31 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
     const renderUsers = () => (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-slate-500">Roles (admin / moderator) and per-studio access — nothing else to manage.</p>
+                <p className={cn('text-xs', MUTED)}>Roles (admin / moderator) and per-studio access — nothing else to manage.</p>
                 <input
                     value={adminUserQuery}
                     onChange={(e) => setAdminUserQuery(e.target.value)}
                     placeholder="Search by username or email"
-                    className="w-full md:w-72 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm bg-white"
+                    className={cn(FIELD, 'h-9 w-full px-3 text-sm md:w-72', DENSITY.coarse)}
                 />
             </div>
 
-            <div className="bg-white border-2 border-black rounded-xl overflow-x-auto">
+            <div className={cn(SECTION_CARD, 'overflow-x-auto')}>
                 <table className="w-full text-sm text-left min-w-[860px]">
                     <thead>
-                        <tr className="bg-slate-50 border-b-2 border-black text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-bold">Email</th>
-                            <th className="px-3 py-2 font-bold">Name</th>
-                            <th className="px-3 py-2 font-bold">Joined</th>
-                            <th className="px-3 py-2 font-bold">Role</th>
-                            <th className="px-3 py-2 font-bold">Studio access</th>
-                            <th className="px-3 py-2 font-bold">Status</th>
-                            <th className="px-3 py-2 font-bold text-right">Actions</th>
+                        <tr className={cn('border-b border-[var(--ds-hairline)] bg-[var(--ds-well)]', OVERLINE)}>
+                            <th className="px-3 py-2 font-semibold">Email</th>
+                            <th className="px-3 py-2 font-semibold">Name</th>
+                            <th className="px-3 py-2 font-semibold">Joined</th>
+                            <th className="px-3 py-2 font-semibold">Role</th>
+                            <th className="px-3 py-2 font-semibold">Studio access</th>
+                            <th className="px-3 py-2 font-semibold">Status</th>
+                            <th className="px-3 py-2 font-semibold text-right">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {adminUsers.length === 0 && (
-                            <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">No users found.</td></tr>
+                            <tr><td colSpan={7} className={cn('px-3 py-6 text-center text-sm', MUTED)}>No users found.</td></tr>
                         )}
                         {adminUsers.map((adminUser) => {
                             const isTargetAdmin = adminUser.roles.includes('admin');
@@ -687,12 +687,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             const suspended = adminUser.moderationStatus === 'suspended';
                             return (
                                 <React.Fragment key={adminUser.userId}>
-                                    <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                                    <tr className="border-b border-[var(--ds-hairline-soft)] last:border-0 hover:bg-[var(--ds-hover)]">
                                         <td className="px-3 py-2 font-mono text-xs max-w-[220px] truncate" title={adminUser.email || adminUser.maskedEmail || adminUser.userId}>
                                             {adminUser.email || adminUser.maskedEmail || adminUser.userId}
                                         </td>
-                                        <td className="px-3 py-2 font-bold max-w-[140px] truncate">{adminUser.username || '—'}</td>
-                                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                                        <td className="px-3 py-2 font-semibold max-w-[140px] truncate">{adminUser.username || '—'}</td>
+                                        <td className={cn('whitespace-nowrap px-3 py-2 text-xs', MUTED)}>
                                             {adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : '—'}
                                         </td>
                                         <td className="px-3 py-2">
@@ -701,14 +701,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                                                     value={roleValueOf(adminUser.roles)}
                                                     onChange={(e) => void handleRoleSelect(adminUser, e.target.value as RoleValue)}
                                                     disabled={busy}
-                                                    className="border-2 border-black rounded px-1.5 py-0.5 text-xs font-bold bg-white"
+                                                    className={cn(FIELD, 'h-8 px-1.5 text-xs font-medium', DENSITY.coarse)}
                                                 >
                                                     <option value="none">—</option>
                                                     <option value="moderator">moderator</option>
                                                     <option value="admin">admin</option>
                                                 </select>
                                             ) : (
-                                                <span className="text-xs font-bold">{roleValueOf(adminUser.roles) === 'none' ? '—' : roleValueOf(adminUser.roles)}</span>
+                                                <span className="text-xs font-semibold">{roleValueOf(adminUser.roles) === 'none' ? '—' : roleValueOf(adminUser.roles)}</span>
                                             )}
                                         </td>
                                         <td className="px-3 py-2">{studioChips(adminUser)}</td>
@@ -716,23 +716,28 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                                         <td className="px-3 py-2">
                                             <div className="flex items-center justify-end gap-1.5">
                                                 {isAdmin && (
-                                                    <button
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        aria-expanded={expanded}
                                                         onClick={() => toggleExpanded(adminUser.userId)}
-                                                        className={`inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 transition-colors ${expanded ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}
+                                                        className={expanded ? 'bg-[var(--ds-active)]' : undefined}
                                                     >
                                                         <MonitorPlay size={11} /> Studios…
-                                                        <ChevronDown size={11} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
-                                                    </button>
+                                                        <ChevronDown size={11} className={cn('transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none', expanded && 'rotate-180')} />
+                                                    </Button>
                                                 )}
                                                 {canModerateTarget && (
-                                                    <button
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
                                                         onClick={() => void handleSuspendToggle(adminUser)}
                                                         disabled={busy}
-                                                        className={`inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 transition-colors disabled:opacity-40 ${suspended ? 'bg-green-100 hover:bg-green-200' : 'bg-white hover:bg-red-50 text-red-600'}`}
+                                                        className={suspended ? undefined : 'text-[var(--ds-danger-text)]'}
                                                         title={suspended ? 'Reactivate this account' : 'Suspend this account'}
                                                     >
                                                         <Ban size={11} /> {suspended ? 'Unsuspend' : 'Suspend'}
-                                                    </button>
+                                                    </Button>
                                                 )}
                                             </div>
                                         </td>
@@ -749,25 +754,25 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
 
     const renderModeration = () => (
         <div className="space-y-4">
-            <p className="text-xs text-slate-500">Force projects private (reason required) and review republish requests.</p>
+            <p className={cn('text-xs', MUTED)}>Force projects private (reason required) and review republish requests.</p>
             <div className="space-y-3">
                 {moderationQueue.length === 0 && (
-                    <div className="text-sm text-slate-500 border-2 border-dashed border-slate-300 rounded-xl px-4 py-6 text-center">
+                    <div className={cn('rounded-[var(--ds-radius-panel)] border border-dashed border-[var(--ds-hairline)] px-4 py-6 text-center text-sm', MUTED)}>
                         Queue is clear — no moderation items.
                     </div>
                 )}
                 {moderationQueue.map((item) => (
-                    <div key={item.projectId} className="border-2 border-black rounded-xl bg-white p-4 space-y-3">
+                    <div key={item.projectId} className={cn(SECTION_CARD, 'space-y-3 p-4')}>
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                                <div className="font-bold">{item.projectName || item.projectId}</div>
-                                <div className="text-xs text-slate-500">Owner: {item.ownerUserId}</div>
+                            <div className="min-w-0">
+                                <div className="font-semibold [overflow-wrap:anywhere]">{item.projectName || item.projectId}</div>
+                                <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>Owner: {item.ownerUserId}</div>
                             </div>
                             <div className="flex flex-wrap gap-2">
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold border border-black ${item.isForcedPrivate ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                                <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[item.isForcedPrivate ? 'error' : 'healthy'])}>
                                     {item.isForcedPrivate ? 'Forced Private' : item.isPublic ? 'Public' : 'Private'}
                                 </span>
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold border border-black ${item.republishRequestStatus === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                                <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[item.republishRequestStatus === 'pending' ? 'attention' : 'waiting'])}>
                                     Republish: {item.republishRequestStatus}
                                 </span>
                             </div>
@@ -777,7 +782,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             value={moderationReasonByProject[item.projectId] || ''}
                             onChange={(e) => setModerationReasonByProject((prev) => ({ ...prev, [item.projectId]: e.target.value }))}
                             placeholder="Moderation reason (required for force private)"
-                            className="w-full border-2 border-black rounded-lg px-3 py-2 text-sm"
+                            className={cn(FIELD, 'h-9 w-full px-3 text-sm', DENSITY.coarse)}
                         />
 
                         <div className="flex gap-2 flex-wrap">
@@ -792,7 +797,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             )}
                             {item.republishRequestStatus === 'pending' && (
                                 <>
-                                    <Button variant="secondary" disabled={busy} onClick={() => void handleReviewRepublish(item.projectId, true)}>
+                                    <Button disabled={busy} onClick={() => void handleReviewRepublish(item.projectId, true)}>
                                         Approve Republish
                                     </Button>
                                     <Button variant="outline" disabled={busy} onClick={() => void handleReviewRepublish(item.projectId, false)}>
@@ -802,9 +807,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             )}
                         </div>
 
-                        {item.forcedPrivateReason && <div className="text-xs text-slate-600">Force-private reason: {item.forcedPrivateReason}</div>}
-                        {item.republishRequestReason && <div className="text-xs text-slate-600">Republish request: {item.republishRequestReason}</div>}
-                        {item.republishReviewReason && <div className="text-xs text-slate-600">Republish review: {item.republishReviewReason}</div>}
+                        {item.forcedPrivateReason && <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>Force-private reason: {item.forcedPrivateReason}</div>}
+                        {item.republishRequestReason && <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>Republish request: {item.republishRequestReason}</div>}
+                        {item.republishReviewReason && <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>Republish review: {item.republishReviewReason}</div>}
                     </div>
                 ))}
             </div>
@@ -816,29 +821,25 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             {/* Console header: identity + section switcher in one calm bar. */}
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border-2 border-black bg-brand-yellow">
-                        <Shield size={13} /> {isAdmin ? 'Admin' : 'Moderator'}
+                    <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.active)}>
+                        <Shield size={13} aria-hidden /> {isAdmin ? 'Admin' : 'Moderator'}
                     </span>
                     {adminAccess?.bootstrapAdmin && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border-2 border-black bg-amber-100 text-amber-800">
-                            <UserCog size={13} /> Bootstrap
+                        <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.attention)}>
+                            <UserCog size={13} aria-hidden /> Bootstrap
                         </span>
                     )}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                <div className={cn('flex items-center gap-2 text-[11px]', MUTED)}>
                     <span>{lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : 'Loading…'}</span>
-                    <button
-                        onClick={() => void refreshNow()}
-                        disabled={busy}
-                        className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-1 font-bold bg-white hover:bg-slate-100 disabled:opacity-50 transition-colors"
-                    >
-                        <RefreshCw size={12} className={busy ? 'animate-spin' : ''} /> Refresh
-                    </button>
+                    <Button variant="outline" size="sm" onClick={() => void refreshNow()} disabled={busy}>
+                        <RefreshCw size={12} className={busy ? 'motion-safe:animate-spin' : ''} /> Refresh
+                    </Button>
                 </div>
             </div>
 
             {/* Section navigation: a single scrollable rail replaces the old wall of stacked panels. */}
-            <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1" role="tablist" aria-label="Admin console sections">
+            <div className="ds-fade-edge-x flex max-w-full gap-0.5 overflow-x-auto rounded-[var(--ds-radius-control)] border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Admin console sections">
                 {visibleSections.map((entry) => {
                     const active = section === entry.id;
                     const badge = entry.id === 'moderation' && pendingModeration > 0 ? pendingModeration : null;
@@ -848,19 +849,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             role="tab"
                             aria-selected={active}
                             onClick={() => selectSection(entry.id)}
-                            className={`relative shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border-2 text-sm font-bold transition-colors ${active ? 'border-black bg-black text-white' : 'border-transparent text-slate-500 hover:text-black hover:bg-slate-100'}`}
-                        >
-                            {active && (
-                                <motion.span
-                                    layoutId="admin-section-pill"
-                                    className="absolute inset-0 rounded-xl border-2 border-black bg-black -z-10"
-                                    transition={{ type: 'spring', stiffness: 500, damping: 38 }}
-                                />
+                            className={cn(
+                                'relative inline-flex shrink-0 items-center gap-1.5 rounded-[calc(var(--ds-radius-control)-2px)] px-3 py-1.5 text-[13px] font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]',
+                                DENSITY.coarse,
+                                FOCUS_RING,
+                                'focus-visible:outline-offset-0',
+                                active ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
                             )}
+                        >
                             {entry.icon}
                             {entry.label}
                             {badge !== null && (
-                                <span className={`min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full text-[10px] px-1 ${active ? 'bg-brand-yellow text-black' : 'bg-amber-400 text-black'}`}>
+                                <span className={cn(STATUS_CHIP, 'min-w-[18px] justify-center px-1.5', STATUS_CHIP_TONE.attention)}>
                                     {badge}
                                 </span>
                             )}
@@ -870,38 +870,37 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             </div>
 
             {message && (
-                <div className={`border-2 rounded-lg px-3 py-2 text-sm font-semibold flex items-center gap-2 ${message.type === 'success' ? 'border-green-500 bg-green-50 text-green-700' : 'border-red-500 bg-red-50 text-red-700'}`}>
-                    {message.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />} {message.text}
+                <div className={cn('flex items-center gap-2 rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm font-medium [overflow-wrap:anywhere]', message.type === 'success' ? `${STATUS_SURFACE.healthy} ${STATUS_INK.healthy}` : `${STATUS_SURFACE.error} ${STATUS_INK.error}`)}>
+                    {message.type === 'success' ? <CheckCircle2 size={16} className="shrink-0" aria-hidden /> : <AlertTriangle size={16} className="shrink-0" aria-hidden />} {message.text}
                 </div>
             )}
 
-            <AnimatePresence mode="wait">
-                <motion.div key={section} {...sectionMotion}>
+            {/* The section rises in on the token entrance (still under reduced motion). */}
+            <div key={section} className={RISE_IN}>
                     {section === 'overview' && renderOverview()}
                     {section === 'users' && renderUsers()}
                     {section === 'moderation' && renderModeration()}
                     {section === 'invites' && isAdmin && (
-                        <div className="border-2 border-black rounded-xl bg-white"><InviteManager /></div>
+                        <div className={SECTION_CARD}><InviteManager /></div>
                     )}
                     {section === 'studios' && isAdmin && (
-                        <div className="border-2 border-black rounded-xl bg-white"><ProductAccessPanel /></div>
+                        <div className={SECTION_CARD}><ProductAccessPanel /></div>
                     )}
                     {section === 'email' && isAdmin && (
-                        <div className="border-2 border-black rounded-xl bg-white"><EmailConsole /></div>
+                        <div className={SECTION_CARD}><EmailConsole /></div>
                     )}
                     {section === 'analytics' && (
-                        <div className="border-2 border-black rounded-xl bg-white"><AdminAnalytics /></div>
+                        <AdminAnalytics />
                     )}
                     {section === 'costs' && isAdmin && <CostCentre />}
                     {section === 'verification' && isAdmin && (
-                        <div className="border-2 border-black rounded-xl bg-white"><VerificationCenter /></div>
+                        <VerificationCenter />
                     )}
                     {(() => {
                         const feature = activeFeatureSection(section);
                         return feature ? <feature.Component /> : null;
                     })()}
-                </motion.div>
-            </AnimatePresence>
+            </div>
         </div>
     );
 };

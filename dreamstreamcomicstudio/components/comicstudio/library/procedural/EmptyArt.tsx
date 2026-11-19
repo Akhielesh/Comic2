@@ -1,6 +1,6 @@
 // Line-art empty states (contract §13.3, assets.md §6; owner P1-LIBRARY): calm editorial spot
-// drawings in currentColor strokes with soft currentColor washes and one terracotta (#D97757,
-// the theme-invariant accent) detail, so each reads well in light and dark themes at $0.
+// drawings in currentColor strokes with soft currentColor washes and one picked-out detail (in the
+// ink by default, Atlas: hue never decorates), so each reads well in light and dark themes at $0.
 // Tier 2 under the library's AI empty-state art (LibraryImage falls back to it).
 
 import React from 'react';
@@ -10,13 +10,13 @@ export type EmptyArtVariant = 'pages' | 'cast' | 'style' | 'reader' | 'studio' |
 export interface EmptyArtProps {
   variant: EmptyArtVariant;
   /**
-   * The detail colour: the terracotta accent by default; `currentColor` draws the spot in one ink (the comics landing:
-   * black and white with one colour, its hero's spark — DS-3 #5 left the spark recolour to CL-1).
+   * The detail colour: `currentColor` by default, so the spot is drawn in one ink (the Atlas accent is the ink); a
+   * caller may pass a token colour (`var(--ds-…)`) to pick the detail out.
    */
   accent?: string;
 }
 
-const ACCENT = '#D97757';
+const ACCENT = 'currentColor';
 const WASH = { fill: 'currentColor', fillOpacity: 0.07, stroke: 'none' } as const;
 const SOFT = { strokeOpacity: 0.45 } as const;
 

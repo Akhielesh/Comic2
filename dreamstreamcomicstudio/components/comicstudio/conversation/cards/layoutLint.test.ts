@@ -21,7 +21,6 @@ const REPO = join(ROOT, '..');
 const ALLOW: { file: string; includes: string; owner: string }[] = [
   // Found when DS-3 widened the walk to components/** (S2b integration); each predates it. Put `truncate` on an inner
   // `min-w-0` text span, then drop the entry.
-  { file: 'ModelSelectionPanel.tsx', includes: 'truncate flex items-center gap-1.5', owner: 'model selection (legacy wizard)' },
   { file: 'chat/ChatModelPicker.tsx', includes: 'font-semibold leading-tight truncate flex items-center gap-1.5', owner: 'chat studio' },
   { file: 'chat/IconsBrowser.tsx', includes: 'flex items-center gap-0.5 truncate text-[9.5px]', owner: 'chat studio' },
   { file: 'chat/artifacts/CalendarAgenda.tsx', includes: 'flex items-center gap-1 truncate text-[9px]', owner: 'chat artifacts' },

@@ -1,21 +1,26 @@
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { cn } from '../../../../lib/utils';
+import { FOCUS_RING, SECTION_CARD } from '../../studioDesign';
 
-// The macOS-glass card shell every rich-output component sits in. Owns the house
-// style for widgets (hairline border, soft ambient shadow, frosted glass, rounded-2xl)
-// so a single file restyles every card. An optional accent hex renders as a thin
-// gradient strip so the AI can recolor a card with one prop.
+// The card shell every rich-output component sits in, built from the Atlas section-card
+// recipe (SECTION_CARD: an opaque --ds-surface, a hairline, the soft shadow and the panel
+// radius, no blur), so a single file restyles every card and every card matches the
+// sibling DS cards around it.
 //
-// This is the "calm studio" widget language (see components/chat/studioDesign.ts):
 // NO comic borders (`border-2 border-black`), NO hard offset shadows (`shadow-comic`),
-// NO display lettering. Quiet, layered, precise.
+// NO display lettering, NO spelled radius, shadow or hue.
 
 interface SurfaceProps {
   /** Left-aligned header content (title, subtitle). */
   header?: React.ReactNode;
   /** Right-aligned header content (price, controls). */
   right?: React.ReactNode;
-  /** Accent hex used for the top strip; omit for no strip. */
+  /**
+   * Kept for callers and model data that still pass a colour. The card no longer draws a
+   * coloured strip: identity comes from the content (a chart's series, a status chip),
+   * never from the card edge.
+   */
   accent?: string;
   /** Optional footer row, divided from the body. */
   footer?: React.ReactNode;
@@ -23,16 +28,8 @@ interface SurfaceProps {
   children?: React.ReactNode;
 }
 
-export const Surface: React.FC<SurfaceProps> = ({ header, right, accent, footer, className = '', children }) => (
-  <div
-    className={`my-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)] overflow-hidden animate-fade-in ${className}`}
-  >
-    {accent && (
-      <div
-        className="h-[3px]"
-        style={{ background: `linear-gradient(90deg, ${accent}, ${accent}66)` }}
-      />
-    )}
+export const Surface: React.FC<SurfaceProps> = ({ header, right, footer, className = '', children }) => (
+  <div className={cn('my-2 animate-fade-in', SECTION_CARD, className)}>
     {(header || right) && (
       <div className="flex items-start justify-between gap-2 p-3 pb-2">
         <div className="min-w-0">{header}</div>
@@ -67,11 +64,11 @@ export const Expandable: React.FC<{
     <>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-center gap-1 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] py-1.5 text-[11px] font-semibold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] transition-colors duration-200"
+        className={cn('w-full flex items-center justify-center gap-1 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] py-1.5 text-[11px] font-semibold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] transition-colors duration-[var(--ds-motion-medium)] coarse:min-h-[44px]', FOCUS_RING)}
         aria-expanded={open}
       >
         {open ? lessLabel : moreLabel}
-        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-[var(--ds-motion-medium)] motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>
       {open && <div className="animate-fade-in border-t border-[var(--ds-hairline-soft)]">{children}</div>}
     </>

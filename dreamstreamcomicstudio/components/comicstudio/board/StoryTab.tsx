@@ -23,7 +23,7 @@ import { KIND_LABEL, plural } from './boardModel';
 import { spendSummary } from '../insights/insightsModel';
 import { SpendByKindList } from '../insights/OverviewTab';
 import { useCostFormat, type CostFormat } from './costFormat';
-import { OVERLINE } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE } from '../../chat/studioDesign';
 import { Chip, InlineField, SectionTitle, Surface, cx } from './ui';
 
 const SCRIPT_PREVIEW_LINES = 14;
@@ -64,7 +64,7 @@ const TagEditor: React.FC<{ label: string; values: string[]; onChange: (next: st
         aria-label={`Add ${label.toLowerCase()}`}
         placeholder={placeholder}
         maxLength={60}
-        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11 coarse:text-base"
+        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-base"
       />
     </div>
   );
@@ -91,7 +91,7 @@ const NotesList: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ stud
                 type="button"
                 aria-label={`Remove note: ${note}`}
                 onClick={() => void studio.patch([{ op: 'brief', patch: { notes: notes.filter((_, j) => j !== i) } }])}
-                className="hover-reveal tap-target mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                className={`hover-reveal tap-target mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
               >
                 <X className="h-3.5 w-3.5" aria-hidden />
               </button>
@@ -115,13 +115,13 @@ const NotesList: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ stud
           aria-label="Add a note"
           placeholder="Add a note…"
           maxLength={500}
-          className="h-8 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11 coarse:text-base"
+          className="h-8 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-base"
         />
         <button
           type="submit"
           disabled={!draft.trim()}
           aria-label="Add note"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-40 coarse:h-11 coarse:w-11"
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING} disabled:opacity-40 coarse:h-11 coarse:w-11`}
         >
           <Plus className="h-4 w-4" aria-hidden />
         </button>
@@ -168,7 +168,7 @@ const FormatChips: React.FC<{ doc: ComicDoc; onLanguages?: () => void }> = ({ do
           title={`${lang.title} — open Languages`}
           aria-label={`Language: ${lang.label}. Open Languages`}
           data-testid="language-chip"
-          className="tap-target inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[12px] leading-none text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          className={`tap-target inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[12px] leading-none text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
         >
           <Languages className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" aria-hidden />
           <span className="min-w-0 truncate">{lang.label}</span>
@@ -309,7 +309,7 @@ export const StoryTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
       <Surface className="p-3 sm:p-4" aria-label="Brief">
         {briefIsEmpty(doc) && (
           <div className="mb-3 flex items-start gap-3 rounded-xl bg-[var(--ds-well)] px-3 py-2.5">
-            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]" aria-hidden>
+            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]" aria-hidden>
               <FileText className="h-3.5 w-3.5" />
             </span>
             <div className="min-w-0">

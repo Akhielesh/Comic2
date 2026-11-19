@@ -18,6 +18,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { API_BASE_URL } from '../../services/clientConfig';
 import { useIsAdmin } from '../../hooks/useIsAdmin';
 import { platformDocsVisible } from '../../services/platformFlags';
+import { FOCUS_RING, MUTED, RADIUS_CONTROL, SECTION_CARD, TWO_LINE_TEXT, WRAP_TEXT } from './studioDesign';
 
 // Server-side provider usage row (mirrors server/src/lib/providerUsage.ts snapshot).
 interface ProviderUsageRow {
@@ -75,8 +76,8 @@ const CAT_ICONS: Record<string, LucideIcon> = {
 // --- small presentational helpers ----------------------------------------------
 const KindBadge: React.FC<{ kind: ToolKind }> = ({ kind }) => {
   const map: Record<ToolKind, { label: string; cls: string }> = {
-    api: { label: 'API', cls: 'border-sky-500/20 text-sky-700 bg-sky-50' },
-    mcp: { label: 'MCP', cls: 'border-violet-500/20 text-violet-700 bg-violet-50' },
+    api: { label: 'API', cls: 'border-[var(--ds-hairline)] text-[var(--ds-ink)] bg-[var(--ds-well)]' },
+    mcp: { label: 'MCP', cls: 'border-[var(--ds-hairline)] text-[var(--ds-ink)] bg-[var(--ds-well)]' },
     builtin: { label: 'BUILT-IN', cls: 'border-[var(--ds-hairline)] text-[var(--ds-muted)] bg-[var(--ds-well)]' }
   };
   const m = map[kind];
@@ -86,7 +87,7 @@ const KindBadge: React.FC<{ kind: ToolKind }> = ({ kind }) => {
 const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) => {
   if (auth === 'none')
     return (
-      <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-emerald-500/20 text-emerald-700 bg-emerald-50">
+      <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] text-[var(--ds-success-text)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]">
         <Unlock className="w-2.5 h-2.5" /> KEYLESS
       </span>
     );
@@ -94,7 +95,7 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
     return (
       <span
         title={env ? `Runs keyless; set ${env} to raise limits` : undefined}
-        className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-amber-500/20 text-amber-700 bg-amber-50"
+        className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] text-[var(--ds-warning-text)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)]"
       >
         <KeyRound className="w-2.5 h-2.5" /> KEY OPTIONAL
       </span>
@@ -102,7 +103,7 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
   return (
     <span
       title={env ? `Requires ${env}` : undefined}
-      className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-rose-500/20 text-rose-700 bg-rose-50"
+      className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] text-[var(--ds-danger-text)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]"
     >
       <KeyRound className="w-2.5 h-2.5" /> KEY REQUIRED
     </span>
@@ -114,10 +115,10 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
 // commercial use".
 const LicenseBadge: React.FC<{ license: ToolLicense }> = ({ license }) => {
   const cls: Record<ToolLicense, string> = {
-    'commercial-ok': 'border-emerald-500/20 text-emerald-700 bg-emerald-50',
-    attribution: 'border-sky-500/20 text-sky-700 bg-sky-50',
-    conditional: 'border-amber-500/20 text-amber-700 bg-amber-50',
-    unofficial: 'border-rose-500/20 text-rose-700 bg-rose-50'
+    'commercial-ok': 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] text-[var(--ds-success-text)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]',
+    attribution: 'border-[color:color-mix(in_srgb,var(--ds-info)_30%,transparent)] text-[var(--ds-info-text)] bg-[color:color-mix(in_srgb,var(--ds-info)_10%,transparent)]',
+    conditional: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] text-[var(--ds-warning-text)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)]',
+    unofficial: 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] text-[var(--ds-danger-text)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]'
   };
   const m = LICENSE_META[license];
   return (
@@ -204,7 +205,7 @@ const ToolRow: React.FC<{ tool: ToolMeta; stat?: ToolStat }> = ({ tool, stat }) 
           <Activity className="w-3 h-3" /> {stat?.calls || 0} call{(stat?.calls || 0) === 1 ? '' : 's'}
         </span>
         {successRate != null && (
-          <span className={successRate >= 80 ? 'text-emerald-700' : successRate >= 50 ? 'text-amber-700' : 'text-rose-700'}>
+          <span className={successRate >= 80 ? 'text-[var(--ds-success-text)]' : successRate >= 50 ? 'text-[var(--ds-warning-text)]' : 'text-[var(--ds-danger-text)]'}>
             {successRate}% ok
           </span>
         )}
@@ -297,33 +298,38 @@ export const ToolsDashboard: React.FC = () => {
       {/* Summary band */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <StatCard icon={Boxes} label="Live tools" value={String(counts.total)} sub={`${counts.api} API · ${counts.builtin} built-in`} />
-        <StatCard icon={Unlock} label="Keyless" value={String(counts.keyless)} sub={`of ${counts.total} run with no key`} accent="text-emerald-600" />
+        <StatCard icon={Unlock} label="Keyless" value={String(counts.keyless)} sub={`of ${counts.total} run with no key`} accent="text-[var(--ds-success-text)]" />
         <StatCard icon={Activity} label="Total calls" value={summary.totalCalls.toLocaleString()} sub={`${summary.distinctToolsUsed} tools used`} accent="text-[var(--ds-accent)]" />
         <StatCard
           icon={CheckCircle2}
           label="Success rate"
           value={summary.totalCalls ? `${Math.round(summary.successRate * 100)}%` : '—'}
           sub={summary.totalCalls ? `${summary.totalOk}/${summary.totalCalls} ok` : 'no calls yet'}
-          accent="text-emerald-600"
+          accent="text-[var(--ds-success-text)]"
         />
       </div>
 
-      <p className="text-[11px] text-[var(--ds-muted)] flex items-start gap-1.5">
-        <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
-        These are <span className="font-semibold text-[var(--ds-ink)]">automatic backend tools</span> — the AI always has them and picks the right
-        ones for each message (it <span className="font-semibold text-[var(--ds-ink)]">smart-routes</span> by relevance instead of calling everything).
-        You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
+      {/* The icon is the only flex child beside one span, so the sentence wraps as one paragraph */}
+      <p className={`text-[11px] ${MUTED} flex items-start gap-1.5`}>
+        <Zap className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${MUTED}`} aria-hidden="true" />
+        <span className={WRAP_TEXT}>
+          These are <span className="font-semibold text-[var(--ds-ink)]">automatic backend tools</span> — the AI always has them and picks the right
+          ones for each message (it <span className="font-semibold text-[var(--ds-ink)]">smart-routes</span> by relevance instead of calling everything).
+          You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
+        </span>
       </p>
 
       {/* Connector upgrades — the audited "set these keys" checklist. Informational:
           the env vars live on the server, not in the browser. */}
-      <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
-        <div className="flex items-center gap-1.5 mb-1">
-          <ShieldCheck className="w-4 h-4 text-emerald-600" />
-          <span className="font-semibold text-sm text-[var(--ds-ink)]">Connector upgrades</span>
-          <span className="text-[10px] text-[var(--ds-muted)]">
+      <div className={`${SECTION_CARD} p-3`}>
+        <div className="mb-2">
+          <div className="flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 shrink-0 text-[var(--ds-success-text)]" aria-hidden="true" />
+            <span className="font-semibold text-sm text-[var(--ds-ink)]">Connector upgrades</span>
+          </div>
+          <p className={`mt-0.5 text-[11px] ${MUTED} ${WRAP_TEXT}`}>
             Free keys that raise reliability and keep commercial use compliant — set them in the server environment
-          </span>
+          </p>
         </div>
         <div className="flex flex-wrap gap-1.5 mb-2">
           {(Object.keys(LICENSE_META) as ToolLicense[]).map((l) => (
@@ -332,25 +338,27 @@ export const ToolsDashboard: React.FC = () => {
             </span>
           ))}
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {/* The grid follows its own width (the settings column), not the viewport */}
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-2">
           {CONNECTOR_KEYS.map((k) => (
-            <div key={k.env} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <KeyRound className="w-3.5 h-3.5 text-[var(--ds-muted)] shrink-0" />
-                  <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{k.provider}</span>
+            <div key={k.env} className={`min-w-0 ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-1.5 min-w-0">
+                  <KeyRound className="mt-0.5 w-3.5 h-3.5 text-[var(--ds-muted)] shrink-0" aria-hidden="true" />
+                  <span className={`font-semibold text-sm text-[var(--ds-ink)] ${TWO_LINE_TEXT}`} title={k.provider}>{k.provider}</span>
                 </div>
                 <a
                   href={k.signupUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="shrink-0 text-[var(--ds-muted)] opacity-80 hover:text-[var(--ds-ink)] transition-colors duration-200"
+                  className={`shrink-0 text-[var(--ds-muted)] opacity-80 hover:text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] ${RADIUS_CONTROL} ${FOCUS_RING}`}
                   title={`${k.provider} — get a key`}
+                  aria-label={`${k.provider}: get a key`}
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </div>
-              <code className="text-[9px] text-[var(--ds-muted)]">{k.env}</code>
+              <code className={`block text-[9px] text-[var(--ds-muted)] ${WRAP_TEXT}`}>{k.env}</code>
               <div className="text-[11px] text-[var(--ds-ink)] mt-1">{k.unlocks}</div>
               <div className="text-[10px] text-[var(--ds-muted)] mt-1">{k.cost}</div>
             </div>
@@ -362,7 +370,7 @@ export const ToolsDashboard: React.FC = () => {
           the backend meter (every upstream call, all users), unlike the local
           per-device tool analytics below. */}
       {usage && usage.length > 0 && (
-        <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+        <div className={`${SECTION_CARD} p-3`}>
           <div className="flex items-center gap-1.5 mb-2">
             <Activity className="w-4 h-4 text-[var(--ds-accent)]" />
             <span className="font-semibold text-sm text-[var(--ds-ink)]">Provider usage today (server)</span>
@@ -373,11 +381,11 @@ export const ToolsDashboard: React.FC = () => {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {usage.map((u) => {
               const health: Record<ProviderUsageRow['health'], { label: string; cls: string }> = {
-                ok: { label: 'OK', cls: 'border-emerald-500/20 text-emerald-700 bg-emerald-50' },
-                hot: { label: 'HOT', cls: 'border-amber-500/20 text-amber-700 bg-amber-50' },
-                'near-cap': { label: 'NEAR CAP', cls: 'border-amber-500/20 text-amber-700 bg-amber-50' },
-                failing: { label: 'FAILING', cls: 'border-rose-500/20 text-rose-700 bg-rose-50' },
-                capped: { label: 'CAPPED', cls: 'border-rose-500/20 text-rose-700 bg-rose-50' }
+                ok: { label: 'OK', cls: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] text-[var(--ds-success-text)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' },
+                hot: { label: 'HOT', cls: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] text-[var(--ds-warning-text)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)]' },
+                'near-cap': { label: 'NEAR CAP', cls: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] text-[var(--ds-warning-text)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)]' },
+                failing: { label: 'FAILING', cls: 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] text-[var(--ds-danger-text)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]' },
+                capped: { label: 'CAPPED', cls: 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] text-[var(--ds-danger-text)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]' }
               };
               const h = health[u.health];
               return (
@@ -388,12 +396,12 @@ export const ToolsDashboard: React.FC = () => {
                   </div>
                   <div className="text-[10px] text-[var(--ds-muted)] mt-1 tabular-nums">
                     {u.todayCalls.toLocaleString()} / {u.perDay.toLocaleString()} today · {u.lastMinute}/{u.perMin} last min
-                    {u.todayErrors > 0 && <span className="text-rose-700"> · {u.todayErrors} errors</span>}
-                    {u.blockedToday > 0 && <span className="text-amber-700"> · {u.blockedToday} blocked</span>}
+                    {u.todayErrors > 0 && <span className="text-[var(--ds-danger-text)]"> · {u.todayErrors} errors</span>}
+                    {u.blockedToday > 0 && <span className="text-[var(--ds-warning-text)]"> · {u.blockedToday} blocked</span>}
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--ds-well)] mt-1.5 overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${u.dayUsedPct >= 80 ? 'bg-rose-500' : u.dayUsedPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      className={`h-full rounded-full ${u.dayUsedPct >= 80 ? 'bg-[var(--ds-danger-mark)]' : u.dayUsedPct >= 50 ? 'bg-[var(--ds-warning)]' : 'bg-[var(--ds-success)]'}`}
                       style={{ width: `${Math.max(2, u.dayUsedPct)}%` }}
                     />
                   </div>
@@ -477,9 +485,9 @@ export const ToolsDashboard: React.FC = () => {
       </div>
 
       {/* Curated MCP marketplace — one-click connect (Phase 10), grouped by category */}
-      <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+      <div className={`${SECTION_CARD} p-3`}>
         <div className="flex items-center gap-1.5 mb-2">
-          <Boxes className="w-4 h-4 text-violet-600" />
+          <Boxes className="w-4 h-4 text-[var(--ds-muted)]" />
           <span className="font-semibold text-sm text-[var(--ds-ink)]">MCP marketplace</span>
           <span className="text-[10px] text-[var(--ds-muted)]">Vetted free servers — connect one in a click to expose its tools to the AI</span>
         </div>
@@ -494,7 +502,7 @@ export const ToolsDashboard: React.FC = () => {
                     <div key={m.id} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5 flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <Server className="w-4 h-4 text-violet-600 shrink-0" />
+                          <Server className="w-4 h-4 text-[var(--ds-muted)] shrink-0" />
                           <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{m.name}</span>
                           <KindBadge kind="mcp" />
                           <AuthBadge auth="none" />
@@ -507,7 +515,7 @@ export const ToolsDashboard: React.FC = () => {
                         onClick={() => addMcpServer({ name: m.name, url: m.url })}
                         className={`shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg px-2 py-1 transition-colors duration-200 ${
                           connected
-                            ? 'border border-emerald-500/20 bg-emerald-50 text-emerald-700 cursor-default'
+                            ? 'border border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] text-[var(--ds-success-text)] cursor-default'
                             : 'bg-[var(--ds-accent)] hover:bg-[var(--ds-accent-hover)] text-white'
                         }`}
                       >
@@ -535,7 +543,7 @@ export const ToolsDashboard: React.FC = () => {
             {mcpServers.map((s) => (
               <div key={s.id} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5">
                 <div className="flex items-center gap-1.5">
-                  <Server className="w-4 h-4 text-violet-600" />
+                  <Server className="w-4 h-4 text-[var(--ds-muted)]" />
                   <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{s.name}</span>
                   <KindBadge kind="mcp" />
                   {s.headers?.Authorization && <AuthBadge auth="required" />}

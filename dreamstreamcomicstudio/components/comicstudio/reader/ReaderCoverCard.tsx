@@ -45,7 +45,8 @@ export interface ReaderCoverCardProps {
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
 const roomBackground = (themeColor?: string): string => {
-  if (!themeColor || !HEX.test(themeColor)) return 'radial-gradient(120% 90% at 50% 30%, rgba(217,119,87,0.16), transparent 70%), var(--ds-reader-room)';
+  // No colour of the comic's own: a faint glow of the reader's paper over the room (tokens only, both content-side).
+  if (!themeColor || !HEX.test(themeColor)) return 'radial-gradient(120% 90% at 50% 30%, color-mix(in srgb, var(--ds-reader-paper-back) 6%, transparent), transparent 70%), var(--ds-reader-room)';
   const r = parseInt(themeColor.slice(1, 3), 16);
   const g = parseInt(themeColor.slice(3, 5), 16);
   const b = parseInt(themeColor.slice(5, 7), 16);

@@ -9,23 +9,42 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/venturesApi';
 import type { Venture, VentureDetail, Goal, VentureEvent } from '../../services/venturesApi';
+import { cn } from '../../lib/utils';
+import { Button, buttonClasses } from '../ds';
+import {
+  FIELD,
+  FOCUS_RING,
+  HOVER_ROW,
+  INK,
+  MUTED,
+  OVERLINE,
+  SECTION_CARD,
+  STATUS_CHIP,
+  STATUS_CHIP_TONE,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TONE_FILL,
+  TONE_TEXT,
+  type StatusState
+} from '../chat/studioDesign';
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-neutral-700 text-neutral-200',
-  roadmap_pending: 'bg-amber-500/20 text-amber-300 border border-amber-500/40',
-  active: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
-  paused: 'bg-orange-500/20 text-orange-300 border border-orange-500/40',
-  archived: 'bg-neutral-800 text-neutral-400'
+// One status vocabulary (Atlas): the words always ride with the tint.
+const STATUS_STATE: Record<string, StatusState> = {
+  draft: 'waiting',
+  roadmap_pending: 'attention',
+  active: 'healthy',
+  paused: 'attention',
+  archived: 'waiting'
 };
 
 const LEVEL_COLORS: Record<string, string> = {
-  info: 'text-neutral-400',
-  warn: 'text-amber-300',
-  error: 'text-rose-400'
+  info: MUTED,
+  warn: TONE_TEXT.warning,
+  error: TONE_TEXT.danger
 };
 
 const Badge: React.FC<{ status: string }> = ({ status }) => (
-  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[status] || 'bg-neutral-700 text-neutral-200'}`}>
+  <span className={cn(STATUS_CHIP, 'shrink-0', STATUS_CHIP_TONE[STATUS_STATE[status] || 'waiting'])}>
     {status.replace(/_/g, ' ')}
   </span>
 );
@@ -51,8 +70,8 @@ const errorCode = (e: unknown): string | undefined => {
 };
 
 const RetiredBanner: React.FC = () => (
-  <div role="note" className="m-4 p-3 rounded border border-amber-500/30 bg-amber-500/5 text-sm text-amber-200">
-    <span className="font-medium">Build stage retired.</span> {BUILD_RETIRED_COPY}
+  <div role="note" className={cn('m-4 rounded-[var(--ds-radius-panel)] border p-3 text-sm', STATUS_SURFACE.attention, INK)}>
+    <span className={cn('font-medium', STATUS_INK.attention)}>Build stage retired.</span> {BUILD_RETIRED_COPY}
   </div>
 );
 
@@ -62,10 +81,10 @@ const BudgetMeter: React.FC<{ detail: VentureDetail }> = ({ detail }) => {
   const cap = num(budget.usdTotal);
   const pct = cap > 0 ? Math.min(100, Math.round((num(spend.usdTotal) / cap) * 100)) : 0;
   const tone =
-    detail.budgetAlert === 'exceeded' ? 'bg-rose-500' : detail.budgetAlert === 'warn' ? 'bg-amber-400' : 'bg-emerald-500';
+    detail.budgetAlert === 'exceeded' ? TONE_FILL.danger : detail.budgetAlert === 'warn' ? TONE_FILL.warning : TONE_FILL.success;
   return (
     <div className="space-y-1">
-      <div className="flex justify-between text-xs text-neutral-400">
+      <div className={cn('flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs tabular-nums', MUTED)}>
         <span>Spend</span>
         <span>
           ${num(spend.usdTotal).toFixed(2)}{cap > 0 ? ` / $${cap.toFixed(2)}` : ''} total
@@ -73,7 +92,7 @@ const BudgetMeter: React.FC<{ detail: VentureDetail }> = ({ detail }) => {
         </span>
       </div>
       {cap > 0 && (
-        <div className="h-2 w-full rounded-full bg-neutral-800 overflow-hidden">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--ds-well-strong)]">
           <div className={`h-full ${tone}`} style={{ width: `${pct}%` }} />
         </div>
       )}
@@ -169,17 +188,17 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
 
   if (disabled) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-neutral-200 flex items-center justify-center p-8">
-        <div className="max-w-md text-center space-y-3">
+      <div className={cn('flex min-h-screen items-center justify-center bg-[var(--ds-canvas)] p-8', INK)}>
+        <div className="max-w-md space-y-3 text-center">
           <h1 className="text-xl font-semibold">Autopilot is admin-only</h1>
-          <p className="text-neutral-400 text-sm">
+          <p className={cn('text-sm', MUTED)}>
             Ventures is turned off for everyone else (<code>VENTURES_ENABLED=false</code>) since its build stage was
             retired with Code Studio. Admins can still draft ventures and plan roadmaps. See <code>docs/ventures</code>.
           </p>
           {onBack && (
-            <button onClick={onBack} className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700 text-sm">
+            <Button variant="outline" onClick={onBack}>
               Back
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -187,86 +206,75 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex">
-      {/* Left: venture list + intake */}
-      <aside className="w-80 border-r border-neutral-800 flex flex-col">
-        <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
+    <div className={cn('flex min-h-screen flex-col bg-[var(--ds-canvas)] md:flex-row', INK)}>
+      {/* Left: venture list + intake (stacks above the detail on phones) */}
+      <aside className="flex w-full flex-col border-b border-[var(--ds-hairline)] bg-[var(--ds-sidebar)] md:w-80 md:shrink-0 md:border-b-0 md:border-r">
+        <div className="flex items-center justify-between border-b border-[var(--ds-hairline)] p-4">
           <h1 className="font-semibold">Autopilot</h1>
           {onBack && (
-            <button onClick={onBack} className="text-xs text-neutral-400 hover:text-neutral-200">
+            <Button variant="ghost" size="sm" onClick={onBack} className={MUTED}>
               ← Back
-            </button>
+            </Button>
           )}
         </div>
-        <div className="p-4 border-b border-neutral-800 space-y-2">
+        <div className="space-y-2 border-b border-[var(--ds-hairline)] p-4">
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
             placeholder="Describe a product idea to plan…"
-            className="w-full h-20 text-sm bg-neutral-900 border border-neutral-800 rounded p-2 resize-none focus:outline-none focus:border-violet-500"
+            className={cn(FIELD, 'h-20 w-full resize-none p-2 text-sm')}
           />
-          <button
-            onClick={draft}
-            disabled={!idea.trim() || busy === 'draft'}
-            className="w-full py-2 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-sm font-medium"
-          >
+          <Button variant="secondary" onClick={draft} disabled={!idea.trim() || busy === 'draft'} className="w-full">
             {busy === 'draft' ? 'Drafting roadmap…' : 'Draft a venture'}
-          </button>
+          </Button>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {ventures.length === 0 && <p className="p-4 text-sm text-neutral-500">No ventures yet.</p>}
+        <div className="max-h-[50vh] flex-1 space-y-0.5 overflow-y-auto p-2 md:max-h-none">
+          {ventures.length === 0 && <p className={cn('p-2 text-sm', MUTED)}>No ventures yet.</p>}
           {ventures.map((v) => (
             <button
               key={v.id}
               onClick={() => setSelectedId(v.id)}
-              className={`w-full text-left px-4 py-3 border-b border-neutral-900 hover:bg-neutral-900 ${selectedId === v.id ? 'bg-neutral-900' : ''}`}
+              aria-current={selectedId === v.id ? 'true' : undefined}
+              className={cn('w-full px-3 py-3 text-left', HOVER_ROW, selectedId === v.id && 'bg-[var(--ds-active)]', FOCUS_RING)}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium truncate">{v.name}</span>
+                <span className="min-w-0 truncate text-sm font-medium">{v.name}</span>
                 <Badge status={v.status} />
               </div>
-              {v.summary && <p className="text-xs text-neutral-500 mt-1 line-clamp-2">{v.summary}</p>}
+              {v.summary && <p className={cn('mt-1 line-clamp-2 text-xs', MUTED)}>{v.summary}</p>}
             </button>
           ))}
         </div>
       </aside>
 
       {/* Right: detail */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <RetiredBanner />
-        {error && <div className="m-4 p-3 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">{error}</div>}
-        {!detail && <div className="p-8 text-neutral-500">Select a venture, or draft one from an idea.</div>}
+        {error && <div className={cn('m-4 rounded-[var(--ds-radius-panel)] border p-3 text-sm [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>{error}</div>}
+        {!detail && <div className={cn('p-8', MUTED)}>Select a venture, or draft one from an idea.</div>}
         {detail && (
-          <div className="p-6 space-y-6 max-w-4xl">
+          <div className="max-w-4xl space-y-6 p-4 sm:p-6">
             <header className="space-y-2">
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-semibold">{detail.venture.name}</h2>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h2 className="min-w-0 text-[length:var(--ds-text-2xl)] font-semibold leading-8 [overflow-wrap:anywhere]">{detail.venture.name}</h2>
                 <Badge status={detail.venture.status} />
                 {detail.venture.pauseReason && (
-                  <span className="text-xs text-orange-300">
+                  <span className={cn('text-xs', STATUS_INK.attention)}>
                     {PAUSE_LABELS[detail.venture.pauseReason] || `paused: ${detail.venture.pauseReason}`}
                   </span>
                 )}
               </div>
-              {detail.venture.summary && <p className="text-neutral-400 text-sm">{detail.venture.summary}</p>}
+              {detail.venture.summary && <p className={cn('text-sm', MUTED)}>{detail.venture.summary}</p>}
               <div className="flex flex-wrap gap-2 pt-1">
                 {detail.venture.status === 'roadmap_pending' && (
-                  <button
-                    onClick={() => act('approve', () => api.approveRoadmap(detail.venture.id))}
-                    disabled={busy === 'approve'}
-                    className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-medium"
-                  >
+                  <Button size="sm" onClick={() => act('approve', () => api.approveRoadmap(detail.venture.id))} disabled={busy === 'approve'}>
                     {busy === 'approve' ? 'Approving…' : 'Approve roadmap'}
-                  </button>
+                  </Button>
                 )}
                 {detail.venture.status === 'active' && (
-                  <button
-                    onClick={() => act('pause', () => api.setVentureStatus(detail.venture.id, 'paused'))}
-                    disabled={busy === 'pause'}
-                    className="px-3 py-1.5 rounded bg-orange-600/80 hover:bg-orange-500 disabled:opacity-50 text-sm"
-                  >
+                  <Button size="sm" variant="outline" onClick={() => act('pause', () => api.setVentureStatus(detail.venture.id, 'paused'))} disabled={busy === 'pause'}>
                     Pause
-                  </button>
+                  </Button>
                 )}
                 {/* No Resume: with the build stage retired the server refuses 'active' (410), so a
                     paused venture stays paused whatever paused it. */}
@@ -275,7 +283,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
                     href={detail.venture.deployUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-sm"
+                    className={buttonClasses({ variant: 'outline', size: 'sm' })}
                   >
                     Open live ↗
                   </a>
@@ -283,49 +291,41 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
               </div>
             </header>
 
-            <section className="rounded-lg border border-neutral-800 p-4">
+            <section className={cn(SECTION_CARD, 'p-4')}>
               <BudgetMeter detail={detail} />
             </section>
 
             {detail.openCheckpoints.length > 0 && (
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold text-amber-300">Approvals needed ({detail.openCheckpoints.length})</h3>
+                <h3 className={cn('text-sm font-semibold', STATUS_INK.attention)}>Approvals needed ({detail.openCheckpoints.length})</h3>
                 {detail.openCheckpoints.map((c) => (
-                  <div key={c.id} className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium">{c.title}</div>
-                      <div className="text-xs text-neutral-400">{c.kind.replace(/_/g, ' ')}{c.detail ? ` — ${c.detail}` : ''}</div>
+                  <div key={c.id} className={cn('flex flex-wrap items-center justify-between gap-3 rounded-[var(--ds-radius-panel)] border p-3', STATUS_SURFACE.attention)}>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium [overflow-wrap:anywhere]">{c.title}</div>
+                      <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>{c.kind.replace(/_/g, ' ')}{c.detail ? ` — ${c.detail}` : ''}</div>
                     </div>
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'approve'))}
-                        disabled={busy === 'cp-' + c.id}
-                        className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-medium"
-                      >
+                    <div className="flex shrink-0 gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'approve'))} disabled={busy === 'cp-' + c.id}>
                         Approve
-                      </button>
-                      <button
-                        onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'deny'))}
-                        disabled={busy === 'cp-' + c.id}
-                        className="px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-xs"
-                      >
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'deny'))} disabled={busy === 'cp-' + c.id}>
                         Deny
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
               </section>
             )}
 
-            <div className="grid md:grid-cols-2 gap-6">
+            <div className="grid gap-6 md:grid-cols-2">
               {/* Roadmap */}
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold text-neutral-300">Roadmap ({goals.length})</h3>
+                <h3 className={OVERLINE}>Roadmap ({goals.length})</h3>
                 <div className="space-y-1">
-                  {goals.length === 0 && <p className="text-xs text-neutral-500">No goals yet.</p>}
+                  {goals.length === 0 && <p className={cn('text-xs', MUTED)}>No goals yet.</p>}
                   {goals.map((g) => (
-                    <div key={g.id} className="flex items-center justify-between gap-2 rounded border border-neutral-800 px-3 py-2">
-                      <span className="text-sm truncate">{g.title}</span>
+                    <div key={g.id} className="flex items-center justify-between gap-2 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-2">
+                      <span className="min-w-0 truncate text-sm">{g.title}</span>
                       <Badge status={g.status} />
                     </div>
                   ))}
@@ -334,13 +334,13 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
 
               {/* Activity */}
               <section className="space-y-2">
-                <h3 className="text-sm font-semibold text-neutral-300">Activity</h3>
+                <h3 className={OVERLINE}>Activity</h3>
                 <div className="space-y-1 font-mono text-xs">
-                  {events.length === 0 && <p className="text-neutral-500 font-sans">No activity yet.</p>}
+                  {events.length === 0 && <p className={cn('font-sans', MUTED)}>No activity yet.</p>}
                   {events.map((e) => (
                     <div key={e.id} className="flex gap-2">
-                      <span className="text-neutral-600 shrink-0">{new Date(e.createdAt).toLocaleTimeString()}</span>
-                      <span className={LEVEL_COLORS[e.level] || 'text-neutral-400'}>
+                      <span className={cn('shrink-0 tabular-nums', MUTED)}>{new Date(e.createdAt).toLocaleTimeString()}</span>
+                      <span className={cn('min-w-0 [overflow-wrap:anywhere]', LEVEL_COLORS[e.level] || MUTED)}>
                         {e.kind}
                         {e.message ? `: ${e.message}` : ''}
                         {typeof e.costUsd === 'number' ? ` ($${e.costUsd.toFixed(3)})` : ''}

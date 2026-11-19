@@ -8,7 +8,10 @@
 
 import React, { useState } from 'react';
 import { Check, Loader2, Mail, MonitorPlay, Search, ShieldOff } from 'lucide-react';
-import { Button } from '../Button';
+import { cn } from '../../lib/utils';
+import { Button } from '../ds';
+import { CARD_TITLE } from '../ds/Card';
+import { DENSITY, FIELD, MUTED, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE } from '../chat/studioDesign';
 import {
   adminGetProductAccess,
   adminResetProductAccess,
@@ -127,7 +130,7 @@ export const ProductAccessPanel: React.FC = () => {
 
   return (
     <div className="space-y-4 p-4">
-      <p className="text-xs text-slate-500">
+      <p className={cn('text-xs', MUTED)}>
         Onboard a user to a standalone studio (or revoke one). Accounts with <strong>no grants</strong> have
         default access to everything; <strong>any grant confines the account</strong> to exactly its active
         studios. A user granted only Stream Studio is routed straight to {streamAddressLabel()}.
@@ -135,32 +138,28 @@ export const ProductAccessPanel: React.FC = () => {
 
       {/* Lookup */}
       <form
-        className="border-2 border-black rounded-xl bg-slate-50 p-3 flex flex-wrap items-end gap-3"
+        className="flex flex-wrap items-end gap-3 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3"
         onSubmit={(e) => { e.preventDefault(); void loadGrants(email); }}
       >
-        <label className="text-xs font-bold grow max-w-sm">User email
+        <label className="min-w-0 max-w-sm grow text-xs font-medium text-[var(--ds-muted)]">User email
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="user@example.com"
             type="email"
-            className="block mt-1 w-full border-2 border-black rounded-md px-2 py-1.5 bg-white font-mono text-sm"
+            className={cn(FIELD, 'mt-1 block h-9 w-full px-2 text-sm', DENSITY.coarse)}
           />
         </label>
-        <button
-          type="submit"
-          disabled={lookup.status === 'loading'}
-          className="flex items-center gap-1 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40"
-        >
-          {lookup.status === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Look up
-        </button>
+        <Button type="submit" disabled={lookup.status === 'loading'}>
+          {lookup.status === 'loading' ? <Loader2 className="w-4 h-4 motion-safe:animate-spin" /> : <Search className="w-4 h-4" />} Look up
+        </Button>
       </form>
 
       {lookup.status === 'error' && (
-        <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{lookup.message}</div>
+        <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-xs font-medium [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>{lookup.message}</div>
       )}
       {message && (
-        <div className={`border-2 rounded-lg px-3 py-2 text-xs font-bold ${message.type === 'success' ? 'border-green-500 bg-green-50 text-green-700' : 'border-red-400 bg-red-50 text-red-700'}`}>
+        <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-xs font-medium [overflow-wrap:anywhere]', message.type === 'success' ? `${STATUS_SURFACE.healthy} ${STATUS_INK.healthy}` : `${STATUS_SURFACE.error} ${STATUS_INK.error}`)}>
           {message.text}
         </div>
       )}
@@ -168,51 +167,47 @@ export const ProductAccessPanel: React.FC = () => {
       {lookup.status === 'loaded' && (
         <>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-bold">{lookup.email}</span>
-            <span className="text-slate-400 font-mono truncate">{lookup.userId}</span>
-            <span className={`px-1.5 py-0.5 rounded font-bold ${isDefault ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+            <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{lookup.email}</span>
+            <span className={cn('min-w-0 truncate font-mono', MUTED)}>{lookup.userId}</span>
+            <span className={cn(STATUS_CHIP, 'whitespace-normal', STATUS_CHIP_TONE[isDefault ? 'healthy' : 'attention'])}>
               {isDefault ? 'Full access (default — everything open)' : `Confined to ${grants.filter((g) => g.active).length} active studio(s)`}
             </span>
             {!isDefault && (
-              <button
-                onClick={() => void handleReset()}
-                disabled={busyProduct !== null}
-                className="font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-green-50 transition-colors disabled:opacity-40"
-              >
+              <Button variant="outline" size="sm" onClick={() => void handleReset()} disabled={busyProduct !== null}>
                 Reset to full access (all studios)
-              </button>
+              </Button>
             )}
           </div>
 
           {/* Invite email options (used when granting) */}
-          <div className="border-2 border-black rounded-xl bg-white p-3 space-y-2">
-            <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
+          <div className={cn('space-y-2 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] p-3')}>
+            <label className={cn('flex cursor-pointer items-center gap-2 text-sm font-medium', DENSITY.coarse)}>
               <input
                 type="checkbox"
                 checked={sendInvite}
                 onChange={(e) => setSendInvite(e.target.checked)}
-                className="w-4 h-4 accent-black"
+                className="w-4 h-4 accent-[var(--ds-accent)]"
               />
               <Mail className="w-4 h-4" /> Send invite email when granting
             </label>
             {sendInvite && (
-              <div className="grid sm:grid-cols-2 gap-3 pl-6">
-                <label className="text-xs font-bold">Inviter name (optional)
+              <div className="grid gap-3 pl-6 sm:grid-cols-2">
+                <label className="text-xs font-medium text-[var(--ds-muted)]">Inviter name (optional)
                   <input
                     value={inviterName}
                     onChange={(e) => setInviterName(e.target.value)}
                     placeholder="e.g. Akhielesh"
                     maxLength={80}
-                    className="block mt-1 w-full border-2 border-black rounded-md px-2 py-1.5 bg-white text-sm"
+                    className={cn(FIELD, 'mt-1 block h-9 w-full px-2 text-sm', DENSITY.coarse)}
                   />
                 </label>
-                <label className="text-xs font-bold">Personal note (optional)
+                <label className="text-xs font-medium text-[var(--ds-muted)]">Personal note (optional)
                   <input
                     value={personalNote}
                     onChange={(e) => setPersonalNote(e.target.value)}
                     placeholder="A short note shown in the email"
                     maxLength={500}
-                    className="block mt-1 w-full border-2 border-black rounded-md px-2 py-1.5 bg-white text-sm"
+                    className={cn(FIELD, 'mt-1 block h-9 w-full px-2 text-sm', DENSITY.coarse)}
                   />
                 </label>
               </div>
@@ -227,35 +222,31 @@ export const ProductAccessPanel: React.FC = () => {
               // Effective access, not raw row state: in default mode every studio is open;
               // in confined mode a missing row means locked out.
               const stateLabel = state !== 'default' ? state : isDefault ? 'Open (default)' : 'Not allowed';
-              const stateTone = state === 'granted'
-                ? 'bg-green-100 text-green-700'
-                : state === 'revoked'
-                  ? 'bg-red-100 text-red-700'
-                  : isDefault ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500';
+              const stateTone = STATUS_CHIP_TONE[state === 'granted' ? 'healthy' : state === 'revoked' ? 'error' : isDefault ? 'healthy' : 'error'];
               const busy = busyProduct === product;
               return (
-                <div key={product} className="border-2 border-black rounded-xl bg-white p-3 space-y-2 flex flex-col">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-display text-lg flex items-center gap-1.5">
-                      <MonitorPlay size={16} /> {PRODUCT_LABELS[product]}
+                <div key={product} className={cn('flex flex-col space-y-2 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] p-3')}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className={cn(CARD_TITLE, 'flex items-center gap-1.5')}>
+                      <MonitorPlay size={16} aria-hidden /> {PRODUCT_LABELS[product]}
                     </div>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${stateTone}`}>
+                    <span className={cn(STATUS_CHIP, stateTone)}>
                       {stateLabel}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 leading-snug grow">{STUDIO_BLURB[product]}</p>
-                  {grant?.note && <p className="text-[11px] text-slate-400 italic truncate">Note: {grant.note}</p>}
+                  <p className={cn('grow text-[11px] leading-snug', MUTED)}>{STUDIO_BLURB[product]}</p>
+                  {grant?.note && <p className={cn('truncate text-[11px] italic', MUTED)}>Note: {grant.note}</p>}
                   {grant?.updated_at && (
-                    <p className="text-[10px] text-slate-400 tabular-nums">Updated {new Date(grant.updated_at).toLocaleString()}</p>
+                    <p className={cn('text-[11px] tabular-nums', MUTED)}>Updated {new Date(grant.updated_at).toLocaleString()}</p>
                   )}
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
                       variant={state === 'granted' ? 'outline' : 'secondary'}
                       disabled={busy || state === 'granted'}
                       onClick={() => void handleSet(product, true)}
-                      icon={busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
                     >
+                      {busy ? <Loader2 size={13} className="motion-safe:animate-spin" /> : <Check size={13} />}
                       {state === 'granted' ? 'Granted' : 'Grant'}
                     </Button>
                     <Button
@@ -263,8 +254,8 @@ export const ProductAccessPanel: React.FC = () => {
                       variant="outline"
                       disabled={busy || state === 'revoked'}
                       onClick={() => void handleSet(product, false)}
-                      icon={busy ? <Loader2 size={13} className="animate-spin" /> : <ShieldOff size={13} />}
                     >
+                      {busy ? <Loader2 size={13} className="motion-safe:animate-spin" /> : <ShieldOff size={13} />}
                       Revoke
                     </Button>
                   </div>

@@ -112,7 +112,6 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
 
   return (
     <Surface
-      accent="#D97757"
       header={
         <div className="flex items-start gap-2">
           <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
@@ -148,13 +147,13 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
             <div
               key={q.id}
               className={`rounded-xl border p-3 transition-colors duration-200 ${
-                showResult ? (ok ? 'border-emerald-200 bg-emerald-50/60' : 'border-red-200 bg-red-50/60') : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
+                showResult ? (ok ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' : 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]') : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
               }`}
             >
               <div className="flex items-start gap-2">
                 <span className="shrink-0 w-6 h-6 rounded-full bg-[var(--ds-well-strong)] flex items-center justify-center text-xs font-semibold text-[var(--ds-ink)]">{i + 1}</span>
                 <p className="text-sm font-semibold tracking-tight text-[var(--ds-ink)] flex-1">{q.prompt}</p>
-                {showResult && (ok ? <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" /> : <XCircle className="w-5 h-5 text-red-500 shrink-0" />)}
+                {showResult && (ok ? <CheckCircle2 className="w-5 h-5 text-[var(--ds-success-text)] shrink-0" /> : <XCircle className="w-5 h-5 text-[var(--ds-danger-text)] shrink-0" />)}
               </div>
 
               <div className="mt-2 pl-8 space-y-1.5">
@@ -172,8 +171,8 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                     const selected = (answers[q.id] || []).includes(c.id);
                     const isAnswer = (q.correct || []).includes(c.id);
                     const tone = showResult
-                      ? isAnswer ? 'border-emerald-300 bg-emerald-50' : selected ? 'border-red-300 bg-red-50' : 'border-[var(--ds-hairline-soft)] bg-white/50'
-                      : selected ? 'border-[#D97757]/50 bg-[#D97757]/[0.08]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-well)]';
+                      ? isAnswer ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' : selected ? 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]' : 'border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)]'
+                      : selected ? 'border-[color:color-mix(in_srgb,var(--ds-accent)_50%,transparent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-well)]';
                     return (
                       <button
                         key={c.id}
@@ -182,9 +181,9 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                         onClick={() => (q.type === 'multi' ? toggleMulti(q.id, c.id) : setSingle(q.id, c.id))}
                         className={`w-full text-left flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm text-[var(--ds-ink)] transition-colors duration-200 ${tone} disabled:cursor-default`}
                       >
-                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[#D97757]' : 'bg-[var(--ds-raised)] border-[var(--ds-faint)]'}`} />
+                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[var(--ds-accent)]' : 'bg-[var(--ds-raised)] border-[var(--ds-faint)]'}`} />
                         <span className="flex-1">{c.text}</span>
-                        {showResult && isAnswer && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+                        {showResult && isAnswer && <CheckCircle2 className="w-4 h-4 text-[var(--ds-success-text)]" />}
                       </button>
                     );
                   })
@@ -195,9 +194,9 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
               {!checked && q.hint && (
                 <div className="mt-2 pl-8">
                   {revealed[q.id] ? (
-                    <div className="text-[11px] text-amber-700 flex items-start gap-1"><Lightbulb className="w-3 h-3 mt-0.5 shrink-0" />{q.hint}</div>
+                    <div className="text-[11px] text-[var(--ds-warning-text)] flex items-start gap-1"><Lightbulb className="w-3 h-3 mt-0.5 shrink-0" />{q.hint}</div>
                   ) : (
-                    <button onClick={() => setRevealed((p) => ({ ...p, [q.id]: true }))} className="text-[11px] font-semibold text-amber-700 hover:underline flex items-center gap-1"><Lightbulb className="w-3 h-3" /> Hint</button>
+                    <button onClick={() => setRevealed((p) => ({ ...p, [q.id]: true }))} className="text-[11px] font-semibold text-[var(--ds-warning-text)] hover:underline flex items-center gap-1"><Lightbulb className="w-3 h-3" /> Hint</button>
                   )}
                 </div>
               )}
@@ -230,7 +229,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
           ) : (
             <>
               <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
-                {answeredCount}/{questions.length} answered{unanswered > 0 ? <span className="text-amber-600"> · {unanswered} left</span> : ''}
+                {answeredCount}/{questions.length} answered{unanswered > 0 ? <span className="text-[var(--ds-warning-text)]"> · {unanswered} left</span> : ''}
               </span>
               <button onClick={() => setChecked(true)} className="ml-auto flex items-center gap-1.5 text-sm font-semibold rounded-lg px-4 py-1.5 bg-[var(--ds-accent)] text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)]">
                 <CheckCircle2 className="w-4 h-4" /> Check{unanswered > 0 ? ' anyway' : ' answers'}

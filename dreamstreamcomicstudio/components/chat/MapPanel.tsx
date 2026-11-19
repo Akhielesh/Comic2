@@ -27,9 +27,9 @@ const TILES = {
 const TILE_ATTRIBUTION = '© OpenStreetMap · © CARTO';
 
 const accentColor = (): string => {
-  if (typeof document === 'undefined') return '#D97757';
+  if (typeof document === 'undefined') return '#1a1915';
   const v = getComputedStyle(document.documentElement).getPropertyValue('--ds-accent').trim();
-  return v || '#D97757';
+  return v || '#1a1915';
 };
 
 // Accent teardrop pin as an inline-SVG divIcon — avoids bundler/asset issues with

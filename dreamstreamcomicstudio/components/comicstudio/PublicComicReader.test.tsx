@@ -516,6 +516,36 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(main.style.paddingRight).toBe('var(--sa-right)');
   });
 
+  it('on a 360 px phone: no author working status, and Full screen stays on the toolbar row', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 360, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 740, configurable: true });
+    // Pages 1–2 drawn, page 3 out of date, the rest not drawn: what the studio would call "2 of N pages drawn · 1 out of date".
+    const doc = snapshotDoc((d) =>
+      d.pages.forEach((p, i) => {
+        if (i === 2) p.render = { ...p.render, status: 'stale' };
+        if (i > 2) p.render = { status: 'none', history: [] };
+      })
+    );
+    api.loadPublicComicBySlug.mockResolvedValue(payload({}, doc));
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 360, h: 740, coarse: true })}>
+        <PublicComicReader source={{ kind: 'slug', slug: SLUG }} start={{ page: 1 }} />
+      </FormFactorProvider>
+    );
+    const toolbar = await screen.findByTestId('reader-toolbar');
+    // A reader never sees how far the drawing got, not even as screen-reader text.
+    expect(screen.queryByTestId('reader-drawn')).toBeNull();
+    expect(screen.getByTestId('public-comic-reader').textContent).not.toMatch(/pages? drawn|out of date/);
+    // One row: the leading controls scroll sideways, the trailing group (with Full screen) never wraps under them.
+    expect(toolbar.className).toContain('flex-nowrap');
+    expect(toolbar.className).not.toContain('flex-wrap');
+    const actions = within(toolbar).getByTestId('reader-toolbar-actions');
+    expect(actions.className).toMatch(/\bshrink-0\b/);
+    const full = within(actions).getByRole('button', { name: 'Full screen' });
+    expect(full).toHaveAttribute('data-action', 'read');
+    expect(within(toolbar).getByTestId('reader-toolbar-lead').className).toMatch(/\boverflow-x-auto\b/);
+  });
+
   it('sends nothing for the owner reading their own link', async () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload());
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} isOwner identityReady />);

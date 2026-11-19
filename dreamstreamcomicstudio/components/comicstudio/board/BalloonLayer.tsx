@@ -1146,8 +1146,9 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 'absolute select-none rounded-[30%] focus:outline-none',
                 addArmed ? 'pointer-events-none' : 'pointer-events-auto',
                 p.locked ? 'cursor-not-allowed' : 'cursor-move',
-                // A selected balloon owns its touches (drag at once); unselected ones let the page pan/scroll.
-                sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[var(--ds-accent)]',
+                // A selected balloon owns its touches (drag at once); unselected ones let the page pan/scroll. The
+                // selection sits on the art, so it is the spark (SPARK_RING_ON_ART), dashed; keyboard focus stays the ink.
+                sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[color:var(--ds-spark)]',
                 'focus-visible:outline-dashed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ds-accent)]',
                 lifted === id && 'scale-[1.04] shadow-[0_10px_30px_rgba(0,0,0,0.35)] motion-reduce:scale-100'
               )}
@@ -1207,7 +1208,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               )}
               {p.overflow && (
                 // Visible "text doesn't fit" marker in the editor (the inspector offers the free fix).
-                <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white" />
+                <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-[var(--ds-warning)] ring-2 ring-[var(--ds-canvas)]" />
               )}
             </div>
           );

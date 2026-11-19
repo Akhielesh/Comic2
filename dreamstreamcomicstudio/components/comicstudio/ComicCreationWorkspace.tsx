@@ -41,6 +41,9 @@ export function ComicProjectNavigation({ projects, activeProjectId, activeView, 
   </nav>;
 }
 
+/** Below this width the frame's navigation (and its New comic) is a drawer, not a sidebar. */
+export const WORKSPACE_NAV_DRAWER_BELOW = 900;
+
 const NAV_KEY = 'comicstudio.creation.navigation';
 const readNav = () => { try { return localStorage.getItem(NAV_KEY) !== 'closed'; } catch { return true; } };
 
@@ -48,7 +51,7 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
   children: React.ReactNode; title: string; navigation: ComicProjectNavigationProps; onHome(): void; onAccount(): void;
 }) {
   const ff = useFormFactor();
-  const narrow = ff.width < 900;
+  const narrow = ff.width < WORKSPACE_NAV_DRAWER_BELOW;
   const [wideOpen, setWideOpen] = useState(readNav);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);

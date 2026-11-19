@@ -14,6 +14,7 @@ import { GhostButton, PrimaryButton, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { cssFontFamily } from './scriptFonts';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 const POLICIES: { id: GlossaryTerm['policy']; label: string; hint: string }[] = [
   { id: 'transliterate', label: 'Spell by sound', hint: 'A name, written in the other script (Milo → మైలో)' },
   { id: 'translate', label: 'Translate', hint: 'A word with a meaning (The Baby → పాపాయి)' },
@@ -64,7 +65,7 @@ function FormInput({ doc, term, lang, onCommit }: { doc: ComicDoc; term: Glossar
         disabled={term.policy === 'keep'}
         aria-label={`${term.term} in ${spec?.english || lang}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
-        className="h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25 disabled:opacity-60 coarse:h-11 coarse:text-[16px]"
+        className="h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none focus:ring-2 focus:ring-ds-focus/15 disabled:opacity-60 coarse:h-11 coarse:text-[16px]"
       />
     </label>
   );
@@ -118,7 +119,7 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
             Add the cast and places ({seed.length})
           </GhostButton>
         )}
-        <p role="status" aria-live="polite" className={note ? 'mb-2 rounded-lg bg-[#D97757]/10 px-2.5 py-1.5 text-[12px]' : 'sr-only'}>
+        <p role="status" aria-live="polite" className={note ? 'mb-2 rounded-lg bg-[var(--ds-accent-soft)] px-2.5 py-1.5 text-[12px]' : 'sr-only'}>
           {note || ''}
         </p>
         {!glossary.length && <p className="mb-3 text-[13px] text-[var(--ds-muted)]">No terms yet. Translations add the names they use here automatically.</p>}
@@ -144,7 +145,7 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
                   type="button"
                   aria-label={`Remove ${term.term}`}
                   onClick={() => patch([{ op: 'glossary_term', id: term.id, patch: null }], 'Remove glossary term')}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
+                  className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING} coarse:h-11 coarse:w-11`}
                 >
                   <Trash2 className="h-4 w-4" aria-hidden />
                 </button>
@@ -172,7 +173,7 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
             maxLength={80}
             placeholder="Add a name or word…"
             aria-label="New glossary term"
-            className={cx('h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11 coarse:text-[16px]')}
+            className={cx('h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-[16px]')}
           />
           <PrimaryButton type="submit" size="sm" disabled={!draft.trim()} className="coarse:h-11">
             <Plus className="h-3.5 w-3.5" aria-hidden />

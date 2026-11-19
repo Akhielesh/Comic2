@@ -107,7 +107,7 @@ const SessionRow: React.FC<{
 
   if (editing) {
     return (
-      <div className={`flex items-center gap-1 rounded-lg ${HAIRLINE} px-2 py-1 ${active ? 'bg-[#D97757]/10' : 'bg-[var(--ds-surface-soft)]'}`}>
+      <div className={`flex items-center gap-1 rounded-lg ${HAIRLINE} px-2 py-1 ${active ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-surface-soft)]'}`}>
         <input
           autoFocus
           value={draft}
@@ -125,7 +125,7 @@ const SessionRow: React.FC<{
           }}
           className={`flex-1 min-w-0 text-base sm:text-[13px] outline-none bg-transparent font-medium ${INK}`}
         />
-        <button onClick={commitRename} className="tap-target p-1 text-green-600 hover:scale-110"><Check className="w-3.5 h-3.5" /></button>
+        <button onClick={commitRename} className="tap-target p-1 text-[var(--ds-success-text)] hover:scale-110"><Check className="w-3.5 h-3.5" /></button>
         <button onClick={() => setEditing(false)} className={`tap-target p-1 ${MUTED} hover:scale-110`}><X className="w-3.5 h-3.5" /></button>
       </div>
     );
@@ -168,7 +168,7 @@ const SessionRow: React.FC<{
             <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setDraft(session.title); setEditing(true); }} className={MENU_ITEM}>
               <Pencil className="w-3.5 h-3.5" /> Rename
             </button>
-            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-red-600 hover:bg-red-500/10`}>
+            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)]`}>
               <Trash2 className="w-3.5 h-3.5" /> Delete
             </button>
             <div className="border-t border-[var(--ds-hairline)] my-1" />
@@ -221,7 +221,7 @@ const ProjectGroup: React.FC<{
       onDrop={onDropSession}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      className={`rounded-lg border ${dragOver ? 'border-[#D97757] border-dashed bg-[#D97757]/5' : 'border-transparent'} ${TRANSITION}`}
+      className={`rounded-lg border ${dragOver ? 'border-[var(--ds-accent)] border-dashed bg-[var(--ds-accent-soft)]' : 'border-transparent'} ${TRANSITION}`}
     >
       <div className={`group flex items-center gap-1 rounded-lg px-1.5 py-1 hover:bg-[var(--ds-hover)] ${TRANSITION}`}>
         <button onClick={onToggle} aria-expanded={!collapsed} className={`flex items-center gap-1.5 min-w-0 flex-1 rounded-md ${FOCUS_RING}`}>
@@ -243,7 +243,7 @@ const ProjectGroup: React.FC<{
                 setMenuOpen(false);
                 onEdit();
               }} className={MENU_ITEM}><Pencil className="w-3.5 h-3.5" /> Edit</button>
-              <button onClick={() => { setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-red-600 hover:bg-red-500/10`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
+              <button onClick={() => { setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)]`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
             </div>
           )}
         </div>
@@ -444,14 +444,14 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         <button onClick={onOpenSearch} title="Search" className={`${CONTROL_BTN} p-1.5`}>
           <Search className="w-4 h-4" />
         </button>
-        <button onClick={onOpenLibrary} title="Library" className={`${CONTROL_BTN} p-1.5 ${view === 'library' ? 'bg-[#D97757]/10' : ''}`}>
+        <button onClick={onOpenLibrary} title="Library" className={`${CONTROL_BTN} p-1.5 ${view === 'library' ? 'bg-[var(--ds-accent-soft)]' : ''}`}>
           <Library className="w-4 h-4" />
         </button>
-        <button onClick={onOpenDashboards} title="Dashboards" className={`${CONTROL_BTN} p-1.5 ${view === 'dashboards' ? 'bg-[#D97757]/10' : ''}`}>
+        <button onClick={onOpenDashboards} title="Dashboards" className={`${CONTROL_BTN} p-1.5 ${view === 'dashboards' ? 'bg-[var(--ds-accent-soft)]' : ''}`}>
           <LayoutDashboard className="w-4 h-4" />
         </button>
         <div className="flex-1" />
-        <button onClick={onEditMemory} title="Settings, memory, agents & tools" className={`${CONTROL_BTN} p-1.5 ${hasMemory ? 'bg-[#D97757]/10' : ''}`}>
+        <button onClick={onEditMemory} title="Settings, memory, agents & tools" className={`${CONTROL_BTN} p-1.5 ${hasMemory ? 'bg-[var(--ds-accent-soft)]' : ''}`}>
           <Settings className="w-4 h-4" />
         </button>
         <button onClick={onBack} title="Back to app" className={`${CONTROL_BTN} p-1.5`}>
@@ -541,7 +541,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
           onDrop={dropHandler(null)}
           onDragOver={allowDrop('unfiled')}
           onDragLeave={() => setDragOver(null)}
-          className={`rounded-lg border ${dragOver === 'unfiled' ? 'border-[#D97757] border-dashed bg-[#D97757]/5' : 'border-transparent'} space-y-2 ${TRANSITION}`}
+          className={`rounded-lg border ${dragOver === 'unfiled' ? 'border-[var(--ds-accent)] border-dashed bg-[var(--ds-accent-soft)]' : 'border-transparent'} space-y-2 ${TRANSITION}`}
         >
           {byProject.unfiled.length === 0 ? (
             projects.length === 0 && <p className={`text-xs ${MUTED} text-center py-8`}>No chats yet. Start a new one.</p>

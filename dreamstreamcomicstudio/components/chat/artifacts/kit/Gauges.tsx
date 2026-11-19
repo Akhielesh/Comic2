@@ -21,7 +21,7 @@ export const RadialGauge: React.FC<{
   color?: string;
   track?: string;
   size?: number;
-}> = ({ value, max, min = 0, label, unit, display, color = '#3B82F6', track = 'var(--ds-hairline)', size = 76 }) => {
+}> = ({ value, max, min = 0, label, unit, display, color = 'var(--ds-chart-1)', track = 'var(--ds-hairline)', size = 76 }) => {
   const r = size / 2 - 7;
   const cx = size / 2;
   const cy = size / 2;
@@ -33,17 +33,21 @@ export const RadialGauge: React.FC<{
       <svg width={size} height={size * 0.84} viewBox={`0 0 ${size} ${size}`}>
         <g transform={`rotate(135 ${cx} ${cy})`}>
           <circle cx={cx} cy={cy} r={r} fill="none" stroke={track} strokeWidth="7" strokeDasharray={`${arc * C} ${C}`} strokeLinecap="round" />
-          <circle
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={color}
-            strokeWidth="7"
-            strokeDasharray={`${frac * arc * C} ${C}`}
-            strokeLinecap="round"
-            style={{ transition: 'stroke-dasharray 0.7s ease-out' }}
-          />
+          {/* No value, no arc: a round cap on a zero-length dash would paint a stray dot at 0 %. */}
+          {frac > 0 && (
+            <circle
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="none"
+              stroke={color}
+              strokeWidth="7"
+              strokeDasharray={`${frac * arc * C} ${C}`}
+              strokeLinecap="round"
+              className="motion-reduce:!transition-none"
+              style={{ transition: 'stroke-dasharray var(--ds-motion-enter-slow) var(--ds-ease-enter)' }}
+            />
+          )}
         </g>
         <text x={cx} y={cy - 1} textAnchor="middle" fontSize={size * 0.26} fontWeight="600" fill="var(--ds-ink)" style={{ letterSpacing: '-0.02em' }}>
           {display ?? Math.round(value)}
@@ -74,7 +78,7 @@ export const LinearGauge: React.FC<{
   color?: string;
   height?: number;
   showMarker?: boolean;
-}> = ({ value, min = 0, max, bands, color = '#3B82F6', height = 8, showMarker = false }) => {
+}> = ({ value, min = 0, max, bands, color = 'var(--ds-chart-1)', height = 8, showMarker = false }) => {
   const id = useId().replace(/:/g, '');
   const frac = Math.max(0, Math.min(1, (value - min) / (max - min || 1)));
   // Grow the fill in from 0 on mount (and animate on value changes) for a little life.
@@ -108,7 +112,7 @@ export const Compass: React.FC<{
   unit?: string;
   color?: string;
   size?: number;
-}> = ({ direction, speed, unit = 'km/h', color = '#3B82F6', size = 84 }) => {
+}> = ({ direction, speed, unit = 'km/h', color = 'var(--ds-chart-1)', size = 84 }) => {
   const cx = size / 2;
   const cy = size / 2;
   const r = size / 2 - 4;

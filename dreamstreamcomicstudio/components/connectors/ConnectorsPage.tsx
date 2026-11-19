@@ -386,7 +386,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
         )}
 
         {loadError && (
-          <div className="mb-5 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700">
+          <div className="mb-5 flex items-center gap-2 rounded-xl border border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)] px-4 py-3 text-sm text-[var(--ds-danger-text)]">
             <AlertTriangle className="h-4 w-4 shrink-0" /> {loadError}
             <button onClick={() => void load()} className="ml-auto font-medium underline">
               Retry
@@ -496,9 +496,9 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
             role="status"
             className={`pointer-events-auto flex items-start gap-2 rounded-xl border px-4 py-3 text-sm shadow-lg backdrop-blur-md ${
               t.tone === 'success'
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800'
+                ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] text-[var(--ds-success-text)]'
                 : t.tone === 'error'
-                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-800'
+                  ? 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)] text-[var(--ds-danger-text)]'
                   : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-ink)]'
             }`}
           >
@@ -525,7 +525,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
 // ---- small inline bits ------------------------------------------------------
 
 const ConnectedBadge: React.FC<{ count?: number }> = ({ count = 1 }) => (
-  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ds-success-text)]">
     <CheckCircle2 className="h-3 w-3" /> Connected{count > 1 ? ` · ${count}` : ''}
   </span>
 );
@@ -533,7 +533,7 @@ const ConnectedBadge: React.FC<{ count?: number }> = ({ count = 1 }) => (
 const NotConfiguredBadge: React.FC = () => (
   <span
     title="The server's Google OAuth client isn't configured yet."
-    className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+    className="shrink-0 rounded-full bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ds-warning-text)]"
   >
     Unavailable
   </span>
@@ -570,7 +570,7 @@ const GoogleRow: React.FC<{
                 key={s.id}
                 title={`${s.displayName}${on ? ' (connected)' : ''}`}
                 className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] ${
-                  on ? 'bg-emerald-500/10 text-emerald-700' : 'bg-[var(--ds-well)] text-[var(--ds-muted)]'
+                  on ? 'bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] text-[var(--ds-success-text)]' : 'bg-[var(--ds-well)] text-[var(--ds-muted)]'
                 }`}
               >
                 <ConnectorIcon name={s.icon} className="h-3 w-3" />
@@ -671,7 +671,7 @@ const ConnectionRow: React.FC<{
         <p className="truncate text-xs text-[var(--ds-muted)]">{meta}</p>
         {conn.lastError && (conn.status === 'error' || vis.needsReconnect) && (
           <p
-            className={`mt-0.5 line-clamp-2 text-[11px] ${conn.status === 'error' ? 'text-rose-600' : 'text-amber-700'}`}
+            className={`mt-0.5 line-clamp-2 text-[11px] ${conn.status === 'error' ? 'text-[var(--ds-danger-text)]' : 'text-[var(--ds-warning-text)]'}`}
             title={conn.lastError}
           >
             {conn.lastError}

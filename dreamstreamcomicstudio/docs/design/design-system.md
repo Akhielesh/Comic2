@@ -700,7 +700,7 @@ excluded; `live/**` excluded until DS-11):
 
 | Guard | Fails on |
 | --- | --- |
-| `legacyKitGuard` | `border-black`, `shadow-comic`, `font-comic`, `brand-*`, Tailwind `font-display` (Bangers) |
+| `legacyKitGuard` | `border-black`, `shadow-comic`, `font-comic`, `brand-*`, Tailwind `font-display` (Bangers); a never rule since the Atlas conversion (content pinned in its `ALLOWLIST`) |
 | `terracottaGuard` | the terracotta literal and its hover hex |
 | `localCxGuard` | a local `const cx =` |
 | `zLadderGuard` | `z-[…]` / `z-NN` outside the `Z` recipe (`components/ds/**` and `studioDesign.ts` are excluded from this one guard only) |

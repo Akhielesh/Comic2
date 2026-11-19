@@ -197,10 +197,10 @@ describe('ComicReaderView', () => {
   });
 
   it('reads only what is drawn, and says so', () => {
-    render(<ComicReaderView doc={makeSampleDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    render(<ComicReaderView doc={makeSampleDoc()} urlFor={fakeUrlFor} initialMode="page" showDrawnStatus />);
     expect(shownKeys()).toEqual(['pg_1']);
     // One "drawn" definition with the board (B25): page 5 has art but is out of date, so it reads, and it is
-    // counted apart — the board's Pages badge says 1/6 too.
+    // counted apart — the board's Pages badge says 1/6 too. (The owner's studio tab only: showDrawnStatus.)
     expect(screen.getByText('1 of 6 pages drawn · 1 out of date')).toBeInTheDocument();
   });
 

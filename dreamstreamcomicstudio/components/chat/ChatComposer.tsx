@@ -11,7 +11,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
   CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, INK, TRANSITION, SHADOW_SOFT,
-  RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
+  RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, DANGER_FILL, DANGER_FILL_HOVER
 } from './studioDesign';
 
 interface ChatComposerProps {
@@ -367,7 +367,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   return (
     <div className={`${CANVAS_BG} px-3 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}>
-      <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`}>
+      <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3 transition-[border-color,box-shadow] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] focus-within:border-[var(--ds-focus)] focus-within:ring-2 focus-within:ring-[var(--ds-focus)] focus-within:ring-offset-2 focus-within:ring-offset-[color:var(--ds-canvas)]`}>
       {/* Feature toggles */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
         {features.reasoning && (
@@ -386,7 +386,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
-          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
+          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[color:color-mix(in_srgb,var(--ds-accent)_30%,transparent)]` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
           title="DreamStream connector: let this chat see your own projects, account and usage (read-only, sanitized). Off by default."
         >
           <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
@@ -399,7 +399,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <button
                 key={server.id}
                 onClick={() => onToggleMcpServer(server.id, !on)}
-                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
+                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[color:color-mix(in_srgb,var(--ds-accent)_30%,transparent)]` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
                 title={`Custom MCP server: ${server.url}`}
               >
                 <Server className="w-3.5 h-3.5" /> {server.name} {on ? 'on' : 'off'}
@@ -521,7 +521,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         />
 
         {busy ? (
-          <button onClick={onStop} className={`shrink-0 rounded-full p-2.5 bg-red-500 hover:bg-red-600 text-white ${TRANSITION}`} title="Stop">
+          <button onClick={onStop} className={`shrink-0 rounded-full p-2.5 ${DANGER_FILL} ${DANGER_FILL_HOVER} ${TRANSITION}`} title="Stop">
             <Square className="w-4 h-4" />
           </button>
         ) : (

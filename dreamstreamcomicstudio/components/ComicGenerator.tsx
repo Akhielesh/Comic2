@@ -3,6 +3,34 @@ import { Activity, AlertTriangle, Check, Clock, Loader2, RefreshCw, Square, Term
 import { AgentOutputTarget, ComicPanel, ComicState } from '../types';
 import { AgentStageShell } from './AgentStageShell';
 import { outputTargetLabel } from '../services/comicAgentSettings';
+import { cn } from '../lib/utils';
+import { Button, Progress } from './ds';
+import {
+  CHIP,
+  CHIP_VARIANT,
+  HAIRLINE,
+  INK,
+  INVERSE_SURFACE,
+  MAKING_SWEEP,
+  MUTED,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  RADIUS_ROUND,
+  SECTION_TITLE,
+  SHADOW_SOFT,
+  STATUS_CHIP_TONE,
+  STATUS_DOT,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TEXT_2XL,
+  TONE_CHIP_ON_ART,
+  TRANSITION,
+  WRAP_TEXT,
+  type StatusState
+} from './chat/studioDesign';
+
+const CARD_SURFACE = 'bg-[var(--ds-surface)]';
 
 interface ComicGeneratorProps {
   state: ComicState;
@@ -54,18 +82,19 @@ const playCompletionSound = () => {
 
 type PhaseState = 'waiting' | 'active' | 'done' | 'warning';
 
-const phaseBadgeClass = (state: PhaseState) => {
-  switch (state) {
-    case 'active':
-      return 'border-2 border-black bg-brand-blue text-white';
-    case 'done':
-      return 'border-2 border-black bg-green-100 text-green-700';
-    case 'warning':
-      return 'border-2 border-black bg-amber-100 text-amber-700';
-    default:
-      return 'border-2 border-black bg-white text-slate-600';
-  }
+const PHASE_STATUS: Record<PhaseState, StatusState> = {
+  active: 'active',
+  done: 'healthy',
+  warning: 'attention',
+  waiting: 'waiting'
 };
+
+// An opaque card on the page: the hairline, the soft shadow and the panel radius.
+const SURFACE_CARD = cn(CARD_SURFACE, HAIRLINE, SHADOW_SOFT, RADIUS_PANEL);
+// A panel thumbnail's frame: the art inside it stays content.
+const TILE = cn('border border-[var(--ds-hairline)] bg-[var(--ds-well)]', RADIUS_CONTROL);
+// The label over a thumbnail on hover: the inverse ink panel, never a gradient over the art.
+const OVERLAY_LABEL = INVERSE_SURFACE;
 
 const summarizeFailure = (message: string) => {
   if (/token limit|billing limit/i.test(message)) return 'Billing or token limit';
@@ -188,59 +217,62 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
   const recentLogs = [...streamLogs].slice(-9).reverse();
   const latestProblem = recentLogs.find((log) => /failed|error|timeout|limit|reference|continuity/i.test(log.message));
 
+  const progressTone = isFailed ? 'attention' : isDone ? 'healthy' : status?.isActive ? 'making' : undefined;
+
   const sidebar = (
     <div className="space-y-5">
       <div className="space-y-2">
-        <div className="text-xs font-display uppercase text-slate-600">Run Status</div>
-        <div className="rounded-xl border-2 border-black bg-white p-4">
+        <div className={OVERLINE}>Run Status</div>
+        <div className={cn(SURFACE_CARD, 'p-4')}>
           <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-2xl font-display text-black">{percent}%</div>
-              <div className="mt-1 text-xs text-slate-600 font-comic">{description}</div>
+            <div className="min-w-0">
+              <div className={cn(TEXT_2XL, 'font-semibold tabular-nums', INK)}>{percent}%</div>
+              <div className={cn('mt-1 text-xs', MUTED, WRAP_TEXT)}>{description}</div>
             </div>
             {status?.isActive ? (
-              <Loader2 className="h-5 w-5 animate-spin text-black" />
+              <Loader2 className={cn('h-5 w-5 shrink-0 animate-spin', INK)} aria-hidden />
             ) : isDone ? (
-              <Check className="h-5 w-5 text-green-600" />
+              <Check className={cn('h-5 w-5 shrink-0', STATUS_INK.healthy)} aria-hidden />
             ) : (
-              <Activity className="h-5 w-5 text-slate-600" />
+              <Activity className={cn('h-5 w-5 shrink-0', MUTED)} aria-hidden />
             )}
           </div>
-          <div className="mt-4 h-2 overflow-hidden rounded-full border-2 border-black bg-white">
-            <div
-              className={`h-full transition-all duration-700 ${isFailed ? 'bg-amber-400' : 'bg-brand-blue'}`}
-              style={{ width: `${Math.max(percent, status?.isActive ? 3 : 0)}%` }}
-            />
-          </div>
+          <Progress
+            className="mt-4"
+            label="Build progress"
+            value={Math.max(percent, status?.isActive ? 3 : 0)}
+            valueText={`${percent}%`}
+            tone={progressTone}
+          />
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="flex items-center gap-1.5 text-[11px] uppercase text-slate-600 font-bold">
-            <Clock className="h-3 w-3" /> Elapsed
+        <div className={cn(SURFACE_CARD, 'p-3')}>
+          <div className={cn(OVERLINE, 'flex items-center gap-1.5')}>
+            <Clock className="h-3 w-3" aria-hidden /> Elapsed
           </div>
-          <div className="mt-1 text-sm font-bold text-black">{formatDuration(elapsedSec)}</div>
+          <div className={cn('mt-1 text-sm font-semibold tabular-nums', INK)}>{formatDuration(elapsedSec)}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Left</div>
-          <div className="mt-1 text-sm font-bold text-black">{remainingDisplay}</div>
+        <div className={cn(SURFACE_CARD, 'p-3')}>
+          <div className={OVERLINE}>Left</div>
+          <div className={cn('mt-1 text-sm font-semibold tabular-nums', INK, WRAP_TEXT)}>{remainingDisplay}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Panels</div>
-          <div className="mt-1 text-sm font-bold text-black">{doneCount} / {total}</div>
+        <div className={cn(SURFACE_CARD, 'p-3')}>
+          <div className={OVERLINE}>Panels</div>
+          <div className={cn('mt-1 text-sm font-semibold tabular-nums', INK)}>{doneCount} / {total}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Retries</div>
-          <div className="mt-1 text-sm font-bold text-black">{failedCount}</div>
+        <div className={cn(SURFACE_CARD, 'p-3')}>
+          <div className={OVERLINE}>Retries</div>
+          <div className={cn('mt-1 text-sm font-semibold tabular-nums', INK)}>{failedCount}</div>
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-display uppercase text-slate-600">Outputs</div>
+        <div className={OVERLINE}>Outputs</div>
         <div className="flex flex-wrap gap-2">
           {outputTargets.map((target) => (
-            <span key={target} className="rounded-full border-2 border-black px-2.5 py-1 text-xs font-bold text-black">
+            <span key={target} className={cn(CHIP, CHIP_VARIANT.outline)}>
               {outputTargetLabel(target)}
             </span>
           ))}
@@ -248,9 +280,9 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
       </div>
 
       {(failedCount > 0 || fallbackCount > 0 || billingHit || latestProblem) && (
-        <div className="rounded-xl border-2 border-black bg-amber-100 p-3 text-xs leading-5 text-amber-800 font-comic">
-          <div className="mb-1 flex items-center gap-2 font-bold">
-            <AlertTriangle className="h-4 w-4" />
+        <div className={cn('border p-3 text-xs leading-5', RADIUS_CONTROL, STATUS_SURFACE.attention, INK)}>
+          <div className="mb-1 flex items-center gap-2 font-semibold">
+            <AlertTriangle className={cn('h-4 w-4 shrink-0', STATUS_INK.attention)} aria-hidden />
             {latestProblem ? summarizeFailure(latestProblem.message) : 'Build notice'}
           </div>
           {billingHit && <div>Limit reached; completed panels remain saved.</div>}
@@ -260,62 +292,59 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
       )}
 
       {!showStopConfirm ? (
-        <button
+        <Button
           type="button"
+          variant="outline"
+          className="w-full"
           onClick={() => setShowStopConfirm(true)}
           disabled={!status?.isActive}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-black bg-white px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-yellow disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <Square className="h-4 w-4" /> Stop
-        </button>
+          <Square className="h-4 w-4" aria-hidden /> Stop
+        </Button>
       ) : (
         <div className="grid grid-cols-2 gap-2">
-          <button
+          <Button
             type="button"
+            variant="destructive"
             onClick={() => {
               onCancel();
               setShowStopConfirm(false);
             }}
-            className="rounded-xl border-2 border-black bg-red-100 px-3 py-2 text-sm font-bold text-red-700"
           >
             Confirm
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowStopConfirm(false)}
-            className="rounded-xl border-2 border-black bg-white px-3 py-2 text-sm font-bold text-black"
-          >
+          </Button>
+          <Button type="button" variant="outline" onClick={() => setShowStopConfirm(false)}>
             Cancel
-          </button>
+          </Button>
         </div>
       )}
 
       {isFailed && (
-        <button
+        <Button
           type="button"
+          className="w-full"
           onClick={() => {
             hasAutoAdvanced.current = false;
             hasTriggeredStart.current = true;
             onStart();
           }}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-black bg-brand-yellow px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-yellow/80"
         >
-          <RefreshCw className="h-4 w-4" /> Retry
-        </button>
+          <RefreshCw className="h-4 w-4" aria-hidden /> Retry
+        </Button>
       )}
     </div>
   );
 
   const actions = (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       {status?.isActive && !isFailed && (
-        <span className="hidden rounded-full border-2 border-black px-3 py-1 text-xs font-bold text-slate-600 sm:inline-flex">
+        <span className={cn(CHIP, CHIP_VARIANT.outline, 'hidden sm:inline-flex')}>
           {TIPS[tipIndex]}
         </span>
       )}
       {isDone && (
-        <span className="inline-flex items-center gap-1.5 rounded-full border-2 border-black bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
-          <Check className="h-3.5 w-3.5" /> Ready
+        <span className={cn(CHIP, STATUS_CHIP_TONE.healthy)}>
+          <Check className="h-3.5 w-3.5" aria-hidden /> Ready
         </span>
       )}
     </div>
@@ -325,7 +354,11 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
     <AgentStageShell
       eyebrow="Build agent"
       title={headline}
-      description="The agent is planning pages, rendering panels, and preparing the requested outputs from the locked story context."
+      description={isFailed
+        ? 'The run stopped before every panel was drawn. Retry continues from where it stopped.'
+        : isDone
+          ? 'The pages are ready. Read them, fix any panel, then export.'
+          : 'The agent is planning pages, rendering panels, and preparing the requested outputs from the locked story context.'}
       icon={<Activity className="h-5 w-5" />}
       actions={actions}
       sidebar={sidebar}
@@ -341,27 +374,23 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
                 : index === currentPhaseIndex && status?.isActive
                   ? 'active'
                   : 'waiting';
+            const phaseStatus = PHASE_STATUS[stateForPhase];
             return (
-              <div key={phase.id} className={`rounded-lg border p-4 transition-colors ${phaseBadgeClass(stateForPhase)}`}>
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">{phase.label}</div>
-                  {stateForPhase === 'done' ? <Check className="h-4 w-4" />
-                    : stateForPhase === 'active' ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : stateForPhase === 'warning' ? <AlertTriangle className="h-4 w-4" />
-                    : <span className="h-2 w-2 rounded-full bg-current opacity-40" />}
+              <div key={phase.id} className={cn('border p-4', RADIUS_PANEL, STATUS_SURFACE[phaseStatus], TRANSITION)}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className={cn('text-sm font-semibold', INK)}>{phase.label}</div>
+                  {stateForPhase === 'done' ? <Check className={cn('h-4 w-4 shrink-0', STATUS_INK.healthy)} aria-hidden />
+                    : stateForPhase === 'active' ? <Loader2 className={cn('h-4 w-4 shrink-0 animate-spin', INK)} aria-hidden />
+                    : stateForPhase === 'warning' ? <AlertTriangle className={cn('h-4 w-4 shrink-0', STATUS_INK.attention)} aria-hidden />
+                    : <span aria-hidden className={cn('h-2 w-2 shrink-0', RADIUS_ROUND, STATUS_DOT.waiting)} />}
                 </div>
-                <div className="mt-5 h-1 rounded-full bg-current/20">
-                  <div
-                    className="h-full rounded-full bg-current transition-all duration-500"
-                    style={{
-                      width: stateForPhase === 'done'
-                        ? '100%'
-                        : stateForPhase === 'active'
-                          ? `${Math.max(12, percent)}%`
-                          : '0%'
-                    }}
-                  />
-                </div>
+                <Progress
+                  className="mt-5"
+                  size="sm"
+                  label={phase.label}
+                  value={stateForPhase === 'done' ? 100 : stateForPhase === 'active' ? Math.max(12, percent) : 0}
+                  tone={stateForPhase === 'active' ? 'making' : phaseStatus}
+                />
               </div>
             );
           })}
@@ -370,10 +399,10 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
         <section className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <div className="text-xs font-display uppercase text-slate-600">Panel Wall</div>
-              <h3 className="mt-1 text-lg font-display text-black">{doneCount} of {total} rendered</h3>
+              <div className={OVERLINE}>Panel Wall</div>
+              <h3 className={cn('mt-1', SECTION_TITLE)}>{doneCount} of {total} rendered</h3>
             </div>
-            <div className="text-xs text-slate-600 font-comic">{description}</div>
+            <div className={cn('text-xs', MUTED, WRAP_TEXT)}>{description}</div>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6">
@@ -381,12 +410,12 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
               const panel = state.panels[index];
               if (panel?.imageUrl) {
                 return (
-                  <div key={panel.id || `done-${index}`} className="group relative aspect-square overflow-hidden rounded-md border-2 border-black bg-white">
+                  <div key={panel.id || `done-${index}`} className={cn('group relative aspect-square overflow-hidden', TILE)}>
                     <img src={panel.imageUrl} alt={panel.description || `Panel ${index + 1}`} className="h-full w-full object-cover" />
-                    <div className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-black bg-green-400 text-black">
-                      <Check className="h-3 w-3" strokeWidth={3} />
+                    <div className={cn('absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center border', RADIUS_ROUND, TONE_CHIP_ON_ART.success)}>
+                      <Check className="h-3 w-3" strokeWidth={3} aria-hidden />
                     </div>
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6 text-[10px] font-semibold text-white opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className={cn('absolute inset-x-0 bottom-0 px-2 py-1 text-[10px] font-semibold opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100', OVERLAY_LABEL)}>
                       Panel {index + 1}
                     </div>
                   </div>
@@ -398,10 +427,10 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
                   <div
                     key={panel.id || `failed-${index}`}
                     title={panel.failureReason}
-                    className="flex aspect-square flex-col items-center justify-center rounded-md border-2 border-black bg-amber-100 text-amber-700"
+                    className={cn('flex aspect-square flex-col items-center justify-center border', RADIUS_CONTROL, STATUS_SURFACE.attention, INK)}
                   >
-                    <AlertTriangle className="h-4 w-4" />
-                    <span className="mt-1 text-[10px] font-bold">Panel {index + 1}</span>
+                    <AlertTriangle className={cn('h-4 w-4', STATUS_INK.attention)} aria-hidden />
+                    <span className="mt-1 text-[10px] font-semibold">Panel {index + 1}</span>
                   </div>
                 );
               }
@@ -410,40 +439,43 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
               return (
                 <div
                   key={panel?.id || `pending-${index}`}
-                  className={`relative aspect-square overflow-hidden rounded-md border-2 ${isNext ? 'border-brand-blue' : 'border-black'} bg-slate-50`}
+                  className={cn(
+                    'relative aspect-square overflow-hidden border bg-[var(--ds-well)]',
+                    RADIUS_CONTROL,
+                    isNext ? cn('border-[var(--ds-ink)]', MAKING_SWEEP) : 'border-[var(--ds-hairline)]'
+                  )}
                 >
-                  <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,0,0,.04),rgba(0,0,0,.01))]" />
                   {isNext && (
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <Loader2 className="h-5 w-5 animate-spin text-black" />
+                      <Loader2 className={cn('h-5 w-5 animate-spin', INK)} aria-hidden />
                     </div>
                   )}
-                  <span className="absolute bottom-1.5 left-2 text-[10px] font-bold text-slate-400">Panel {index + 1}</span>
+                  <span className={cn('absolute bottom-1.5 left-2 text-[10px] font-semibold', MUTED)}>Panel {index + 1}</span>
                 </div>
               );
             })}
           </div>
         </section>
 
-        <section className="rounded-xl border-2 border-black bg-white">
-          <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-display uppercase text-black">
-              <Terminal className="h-4 w-4" /> Agent stream
+        <section className={SURFACE_CARD}>
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--ds-hairline)] px-4 py-3">
+            <div className={cn('flex items-center gap-2 text-sm font-semibold', INK)}>
+              <Terminal className="h-4 w-4" aria-hidden /> Agent stream
             </div>
-            <div className="text-xs text-slate-600 font-comic">{recentLogs.length} recent</div>
+            <div className={cn('text-xs tabular-nums', MUTED)}>{recentLogs.length} recent</div>
           </div>
           <div className="max-h-64 overflow-y-auto px-4 py-3 font-mono text-xs custom-scrollbar">
             {recentLogs.length === 0 ? (
-              <div className="text-slate-400">Waiting for first event...</div>
+              <div className={MUTED}>Waiting for first event...</div>
             ) : (
               recentLogs.map((log) => (
-                <div key={`${log.timestamp}-${log.message}`} className="border-b border-slate-200 py-2 text-slate-600 last:border-0">
-                  <span className="mr-2 text-slate-400">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                <div key={`${log.timestamp}-${log.message}`} className={cn('border-b border-[var(--ds-hairline-soft)] py-2 last:border-0', MUTED, WRAP_TEXT)}>
+                  <span className="mr-2">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   {log.message}
                 </div>
               ))
             )}
-            {status?.isActive && <div className="py-2 text-slate-400">_</div>}
+            {status?.isActive && <div className={cn('py-2', MUTED)}>_</div>}
           </div>
         </section>
       </div>

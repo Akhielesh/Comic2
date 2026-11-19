@@ -1,6 +1,6 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { BULL, BEAR, NEUTRAL } from './theme';
+import { BULL, BEAR, NEUTRAL, withAlpha } from './theme';
 import { formatSigned, formatPercent } from './format';
 
 // Small shared status atoms: a trend pill (signed change + arrow), a generic badge,
@@ -26,7 +26,7 @@ export const TrendPill: React.FC<{ change?: number; changePercent?: number; size
   return (
     <span
       className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 font-bold ${text}`}
-      style={{ color, backgroundColor: `${color}1a` }}
+      style={{ color, backgroundColor: withAlpha(color, 0.1) }}
     >
       <Icon className={icon} />
       {hasChange ? formatSigned(change) : hasPercent ? formatPercent(changePercent) : ''}
@@ -40,12 +40,11 @@ export const Badge: React.FC<{ children: React.ReactNode; color?: string; title?
   color = NEUTRAL,
   title
 }) => (
-  // `#rrggbb` colors get a 10%-alpha tint of themselves; CSS-var colors (e.g.
-  // var(--ds-muted), which can't be hex-concatenated) fall back to the well tint.
+  // A 10 % tint of its own colour: a hex as rgba, a token (var(--ds-muted)) through color-mix.
   <span
     title={title}
     className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-    style={{ color, backgroundColor: color.startsWith('#') ? `${color}1a` : 'var(--ds-well-strong)' }}
+    style={{ color, backgroundColor: withAlpha(color, 0.1) }}
   >
     {children}
   </span>
@@ -56,14 +55,13 @@ export const Chip: React.FC<{
   active?: boolean;
   accent?: string;
   onClick?: () => void;
-}> = ({ label, active = false, accent = '#3B82F6', onClick }) => (
+}> = ({ label, active = false, onClick }) => (
   <button
     onClick={onClick}
     aria-pressed={active}
-    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
-      active ? 'border-transparent text-white shadow-sm' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
+    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-[var(--ds-motion-medium)] ${
+      active ? 'border-transparent bg-[var(--ds-accent)] text-[var(--ds-on-accent)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
     }`}
-    style={active ? { backgroundColor: accent } : undefined}
   >
     {label}
   </button>
