@@ -25,11 +25,11 @@ export interface ComicsHeaderProps {
   signedIn: boolean;
   /** 'home' shows the in-page section links; 'other' (sign-in, Privacy, Terms, Library) shows the Library only. */
   page: 'home' | 'other';
-  /** On `page="other"`, the view under the header: 'auth' hides "Sign in", 'gallery' marks the Library link. */
+  /** On `page="other"`, the view under the header: 'auth' hides "Sign in" and "Register interest", 'gallery' marks the Library link. */
   current?: ComicsHeaderCurrent;
   onGoHome: () => void;
   onSignIn: () => void;
-  /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's request step. */
+  /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's Register interest tab. */
   onRequestAccess: () => void;
   onOpenComics: () => void;
   /** Opens account settings with the current Comic Studio page as its return destination. */
@@ -120,7 +120,9 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
         { label: 'My comics', run: onOpenComics, separated: true },
         ...(onOpenAccount ? [{ label: 'Account settings', run: onOpenAccount }] : [])
       ]
-      : [{ label: home ? 'Register interest' : 'Request access', run: onRequestAccess, separated: true }]),
+      : onSignInPage
+        ? [] // the sign-in card itself switches between Sign in and Register interest
+        : [{ label: 'Register interest', run: onRequestAccess, separated: true }]),
     { label: themeLabel, run: () => setTheme(nextTheme), separated: true, compactOnly: true }
   ];
 
@@ -165,9 +167,11 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
         </Button>
       ) : (
         <>
-          {!home && (
+          {/* Not on the sign-in page: its card already switches to Register interest (pressing this there remounted the
+              card and wiped what was typed). */}
+          {!home && !onSignInPage && (
             <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden expanded:inline-flex')} onClick={onRequestAccess}>
-              Request access
+              Register interest
             </Button>
           )}
           {/* The landing's join action stays one press away once the hero has scrolled off: a ghost, never a fill (the

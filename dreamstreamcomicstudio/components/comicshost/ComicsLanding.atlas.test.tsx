@@ -122,7 +122,7 @@ describe('Comics landing', () => {
       renderLanding();
       fireEvent.click(screen.getByTestId('comics-hero-cta'));
       const register = document.getElementById('register') as HTMLElement;
-      expect(document.activeElement).toBe(within(register).getByRole('textbox', { name: 'Email address' }));
+      expect(document.activeElement).toBe(within(register).getByRole('textbox', { name: /Email address/ }));
     } finally {
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }

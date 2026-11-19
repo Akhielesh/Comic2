@@ -2,8 +2,8 @@
 // The landing says only what landingCopy.ts and the registries say: every line of the hero and the sections below it
 // is on the page, filled from the registries (no brace left), and the page never uses words it must not: a price or an
 // amount, "free forever", promises of an email, a reply, early access or a date, or plans; not before the interest
-// form is sent and not after, whatever the backend or the fallback answers. Reading the page loads nothing from
-// another site: the form's bot check (on here, as in a build with a site key) waits for the visitor to use the form.
+// form is sent and not after. The register section is the app's own interest form (components/WaitlistForm.tsx, kind
+// "access"), the one the sign-in card's Register interest tab shows, with its own questions and thank-you.
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const waitlist = vi.hoisted(() => ({ submitWaitlistEmail: vi.fn() }));
 /** Whether this build "has" a bot-check site key (off unless a test turns it on). */
 const build = vi.hoisted(() => ({ turnstile: false }));
-vi.mock('../../../services/waitlist', () => ({ submitWaitlistEmail: waitlist.submitWaitlistEmail }));
+vi.mock('../../../services/waitlist', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/waitlist')>()),
+  submitWaitlistEmail: waitlist.submitWaitlistEmail
+}));
+vi.mock('../../../services/supabase', () => ({ supabase: { from: vi.fn() } }));
 vi.mock('../../../services/clientConfig', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../services/clientConfig')>()),
   TURNSTILE_SITE_KEY: 'test-site-key',
@@ -19,7 +23,8 @@ vi.mock('../../../services/clientConfig', async (importOriginal) => ({
 }));
 
 import { ComicsLanding } from '../ComicsLanding';
-import { FAQ, FEATURES, HERO, HOW, MODELS, PRICING, REGISTER, fill } from './landingCopy';
+import { FAQ, FEATURES, HERO, HOW, MODELS, PRICING, fill } from './landingCopy';
+import { INTEREST_FEATURES_QUESTION, INTEREST_THANKS } from '../../../shared/interest';
 import { DEFAULT_MODEL, LANDING_VALUES, OTHER_MODELS } from './landingModels';
 
 beforeEach(() => {
@@ -109,54 +114,42 @@ describe('landing copy', () => {
     expect(hero).toMatch(/\bAI\b/);
   });
 
-  it('the interest form asks about Comic Studio only: no product chips, no question about access', async () => {
-    waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'joined', message: 'x' });
+  it('the register section is the app’s own interest form: email, the optional questions, one submit with source "landing"', async () => {
+    waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message: INTEREST_THANKS.access });
     renderLanding();
     const register = document.getElementById('register') as HTMLElement;
-    expect(within(register).queryByRole('group')).toBeNull();
-    for (const product of ['Chat Studio', 'Code Studio', 'Stream Studio', 'Dashboards']) expect(register.textContent).not.toContain(product);
-    fireEvent.change(within(register).getByRole('textbox', { name: 'Email address' }), { target: { value: 'reader@example.com' } });
-    await act(async () => {
-      fireEvent.submit(within(register).getByRole('textbox', { name: 'Email address' }).closest('form')!);
-    });
-    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, {
-      productInterests: ['comic_studio'],
-      feedback: undefined
-    });
-  });
-
-  // What the backend (routes/newsletter.ts) and the direct-insert fallback (services/waitlist.ts) say for an accepted
-  // signup, new or repeat. Some of them promise an email; the landing shows its own words instead.
-  const ACCEPTED = [
-    { ok: true, status: 'joined', alreadyJoined: false, message: 'Thanks! We’ll email you the moment access opens up.' },
-    { ok: true, status: 'already-registered', alreadyJoined: true, message: 'You’re already on the list.' },
-    { ok: true, message: "Thanks! We'll email you the moment access opens up." },
-    { ok: true, alreadyJoined: true, message: "You're already on the list — sit tight, we'll be in touch." }
-  ];
-
-  it.each(ACCEPTED)('after sending, the page shows its own words and no banned ones ($message)', async (answer) => {
-    waitlist.submitWaitlistEmail.mockResolvedValue(answer);
-    const { container } = renderLanding();
-    const register = document.getElementById('register') as HTMLElement;
-    const email = within(register).getByRole('textbox', { name: 'Email address' });
+    expect(within(register).getByRole('group', { name: new RegExp(INTEREST_FEATURES_QUESTION.replace(/[?]/g, '\\?')) })).toBeInTheDocument();
+    const email = within(register).getByRole('textbox', { name: /Email address/ });
     fireEvent.change(email, { target: { value: 'reader@example.com' } });
     await act(async () => {
       fireEvent.submit(email.closest('form')!);
     });
     expect(waitlist.submitWaitlistEmail).toHaveBeenCalledTimes(1);
-    expect(within(register).getByRole('status')).toHaveTextContent(REGISTER.recorded);
+    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, {});
+  });
+
+  // The form's one thank-you, with or without answers (shared/interest.ts INTEREST_THANKS): it promises no email.
+  it.each([INTEREST_THANKS.access, INTEREST_THANKS.accessWithAnswers])('after sending, the page shows the form’s thank-you and no banned words (%s)', async (message) => {
+    waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message });
+    const { container } = renderLanding();
+    const register = document.getElementById('register') as HTMLElement;
+    const email = within(register).getByRole('textbox', { name: /Email address/ });
+    fireEvent.change(email, { target: { value: 'reader@example.com' } });
+    await act(async () => {
+      fireEvent.submit(email.closest('form')!);
+    });
+    expect(within(register).getByRole('status')).toHaveTextContent(message);
     const text = squash(container.textContent || '');
-    expect(text).not.toContain(answer.message);
     for (const re of BANNED) expect(text.match(re), String(re)).toBeNull();
   });
 
-  it('reading the page loads nothing from another site; the bot check loads once the visitor uses the form', () => {
-    build.turnstile = true;
+  it('without a bot-check key the page loads no script from another site; with one, only the form’s check', () => {
     const external = () => [...document.querySelectorAll<HTMLScriptElement>('script[src]')].filter((el) => new URL(el.src, location.href).origin !== location.origin);
-    renderLanding();
+    const first = renderLanding();
     expect(external()).toEqual([]);
-    const register = document.getElementById('register') as HTMLElement;
-    fireEvent.focusIn(within(register).getByRole('textbox', { name: 'Email address' }));
+    first.unmount();
+    build.turnstile = true;
+    renderLanding();
     expect(external().map((el) => new URL(el.src).hostname)).toEqual(['challenges.cloudflare.com']);
   });
 

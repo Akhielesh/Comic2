@@ -1,7 +1,6 @@
-// The end of the landing: "Register your interest" (the app's own WaitlistForm, told to ask about Comic Studio only, to
-// say this page's own words once a visitor's interest is recorded, and to load its bot check only once the visitor
-// starts using it) and the questions, each a native <details> that opens without script. Members see their way back to
-// their comics instead of the form. Ink only.
+// The end of the landing: "Register your interest" (the app's own interest form, the same one the sign-in card's Register
+// interest tab shows, with its optional questions and its one thank-you that promises no email) and the questions, each a
+// native <details> that opens without script. Members see their way back to their comics instead of the form. Ink only.
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../../lib/utils';
@@ -13,16 +12,11 @@ import { WaitlistForm } from '../../WaitlistForm';
 import { FAQ, FAQ_HEAD, JOIN, REGISTER, fill } from './landingCopy';
 import { LANDING_VALUES } from './landingModels';
 import { showSection } from './parts';
-import { useDarkClass } from './useDarkClass';
 
 /** A quiet text link: ink, the underline draws in, a 44 px square target at least under a coarse pointer. */
 export const QUIET_LINK = cn('ds-link inline-flex items-center justify-center font-medium text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
 
-/** The interest form asks about this page's product only. */
-const LANDING_PRODUCTS = ['comic_studio'] as const;
-
 export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignIn, onOpenComics }) => {
-  const dark = useDarkClass();
   return (
     <section id="register" aria-labelledby="landing-register" className="landing-section">
       <div className="landing-register">
@@ -36,17 +30,7 @@ export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void
           </Button>
         ) : (
           <>
-            <WaitlistForm
-              kind="access"
-              source="landing"
-              buttonLabel={JOIN.short}
-              onSignIn={onSignIn}
-              products={LANDING_PRODUCTS}
-              successMessage={REGISTER.recorded}
-              deferVerification
-              verificationTheme={dark ? 'dark' : 'light'}
-              className="landing-register-form"
-            />
+            <WaitlistForm kind="access" source="landing" buttonLabel={JOIN.short} className="landing-register-form" />
             <p className="landing-member">
               {REGISTER.memberAsk}
               <button type="button" className={QUIET_LINK} onClick={onSignIn}>

@@ -16,7 +16,13 @@ vi.mock('../services/supabase', () => ({
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('./WaitlistForm', () => ({ WaitlistForm: () => <div data-testid="waitlist" /> }));
+vi.mock('./WaitlistForm', () => ({
+  WaitlistForm: ({ onJoined }: { onJoined?: (email: string) => void }) => (
+    <div data-testid="waitlist">
+      <button type="button" onClick={() => onJoined?.('reader@example.com')}>Pretend saved</button>
+    </div>
+  )
+}));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
 
 import { AuthPage } from './AuthPage';
@@ -36,7 +42,7 @@ describe('AuthPage on Atlas', () => {
     expect(screen.getByLabelText(/^Password/)).toHaveAttribute('type', 'password');
     expect(container.innerHTML).not.toMatch(LEGACY);
     // The two choices are one radio group (the DS Segmented), not two loose buttons.
-    expect(screen.getByRole('radiogroup', { name: 'Sign in or join' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Sign in or register interest' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveAttribute('aria-checked', 'true');
   });
 
@@ -122,16 +128,24 @@ describe('AuthPage on Atlas', () => {
     for (const cls of DENSITY.coarse.split(' ')) expect(resend.className.split(/\s+/)).toContain(cls);
   });
 
-  it('switching to “Request access” (sign-ups closed) shows the access request in place', () => {
+  it('switching to “Register interest” (sign-ups closed) shows the access request in place', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-    fireEvent.click(screen.getByRole('radio', { name: 'Request access' }));
-    expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Register interest' }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
     expect(screen.getByTestId('waitlist')).toBeInTheDocument();
     // "Already have an account? Sign in" is a 44 x 44 target under a coarse pointer (the layout smoke's hit-target rule).
     const signIn = screen.getByRole('button', { name: 'Sign in' });
     for (const cls of DENSITY.coarseSquare.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
     fireEvent.click(signIn);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+  });
+
+  it('after the thank-you, the intro that asked for the email and answers is gone', () => {
+    render(<AuthPage initialMode="request-access" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    expect(screen.getByText(/Leave your email, and a few answers if you like\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pretend saved' }));
+    expect(screen.queryByText(/Leave your email/)).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
   });
 
   it('reads its mode once, at mount: App keys it per request, so a header "Request access" on the open page switches the form', () => {
@@ -142,7 +156,7 @@ describe('AuthPage on Atlas', () => {
     rerender(<AuthPage key="auth-1" initialMode="request-access" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
     rerender(<AuthPage key="auth-2" initialMode="request-access" {...h} />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
     expect(screen.getByTestId('waitlist')).toBeInTheDocument();
     rerender(<AuthPage key="auth-3" initialMode="signin" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
@@ -162,5 +176,24 @@ describe('AuthPage on Atlas', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
     expect(screen.getByTestId('auth-brand')).toHaveTextContent('DreamStream');
     expect(screen.getByRole('main').className.split(/\s+/)).toContain('min-h-[100dvh]');
+  });
+
+  it('on the comics host, a member of the main site finds their way back to its front page (never the bare "/")', () => {
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, hostname: 'comics.dreamstreamstudio.ai' } });
+    try {
+      for (const initialMode of ['signin', 'request-access'] as const) {
+        render(<AuthPage initialMode={initialMode} onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+        const link = screen.getByRole('link', { name: 'Sign in there' });
+        expect(link).toHaveAttribute('href', 'https://dreamstreamstudio.ai/?home=1');
+        for (const cls of DENSITY.coarseSquare.split(' ')) expect(link.className.split(/\s+/)).toContain(cls);
+        cleanup();
+      }
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+    // On the main site itself the card is already there: no such link.
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    expect(screen.queryByRole('link', { name: 'Sign in there' })).toBeNull();
   });
 });

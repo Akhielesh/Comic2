@@ -64,7 +64,7 @@ describe('ComicsHeader', () => {
     expect(p.onGoHome).toHaveBeenCalledTimes(1);
   });
 
-  it('signed out: the join row and Sign in (round; outline on the landing, the ink fill elsewhere); no My comics', () => {
+  it('signed out: Register interest and Sign in (round; outline on the landing, the ink fill elsewhere); no My comics', () => {
     const other = render(<ComicsHeader {...props({ page: 'other' })} />);
     expect(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i })).toHaveAttribute('data-variant', 'default');
     other.unmount();
@@ -78,7 +78,7 @@ describe('ComicsHeader', () => {
     fireEvent.click(signIn);
     expect(p.onSignIn).toHaveBeenCalledTimes(1);
     expect(within(actions).queryByRole('button', { name: /^request access$/i })).toBeNull();
-    // On the landing the join row names the page's own form ("Register your interest"); elsewhere it is the access request.
+    // On the landing the join row scrolls to the page's own form; elsewhere it opens the sign-in card's Register interest tab.
     // From lg the header also carries it as a ghost beside Sign in (never a second fill), so it stays one press away.
     const register = within(actions).getByRole('button', { name: 'Register interest' });
     expect(register).toHaveAttribute('data-variant', 'ghost');
@@ -91,7 +91,7 @@ describe('ComicsHeader', () => {
     expect(within(actions).queryByRole('button', { name: /my comics/i })).toBeNull();
   });
 
-  it('signed in: My comics only (outline on the landing, the ink fill elsewhere); no Sign in, no Request access', () => {
+  it('signed in: My comics only (outline on the landing, the ink fill elsewhere); no Sign in, no Register interest', () => {
     const other = render(<ComicsHeader {...props({ signedIn: true, page: 'other' })} />);
     expect(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' })).toHaveAttribute('data-variant', 'default');
     other.unmount();
@@ -102,14 +102,14 @@ describe('ComicsHeader', () => {
     fireEvent.click(within(actions).getByRole('button', { name: 'My comics' }));
     expect(p.onOpenComics).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /request access/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /request access|register interest/i })).toBeNull();
   });
 
-  it('the menu rows per state and page: section links on the landing only, the join row only signed out', () => {
+  it('the menu rows per state and page: section links on the landing only, Register interest only signed out', () => {
     const cases: Array<[Partial<ComicsHeaderProps>, string[]]> = [
       [{ signedIn: false, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'Register interest', 'Use Paper theme']],
       [{ signedIn: true, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'My comics', 'Use Paper theme']],
-      [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Request access', 'Use Paper theme']],
+      [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Register interest', 'Use Paper theme']],
       [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics', 'Use Paper theme']]
     ];
     for (const [over, rows] of cases) {
@@ -140,13 +140,15 @@ describe('ComicsHeader', () => {
     expect(p.onOpenComics).toHaveBeenCalledOnce();
   });
 
-  it('on the sign-in page the header offers no Sign in (Request access stays); on the Library its link is the current page', () => {
+  it('on the sign-in page the header offers neither Sign in nor Register interest (the card switches between them); on the Library its link is the current page', () => {
     const p = props({ page: 'other', current: 'auth' });
     const { unmount } = render(<ComicsHeader {...p} />);
     const banner = screen.getByRole('banner');
     expect(within(banner).queryByRole('button', { name: /^sign in$/i })).toBeNull();
-    fireEvent.click(within(banner).getByRole('button', { name: /^request access$/i }));
-    expect(p.onRequestAccess).toHaveBeenCalledTimes(1);
+    // Pressing it there remounted the card and wiped what was typed.
+    expect(within(banner).queryByRole('button', { name: /^register interest$|^request access$/i })).toBeNull();
+    expect(menuRows()).toEqual(['Home', 'Library', 'Use Paper theme']);
+    expect(p.onRequestAccess).not.toHaveBeenCalled();
     unmount();
     const g = props({ page: 'other', current: 'gallery' });
     render(<ComicsHeader {...g} />);

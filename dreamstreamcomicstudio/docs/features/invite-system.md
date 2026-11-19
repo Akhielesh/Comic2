@@ -40,21 +40,14 @@ pending invite?"* and *"which of my invites were accepted?"*.
    No manual code entry needed; the Settings `RedeemInvite` box still exists as a
    fallback for codes shared out-of-band.
 
-## Already-invited person clicks "Request access" / tries to register
+## Someone registers interest (including an already-invited person)
 
-`POST /api/newsletter/subscribe` (kind `access`) now checks, in order:
-
-1. **Existing account** → `account-exists`: "You already have an account — sign in instead." (unchanged)
-2. **Pending invite** (NEW) → `already-invited`: the server **re-sends the invite email**
-   (`resendPendingInvite`, 10-minute cooldown so retry-mashing can't mail-bomb) and
-   responds "You already have access — we just re-sent your invite email. Follow its
-   instructions to set up your account." Rendered by `WaitlistForm`.
-3. Otherwise → normal waitlist capture.
-
-Enumeration note: this check sits behind the same Turnstile gate as the rest of the
-subscribe route, and an attacker can only learn what the existing `account-exists`
-branch already reveals (that an email is known to the system). The resend goes to the
-email owner, never to the requester.
+`POST /api/newsletter/subscribe` no longer looks the address up in accounts or invites and
+never re-sends an invite. Every valid address gets the same status and body, so the form
+cannot be used to learn whether an address has an account or an invite. An invited person
+uses the link in their invite email; an admin can re-send it from the admin console
+(`resendPendingInvite` stays in `services/invites.ts` for that). The full flow, the
+optional questions and the email switch are in [register-interest.md](./register-interest.md).
 
 ## Visibility
 
@@ -74,6 +67,6 @@ email owner, never to the requester.
   `invites.ts` / `adminEmail.ts` / `newsletter.ts`, SQL `server/sql/access_invite_sends.sql`.
 - Client: `services/invites.ts` (capture/pending helpers + types), `App.tsx` (capture +
   auto-redeem + banner), `components/AuthPage.tsx` (invite banner + invite-unlocked
-  signup), `components/WaitlistForm.tsx` (`already-invited` state),
+  signup), `components/WaitlistForm.tsx` (register interest),
   `components/InviteFriends.tsx` (referral stats), `components/admin/InviteManager.tsx`
   (timeline).

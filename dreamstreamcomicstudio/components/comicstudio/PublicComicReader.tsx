@@ -72,7 +72,7 @@ type Status = 'loading' | 'ready' | 'not_found' | 'error';
 /** Don't refresh links more often than this when images fail (project mode: signed links). */
 const RELINK_COOLDOWN_MS = 60_000;
 
-/** Where "Make your own" goes: Comic Studio's own front page (a full navigation, never in-app). */
+/** Where the cover card's "Made with Comic Studio" line (and the end card's make-yours action) goes: Comic Studio's own front page (a full navigation, never in-app). */
 const MAKE_YOUR_OWN_HREF = '/';
 
 const urlForMap = (urls: Record<string, string> | null) => (asset?: AssetRef | string | null): string | undefined => {
@@ -561,7 +561,7 @@ const ReaderShell: React.FC<ShellProps> = ({
             confirmReadingLanguage();
             setView('inline');
           }}
-          cta={isOwner ? undefined : { label: 'Made with DreamStream Studio — make your own', href: MAKE_YOUR_OWN_HREF }}
+          cta={isOwner ? undefined : { label: 'Made with Comic Studio', href: MAKE_YOUR_OWN_HREF }}
           labels={{ read: t('startReading'), readsRightToLeft: t('readsRightToLeft'), chooseLanguage: t('chooseLanguage') }}
         />
       </div>

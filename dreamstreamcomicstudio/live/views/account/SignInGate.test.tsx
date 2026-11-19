@@ -104,7 +104,8 @@ describe('sign in — signed out', () => {
 
   it('a way home and the legal links', () => {
     render(<SignInGate gate="sign-in" view="dashboard" push={push} />);
-    expect(screen.getByRole('link', { name: 'DreamStream home' })).toHaveAttribute('href', '/');
+    // The main front page's escape hatch: the bare '/' would send a visitor without the member hint to Comic Studio.
+    expect(screen.getByRole('link', { name: 'DreamStream home' })).toHaveAttribute('href', '/?home=1');
     expect(screen.getByRole('navigation', { name: 'Legal and support links' })).toBeInTheDocument();
   });
 

@@ -12,7 +12,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                 <header className="mb-8 sm:mb-10">
                     <p className={OVERLINE_DISPLAY}>Legal</p>
                     <h1 className={cn(DISPLAY_SECTION, 'mt-4 text-[var(--ds-ink)]')}>Privacy Policy</h1>
-                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: November 12, 2026</p>
+                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: November 19, 2026</p>
                 </header>
                 <div className={cn(SECTION_CARD, 'p-6 sm:p-8')}>
                 <div className={LEGAL_PROSE}>
@@ -26,6 +26,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                         <li><strong>Stream Studio Live-Event Data:</strong> Event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
                         <li><strong>Community Data:</strong> Public profile data, follows, likes, views, notifications, and other social interactions tied to your account.</li>
                         <li><strong>Support Data:</strong> Contact/support messages you submit (for example, email and message body).</li>
+                        <li><strong>Register Interest Data:</strong> When you register interest or join a list while sign-up is closed, we store your email address and any optional answers (first name, the features and studios you pick, and your comment) in our Supabase database, with the page you sent it from. It is kept until you ask us to remove it and is used only to plan the product; we do not send emails for it at this time.</li>
                         <li><strong>Operational and Debug Data:</strong> Token ledger events, pricing snapshot metadata, provider/model timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
                         <li><strong>Billing Lifecycle Data:</strong> If paid billing is enabled for your account, subscription status, cancel-at-period-end flags, billing-period timestamps, webhook processing records, and overage capture metadata.</li>
                         <li><strong>Device-Stored Data:</strong> Browser local storage and IndexedDB records used for saved keys, guest projects, test runs/images, reader state, and learning progress.</li>
@@ -70,6 +71,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
 
                     <h3>6. Cookies, Local Storage, and Device Data</h3>
                     <p>The current app code relies on browser storage (localStorage/IndexedDB) for key settings, local caches, guest-mode data, and session-related client state. The codebase does not include third-party advertising trackers.</p>
+                    <p>The main site also sets one first-party cookie, <code>ds_member</code>, with a fixed value and no identifier, only while you are signed in on dreamstreamstudio.ai (it is removed when you sign out there and otherwise expires after a year). It is used only to decide which front page to show your browser, and it gives no access to anything.</p>
 
                     <h3>7. Retention and Deletion</h3>
                     <p>We keep account and project data while needed to operate the service and satisfy legal/security obligations. You can delete projects and some user content from the app; account deletion/support requests may be required for full removal workflows. Stream Studio replay segments are designed to expire after about 24 hours, and server-side recordings are designed to expire after about 7 days unless a newer product flow explicitly states otherwise. Certain logs may be retained where required for abuse prevention, accounting, or legal compliance.</p>

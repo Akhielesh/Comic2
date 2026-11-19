@@ -239,7 +239,7 @@ describe('ComicsLanding', () => {
     fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Request access' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Request access|Register interest/ })).toBeNull();
   });
 
   it('the footer links to the Library, legal pages, and the routed support mailbox', () => {

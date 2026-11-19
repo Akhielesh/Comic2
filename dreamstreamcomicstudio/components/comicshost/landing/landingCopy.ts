@@ -4,8 +4,8 @@
 //
 // Rules for anything added here: true today, in production, for the reader it addresses; no price, amount, allowance,
 // plan name or date; no promise of an email, a reply, early access or a time; numbers and model names are never typed:
-// a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`. The interest form's own
-// words after a visitor sends it come from here too (REGISTER.recorded), never from the form's defaults.
+// a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`. The interest form is the
+// app's own (components/WaitlistForm.tsx) with its own questions and thank-you, which promise nothing either.
 
 /** Fill `{NAME}` placeholders. A missing value throws, so a typo never ships as a literal brace. */
 export const fill = (text: string, values: Readonly<Record<string, string | number>> = {}): string =>
@@ -130,8 +130,6 @@ export const REGISTER = {
   line: 'New accounts are by invite while Comic Studio is in beta. Registering your interest costs nothing.',
   memberAsk: 'Already a member?',
   signIn: 'Sign in',
-  /** Shown once the form has recorded a visitor's interest (new or repeat): it promises nothing further. */
-  recorded: 'Thanks. Your interest is recorded.',
   signedInTitle: 'You’re a member',
   signedInLine: 'Your comics and drafts are in My comics.',
   openComics: 'Open My comics'
@@ -155,7 +153,7 @@ export const FAQ: readonly FaqCopy[] = [
   },
   {
     q: 'What happens after I register my interest?',
-    a: 'Your interest is recorded, and we may send one email to say we received it. Accounts open by invite, and there is no date yet.'
+    a: 'Your interest is recorded, with any answers you add. Nobody is emailed for registering. Accounts open by invite, and there is no date yet.'
   },
   {
     q: 'Does it cost anything?',

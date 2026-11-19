@@ -2,9 +2,8 @@
 // looks, how it works, the models, pricing, where to read, "Register your interest", the questions and the footer.
 // Signed out, the hero's filled action takes a visitor to the form on this page (sign-up is closed); signed in, it
 // starts a comic. Everything below the looks lives in ./landing (copy, registries, pictures, sections) and its styles
-// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer, and nothing loads from another
-// site while a visitor only reads: the interest form loads its bot check (when the build has one) only once the visitor
-// starts using the form.
+// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer; the interest form is the app's
+// own, with its bot check when the build has a site key.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';

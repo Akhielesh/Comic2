@@ -29,6 +29,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 
 | Doc | What it covers |
 |-----|----------------|
+| `features/public-library.md` | What the public Library and public profiles list: current Comic Studio publications only (the rule, where it runs, older comics hidden, the small-Library layout, signed-out reading). |
 | `features/component-library.md` | The chat widget system end to end: artifact pipeline, calm-studio design language, Primitive Kit API, dual density, resize, theming, full artifact-type table, add-a-widget checklist. |
 | `features/live-widgets.md` | Live data in widgets: origin stamping, `REFRESHABLE_TOOLS`, the `/api/chat/tool-refresh` contract, `useLiveData()`, and the NewsDigest topic-chip refresh pattern. |
 | `features/voice-dictation.md` | On-device voice dictation: recorder → 16 kHz PCM → transformers.js Whisper (WebGPU/WASM), engines + fallback, 4 s live partials, model self-hosting, UI states, failure modes. |

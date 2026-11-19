@@ -22,6 +22,19 @@ describe('launch legal copy', () => {
     expect(item).toHaveTextContent('OpenRouter: Routes Comic Studio image requests to the model you pick.');
   });
 
+  it('covers registering interest (what is kept, where, for how long, no emails) and the front-page cookie', () => {
+    render(<PrivacyPolicy onBack={vi.fn()} />);
+
+    const interest = screen.getByText('Register Interest Data:').closest('li');
+    expect(interest).toHaveTextContent(/email address and any optional answers \(first name, the features and studios you pick, and your comment\)/i);
+    expect(interest).toHaveTextContent(/kept until you ask us to remove it/i);
+    expect(interest).toHaveTextContent(/we do not send emails for it/i);
+    const cookie = screen.getByText(/ds_member/).closest('p')!;
+    expect(cookie).toHaveTextContent(/only while you are signed in on dreamstreamstudio\.ai/i);
+    expect(cookie).toHaveTextContent(/which front page to show/i);
+    expect(cookie).toHaveTextContent(/no identifier/i);
+  });
+
   it('sets launch-safe Stream Studio terms for private links, beta limits, and billing approval', () => {
     render(<TermsOfService onBack={vi.fn()} />);
 

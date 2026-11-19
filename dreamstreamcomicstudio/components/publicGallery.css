@@ -45,7 +45,7 @@
 .library-sample-detail { font-size: .75rem; color: var(--ds-muted); margin-top: .75rem; line-height: 1.5; }
 .library-read-link { display: flex; align-items: center; gap: .5rem; color: var(--ds-accent-text); font-size: .875rem; font-weight: 600; margin-top: 1.25rem; }
 .library-read-link svg { width: 1rem; height: 1rem; }
-.library-community { border-top: 1px solid var(--ds-hairline); padding-top: 1.5rem; }
+.library-community { border-top: 1px solid var(--ds-hairline); padding-block: 1.5rem 2.5rem; }
 .library-search-form { display: flex; align-items: stretch; min-width: 0; border: 1px solid var(--ds-hairline); border-radius: var(--ds-radius-control); background: var(--ds-surface); }
 .library-search-form:focus-within { outline: 2px solid var(--ds-focus); outline-offset: 2px; }
 .library-search-kind { display: flex; flex-shrink: 0; padding: .5rem; }
@@ -83,6 +83,18 @@
 .library-like { min-height: 2.75rem; min-width: 2.75rem; }
 .library-like:disabled { opacity: .6; }
 .library-like[aria-pressed='true'] { color: var(--ds-ink); }
+/* One or two comics (PublicGallery LIBRARY_FEW_MAX): wide cards the shape of the Studio samples, two a row from sm,
+   so a small Library never shows a cover grid with most of its row empty. One link per card (cover, title, date, "Read
+   comic"); the likes sit over the copy column's foot, outside the link. */
+.library-grid[data-layout='few'] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.library-card[data-layout='wide'] { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1fr); grid-template-rows: 1fr auto; border: 1px solid var(--ds-hairline); border-radius: .625rem; overflow: hidden; background: var(--ds-well); }
+.library-card[data-layout='wide'] > .library-card-read { grid-column: 1 / -1; grid-row: 1 / -1; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1fr); min-height: 15rem; border-radius: inherit; }
+.library-card[data-layout='wide'] > .library-card-read:focus-visible { outline-offset: -3px; }
+.library-card[data-layout='wide'] .library-cover { aspect-ratio: auto; height: 100%; min-height: 15rem; border: 0; border-radius: 0; }
+.library-wide-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: clamp(1rem, 2vw, 1.75rem) clamp(1rem, 2vw, 1.75rem) calc(clamp(1rem, 2vw, 1.75rem) + 2.75rem); }
+.library-card[data-layout='wide'] h3 { font-family: var(--ds-font-display); font-size: clamp(1.35rem, 2vw, 1.875rem); line-height: 1.15; letter-spacing: -.035em; margin-top: 0; }
+.library-card[data-layout='wide'] .library-published { margin-top: .75rem; }
+.library-card[data-layout='wide'] > .library-card-stats { position: relative; grid-column: 2; grid-row: 2; margin: 0; padding: 0 clamp(1rem, 2vw, 1.75rem) clamp(.25rem, 1vw, .75rem); }
 .library-empty, .library-load-error { text-align: center; padding: clamp(2rem, 5vw, 4rem) 1rem; border: 1px dashed var(--ds-hairline); border-radius: .5rem; }
 .library-empty > svg { width: 1.75rem; height: 1.75rem; margin: 0 auto .875rem; color: var(--ds-muted); }
 .library-empty h3 { font-size: 1.125rem; font-weight: 600; }
@@ -106,6 +118,9 @@
 .library-card-read:focus-visible .library-cover-read { opacity: 1; transform: none; }
 @media (max-width: 1023px) {
   .library-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .library-grid[data-layout='few'] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .library-card[data-layout='wide'], .library-card[data-layout='wide'] > .library-card-read { grid-template-columns: minmax(0, .8fr) minmax(0, 1fr); }
+  .library-card[data-layout='wide'] h3 { font-size: 1.375rem; }
   .library-sample-grid { gap: 1rem; }
   .library-sample-card { grid-template-columns: minmax(0, .8fr) minmax(0, 1fr); }
   .library-sample-note { display: none; }
@@ -137,8 +152,14 @@
   .library-sort { width: 100%; }
   .library-kids { flex: 1; }
   .library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem .875rem; }
+  .library-grid[data-layout='few'] { grid-template-columns: minmax(0, 1fr); gap: .875rem; }
+  .library-card[data-layout='wide'] > .library-card-read, .library-card[data-layout='wide'] .library-cover { min-height: 11rem; }
+  .library-wide-copy { padding: .875rem .875rem calc(.875rem + 2.75rem); }
+  .library-card[data-layout='wide'] h3 { font-size: 1.125rem; }
+  .library-card[data-layout='wide'] .library-published { margin-top: .5rem; }
+  .library-card[data-layout='wide'] > .library-card-stats { padding: 0 .875rem .25rem; }
   .library-creator { font-size: .8125rem; }
-  .library-community { padding-top: 1.25rem; }
+  .library-community { padding-block: 1.25rem 1.75rem; }
   .library-reader-heading { margin-block: 1rem 1.5rem; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -189,7 +189,8 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
           style={{ marginBottom: 'var(--sa-bottom)' }}
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">{cta.label}</span>
+          {/* Wraps rather than cutting off at narrow widths (320 px). */}
+          <span className="min-w-0 text-balance [overflow-wrap:anywhere]">{cta.label}</span>
         </a>
       )}
     </section>

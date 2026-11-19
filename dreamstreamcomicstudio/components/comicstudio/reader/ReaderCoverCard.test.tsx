@@ -33,3 +33,22 @@ describe('ReaderCoverCard Read button', () => {
     unmount();
   });
 });
+
+describe('ReaderCoverCard call to action', () => {
+  it('wraps a long line at narrow widths instead of cutting it off', () => {
+    render(<ReaderCoverCard title="Baby at the Lake" pageCount={1} onRead={vi.fn()} cta={{ label: 'Made with Comic Studio', href: '/' }} />);
+    const link = screen.getByRole('link', { name: /Made with Comic Studio/ });
+    const text = link.querySelector('span')!;
+    expect(text.className.split(/\s+/)).not.toContain('truncate');
+    expect(text.className).toContain('[overflow-wrap:anywhere]');
+  });
+
+  it('the share reader names the studio plainly and invites no sign-up while it is closed', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const src = readFileSync(path.resolve(__dirname, '..', 'PublicComicReader.tsx'), 'utf8');
+    const cta = src.split('\n').find((line) => line.includes('cta={isOwner')) ?? '';
+    expect(cta).toContain("label: 'Made with Comic Studio'");
+    expect(cta).not.toMatch(/make your own|DreamStream/i);
+  });
+});

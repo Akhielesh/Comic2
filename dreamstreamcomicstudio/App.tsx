@@ -83,7 +83,8 @@ import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from '
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
-import { mainAppUrl } from './services/productHost';
+import { mainFrontPageUrl } from './services/productHost';
+import { useMemberHint } from './hooks/useMemberHint';
 import { safeNext } from './services/safeNext';
 import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
@@ -205,11 +206,10 @@ export const SystemErrorScreen: React.FC<{ message: string; onRetry: () => void;
   </div>
 );
 
-// Views still painted with the legacy kit that lean on the root for their light page: they keep that
-// light page in both themes (the legacy-kit pages keep their light surfaces in dark, atlas-skin.md D5)
-// until their package moves them onto tokens (the dashboard DS-R4, Learn DS-4, the classic editor D4).
-// Every other view sits on the canvas token, light or dark.
-export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['dashboard', 'learn', 'editor', 'fontlab']);
+// Views that still lean on the root for a light page in both themes (atlas-skin.md D5). Only the dev-only
+// font lab is left: the dashboard, Learn and the classic editor paint their own canvas since the app-wide
+// restyle, so they sit on the canvas token like every other view and show no light gutter in dark.
+export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['fontlab']);
 /** The root's page under the views: the canvas token, or the legacy light page for the views above. */
 export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-neutral-50' : CANVAS_BG);
 /**
@@ -224,6 +224,10 @@ export const appRootClass = (view: string, gated: boolean, comicsChrome = false)
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
+  // The main site's member hint cookie follows this tab's session (set while signed in, removed when this tab signs
+  // out; a tab that merely opens signed out leaves it) so the edge serves members their own front page instead of
+  // sending them to Comic Studio. It only observes auth state (hooks/useMemberHint.ts).
+  useMemberHint(!!user, authLoading);
   const isAdmin = useIsAdmin();
   // Diagnostics are admin-only: gated on the server's answer for THIS account (bound to the
   // user id, so an account switch never runs the check on the previous account's answer).
@@ -359,7 +363,7 @@ const App: React.FC = () => {
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
-  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Request access"
+  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Register interest"
   // pressed while the sign-in page is already open remounts it on the step asked for (an invite still wins there).
   const [authRequest, setAuthRequest] = useState(0);
 
@@ -431,10 +435,12 @@ const App: React.FC = () => {
     setCurrentView('settings');
   };
 
-  // The FAQ lives on the main site's home page.
+  // The FAQ lives on the main site's home page. From the comics host it is opened through the front page's
+  // escape hatch (?home=1): the bare front page sends visitors without the member hint back to Comic Studio
+  // (services/productHost.ts frontPageToComicsUrl), so they would never reach the FAQ.
   const handleOpenFaq = () => {
     if (comicsHost.active) {
-      window.location.assign(mainAppUrl('/#home-faq'));
+      window.location.assign(mainFrontPageUrl('#home-faq'));
       return;
     }
     handleBackToHome();
