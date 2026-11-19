@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Generates the Comic Studio (comics.dreamstreamstudio.ai) app icons from its brand mark,
- * public/icons/comics-mark.svg (the DreamStream tile with a turning comic page). The link-preview
- * cards (comics-og.png, comics-library-og.png) are made by scripts/og-cards.mjs instead.
+ * public/icons/comics-mark.svg (an ink tile with a turning paper page, ComicsMark.tsx on the Atlas light
+ * tokens). The PNGs take the light scheme; the mark's dark-scheme swap is for the tab favicon only.
+ * The link-preview cards (comics-og.png, comics-library-og.png) are made by scripts/og-cards.mjs instead.
  * Run from dreamstreamcomicstudio/:
  *
  *   node comics-edge/scripts/gen-comics-icons.mjs
@@ -23,7 +24,8 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const OUT_DIR = path.join(APP_ROOT, 'public', 'icons');
 const SRC = path.join(OUT_DIR, 'comics-mark.svg');
 
-const TILE = '#c2603f';
+// The mark's tile in the light scheme (Atlas --ds-ink): the full-bleed icons fill their corners with it.
+const TILE = '#0a0a0a';
 
 async function renderMark(svg, px) {
   const meta = await sharp(svg).metadata();

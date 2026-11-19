@@ -17,6 +17,7 @@
  */
 import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import {
   type Allowlist,
@@ -164,5 +165,35 @@ describe('terracotta guard — the ratchet', () => {
       'A new terracotta literal: read the accent tokens through the studioDesign recipes (ACCENT_SOFT_BG, PRIMARY_BTN, FOCUS_RING, TONE_*) or components/ds.'
     ).toEqual([]);
     expect(under, 'Terracotta literals were removed: lower the baseline so they cannot come back.').toEqual([]);
+  });
+});
+
+describe('terracotta guard — the Comic Studio app icons', () => {
+  /** The two accent hexes and the old mark's tile, the hex the comics icons were drawn in. */
+  const ICON_TERRACOTTA = /#(?:d97757|c2643f|c2603f)(?:[0-9a-f]{2})?(?![0-9a-f])/gi;
+  const neutral = (hex: string) => {
+    const h = hex.length === 4 ? hex.replace(/[0-9a-f]/gi, (c) => c + c) : hex;
+    return h.slice(1, 3).toLowerCase() === h.slice(3, 5).toLowerCase() && h.slice(3, 5).toLowerCase() === h.slice(5, 7).toLowerCase();
+  };
+  const SOURCES = ['public/icons/comics-mark.svg', 'comics-edge/scripts/gen-comics-icons.mjs'];
+  const PNGS = ['comics-192.png', 'comics-512.png', 'comics-maskable-512.png', 'comics-apple-touch-180.png'];
+
+  it('the mark, its icon script and the icons they make are ink and paper: no terracotta, no hue', async () => {
+    for (const rel of SOURCES) {
+      const source = readFileSync(path.join(APP_ROOT, rel), 'utf8');
+      expect(source.match(ICON_TERRACOTTA), rel).toBeNull();
+      for (const [hex] of source.matchAll(/#[0-9a-f]{6}(?![0-9a-f])|#[0-9a-f]{3}(?![0-9a-f])/gi)) expect(neutral(hex), `${rel}: ${hex}`).toBe(true);
+    }
+    // The favicon follows the browser's scheme: ink tile on light tab strips, paper tile on dark ones.
+    expect(readFileSync(path.join(APP_ROOT, SOURCES[0]), 'utf8')).toMatch(/@media\s*\(prefers-color-scheme:\s*dark\)/);
+    for (const file of PNGS) {
+      const { data, info } = await sharp(readFileSync(path.join(APP_ROOT, 'public/icons', file))).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      let tinted = 0;
+      for (let i = 0; i < data.length; i += info.channels) {
+        if (data[i + 3] === 0) continue;
+        if (Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) > 8) tinted += 1;
+      }
+      expect(tinted, `public/icons/${file}: pixels with a hue (run node comics-edge/scripts/gen-comics-icons.mjs)`).toBe(0);
+    }
   });
 });
