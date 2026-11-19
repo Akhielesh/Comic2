@@ -27,6 +27,7 @@ verification status, plus the complete logs/analytics/metrics collection list):
 | Web search | Self-hosted SearXNG | Tavily → Brave → Serper → Google CSE → DDG/Bing scrape → Wikipedia | `SEARXNG_URL`, `TAVILY_API_KEY`, `BRAVE_API_KEY`, `SERPER_API_KEY` | conditional (keyless scrapers best-effort) | text + citations |
 | Weather/AQI | MET Norway (free, CC BY) | Open-Meteo (fallback; primary when `OPEN_METEO_API_KEY`/`OPEN_METEO_BASE_URL`) | `MET_USER_AGENT` | attribution ✓ | **rich card** ✓ |
 | Flight fares | Amadeus Self-Service (Flight Offers Search; real GDS fares) | web_search fallback when unkeyed | `AMADEUS_API_KEY`/`AMADEUS_API_SECRET` (+ `AMADEUS_PRODUCTION` for the prod host) | free quota then PAYG ✓ | **rich card** ✓ (`search_flights` → `flight_results`) |
+| Flight status (`get_flight_status`) | aviationstack (keyed; paid plans only, the key must work over HTTPS and is never sent over plain HTTP; `aviationstack` budget 5/min, 30/day) | — none: without live data the card shows the flight number, the reason (no data source, busy, no answer, no record) and a web link, never times, gates or delays | `AVIATIONSTACK_API_KEY` | paid plan | **rich card** ✓ (`flight_status`) |
 | US equities | Yahoo (unofficial, consolidated tape — full volume/52w/fundamentals/5Y) | Alpaca IEX (keyed; licensed but THIN — IEX-only volume/ranges, no fundamentals; must never preempt Yahoo) → Stooq | `ALPACA_API_KEY_ID/_SECRET_KEY` (fallback only) | conditional | **rich card** ✓ |
 | Indices/FX/commodities | Yahoo (unofficial) | Stooq | — | unofficial | **rich card** ✓ |
 | Crypto | CoinGecko (+ demo/pro key; misconfigured keys auto-fall back keyless; majors skip /search; 60s result cache) | none legal (exchange-direct feeds PROHIBIT commercial display) | `COINGECKO_API_KEY`, `COINGECKO_API_PLAN` | $35/mo Basic for commercial + attribution | **rich card** ✓ |
@@ -37,14 +38,16 @@ verification status, plus the complete logs/analytics/metrics collection list):
 | Video search | YouTube Data API (keyed; budgeted 10/min, 80/day — a search costs 100 of the key's 10,000 daily units) | DuckDuckGo video scrape (keyless) | `YOUTUBE_API_KEY` | YouTube API ToS | **rich card** ✓ |
 | Geocoding/maps | OSM Nominatim | Open-Meteo geocoder | — | fair-use ✓ | **map** ✓ |
 | Directions/routing | FOSSGIS OSRM (drive/bike/foot, alternatives) | — (transit deep-links to Google Maps) | — | fair-use demo server ✓ (budgeted 20/min) | **rich card** ✓ animated routes |
-| IP geolocation | IPinfo Lite (keyed) | ip-api.com (NON-commercial — dev only) | `IPINFO_TOKEN` | attribution ✓ | text |
-| Knowledge/papers/books | Wikipedia, arXiv, OpenLibrary | — | — | open ✓ | **rich cards** ✓ (document; HN → news card + split reader) |
-| Geo/civic (countries, holidays, time, postal) | REST Countries (⚠ legacy API deprecated June 2026 — country_info needs migration to the keyed v5), Nager.Date, Zippopotam | — | — | open ✓ | **rich cards** ✓ (metric board / data table / live clocks) |
+| IP geolocation (`ip_lookup`) | IPinfo Lite (keyed, HTTPS) | — none: without `IPINFO_TOKEN` the tool says "IP lookup needs a configured data source" (the keyless ip-api.com fallback was plain HTTP and non-commercial; removed, with its `ip-api` budget) | `IPINFO_TOKEN` | attribution ✓ | text |
+| Knowledge/papers/books | Wikipedia (`wiki_lookup` through the shared `server/src/ai/tools/wikipedia.ts`: search, REST summary, langlinks; `wikipedia` budget), arXiv (`https://export.arxiv.org`; paper links over HTTPS), OpenLibrary | — | — | open ✓ | **rich cards** ✓ (document; HN → news card + split reader) |
+| Geo/civic (countries, holidays, time, postal) | Wikidata for `country_info` (keyless, CC0; by English Wikipedia title (`wbgetentities`) or ISO code (a `haswbstatement` search); answers cached a day, 4 s per call; `wikidata` budget 30/min, 1,000/day; flag image from flagcdn.com; an unusable answer says "The country facts source is offline right now", never "not found"), Nager.Date, Zippopotam | — (REST Countries retired its keyless API; its v5 needs a paid key) | — | CC0 / open ✓ | **rich cards** ✓ (metric board / data table / live clocks) |
 | Space/science | Open Notify, SpaceX API, USGS | — | — | open ✓ | **rich cards** ✓ (maps / data tables; APOD = image) |
 | Food, words, entertainment | TheMealDB/CocktailDB, dictionaries, Jikan etc. | — | — | open/fair-use | **rich cards** ✓ (document / metric board; one-liner + trivia tools stay text by design) |
 | Dev (GitHub, npm, PyPI, QR) | public APIs | — | — | open ✓ | **rich cards** ✓ (data table / metric boards; QR = image, predict_name text by design) |
 | 800+ SaaS (OAuth) | Nango (self-hosted) | — | `NANGO_SECRET_KEY` | per-provider | text |
 | Anything via MCP | 13 curated + user-added servers | — | per-server | per-server | text |
+| Comic research (Comic Studio) | Wikipedia search (`en.wikipedia.org` REST `search/page`: 4 articles, title + one-line description, linked) and Wikimedia Commons file search (6 JPEG/PNG/WebP pictures with licence and credit), both on every search: the composer's research sheet and the Director's `research_comic` tool (explicit asks only) | a partial answer when one of the two fails (`incomplete`) | — (keyless; the `wikipedia` budget, shared with Chat; cached 5 min per query) | article text is not copied (links only); pictures only CC0, public domain, CC BY or CC BY-SA, the BY ones only with a named credit; only CC0 and public-domain pictures can be attached for drawing, and pictures wait behind "Show pictures" unless the comic is PG-13 | research sheet + "Research sources" card ([`features/comic-research.md`](features/comic-research.md)) |
+| Approximate location (Chat) | Cloudflare's own request data (`request.cf`): the API Worker sets `X-DS-Geo` (city and region ≤ 80 characters, 2-letter country, coordinates rounded to 2 decimals, ≤ 512 bytes) on the main host's `/api/chat` routes and `/api/recipes/run` only, and deletes any incoming `X-DS-Geo` on every request (`api-proxy/src/geoHeader.ts`); one encode/decode pair cleans the place on both sides (`shared/edgeGeo.ts`), and the backend reads it with `geoFromEdgeHeader` and the chat route's client-context caps | none: a location the browser shares wins; without either, Chat has no location (the comics host and the other recipe routes never get the header) | — (no key, no extra call; no member IP is sent anywhere to find their location) | n/a (no third party) | system-prompt context + weather, maps and places tool context; the automatic news region is the country only, but the assistant resolves "my area" and "local news" from the city, so a news or web search it writes can carry the city |
 
 Topics with **no source yet** (candidates verified in the June 2026 audit): real
 estate (RentCast paid / FRED+Census free), jobs (Adzuna/USAJobs/BLS), elections
@@ -79,6 +82,10 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
   Per-request HTTP metrics (latency, status, userId, requestId) are logged by
   `requestLogger` as JSON lines.
 - Caching: search 5 min, weather 10 min, quotes 60 s (`lib/cache.ts` TtlCache).
+- **Plain-HTTP lookups kept on purpose.** These hosts have no working HTTPS (checked 2026-11-19) and the
+  request carries no key, no IP and no location: `numbersapi.com` (`number_fact`; the certificate does not
+  match), `universities.hipolabs.com` (`find_university`; HTTPS resets the connection) and
+  `api.open-notify.org` (`iss_location`, `people_in_space`; HTTPS does not answer).
 
 ## Connected-account privacy and model routing (Google Limited Use)
 

@@ -1,5 +1,33 @@
-import { describe, it, expect } from 'vitest';
-import { hnToNewsItems, wikiToDocument, dictToDocument, booksToDocument, papersToDocument } from './knowledge.js';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import {
+  hnToNewsItems,
+  wikiToDocument,
+  dictToDocument,
+  booksToDocument,
+  papersToDocument,
+  searchPapersTool,
+  wikiLookupTool
+} from './knowledge.js';
+import { __resetProviderUsage } from '../../lib/providerUsage.js';
+import { SEARCH_REPLY, SUMMARY_REPLY } from './__fixtures__/wikidata.js';
+
+const stubFetch = (route: (url: URL) => unknown): string[] => {
+  const urls: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: unknown) => {
+      const raw = String(input);
+      urls.push(raw);
+      const body = route(new URL(raw));
+      if (body instanceof Response) return body;
+      return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status: 200 });
+    })
+  );
+  return urls;
+};
+
+beforeEach(() => __resetProviderUsage());
+afterEach(() => vi.unstubAllGlobals());
 
 describe('hnToNewsItems', () => {
   const hits = [
@@ -137,5 +165,78 @@ describe('papersToDocument', () => {
     expect(doc.content).toContain('xxx…');
     // Short abstracts get no ellipsis and no empty meta line.
     expect(doc.content).toContain('### [Short abstract paper](http://arxiv.org/abs/9999.00001)\n\nBrief.');
+  });
+});
+
+describe('search_papers', () => {
+  const ATOM = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2601.00001v1</id>
+    <published>2026-01-02T00:00:00Z</published>
+    <title>Lantern  Keepers and
+      Harbor Light Models</title>
+    <summary>An invented abstract about guiding boats with lanterns.</summary>
+    <author><name>A. Example</name></author>
+  </entry>
+</feed>`;
+
+  it('asks arXiv over HTTPS and links the papers over HTTPS', async () => {
+    const urls = stubFetch(() => ATOM);
+    const out = await searchPapersTool.execute({ query: 'harbor lights' });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toBe('https://export.arxiv.org/api/query?search_query=all:harbor%20lights&start=0&max_results=5&sortBy=relevance');
+    expect(out.citations).toEqual([{ url: 'https://arxiv.org/abs/2601.00001v1', title: 'Lantern Keepers and Harbor Light Models' }]);
+    expect(out.content).toContain('https://arxiv.org/abs/2601.00001v1');
+    expect(out.content).not.toContain('http://arxiv.org');
+  });
+});
+
+describe('wiki_lookup', () => {
+  it('answers exactly as before through the shared Wikipedia helper', async () => {
+    const urls = stubFetch((u) => (u.pathname.startsWith('/w/rest.php') ? { pages: [SEARCH_REPLY.pages[0]] } : SUMMARY_REPLY));
+    const out = await wikiLookupTool.execute({ query: 'harbor lights' });
+    expect(urls).toEqual([
+      'https://en.wikipedia.org/w/rest.php/v1/search/page?q=harbor%20lights&limit=1',
+      'https://en.wikipedia.org/api/rest_v1/page/summary/Harbor_Lights_(folk_tale)'
+    ]);
+    const url = 'https://en.wikipedia.org/wiki/Harbor_Lights_(folk_tale)';
+    const thumb = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Harbor.jpg/320px-Harbor.jpg';
+    expect(out).toEqual({
+      content:
+        'Wikipedia — Harbor Lights (folk tale) (Coastal folk tale):\n' +
+        'Harbor Lights is a coastal folk tale in which two lantern keepers guide boats home through a storm.\n' +
+        `Source: ${url}\n` +
+        "(A document card with this summary is shown to the user — don't repeat the extract.)",
+      citations: [{ url, title: 'Harbor Lights (folk tale)' }],
+      images: [{ url: thumb, title: 'Harbor Lights (folk tale)', source: 'Wikipedia' }],
+      artifacts: [
+        {
+          type: 'document',
+          data: {
+            title: 'Harbor Lights (folk tale)',
+            subtitle: 'Coastal folk tale',
+            content:
+              `![Harbor Lights (folk tale)](${thumb})\n\n` +
+              'Harbor Lights is a coastal folk tale in which two lantern keepers guide boats home through a storm.\n\n' +
+              `[Read the full article on Wikipedia](${url})`
+          }
+        }
+      ]
+    });
+  });
+
+  it('falls back to the search excerpt (tags stripped) when the summary has no extract', async () => {
+    stubFetch((u) =>
+      u.pathname.startsWith('/w/rest.php') ? { pages: [SEARCH_REPLY.pages[0]] } : { ...SUMMARY_REPLY, extract: '' }
+    );
+    const out = await wikiLookupTool.execute({ query: 'harbor lights' });
+    expect(out.content).toContain('A harbor tale about lantern keepers');
+  });
+
+  it('says so when nothing matches', async () => {
+    stubFetch(() => ({ pages: [] }));
+    const out = await wikiLookupTool.execute({ query: 'zzzz' });
+    expect(out.content).toBe('No Wikipedia article found for "zzzz".');
   });
 });

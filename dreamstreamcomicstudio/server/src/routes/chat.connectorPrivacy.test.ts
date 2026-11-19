@@ -23,7 +23,6 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
     throw new Error('no database in tests');
   }
 }));
-vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
 vi.mock('../services/mcpRegistry.js', () => ({ enabledMcpConfigs: async () => [] }));
 // MCP tools: none, unless a test turns on the operator's Nango MCP (`mcp_nango_*`).
 const mcp = vi.hoisted(() => ({ nango: false }));

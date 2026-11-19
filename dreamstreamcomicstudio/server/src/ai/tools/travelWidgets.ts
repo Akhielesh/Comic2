@@ -16,6 +16,7 @@ import type {
   FlightStatusArtifact,
   FlightEndpointStatus,
   FlightPhase,
+  FlightUnavailableReason,
   TripBudgetArtifact,
   BudgetCategory,
   LocalCheatsheetArtifact,
@@ -25,6 +26,7 @@ import type {
 } from '../../../../apiTypes.js';
 import { getWeather } from './weather.js';
 import { fetchJson, envKey } from './http.js';
+import { ProviderBudgetError } from '../../lib/providerUsage.js';
 
 const str = (v: unknown, max: number): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
@@ -308,27 +310,13 @@ export const tripCountdownTool: ChatTool = {
 };
 
 // ---------------------------------------------------------------- flight status ---
-// Live via aviationstack when AVIATIONSTACK_API_KEY is configured (free tier:
-// 100 req/month, HTTP-only); otherwise renders the model-supplied schedule with
-// live:false and a notice naming the key. See docs/features/data-connectors.md §4-H.
+// Live via aviationstack when AVIATIONSTACK_API_KEY is set to a key that works over HTTPS (a paid
+// plan). The request is never retried over plain HTTP: the key travels in the query string, so a free
+// key (HTTP-only) counts as no key. Without live data the card carries the flight number only — no
+// times, gates, terminals or delays, not even ones the model remembers — and a link to check it on the
+// web. See docs/DATA_CONNECTORS.md.
 
 const FLIGHT_PHASES: FlightPhase[] = ['scheduled', 'active', 'landed', 'cancelled', 'diverted', 'unknown'];
-
-const coerceFlightEndpoint = (v: unknown): FlightEndpointStatus | null => {
-  if (!v || typeof v !== 'object') return null;
-  const r = v as Record<string, unknown>;
-  const code = str(r.code, 5)?.toUpperCase();
-  if (!code) return null;
-  return {
-    code,
-    city: str(r.city, 80),
-    scheduled: str(r.scheduled, 32),
-    estimated: str(r.estimated, 32),
-    actual: str(r.actual, 32),
-    terminal: str(r.terminal, 12),
-    gate: str(r.gate, 12)
-  };
-};
 
 /** 0–100 along the route from departure/arrival times (best-effort). */
 const progressFromTimes = (dep?: FlightEndpointStatus, arr?: FlightEndpointStatus): number | undefined => {
@@ -362,108 +350,157 @@ const avsEndpoint = (raw?: Record<string, unknown>): FlightEndpointStatus | null
   };
 };
 
-const fetchAviationstack = async (flightIata: string, key: string, signal?: AbortSignal): Promise<AvsFlight | null> => {
+/**
+ * Why aviationstack gave no live record. `https_refused`: the key's plan has no HTTPS (it counts as no
+ * key); `busy`: our call budget or the plan's usage/rate limit is spent; `unavailable`: no usable answer
+ * (network, deadline, server error, a reply without a `data` list); `no_record`: it answered with an
+ * empty list.
+ */
+type AvsMiss = 'https_refused' | 'busy' | 'unavailable' | 'no_record';
+type AvsAnswer = { ok: true; flight: AvsFlight } | { ok: false; miss: AvsMiss };
+
+const AVS_HTTPS_CODES = new Set(['https_access_restricted']);
+const AVS_BUSY_CODES = new Set(['usage_limit_reached', 'rate_limit_reached']);
+
+/** The HTTP status fetchJson names in its error ("<host> returned 403"), if any. */
+const statusOf = (err: unknown): number | undefined => {
+  const m = /\breturned (\d{3})\b/.exec(err instanceof Error ? err.message : '');
+  return m ? Number(m[1]) : undefined;
+};
+
+/** One HTTPS request; never a plain-HTTP retry (the key is in the query string). */
+const fetchAviationstack = async (flightIata: string, key: string, signal?: AbortSignal): Promise<AvsAnswer> => {
   const query = `access_key=${encodeURIComponent(key)}&flight_iata=${encodeURIComponent(flightIata)}`;
-  // The free tier is HTTP-only; try HTTPS first for keyed/paid accounts.
-  for (const proto of ['https', 'http'] as const) {
-    try {
-      const data = await fetchJson<{ data?: AvsFlight[] }>(`${proto}://api.aviationstack.com/v1/flights?${query}`, { signal });
-      const flight = data.data?.[0];
-      if (flight) return flight;
-    } catch {
-      /* try the next protocol */
-    }
+  let data: { data?: unknown; error?: { code?: unknown } } | null;
+  try {
+    data = await fetchJson<{ data?: unknown; error?: { code?: unknown } } | null>(`https://api.aviationstack.com/v1/flights?${query}`, { signal });
+  } catch (err) {
+    if (err instanceof ProviderBudgetError) return { ok: false, miss: 'busy' };
+    const status = statusOf(err);
+    if (status === 403) return { ok: false, miss: 'https_refused' };
+    if (status === 429) return { ok: false, miss: 'busy' };
+    return { ok: false, miss: 'unavailable' };
   }
-  return null;
+  // aviationstack can also answer 200 with an error body instead of a `data` list.
+  const code = data && typeof data === 'object' && data.error && typeof data.error.code === 'string' ? data.error.code : undefined;
+  if (code && AVS_HTTPS_CODES.has(code)) return { ok: false, miss: 'https_refused' };
+  if (code && AVS_BUSY_CODES.has(code)) return { ok: false, miss: 'busy' };
+  if (!data || typeof data !== 'object' || !Array.isArray(data.data)) return { ok: false, miss: 'unavailable' };
+  const flight = data.data[0];
+  return flight && typeof flight === 'object' ? { ok: true, flight: flight as AvsFlight } : { ok: false, miss: 'no_record' };
+};
+
+const NO_TIMES = 'Do not state times, gates or delays.';
+const FLIGHT_UNAVAILABLE = `Live status needs a data source. ${NO_TIMES}`;
+const FLIGHT_CARD_NOTE = 'The card shows the flight number and a link to check it on the web.';
+
+/** The card without live data: the flight number and airline, nothing that reads like a schedule. */
+const unavailableFlight = (flightNumber: string, airline: string | undefined, reason?: FlightUnavailableReason): FlightStatusArtifact => ({
+  flightNumber,
+  ...(airline ? { airline } : {}),
+  live: false,
+  unavailable: true,
+  ...(reason && reason !== 'no_source' ? { unavailableReason: reason } : {})
+});
+
+type FlightNotice = { level: 'info' | 'warn'; message: string; fix?: string };
+
+/** What the model is told, what the card says and what the notice says, for each way there is no live record. */
+const flightMiss = (flightNumber: string, miss: AvsMiss | 'no_key'): { content: string; reason: FlightUnavailableReason; notice: FlightNotice } => {
+  switch (miss) {
+    case 'no_key':
+      return {
+        content: FLIGHT_UNAVAILABLE,
+        reason: 'no_source',
+        notice: {
+          level: 'info',
+          message: 'Live flight status needs a data source.',
+          fix: 'Set AVIATIONSTACK_API_KEY to an aviationstack key that works over HTTPS (a paid plan)'
+        }
+      };
+    case 'https_refused':
+      return {
+        content: FLIGHT_UNAVAILABLE,
+        reason: 'no_source',
+        notice: {
+          level: 'warn',
+          message: 'aviationstack refused HTTPS for this key. A free key works only over plain HTTP, which is never used.',
+          fix: 'Use an aviationstack plan with HTTPS for AVIATIONSTACK_API_KEY'
+        }
+      };
+    case 'busy':
+      return {
+        content: `The live flight data source is busy right now. ${NO_TIMES} Suggest checking again later.`,
+        reason: 'busy',
+        notice: {
+          level: 'warn',
+          message: 'Live flight status is busy: the aviationstack call budget or the plan limit is used up for now.',
+          fix: 'Raise the aviationstack entry in PROVIDER_BUDGETS to match the plan, or wait for the limit to reset'
+        }
+      };
+    case 'unavailable':
+      return {
+        content: `The live flight data source did not answer. ${NO_TIMES}`,
+        reason: 'no_answer',
+        notice: { level: 'warn', message: 'aviationstack did not answer with flight data.' }
+      };
+    case 'no_record':
+      return {
+        content: `The live flight data source has no record for ${flightNumber} right now. ${NO_TIMES}`,
+        reason: 'no_record',
+        notice: { level: 'info', message: `aviationstack has no live record for ${flightNumber} right now.` }
+      };
+  }
 };
 
 export const flightStatusTool: ChatTool = {
   name: 'get_flight_status',
   description:
-    'Track a FLIGHT — status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate, and a route-progress arc. Use when the user asks "where is flight X", "is UA 2402 on time", or wants to track an upcoming flight. Pass the IATA flight number (e.g. "UA2402"); with a configured aviationstack key the data is live. WITHOUT the key, also pass whatever schedule you know (departure/arrival codes and times) so the card renders schedule-only — never invent gates or delays.',
+    'Track a FLIGHT by its IATA flight number (e.g. "UA2402"). With a configured live flight data source it returns the live status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate and a route-progress arc. Without live data (no source, or the source is busy, did not answer or has no record) the card shows only the flight number and a link to check it on the web: then tell the user the reason this tool gives, and do not state times, gates or delays — not even ones you remember.',
   parameters: {
     type: 'object',
     properties: {
       flightNumber: { type: 'string', description: 'IATA flight number, e.g. "UA2402".' },
-      airline: { type: 'string' },
-      status: { type: 'string', enum: FLIGHT_PHASES, description: 'Your best known status (fallback mode only).' },
-      departure: {
-        type: 'object',
-        properties: { code: { type: 'string' }, city: { type: 'string' }, scheduled: { type: 'string', description: 'ISO datetime.' }, terminal: { type: 'string' }, gate: { type: 'string' } },
-        required: ['code']
-      },
-      arrival: {
-        type: 'object',
-        properties: { code: { type: 'string' }, city: { type: 'string' }, scheduled: { type: 'string' }, terminal: { type: 'string' } },
-        required: ['code']
-      }
+      airline: { type: 'string', description: 'Airline name, e.g. "United" (optional).' }
     },
     required: ['flightNumber']
   },
   execute: async (args, signal) => {
     const flightNumber = str(args?.flightNumber, 10)?.toUpperCase().replace(/\s+/g, '');
     if (!flightNumber) return { content: 'A flight number is required, e.g. "UA2402".' };
+    const airline = str(args?.airline, 60);
     const key = envKey('AVIATIONSTACK_API_KEY');
-    if (key) {
-      const flight = await fetchAviationstack(flightNumber, key, signal);
-      const dep = avsEndpoint(flight?.departure);
-      const arr = avsEndpoint(flight?.arrival);
-      if (flight && dep && arr) {
-        const status = FLIGHT_PHASES.includes(flight.flight_status as FlightPhase) ? (flight.flight_status as FlightPhase) : 'unknown';
-        const delayMin = num(flight.departure?.delay);
-        const data: FlightStatusArtifact = {
-          airline: str(flight.airline?.name, 60) ?? str(args?.airline, 60),
-          flightNumber,
-          status,
-          departure: dep,
-          arrival: arr,
-          progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : status === 'scheduled' ? 0 : undefined,
-          altitudeM: num(flight.live?.altitude),
-          speedKmh: num(flight.live?.speed_horizontal),
-          delayMin,
-          live: true,
-          asOf: new Date().toISOString()
-        };
-        return {
-          content: `Live flight status for ${flightNumber}: ${status}${delayMin ? `, departure delayed ${delayMin} min` : ''}, ${dep.code} → ${arr.code}. The tracker card carries the detail — one short line is enough.`,
-          artifacts: [{ type: 'flight_status', data }]
-        };
-      }
-      // Keyed but no match — fall through to schedule-only with an honest note.
-    }
-    const dep = coerceFlightEndpoint(args?.departure);
-    const arr = coerceFlightEndpoint(args?.arrival);
-    if (!dep || !arr) {
+    const answer = key ? await fetchAviationstack(flightNumber, key, signal) : undefined;
+    const flight = answer?.ok ? answer.flight : null;
+    const dep = avsEndpoint(flight?.departure);
+    const arr = avsEndpoint(flight?.arrival);
+    if (flight && dep && arr) {
+      const status = FLIGHT_PHASES.includes(flight.flight_status as FlightPhase) ? (flight.flight_status as FlightPhase) : 'unknown';
+      const delayMin = num(flight.departure?.delay);
+      const data: FlightStatusArtifact = {
+        airline: str(flight.airline?.name, 60) ?? airline,
+        flightNumber,
+        status,
+        departure: dep,
+        arrival: arr,
+        progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : status === 'scheduled' ? 0 : undefined,
+        altitudeM: num(flight.live?.altitude),
+        speedKmh: num(flight.live?.speed_horizontal),
+        delayMin,
+        live: true,
+        asOf: new Date().toISOString()
+      };
       return {
-        content: key
-          ? `No live record found for ${flightNumber} (it may not be operating today). Provide the departure/arrival airports and times you know to render a schedule-only card.`
-          : `Live flight tracking is not configured. Provide the departure/arrival airports and scheduled times you know for ${flightNumber} and call this tool again to render a schedule-only card.`,
-        notice: {
-          level: key ? ('warn' as const) : ('info' as const),
-          message: key ? `aviationstack had no live record for ${flightNumber}.` : 'Flight tracking is in schedule-only mode — live status needs a key.',
-          fix: key ? undefined : 'Set AVIATIONSTACK_API_KEY (free 100 req/mo: aviationstack.com)'
-        }
+        content: `Live flight status for ${flightNumber}: ${status}${delayMin ? `, departure delayed ${delayMin} min` : ''}, ${dep.code} → ${arr.code}. The tracker card carries the detail — one short line is enough.`,
+        artifacts: [{ type: 'flight_status', data }]
       };
     }
-    const status = FLIGHT_PHASES.includes(args?.status as FlightPhase) ? (args?.status as FlightPhase) : 'scheduled';
-    const data: FlightStatusArtifact = {
-      airline: str(args?.airline, 60),
-      flightNumber,
-      status,
-      departure: dep,
-      arrival: arr,
-      progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : 0,
-      live: false,
-      asOf: new Date().toISOString()
-    };
+    // A record without both airports cannot draw a route: it is no live record either.
+    const miss = flightMiss(flightNumber, !answer ? 'no_key' : 'miss' in answer ? answer.miss : 'no_record');
     return {
-      content: `Rendered ${flightNumber} ${dep.code} → ${arr.code} as a SCHEDULE-ONLY tracker (no live provider configured). Tell the user this reflects the schedule, not live status.`,
-      artifacts: [{ type: 'flight_status', data }],
-      notice: {
-        level: 'info' as const,
-        message: 'Flight card is schedule-only — live status/delays need a key.',
-        fix: key ? undefined : 'Set AVIATIONSTACK_API_KEY (free 100 req/mo: aviationstack.com)'
-      }
+      content: `${miss.content} ${FLIGHT_CARD_NOTE}`,
+      artifacts: [{ type: 'flight_status', data: unavailableFlight(flightNumber, airline, miss.reason) }],
+      notice: miss.notice
     };
   }
 };

@@ -45,6 +45,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/settled-cards.md` | Comic Studio's settled chat cards: when a card settles, its one-line summary, the gate outcome stamps and plan counts, the SETTLED_CARDS stage, and the director wave note. |
 | `features/link-previews.md` | Link previews on comics.dreamstreamstudio.ai: the home and Library heads (edge), the `/library` redirect, share-link heads and `?lang=`, the preview pictures (`scripts/og-cards.mjs`, the per-comic card's ink mark) and how each part ships. |
 | `features/discovery.md` | Discover's public listing: the edge routes /api/comic/public/discover[/shelves], the item allow-list (bylines only with Show my username), the ask-first SQL comic_discovery.sql, featured seeding, tests. |
+| `features/comic-research.md` | Comic Studio research as it works today: the composer's research sheet and the Director's `research_comic` tool, what goes to Wikipedia and Wikimedia Commons, the link and picture-licence allowlist, budget, cache, failure states and key files. |
 
 ## Conventions
 

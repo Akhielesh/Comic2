@@ -157,9 +157,11 @@ export const LIBRARY_CALL_KIND = 'library';
 export const LAB_CALL_KIND_PREFIX = 'lab_';
 /** The comic_image_calls kind a Model Lab call is recorded under. */
 export const labCallKind = (kind: string): string => `${LAB_CALL_KIND_PREFIX}${kind}`.slice(0, 20);
-/** A comic_image_calls row written by admin spend (library or lab): never part of users' model stats. */
+/** comic_image_calls.kind prefix of a house comics call ('house_page', 'house_sheet'; shared/comic/house.ts). */
+export const HOUSE_CALL_KIND_PREFIX = 'house_';
+/** A comic_image_calls row written by admin spend (library, lab or house comics): never part of users' model stats. */
 export const isAdminSpendCallKind = (kind: string | null | undefined): boolean =>
-  typeof kind === 'string' && (kind === LIBRARY_CALL_KIND || kind.startsWith(LAB_CALL_KIND_PREFIX));
+  typeof kind === 'string' && (kind === LIBRARY_CALL_KIND || kind.startsWith(LAB_CALL_KIND_PREFIX) || kind.startsWith(HOUSE_CALL_KIND_PREFIX));
 
 /** Admin-only billing line of GET /manifest. Never carries a key. */
 export interface LibraryBillingView {

@@ -41,7 +41,9 @@ Key properties you can rely on while researching:
 1. **Auth model** — key in query/header? OAuth? (OAuth = much more work; avoid
    unless necessary, e.g. Reddit.)
 2. **Rate limit on the FREE tier** — per minute and per month. Our refresh
-   pattern polls; a 100/month tier (aviationstack) supports ~3 lookups/day.
+   pattern polls (a pinned tile refreshes every few minutes), so a small monthly
+   quota goes fast. Check the free tier works over HTTPS at all: aviationstack's
+   does not, so only its paid HTTPS plans work (budgeted 5/min, 30/day by default).
 3. **Server-side friendly** — we call from Node (Railway), so CORS doesn't
    matter, but IP-based limits do (shared egress IPs can be pre-exhausted —
    exactly what happened with keyless GitHub in testing).
@@ -85,7 +87,7 @@ moment it exists. **No research needed, just sign-up.**
 | `GITHUB_TOKEN` | github.com → Settings → Developer settings → fine-grained PAT (public repos, read-only) | `/code-review` PR fetches: 60/hr → 5,000/hr | free |
 | `FRED_API_KEY` | fred.stlouisfed.org/docs/api/api_key.html | **Macro tiles go live** (CPI, unemployment, GDP, Fed funds… real series + sparklines) | free, generous |
 | `FINNHUB_API_KEY` | finnhub.io/register | **Earnings calendar goes live**; economic calendar *if your tier includes it* (verify — see §4-B) | 60 calls/min |
-| `AVIATIONSTACK_API_KEY` | aviationstack.com (free plan) | **Flight status goes live** (real-time status, delays, gates) | 100 req/month (≈3 lookups/day — fine for personal trips) |
+| `AVIATIONSTACK_API_KEY` | aviationstack.com (a paid plan: the key must work over HTTPS) | **Flight status goes live** (real-time status, delays, gates) | per plan; the free plan is HTTP-only and counts as no key (keys are never sent over plain HTTP) |
 | `FOURSQUARE_API_KEY` | developer.foursquare.com | Place ratings/photos/price on `find_places` | free tier |
 | `TAVILY_API_KEY` *or* `BRAVE_API_KEY` | tavily.com / brave.com/search/api | Reliable web search (research + deep-research quality jumps) | both have free tiers |
 | `NASA_API_KEY` | api.nasa.gov | APOD limits 30/hr → 1,000/hr | free |
@@ -210,8 +212,8 @@ is covered by Finnhub in §3).
 
 ## TL;DR — your shopping list, in order
 
-1. Grab the §3 free keys (GITHUB, FRED, FINNHUB, AVIATIONSTACK, FOURSQUARE,
-   TAVILY) — ~1 hour total, several widgets go live instantly.
+1. Grab the §3 free keys (GITHUB, FRED, FINNHUB, FOURSQUARE, TAVILY; AVIATIONSTACK
+   only on a paid HTTPS plan) — ~1 hour total, several widgets go live instantly.
 2. Decide §4-A: pay for a market-data vendor or stay on keyless Yahoo.
 3. Test §4-B econ-calendar candidates with curl; pick whichever free tier
    actually returns actual/forecast/previous.

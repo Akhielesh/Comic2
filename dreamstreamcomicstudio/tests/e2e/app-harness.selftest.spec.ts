@@ -50,6 +50,33 @@ test.describe('app harness probes', () => {
     expect(fast.ms).toBeLessThan(650);
   });
 
+  test('Commons thumbnails: a CORS-readable fixture picture at 3:2, a 404 for Missing_ files, every other remote image still blocked', async ({ page }, testInfo) => {
+    const qa = harness(page, testInfo);
+    await qa.route();
+    await serve(page, `<main>pictures</main>`);
+    // The research tiles load with crossOrigin="anonymous": an answer without CORS headers would fail like a 404.
+    const load = (src: string) =>
+      page.evaluate(
+        (s) =>
+          new Promise<string>((resolve) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => resolve(`${img.naturalWidth}x${img.naturalHeight}`);
+            img.onerror = () => resolve('error');
+            img.src = s;
+          }),
+        src
+      );
+    const thumb = (file: string, w = 320) => `https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/${file}/${w}px-${file}`;
+    expect(await load(thumb('Harbour_at_dawn.jpg'))).toBe('320x213');
+    expect(await load(thumb('Harbour_at_dawn.jpg', 640))).toBe('640x427');
+    expect(await load(thumb('Missing_harbour.jpg'))).toBe('error');
+    expect(await page.evaluate(async (u) => (await fetch(u)).status, thumb('Missing_harbour.jpg'))).toBe(404);
+    for (const src of ['https://upload.wikimedia.org/wikipedia/en/thumb/a/ab/X.jpg/320px-X.jpg', 'https://upload.wikimedia.org/wikipedia/commons/a/ab/X.jpg', 'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/X.jpg/320px-X.jpg', 'https://images.example.org/x.png']) {
+      expect(await load(src), src).toBe('error');
+    }
+  });
+
   test('legacyClasses: variant, important and opacity forms of the legacy kit; the token face is not legacy', async ({ page }, testInfo) => {
     const qa = harness(page, testInfo);
     await page.setContent(html(`<main><div class="md:shadow-comic hover:border-black/50 bg-brand-yellow/40 md:!font-comic ds-font-display p-2">legacy</div></main>`));

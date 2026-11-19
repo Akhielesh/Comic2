@@ -1,11 +1,14 @@
 // Geography & reference tools — countries, IP geolocation, public holidays,
-// sunrise/sunset, world time, postal codes and universities. All free & keyless.
+// sunrise/sunset, world time, postal codes and universities. Free; all keyless except
+// IP geolocation (a free IPinfo token).
 // Structured results also emit rich artifact cards (metric_board / data_table /
 // world_clocks) so they render as widgets and pin to dashboards.
 
 import type { ChatTool } from './types.js';
 import type { DataTableArtifact, MetricBoardArtifact, MetricTile, WorldClocksArtifact } from '../../../../apiTypes.js';
-import { fetchJson } from './http.js';
+import { envKey, fetchJson } from './http.js';
+import { wikidataCountry, type CountryFacts } from './wikipedia.js';
+import { ProviderBudgetError } from '../../lib/providerUsage.js';
 
 // Shared geocoder (Open-Meteo) — name → coordinates + IANA timezone. Keyless.
 interface GeoHit {
@@ -24,20 +27,9 @@ const geocode = async (place: string, signal?: AbortSignal): Promise<GeoHit | nu
   return data.results?.[0] || null;
 };
 
-// --- REST Countries -------------------------------------------------------------
-export interface Country {
-  name?: { common?: string; official?: string };
-  capital?: string[];
-  population?: number;
-  region?: string;
-  subregion?: string;
-  languages?: Record<string, string>;
-  currencies?: Record<string, { name?: string; symbol?: string }>;
-  flags?: { png?: string; svg?: string };
-  area?: number;
-  timezones?: string[];
-  cca2?: string;
-}
+// --- Country facts (Wikidata, CC0) ----------------------------------------------
+// REST Countries retired its keyless API (v3.1 answers an error object, not a list); its v5 needs a
+// paid key. Wikidata is free, keyless and CC0; the flag image comes from flagcdn.com as before.
 
 /** ISO 3166-1 alpha-2 → flag emoji via regional indicator symbols. Pure. */
 export const flagEmoji = (cca2?: string): string => {
@@ -46,95 +38,84 @@ export const flagEmoji = (cca2?: string): string => {
   return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 };
 
-/** Map a REST Countries record to a KPI metric board (flag emoji in the title). Pure. */
-export const countryToMetrics = (c: Country): MetricBoardArtifact => {
+/** Map Wikidata country facts to a KPI metric board (flag emoji in the title). Pure. */
+export const countryToMetrics = (c: CountryFacts): MetricBoardArtifact => {
   const tiles: MetricTile[] = [];
   if (typeof c.population === 'number') tiles.push({ label: 'Population', value: c.population });
-  if (typeof c.area === 'number') tiles.push({ label: 'Area', value: c.area, unit: 'km²' });
-  tiles.push({ label: 'Capital', value: c.capital?.join(', ') || '—' });
-  tiles.push({ label: 'Region', value: c.subregion || c.region || '—' });
-  const currencies = c.currencies ? Object.entries(c.currencies) : [];
-  if (currencies.length) {
-    // Glanceable code(s); full currency names stay in the model-facing text.
-    const [code, v] = currencies[0];
+  if (typeof c.areaKm2 === 'number') tiles.push({ label: 'Area', value: c.areaKm2, unit: 'km²' });
+  tiles.push({ label: 'Capital', value: c.capitals.join(', ') || '—' });
+  tiles.push({ label: 'Continent', value: c.continents.join(', ') || '—' });
+  if (c.currencies.length) {
     tiles.push(
-      currencies.length === 1
-        ? { label: 'Currency', value: code, unit: v.symbol }
-        : { label: 'Currencies', value: currencies.map(([cc]) => cc).slice(0, 3).join(', ') }
+      c.currencies.length === 1
+        ? { label: 'Currency', value: c.currencies[0] }
+        : { label: 'Currencies', value: c.currencies.slice(0, 3).join(', ') }
     );
   }
-  const langs = c.languages ? Object.values(c.languages) : [];
-  if (langs.length) {
+  if (c.languages.length) {
     tiles.push(
-      langs.length <= 2
-        ? { label: 'Languages', value: langs.join(', ') }
-        : { label: 'Languages', value: langs.length, unit: `incl. ${langs[0]}` }
+      c.languages.length <= 2
+        ? { label: 'Languages', value: c.languages.join(', ') }
+        : { label: 'Languages', value: c.languages.length, unit: `incl. ${c.languages[0]}` }
     );
   }
-  if (c.timezones?.length) {
-    tiles.push(
-      c.timezones.length === 1
-        ? { label: 'Timezone', value: c.timezones[0] }
-        : { label: 'Timezones', value: c.timezones.length, unit: 'zones' }
-    );
-  }
-  const flag = flagEmoji(c.cca2);
-  return { title: `${flag ? `${flag} ` : ''}${c.name?.common || 'Country'}`, columns: 3, tiles };
+  const flag = flagEmoji(c.alpha2);
+  return { title: `${flag ? `${flag} ` : ''}${c.name || 'Country'}`, columns: 3, tiles };
 };
+
+const COUNTRY_OFFLINE = 'The country facts source is offline right now. Do not state figures from memory as current; say the facts could not be checked.';
+const COUNTRY_BUSY = 'The country facts source is busy right now (too many look-ups this minute). Try again shortly; do not state figures from memory as current.';
 
 export const countryInfoTool: ChatTool = {
   name: 'country_info',
   description:
-    'Get facts about a country: capital, population, region, official languages, currencies, area, timezones and flag. Use whenever the user asks about a country or compares countries.',
+    'Get facts about a country from Wikidata: capital, population, continent, official languages, currency, area and flag. Use whenever the user asks about a country or compares countries.',
   parameters: {
     type: 'object',
-    properties: { country: { type: 'string', description: 'Country name or code, e.g. "Japan", "Brazil", "DE".' } },
+    properties: { country: { type: 'string', description: 'Country name or ISO code, e.g. "Japan", "Brazil", "DE", "IND".' } },
     required: ['country']
   },
   execute: async (args, signal) => {
     const country = String(args?.country || '').trim();
     if (!country) return { content: 'No country was provided.' };
+    let c: CountryFacts | null;
     try {
-      const data = await fetchJson<Country[]>(
-        `https://restcountries.com/v3.1/name/${encodeURIComponent(country)}?fields=name,capital,population,region,subregion,languages,currencies,flags,area,timezones,cca2`,
-        { signal }
-      );
-      const c = Array.isArray(data) ? data[0] : undefined;
-      if (!c?.name?.common) return { content: `No country found matching "${country}".` };
-      const langs = c.languages ? Object.values(c.languages).join(', ') : '—';
-      const curr = c.currencies
-        ? Object.entries(c.currencies).map(([code, v]) => `${v.name || code} (${v.symbol || code})`).join(', ')
-        : '—';
-      const content =
-        `${c.name.common}${c.name.official && c.name.official !== c.name.common ? ` (${c.name.official})` : ''}\n` +
-        `• Capital: ${c.capital?.join(', ') || '—'}\n` +
-        `• Population: ${c.population?.toLocaleString() || '—'}\n` +
-        `• Region: ${c.subregion || c.region || '—'}\n` +
-        `• Languages: ${langs}\n` +
-        `• Currency: ${curr}\n` +
-        `• Area: ${c.area ? `${c.area.toLocaleString()} km²` : '—'}\n` +
-        `• Timezones: ${c.timezones?.slice(0, 4).join(', ') || '—'}`;
-      const flag = c.flags?.png;
-      return {
-        content: `${content}\n(A country fact board is shown to the user — don't repeat the numbers.)`,
-        ...(flag ? { images: [{ url: flag, title: `Flag of ${c.name.common}`, source: 'REST Countries' }] } : {}),
-        artifacts: [{ type: 'metric_board', data: countryToMetrics(c) }]
-      };
+      c = await wikidataCountry(country, { signal });
     } catch (err) {
-      return { content: `Country lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+      // Never "not found": the source did not answer (network, API error, a reply in another shape).
+      return { content: err instanceof ProviderBudgetError ? COUNTRY_BUSY : COUNTRY_OFFLINE };
     }
+    if (!c) return { content: `No country found matching "${country}".` };
+    const content =
+      `${c.name}\n` +
+      `• Capital: ${c.capitals.join(', ') || '—'}\n` +
+      `• Population: ${typeof c.population === 'number' ? `${c.population.toLocaleString('en-US')}${c.populationYear ? ` (${c.populationYear})` : ''}` : '—'}\n` +
+      `• Continent: ${c.continents.join(', ') || '—'}\n` +
+      `• Official languages: ${c.languages.join(', ') || '—'}\n` +
+      `• Currency: ${c.currencies.join(', ') || '—'}\n` +
+      `• Area: ${typeof c.areaKm2 === 'number' ? `${c.areaKm2.toLocaleString('en-US')} km²` : '—'}\n` +
+      `Source: Wikidata (CC0), ${c.url}\n` +
+      `(A country fact board is shown to the user — don't repeat the numbers.)`;
+    const flag = c.alpha2 ? `https://flagcdn.com/w320/${c.alpha2.toLowerCase()}.png` : undefined;
+    return {
+      content,
+      ...(flag ? { images: [{ url: flag, title: `Flag of ${c.name}`, source: 'flagcdn.com' }] } : {}),
+      citations: [{ url: c.url, title: `${c.name} — Wikidata` }],
+      artifacts: [{ type: 'metric_board', data: countryToMetrics(c) }]
+    };
   }
 };
 
-// --- IP / domain geolocation (IPinfo Lite → ip-api.com) ---------------------------
-// IPinfo Lite (free token, unlimited, commercial use allowed with attribution) is the
-// primary when IPINFO_TOKEN is set — country/network-level only. The keyless
-// ip-api.com endpoint is licensed for NON-commercial use only, so it serves purely as
-// the dev/unconfigured fallback and says so honestly in the notice.
+// --- IP / domain geolocation (IPinfo Lite) ----------------------------------------
+// IPinfo Lite (free token, unlimited, commercial use allowed with attribution), country and
+// network level, over HTTPS. Without IPINFO_TOKEN the tool says it needs a data source: there is
+// no keyless fallback (ip-api.com's free tier is plain HTTP and non-commercial).
+const IP_UNAVAILABLE = 'IP lookup needs a configured data source.';
+
 export const ipLookupTool: ChatTool = {
   name: 'ip_lookup',
   description:
-    'Geolocate an IP address or domain — country, network/ISP and (when available) region, city and coordinates. Use for "where is this IP/server", network diagnostics, or locating a hostname.',
+    'Geolocate an IP address or domain: country, continent and network/ISP (IPinfo Lite). Use for "where is this IP/server", network diagnostics, or locating a hostname. When it says IP lookup needs a configured data source, tell the user so; never guess a location.',
   parameters: {
     type: 'object',
     properties: { ip: { type: 'string', description: 'An IPv4/IPv6 address or a domain name, e.g. "8.8.8.8" or "github.com".' } },
@@ -143,48 +124,26 @@ export const ipLookupTool: ChatTool = {
   execute: async (args, signal) => {
     const ip = String(args?.ip || '').trim();
     if (!ip) return { content: 'No IP address or domain was provided.' };
-    const token = process.env.IPINFO_TOKEN;
-    if (token) {
-      try {
-        const d = await fetchJson<Record<string, unknown>>(
-          `https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(token)}`,
-          { signal }
-        );
-        const content =
-          `${d.ip || ip}\n` +
-          `• Country: ${[d.country, d.country_code ? `(${d.country_code})` : ''].filter(Boolean).join(' ') || '—'}\n` +
-          `• Continent: ${d.continent || '—'}\n` +
-          `• Network: ${[d.asn, d.as_name].filter(Boolean).join(' — ') || '—'}\n` +
-          `• Operator domain: ${d.as_domain || '—'}\n` +
-          `(Country/network-level via IPinfo Lite.)`;
-        return { content, citations: [{ url: 'https://ipinfo.io', title: 'IP data by IPinfo' }] };
-      } catch {
-        /* fall through to the keyless fallback */
-      }
+    const token = envKey('IPINFO_TOKEN');
+    if (!token) {
+      return {
+        content: `${IP_UNAVAILABLE} Do not guess where this address is.`,
+        notice: { level: 'info', message: IP_UNAVAILABLE, fix: 'Set IPINFO_TOKEN (a free IPinfo Lite token)' }
+      };
     }
     try {
       const d = await fetchJson<Record<string, unknown>>(
-        `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,query`,
+        `https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(token)}`,
         { signal }
       );
-      if (d.status !== 'success') return { content: `Could not locate "${ip}": ${d.message || 'not found'}.` };
       const content =
-        `${d.query || ip}\n` +
-        `• Location: ${[d.city, d.regionName, d.country].filter(Boolean).join(', ') || '—'}\n` +
-        `• Coordinates: ${d.lat}, ${d.lon}\n` +
-        `• Timezone: ${d.timezone || '—'}\n` +
-        `• ISP / Org: ${[d.isp, d.org].filter(Boolean).join(' / ') || '—'}\n` +
-        `• Network: ${d.as || '—'}`;
-      return {
-        content,
-        notice: token
-          ? undefined
-          : {
-              level: 'info',
-              message: 'Served by ip-api.com (free tier is licensed for non-commercial use only).',
-              fix: 'Set IPINFO_TOKEN (free IPinfo Lite, commercial-OK with attribution) for a compliant primary source'
-            }
-      };
+        `${d.ip || ip}\n` +
+        `• Country: ${[d.country, d.country_code ? `(${d.country_code})` : ''].filter(Boolean).join(' ') || '—'}\n` +
+        `• Continent: ${d.continent || '—'}\n` +
+        `• Network: ${[d.asn, d.as_name].filter(Boolean).join(' — ') || '—'}\n` +
+        `• Operator domain: ${d.as_domain || '—'}\n` +
+        `(Country/network-level via IPinfo Lite.)`;
+      return { content, citations: [{ url: 'https://ipinfo.io', title: 'IP data by IPinfo' }] };
     } catch (err) {
       return { content: `IP lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

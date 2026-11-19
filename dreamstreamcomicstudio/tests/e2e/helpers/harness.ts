@@ -13,13 +13,14 @@
 // motion probes (recordMotionStarts() / motionStarts(), animations(), settleAnimations()); tests/e2e/
 // app-harness.selftest.spec.ts proves each of them can fail.
 //
-// Every page gets: fixture images served from fixtures/genImages.ts, every other origin BLOCKED (the
-// harness is offline by construction), page errors collected as `console` findings, and the known
+// Every page gets: fixture images served from fixtures/genImages.ts (Wikimedia Commons thumbnails, the research
+// pictures, answered with fixture pictures too), every other origin BLOCKED (the harness is offline by
+// construction), page errors collected as `console` findings, and the known
 // test failures of allowlist.json applied (expected-fail / skip, with the owner package in the title).
 
 import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
 import { deviceByName, type ComicDevice, type ProjectLook } from '../devices';
-import { qaImageBytes, QA_IMAGE_RE } from '../fixtures/genImages';
+import { COMMONS_UPLOAD_ORIGIN, commonsThumbFixture, qaImageBytes, QA_IMAGE_RE } from '../fixtures/genImages';
 import { expectLayoutClean, type CleanOptions, type Finding } from './layoutAsserts';
 import { knownTestFailure } from './allowlist';
 import { emulateHinge, pageSeesSegments, setSafeAreas, stubSegments, type HingeResult } from './safeArea';
@@ -127,7 +128,8 @@ export class QaHarness {
     });
   }
 
-  private async route(): Promise<void> {
+  /** Install the offline routes (open() and delayImages() call it first; once per page). */
+  async route(): Promise<void> {
     if (this.routed) return;
     this.routed = true;
     const base = new URL(this.testInfo.project.use.baseURL || 'http://127.0.0.1:4179');
@@ -141,6 +143,16 @@ export class QaHarness {
           return route.fulfill({ status: 200, contentType: 'image/png', body: await bytes, headers: { 'Cache-Control': 'max-age=3600' } });
         }
         return route.continue();
+      }
+      // Research pictures (qa/app/scenes/research.tsx): a Commons thumbnail gets a fixture picture, so the scenes
+      // measure loaded tiles without leaving the machine; `Missing_…` files get a 404. CORS headers: the tiles load
+      // with crossOrigin="anonymous".
+      if (url.origin === COMMONS_UPLOAD_ORIGIN) {
+        const name = commonsThumbFixture(url.pathname);
+        const bytes = name ? qaImageBytes(name) : null;
+        const cors = { 'Access-Control-Allow-Origin': '*' };
+        if (!bytes) return route.fulfill({ status: 404, headers: cors, body: 'not a fixture thumbnail' });
+        return route.fulfill({ status: 200, contentType: 'image/png', body: await bytes, headers: { ...cors, 'Cache-Control': 'max-age=3600' } });
       }
       // Offline by construction: fonts, CDNs, Supabase, analytics — nothing leaves the machine.
       return route.abort('blockedbyclient');
