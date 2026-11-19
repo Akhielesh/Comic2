@@ -20,6 +20,13 @@
  * an animation (the hook drops the classes; the skin's CSS stops them as well). Timers exist only while a toast is
  * on screen: an idle page runs none.
  *
+ * Alerts (notify SPEC §5.3). A toast from the alert core (services/alerts/bus.ts) says so (`source: 'alert'`). It waits
+ * while someone else's toast is on screen: `toastSlotBusy()` is true while a non-alert app toast is shown or a component
+ * toast (a timeline Undo, a History restore) holds its claim, and the component ends its claim with `endToastClaim(id)`
+ * when its toast closes, so an alert never pushes an Undo off the screen. Slot listeners are told on every claim, on a
+ * dismissal and on an ended claim, so the core shows a waiting alert the moment the slot frees (no timer). A newer alert
+ * still replaces an older alert.
+ *
  * Announcements. The host keeps one polite status region in the page (TOAST_STATUS, present while idle too, so a
  * reader hears the toast that lands in it); an error card is an alert of its own beside that region, never inside it,
  * so it is announced once, at once (live regions do not nest).
@@ -44,10 +51,13 @@ export const TOAST_DURATION_MS = 8000;
 
 let claimSeq = 0;
 let slotOwner = 0;
+/** The component claim (claimToast) holding the slot until it is ended or replaced; 0 when none. */
+let componentClaim = 0;
 const slotListeners = new Set<() => void>();
+const notifySlot = () => slotListeners.forEach((listener) => listener());
 const publishSlot = (id: number) => {
   slotOwner = id;
-  slotListeners.forEach((listener) => listener());
+  notifySlot();
 };
 
 /** A claim on the slot: its id, and `release()` to stop listening for its loss (the claim itself stays until replaced). */
@@ -75,7 +85,18 @@ function claimSlot(onLost?: () => void): SlotClaim {
  * back; `onLost`, when given, is told once when that happens. (The timeline's `claimUndoToast` is this function.)
  */
 export function claimToast(onLost?: () => void): number {
-  return claimSlot(onLost).id;
+  const id = claimSlot(onLost).id;
+  componentClaim = id;
+  return id;
+}
+
+/**
+ * A component toast that claimed the slot (claimToast) has closed: the slot is free for a waiting alert. Ending a claim
+ * that no longer holds the slot changes nothing. Slot listeners are told.
+ */
+export function endToastClaim(id: number): void {
+  if (id > 0 && componentClaim === id) componentClaim = 0;
+  notifySlot();
 }
 
 /** Subscribes to slot changes (a claim); returns the unsubscribe. */
@@ -87,6 +108,16 @@ export function subscribeToastSlot(listener: () => void): () => void {
 /** The id of the claim that holds the slot now (0 before any claim). */
 export function toastSlotOwner(): number {
   return slotOwner;
+}
+
+/**
+ * Someone else's toast is on screen: a non-alert app toast, or a component toast whose claim holds the slot and has not
+ * ended. An alert toast on screen does not count (a newer alert replaces it).
+ */
+export function toastSlotBusy(): boolean {
+  const shown = host.current;
+  if (shown && shown.id === slotOwner) return shown.source !== 'alert';
+  return componentClaim > 0 && componentClaim === slotOwner;
 }
 
 /** Whether the claim `id` holds the slot, live. */
@@ -122,6 +153,8 @@ export interface ToastOptions {
   onDismiss?(): void;
   /** Told once when a newer toast (any claim on the slot) replaces it before that. */
   onLost?(): void;
+  /** 'alert': a toast from the alert core (it never makes the slot busy for another alert). Looks the same. */
+  source?: 'alert';
 }
 
 export interface ToastHandle {
@@ -137,6 +170,7 @@ interface HostToast {
   tone: ToastTone;
   action?: ToastAction;
   duration: number;
+  source?: 'alert';
   onDismiss?(): void;
   release(): void;
 }
@@ -174,6 +208,7 @@ export function toast(options: ToastOptions): ToastHandle {
     tone: options.tone ?? 'healthy',
     action: options.action,
     duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
+    ...(options.source === 'alert' ? { source: 'alert' as const } : {}),
     onDismiss: options.onDismiss,
     release: () => undefined
   };
@@ -195,6 +230,8 @@ export function dismissToast(id?: number): boolean {
   shown.release();
   setHost({ current: null, exiting: shown });
   shown.onDismiss?.();
+  // The slot is free now (its owner is no longer on screen): a waiting alert may show.
+  notifySlot();
   return true;
 }
 
@@ -205,6 +242,7 @@ const finishExit = (id: number) => {
 /** Test seam: forget every app toast (the slot's claims are kept; they are ids, not state). */
 export function resetToastsForTests(): void {
   host.current?.release();
+  componentClaim = 0;
   setHost(EMPTY);
 }
 

@@ -70,6 +70,7 @@ const WRAP_BUTTON = 'h-auto min-h-9 whitespace-normal py-2 text-left';
 const WRAP_LABEL = 'min-w-0 whitespace-normal';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
+import { AlertSettingsCard } from './alerts/AlertSettingsCard';
 
 // The photo button fills a round overflow-hidden frame, so the shared ring (drawn 2 px outside the element) would be
 // clipped away entirely. This one is drawn 4 px inside the button, where the frame cannot clip it.
@@ -787,6 +788,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 </div>
             )}
             {renderMessage(preferencesMessage)}
+
+            <AlertSettingsCard />
 
             <div className={CARD}>
                 <h3 className={CARD_HEADING}>Generation Cost</h3>

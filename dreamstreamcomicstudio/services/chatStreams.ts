@@ -12,7 +12,9 @@
 //    mounted — or none — reads and writes the same copy. Every write in AIChatPlatform goes through
 //    here and then to IndexedDB, outside any React updater;
 //  - which artifact writes (a calendar Confirm) are in flight, so a remounted card shows "Adding…"
-//    instead of offering the write again.
+//    instead of offering the write again;
+//  - which chats got an answer the person has not seen yet (notify NF-3: Chat's list shows an ink dot until the
+//    chat is opened). Page scope only: a reload forgets them, like the rest of this module.
 // Hot copies are kept only while they can matter: while a chat view is mounted (up to
 // HOT_SESSION_LIMIT idle chats), and after the last view unmounts only for chats with work still in
 // flight (a reply streaming, a calendar write). The rest is dropped then, so leaving Chat Studio does
@@ -31,6 +33,8 @@ const controllers = new Map<string, AbortController>();
 /** Insertion order = recency (oldest first). */
 const hot = new Map<string, ChatSession>();
 const artifactWrites = new Set<string>();
+/** Chats with an answer that landed while the person was not looking at them. */
+const unseen = new Set<string>();
 const listeners = new Set<Listener>();
 /** Chat views mounted now (retainChatView). */
 let views = 0;
@@ -39,6 +43,7 @@ const holds = new Map<string, number>();
 
 let version = 0;
 let streamingSnapshot: ReadonlySet<string> = new Set();
+let unseenSnapshot: ReadonlySet<string> = new Set();
 
 const emit = () => {
   version += 1;
@@ -206,11 +211,33 @@ export const endArtifactWrite = (key: string): void => {
 
 export const isArtifactWriteInFlight = (key: string): boolean => artifactWrites.has(key);
 
+// --- Answers not seen yet (the "new answer" dot) ---------------------------------------------------
+
+/** An answer landed in this chat while the person was not looking at it. */
+export const markAnswerUnseen = (sessionId: string): void => {
+  if (!sessionId || unseen.has(sessionId)) return;
+  unseen.add(sessionId);
+  unseenSnapshot = new Set(unseen);
+  emit();
+};
+
+/** The person opened (or came back to) this chat. */
+export const markAnswerSeen = (sessionId: string): void => {
+  if (!unseen.delete(sessionId)) return;
+  unseenSnapshot = new Set(unseen);
+  emit();
+};
+
+/** The chats with an unseen answer. The same Set until something changes (snapshot-safe). */
+export const unseenAnswerIds = (): ReadonlySet<string> => unseenSnapshot;
+
 /** Test-only: forget everything (module state outlives a test file's renders). */
 export const __resetChatStreamsForTests = (): void => {
   controllers.clear();
   hot.clear();
   artifactWrites.clear();
+  unseen.clear();
+  unseenSnapshot = new Set();
   listeners.clear();
   views = 0;
   holds.clear();

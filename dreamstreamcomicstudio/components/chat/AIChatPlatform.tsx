@@ -41,11 +41,15 @@ import {
   hotSessions,
   isStreaming,
   holdHotSession,
+  markAnswerSeen,
   putHotSession,
   retainChatView,
   streamingIds,
-  subscribeChatStreams
+  subscribeChatStreams,
+  unseenAnswerIds
 } from '../../services/chatStreams';
+import { CHAT_OPEN_EVENT, chatAnswered, watchChatSeen } from '../../services/alerts/chatAlerts';
+import { setLooking } from '../../services/alerts/bus';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -511,6 +515,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // answer is currently generating — kept in services/chatStreams (module scope), so a view mounted
   // while a reply from an earlier view is still streaming shows it busy and cannot send over it.
   const busyIds = useSyncExternalStore(subscribeChatStreams, streamingIds, streamingIds);
+  // Chats whose answer landed while the person was elsewhere (an ink dot in the list until opened; notify NF-3).
+  const unseenIds = useSyncExternalStore(subscribeChatStreams, unseenAnswerIds, unseenAnswerIds);
   // Sidebar starts open on desktop, closed on phones so the conversation owns the
   // whole screen (on mobile it opens as an overlay drawer, not an inline column).
   const [sidebarOpen, setSidebarOpen] = useState(
@@ -825,6 +831,27 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // Persist which chat is open so a reload restores it instead of the newest session.
     if (activeId) setLastActiveChatSessionId(activeId);
   }, [activeId]);
+
+  // Alerts (notify NF-3): the open chat is the one being looked at (an answer there never alerts while the tab is in
+  // front), opening it clears its "new answer" dot, and coming back to the tab clears it too.
+  useEffect(() => {
+    if (!activeId || view !== 'chat') return;
+    setLooking({ app: 'chat', id: activeId }, 'chat');
+    markAnswerSeen(activeId);
+    return () => setLooking(null, 'chat');
+  }, [activeId, view]);
+  useEffect(() => watchChatSeen(), []);
+  // An alert's Open while Chat is on screen: switch to that chat (sessionsRef holds the newest list).
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: unknown }>).detail?.id;
+      if (typeof id !== 'string' || !sessionsRef.current.some((s) => s.id === id)) return;
+      setActiveId(id);
+      setView('chat');
+    };
+    window.addEventListener(CHAT_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(CHAT_OPEN_EVENT, onOpen);
+  }, []);
 
   // Invariant repair: the open chat must exist in the list. Covers every path that can
   // remove it (background cloud merge dropping an untouched placeholder, deletes) by
@@ -1391,6 +1418,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         turns: s.turns.map((t) => (t.id === aiTurnId ? withAnswer(t, res, Date.now() - turnStartedAt) : t)),
         updatedAt: Date.now()
       }));
+      // The answer is saved: a chime and a toast if the person is elsewhere (a question or a confirm says so).
+      chatAnswered({ sessionId, turnId: aiTurnId, artifacts: res.artifacts });
       // Fold the tools that ran into local usage analytics (Settings → Tools).
       recordToolEvents(res.toolEvents);
       // Per-turn observability: capture a COMPACT success event (no message content) so
@@ -1494,6 +1523,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }),
         updatedAt: Date.now()
       }));
+      chatAnswered({ sessionId, turnId: aiTurnId, failed: true });
     } finally {
       endStream(sessionId, controller);
       noteGeneration(false);
@@ -1779,6 +1809,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             projects={projectsList}
             activeId={activeId}
             generatingIds={busyIds}
+            unseenIds={unseenIds}
             hasMemory={Boolean(memory.trim())}
             isAdmin={isAdmin}
             view={resolvedView}

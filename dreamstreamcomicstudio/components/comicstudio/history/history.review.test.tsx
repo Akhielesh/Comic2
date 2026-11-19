@@ -31,6 +31,7 @@ import { HISTORY_MOMENT_GONE, HISTORY_UNAVAILABLE } from './historyApi';
 import { MomentRow } from './MomentRow';
 import { claimUndoToast, UndoToast, useTimelineEdit } from '../timeline/UndoToast';
 import { RestoredToast } from './ui';
+import { toastSlotBusy } from '../../ds/Toast';
 import { gitWordsIn } from './historyModel';
 import { beforeRestoreId } from './historyActions';
 import { findLatestAiRow, findOwnRow } from './useHistory';
@@ -789,6 +790,30 @@ describe('one toast slot: a restore toast and a timeline Undo toast never stack 
     expect(screen.getByText('Page 2 deleted')).toBeInTheDocument();
     expect(document.querySelector('[data-history-toast]')).toBeNull();
     expect(undoButtons()).toHaveLength(1);
+  });
+
+  it('a closed toast lets go of the slot (alerts wait only while one is on screen): Undo dismissed, restore dismissed, unmount', () => {
+    const m = historySetup();
+    const view = mountWith(m, <Studio m={m} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    expect(toastSlotBusy()).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText('Page 1 deleted')).toBeNull();
+    expect(toastSlotBusy()).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore page 3' }));
+    expect(toastSlotBusy()).toBe(true);
+    fireEvent.click(within(document.querySelector<HTMLElement>('[data-history-toast]')!).getByRole('button', { name: 'Dismiss' }));
+    expect(document.querySelector('[data-history-toast]')).toBeNull();
+    expect(toastSlotBusy()).toBe(false);
+
+    // A timeline toast replaced by a newer edit keeps the slot busy (the newer one is on screen), then the surface
+    // goes away with it still showing: the slot is free again.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    expect(toastSlotBusy()).toBe(true);
+    view.unmount();
+    expect(toastSlotBusy()).toBe(false);
   });
 
   it('claimUndoToast is additive: it returns a fresh claim each time and a timeline toast still shows when newest', () => {

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claimToast,
   dismissToast,
+  endToastClaim,
   resetToastsForTests,
   subscribeToastSlot,
   toast,
@@ -19,6 +20,7 @@ import {
   TOAST_HOST,
   ToastCard,
   ToastHost,
+  toastSlotBusy,
   toastSlotOwner,
   useToastSlot
 } from './Toast';
@@ -324,6 +326,65 @@ describe('ToastHost', () => {
     act(() => handle.dismiss());
     act(() => void vi.advanceTimersByTime(TOAST_EXIT_FALLBACK_MS));
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('toastSlotBusy and endToastClaim (alerts wait for a toast someone is reading)', () => {
+  it('a component claim (a timeline Undo) keeps the slot busy until it ends; a newer claim decides after that', () => {
+    expect(toastSlotBusy()).toBe(false);
+    const undo = claimUndoToast();
+    expect(toastSlotBusy()).toBe(true);
+    endToastClaim(undo);
+    expect(toastSlotBusy()).toBe(false);
+    // Ending an old claim that no longer holds the slot changes nothing.
+    const restore = claimUndoToast();
+    endToastClaim(undo);
+    expect(toastSlotBusy()).toBe(true);
+    endToastClaim(restore);
+    expect(toastSlotBusy()).toBe(false);
+  });
+
+  it('an app toast on screen keeps it busy; an alert toast does not (a newer alert replaces it); a dismissed one frees it', () => {
+    render(<ToastHost />);
+    let app!: ReturnType<typeof toast>;
+    act(() => void (app = toast({ title: 'Invite accepted' })));
+    expect(toastSlotBusy()).toBe(true);
+    act(() => app.dismiss());
+    expect(toastSlotBusy()).toBe(false);
+    act(() => void toast({ title: 'The Director replied', source: 'alert' }));
+    expect(toastSlotBusy()).toBe(false);
+    expect(cards()).toHaveLength(1);
+    // A component claim over an alert toast makes it busy again.
+    let undo = 0;
+    act(() => void (undo = claimUndoToast()));
+    expect(cards()).toHaveLength(0);
+    expect(toastSlotBusy()).toBe(true);
+    act(() => endToastClaim(undo));
+    expect(toastSlotBusy()).toBe(false);
+  });
+
+  it('slot listeners are also told when a toast is dismissed and when a claim ends (the owner is unchanged)', () => {
+    const listener = vi.fn();
+    const off = subscribeToastSlot(listener);
+    const handle = toast({ title: 'Saved' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    const owner = toastSlotOwner();
+    handle.dismiss();
+    expect(listener).toHaveBeenCalledTimes(2);
+    const undo = claimUndoToast();
+    expect(listener).toHaveBeenCalledTimes(3);
+    endToastClaim(undo);
+    expect(listener).toHaveBeenCalledTimes(4);
+    expect(toastSlotOwner()).toBe(undo);
+    expect(toastSlotOwner()).not.toBe(owner);
+    off();
+  });
+
+  it('app toasts behave as before: the source changes nothing about how a toast shows', () => {
+    render(<ToastHost />);
+    act(() => void toast({ title: 'Pages are ready', message: 'Spice Market: 6 drawn', tone: 'healthy', source: 'alert' }));
+    expect(screen.getByText('Pages are ready')).toBeInTheDocument();
+    expect(liveAncestors(cards()[0])).toEqual([status()]);
   });
 });
 

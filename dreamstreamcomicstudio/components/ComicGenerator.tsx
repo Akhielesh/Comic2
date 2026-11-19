@@ -29,6 +29,7 @@ import {
   WRAP_TEXT,
   type StatusState
 } from './chat/studioDesign';
+import { playChimeNow } from '../services/alerts/bus';
 
 const CARD_SURFACE = 'bg-[var(--ds-surface)]';
 
@@ -60,24 +61,10 @@ const formatDuration = (totalSeconds: number): string => {
   return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
 };
 
+// The finish plays the alert core's Ready chime, through the person's Alerts settings (sound, volume), on the core's one
+// audio context; it makes none of its own (notify NF-4). Audio is optional: no press yet, or no Web Audio, stays silent.
 const playCompletionSound = () => {
-  try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(987.77, audioContext.currentTime);
-    gainNode.gain.setValueAtTime(0.18, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.45);
-
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + 0.45);
-  } catch {
-    // Audio is optional; blocked autoplay or unavailable APIs should not affect builds.
-  }
+  void playChimeNow('ready').catch(() => undefined);
 };
 
 type PhaseState = 'waiting' | 'active' | 'done' | 'warning';
