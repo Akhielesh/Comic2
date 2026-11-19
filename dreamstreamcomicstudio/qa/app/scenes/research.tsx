@@ -84,9 +84,9 @@ export const teluguResults = (): ComicResearchResults => ({
 
 const researchCard = (id: string): Extract<Card, { type: 'research' }> => ({ type: 'research', id, query: 'Lantern Harbour at night', results: researchResults() });
 
-/** A one-page comic at a rating, holding the card; the PG-13 one has one article and one picture pinned. */
+/** The heist comic (a general audience, so the chosen rating holds) at a rating; the PG-13 one has one article and one picture pinned. */
 const ratedDoc = (rating: 'G' | 'PG-13', pinned: boolean): ComicDoc => {
-  const doc = makeQaDoc('lake-1p');
+  const doc = makeQaDoc('heist-12p');
   doc.settings = { ...doc.settings, rating };
   if (pinned) {
     const [article] = researchResults().articles;

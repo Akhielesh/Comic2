@@ -98,6 +98,15 @@ describe('pictures that are safe to use', () => {
     for (const el of [tile('Free'), img]) for (const c of RADIUS_CONTROL.split(' ')) expect(el).toHaveClass(c);
     expect(container.innerHTML).not.toMatch(/rounded-(?:md|sm)\b/);
   });
+
+  it('a picture that cannot load becomes a calm empty tile, not a broken image', () => {
+    const { container } = render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={results({ images: [picture('Free', 'CC0'), picture('Old', 'Public domain')] })} kidsSafe={false} />);
+    fireEvent.error(container.querySelector('img')!);
+    expect(container.querySelectorAll('img')).toHaveLength(1);
+    const placeholder = within(tile('Free')).getByTestId('research-picture-unavailable');
+    for (const c of RADIUS_CONTROL.split(' ')) expect(placeholder).toHaveClass(c);
+    expect(within(tile('Free')).getByRole('link', { name: 'Open source for Free' })).toBeInTheDocument();
+  });
 });
 
 describe('articles', () => {

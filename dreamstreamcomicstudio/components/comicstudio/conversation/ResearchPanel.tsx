@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, ImagePlus, Images, Search } from 'lucide-react';
+import { ExternalLink, ImageOff, ImagePlus, Images, Search } from 'lucide-react';
 import { isAttachable, normalizeComicResearch, type ComicResearchResult, type ComicResearchResults } from '../../../shared/comic/research';
 import { languageSpec } from '../../../shared/comic/languages';
 import { post } from '../../../services/apiClient';
@@ -134,7 +134,7 @@ export function ResearchPanel({ projectId, onAdd, suppliedResults, kidsSafe = tr
             </div>
           )}
           {results.images.length > 0 && showPictures && (
-            <ul className="m-0 grid min-w-0 list-none grid-cols-[repeat(auto-fill,minmax(min(100%,8.5rem),1fr))] gap-2 p-0" aria-label="Image references">
+            <ul className="m-0 grid min-w-0 list-none grid-cols-[repeat(auto-fill,minmax(min(100%,8rem),1fr))] gap-2 p-0" aria-label="Image references">
               {results.images.map((result) => (
                 <PictureTile key={result.source} result={result} busy={busy} pinned={pinned(result.source)} onAdd={() => void addImage(result)} />
               ))}
@@ -194,10 +194,19 @@ function ArticleItem({ result, busy, pinned, onAdd }: { result: ComicResearchRes
 /** One picture: the image, a one-line title, a one-line credit, and what may be done with it. */
 function PictureTile({ result, busy, pinned, onAdd }: { result: ComicResearchResult; busy: boolean; pinned: boolean; onAdd: () => void }) {
   const titleId = useId();
+  // A picture Commons cannot serve (offline, blocked, removed) keeps its place as an empty well, never a broken image.
+  const [failed, setFailed] = useState(false);
   const credit = [result.credit, result.license].filter(Boolean).join(' · ');
+  const frame = cn('aspect-[3/2] w-full bg-[var(--ds-well)]', RADIUS_CONTROL);
   return (
     <li aria-labelledby={titleId} className={cn('min-w-0 border border-[var(--ds-hairline)] p-1', RADIUS_CONTROL)}>
-      <img alt="" src={result.thumbnail} crossOrigin="anonymous" loading="lazy" decoding="async" referrerPolicy="no-referrer" className={cn('aspect-[3/2] w-full bg-[var(--ds-well)] object-cover', RADIUS_CONTROL)} />
+      {failed ? (
+        <div data-testid="research-picture-unavailable" aria-hidden className={cn(frame, 'flex items-center justify-center', MUTED)}>
+          <ImageOff className="size-4" />
+        </div>
+      ) : (
+        <img alt="" src={result.thumbnail} crossOrigin="anonymous" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} className={cn(frame, 'object-cover')} />
+      )}
       <p id={titleId} title={result.title} dir="auto" className="mt-1 truncate text-[12px] font-semibold">{result.title}</p>
       {credit && <p title={credit} dir="auto" className={cn('truncate', NOTE)}>{credit}</p>}
       <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
