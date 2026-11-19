@@ -5,11 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, type ComicDoc } from '../../../../shared/comic/doc.js';
 import { publishableText } from '../../../../shared/comic/safety.js';
 import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
-import { StudioError } from '../types.js';
+import { StudioError, type LlmRequest } from '../types.js';
 import { ratingOf, sha256Hex } from './deps.js';
 import { cleanAnswer } from './fakes.js';
 import { runPublishGate } from './index.js';
-import { gateWindows, MAX_GATE_TEXT_CHARS } from './publishGate.js';
+import { GATE_IMAGE_PARALLEL, gateWindows, MAX_GATE_TEXT_CHARS } from './publishGate.js';
 import { expand, installSafetyFakes, resetSafety, type SafetyFakes } from './testkit.js';
 
 let fakes: SafetyFakes;
@@ -54,9 +54,10 @@ describe('runPublishGate', () => {
     expect(session.doc.safety?.publish).toMatchObject({ ok: true, rating: 'PG-13', blockers: [] });
     expect(session.doc.safety?.text?.assessed).toBe('G');
     // The three pages carry render-QC passes (from the call that also read the author's script), so
-    // each is re-rated image-only once (S14); the cover's non-QC verdict is reused. One text check.
-    // Platform-paid: nothing is reserved against the user's usage.
-    expect(fakes.llm.calls.map((c) => c.jsonSchema?.name)).toEqual(['comic_safety_image', 'comic_safety_image', 'comic_safety_image', 'comic_safety_text']);
+    // each is re-rated image-only once (S14); the cover's non-QC verdict is reused. One text check,
+    // run alongside the pictures (so the calls start in any order). Platform-paid: nothing is
+    // reserved against the user's usage.
+    expect(fakes.llm.calls.map((c) => c.jsonSchema?.name).sort()).toEqual(['comic_safety_image', 'comic_safety_image', 'comic_safety_image', 'comic_safety_text']);
     for (const p of session.doc.pages) expect(p.render.asset?.safety).toMatchObject({ assessed: expect.any(String), by: 'check' });
     expect(ctx.billingFake.reserves).toEqual([]);
   });
@@ -352,5 +353,251 @@ describe('runPublishGate: the whole text is read (S13)', () => {
     expect(err).toMatchObject({ code: 'LIMIT', status: 409 });
     expect(err.userMessage).toMatch(/more words than the safety check can read/);
     expect(fakes.llm.calls).toHaveLength(0);
+  });
+});
+
+// ── One pool: every picture at once (8 in flight), the words alongside (PUB-2) ──────────────
+
+/** A distinct (fake) picture per page, so an answer can depend on which page it rates. */
+const pictureUrl = (id: string) => `data:image/webp;base64,${Buffer.from(`picture-of-${id}`).toString('base64')}`;
+const pictureOf = (req: LlmRequest): string | undefined => {
+  const m = /data:image\/webp;base64,([A-Za-z0-9+/=]+)/.exec(JSON.stringify(req.messages));
+  return m ? Buffer.from(m[1], 'base64').toString().replace('picture-of-', '') : undefined;
+};
+
+/** `n` drawn pages (render-QC passes unless `by` says otherwise) and a drawn cover. */
+function poolDoc(n: number, opts: { by?: 'qc' | 'check' } = {}) {
+  const doc = plannedDoc();
+  const template = doc.pages[0];
+  const by = opts.by ?? 'qc';
+  doc.pages = Array.from({ length: n }, (_, i) => ({
+    ...template,
+    id: `pg_${i + 1}`,
+    n: i + 1,
+    panels: template.panels.map((pn, k) => ({ ...pn, id: `pn_${i + 1}_${k + 1}`, lines: pn.lines.map((l, j) => ({ ...l, id: `ln_${i + 1}_${k + 1}_${j}`, text: `Line on page ${i + 1}` })) })),
+    render: { ...emptyRender(), status: 'ready' as const, asset: { path: `u/user-1/p/proj-1/img/pg_${i + 1}.webp`, source: 'generated' as const, at: 1, safety: { assessed: 'G' as const, at: 1, by } } }
+  }));
+  // A cover with no verdict yet is checked at publish; a by:'check' one is reused.
+  doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 1, ...(by === 'check' ? { safety: { assessed: 'G' as const, at: 1, by } } : {}) } };
+  const session = newSession(doc);
+  const ctx = testContext(session);
+  for (const p of doc.pages) ctx.assetsFake.files.set(p.render.asset!.path, pictureUrl(p.id));
+  ctx.assetsFake.files.set('u/user-1/p/proj-1/img/cover.webp', pictureUrl('cover'));
+  return { doc: session.doc, ctx, session, ids: doc.pages.map((p) => p.id) };
+}
+
+/** Hold every platform call until the test releases it, so the test decides the order answers arrive in. */
+function holdCalls() {
+  const held: { req: LlmRequest; released: boolean; release: () => void }[] = [];
+  const answer = fakes.llm.complete.bind(fakes.llm);
+  fakes.llm.complete = (req) =>
+    new Promise((resolve, reject) => {
+      const h = {
+        req,
+        released: false,
+        release: () => {
+          h.released = true;
+          answer(req).then(resolve, reject);
+        }
+      };
+      held.push(h);
+    });
+  return { held, open: () => held.filter((h) => !h.released) };
+}
+
+const ticks = async (n = 12) => {
+  for (let i = 0; i < n; i += 1) await new Promise((resolve) => setImmediate(resolve));
+};
+
+/** Run to the end, releasing one open call at a time; `pick` chooses which (the arrival order). */
+async function drive<T>(run: Promise<T>, open: () => { release: () => void }[], pick: (n: number) => number = () => 0): Promise<T> {
+  let done = false;
+  void run.finally(() => {
+    done = true;
+  }).catch(() => undefined);
+  while (!done) {
+    await ticks();
+    const waiting = open();
+    if (waiting.length) waiting[pick(waiting.length)].release();
+  }
+  return run;
+}
+
+/** A small seeded shuffle (mulberry32), so every run of the suite tries the same orders. */
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+describe('runPublishGate: one pool for the pictures, the words alongside (PUB-2)', () => {
+  it('11 pages + cover + words: the first 8 picture checks and the words check are all in flight before any answers', async () => {
+    expect(GATE_IMAGE_PARALLEL).toBe(8);
+    const { doc, ctx, ids } = poolDoc(11);
+    const { held, open } = holdCalls();
+    const run = runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] });
+    await ticks();
+    expect(held.every((h) => !h.released)).toBe(true);
+    const pictures = held.filter((h) => h.req.jsonSchema?.name === 'comic_safety_image');
+    expect(pictures).toHaveLength(GATE_IMAGE_PARALLEL);
+    expect(new Set(pictures.map((h) => pictureOf(h.req)))).toEqual(new Set(ids.slice(0, 8)));
+    expect(held.filter((h) => h.req.jsonSchema?.name === 'comic_safety_text')).toHaveLength(1);
+    // Never more than 8 pictures at once, even as answers arrive.
+    let peak = 0;
+    const gate = await drive(run, () => {
+      peak = Math.max(peak, open().filter((h) => h.req.jsonSchema?.name === 'comic_safety_image').length);
+      return open();
+    });
+    expect(peak).toBeLessThanOrEqual(GATE_IMAGE_PARALLEL);
+    expect(gate.status).toBe('cleared');
+    expect(gate.cover).toEqual({ status: 'pass', reasons: [] });
+    expect(imageCalls()).toHaveLength(12); // 11 pages + the cover, each once
+    expect(textCalls()).toHaveLength(1);
+  });
+
+  it('a slow picture holds no one back: while pg_1 is still out, pg_9, pg_10, pg_11 and the cover are already sent', async () => {
+    const { doc, ctx, ids } = poolDoc(11);
+    const { held, open } = holdCalls();
+    const run = runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] });
+    await ticks();
+    const pictureIn = (h: { req: LlmRequest }) => (h.req.jsonSchema?.name === 'comic_safety_image' ? pictureOf(h.req) : undefined);
+    const slow = held.find((h) => pictureIn(h) === 'pg_1');
+    expect(slow).toBeDefined();
+    // Every other picture of the first eight answers; pg_1 (and the words) stay out.
+    for (const h of held) if (h !== slow && ids.slice(1, 8).includes(pictureIn(h) ?? '')) h.release();
+    await ticks(40);
+    expect(slow!.released).toBe(false);
+    const sent = new Set(held.map(pictureIn));
+    for (const id of ['pg_9', 'pg_10', 'pg_11', 'cover']) expect(sent.has(id)).toBe(true);
+    expect(open().filter((h) => pictureIn(h)).length).toBeLessThanOrEqual(GATE_IMAGE_PARALLEL);
+    const gate = await drive(run, open);
+    expect(gate.status).toBe('cleared');
+    expect(imageCalls()).toHaveLength(12);
+  });
+
+  it('the result, checkedHash, blockers and committed verdicts are identical whichever call answers first', async () => {
+    const answers = (req: LlmRequest) => {
+      if (req.jsonSchema?.name !== 'comic_safety_image') return cleanAnswer(req);
+      const page = pictureOf(req);
+      if (page === 'pg_3') return { ...cleanAnswer(req), rating: 'PG' };
+      if (page === 'pg_5') return { ...cleanAnswer(req), rating: 'PG-13' };
+      if (page === 'pg_7') return { ...cleanAnswer(req), rating: 'X', categories: ['graphic_gore'] };
+      if (page === 'pg_9') return null as never; // unusable: this page stays unchecked
+      if (page === 'cover') return { ...cleanAnswer(req), rating: 'PG' };
+      return cleanAnswer(req);
+    };
+    const once = async (pick: (n: number) => number) => {
+      resetSafety();
+      fakes = installSafetyFakes();
+      fakes.llm.fallback = answers;
+      const { doc, ctx, session, ids } = poolDoc(11);
+      const { open } = holdCalls();
+      const gate = await drive(runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] }), open, pick);
+      return {
+        gate,
+        publish: session.doc.safety?.publish,
+        text: session.doc.safety?.text,
+        pages: session.doc.pages.map((p) => p.render.asset?.safety),
+        cover: session.doc.cover.render.asset?.safety
+      };
+    };
+    const inOrder = await once(() => 0);
+    expect(inOrder.gate.status).toBe('blocked');
+    expect(inOrder.gate.pages.pg_7.status).toBe('blocked');
+    expect(inOrder.gate.pages.pg_9.status).toBe('unchecked');
+    expect(inOrder.publish?.blockers?.map((b) => ('id' in b.target ? b.target.id : b.target.kind))).toEqual(['pg_7', 'pg_9']);
+    const lastFirst = await once((n) => n - 1);
+    expect(lastFirst).toEqual(inOrder);
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const rnd = seeded(seed);
+      expect(await once((n) => Math.floor(rnd() * n))).toEqual(inOrder);
+    }
+  });
+
+  it('in the pool, one picture that cannot be checked → needs_check; one window that cannot be read → the words are unchecked', async () => {
+    const a = poolDoc(11);
+    fakes.llm.fallback = (req) => (req.jsonSchema?.name === 'comic_safety_image' && pictureOf(req) === 'pg_6' ? (null as never) : cleanAnswer(req));
+    const gate = await runPublishGate(a.ctx, a.doc, { pageIds: a.ids, includeCover: true, languages: [] });
+    expect(gate.status).toBe('needs_check');
+    expect(gate.pages.pg_6).toEqual({ status: 'unchecked', reasons: ["Couldn't be checked right now"] });
+    expect(Object.entries(gate.pages).filter(([id]) => id !== 'pg_6').every(([, p]) => p.status === 'pass')).toBe(true);
+    expect(gate.text.status).toBe('pass');
+
+    resetSafety();
+    fakes = installSafetyFakes();
+    fakes.llm.script.safety = [null];
+    const b = poolDoc(11);
+    const words = await runPublishGate(b.ctx, b.doc, { pageIds: b.ids, includeCover: true, languages: [] });
+    expect(words.text.status).toBe('unchecked');
+    expect(words.status).toBe('needs_check');
+    expect(Object.values(words.pages).every((p) => p.status === 'pass')).toBe(true);
+    expect(words.cover?.status).toBe('pass');
+  });
+
+  it('an X in the first window stops further windows (4 windows in flight at most)', async () => {
+    const sentinel = 'SENTINEL-ZETA waves from the rooftop.';
+    const { doc, ctx, ids } = longDoc(24, { at: { offset: 100, text: sentinel } });
+    expect(gateWindows(publishableText(doc, [])).length).toBeGreaterThan(4);
+    fakes.llm.fallback = sentinelAnswer('SENTINEL-ZETA');
+    const gate = await runPublishGate(ctx, doc, { pageIds: ids, includeCover: false, languages: [] });
+    expect(gate.text.status).toBe('blocked');
+    expect(textCalls()).toHaveLength(4); // the first batch only
+    expect(imageCalls()).toHaveLength(0); // by:'check' pages are reused
+  });
+
+  it("by:'check' passes make no call and cost nothing; an unchanged comic re-publishes at $0", async () => {
+    const { doc, ctx, session, ids } = poolDoc(11, { by: 'check' });
+    const first = await runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] });
+    expect(first.status).toBe('cleared');
+    expect(imageCalls()).toHaveLength(0);
+    expect(textCalls()).toHaveLength(1);
+    const calls = fakes.llm.calls.length;
+    const again = await runPublishGate(ctx, session.doc, { pageIds: ids, includeCover: true, languages: [] });
+    expect(again.status).toBe('cleared');
+    expect(fakes.llm.calls).toHaveLength(calls);
+    expect(again.costUsd).toBe(0);
+  });
+
+  it('logs one timing line with counts and milliseconds only (no words, no reasons, no user id)', async () => {
+    const { doc, ctx, session, ids } = poolDoc(11);
+    fakes.llm.fallback = (req) => (req.jsonSchema?.name === 'comic_safety_image' && pictureOf(req) === 'pg_2' ? { ...cleanAnswer(req), rating: 'X', categories: ['graphic_gore'], notes: ['NOTE-TEXT'] } : cleanAnswer(req));
+    const gate = await runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] });
+    expect(gate.status).toBe('blocked');
+    const timing = () => vi.mocked(console.info).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"comic_publish_gate_timing"'));
+    expect(timing()).toHaveLength(1);
+    const line = JSON.parse(timing()[0]);
+    expect(Object.keys(line).sort()).toEqual([
+      'event',
+      'images',
+      'imagesChecked',
+      'imagesMs',
+      'imagesUnusable',
+      'level',
+      'projectId',
+      'status',
+      'textChecked',
+      'textMs',
+      'textUnusable',
+      'textWindows',
+      'totalMs',
+      'ts'
+    ]);
+    expect(line).toMatchObject({ event: 'comic_publish_gate_timing', projectId: 'proj-1', images: 12, imagesChecked: 12, imagesUnusable: 0, textWindows: 1, textChecked: true, textUnusable: 0, status: 'blocked' });
+    for (const k of ['imagesMs', 'textMs', 'totalMs']) expect(Number.isInteger(line[k]) && line[k] >= 0).toBe(true);
+    for (const t of ['Line on page', 'Spice Run', 'NOTE-TEXT', 'content rules', 'graphic', ctx.userId]) expect(timing()[0]).not.toContain(t);
+    // The same comic again: every verdict is reused, nothing is checked.
+    await runPublishGate(ctx, session.doc, { pageIds: ids, includeCover: true, languages: [] });
+    expect(JSON.parse(timing()[1])).toMatchObject({ images: 12, imagesChecked: 0, imagesUnusable: 0, textChecked: false, textUnusable: 0, status: 'blocked' });
+
+    // Checks that were sent but came back unusable (a timeout, a limit, an unreadable answer) are
+    // counted apart from verdicts, so a needs_check line says which side could not answer.
+    resetSafety();
+    fakes = installSafetyFakes();
+    fakes.llm.fallback = (req) => (req.jsonSchema?.name === 'comic_safety_image' && pictureOf(req) === 'pg_6' ? (null as never) : cleanAnswer(req));
+    fakes.llm.script.safety = [null];
+    const b = poolDoc(11);
+    expect((await runPublishGate(b.ctx, b.doc, { pageIds: b.ids, includeCover: true, languages: [] })).status).toBe('needs_check');
+    expect(JSON.parse(timing()[2])).toMatchObject({ images: 12, imagesChecked: 12, imagesUnusable: 1, textWindows: 1, textChecked: true, textUnusable: 1, status: 'needs_check' });
   });
 });

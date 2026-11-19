@@ -15,6 +15,14 @@
 //  - A page verdict from render QC is never trusted as-is: the QC call also reads the author's
 //    script, so a QC pass is re-rated image-only (checkImage, no author text) on the platform key
 //    once and the result committed (by:'check'), so later publishes reuse it at $0.
+//
+// Speed (PUB-2): every picture that still needs a check (pages and the cover) goes through ONE
+// pool of GATE_IMAGE_PARALLEL, and the words are checked at the same time, so the gate waits for
+// the slowest call once instead of once per batch. The outcome never depends on which call answers
+// first: hash lines, blockers, ops and costs are put together after everything is in, in a fixed
+// order (pages as requested, then the cover, then the words). One timing line per gate
+// (comic_publish_gate_timing) carries counts and milliseconds only, and counts the checks that
+// were sent but came back unusable (a timeout, a limit, an unreadable answer) apart from verdicts.
 
 import {
   findPage,
@@ -51,7 +59,10 @@ export interface PublishGateResult {
   costUsd: number;
 }
 
-const PARALLEL = 4;
+/** Pictures (pages and the cover) checked at once, in one pool. */
+export const GATE_IMAGE_PARALLEL = 8;
+/** Text windows checked at once (a batch; an X or an unusable window stops the next batch). */
+const TEXT_PARALLEL = 4;
 
 /** Text repeated at the start of the next window, so words split across a cut are seen whole. */
 export const WINDOW_OVERLAP = 2_000;
@@ -130,11 +141,11 @@ export const reasonsFor = (status: SafetyStatus, verdict: SafetyVerdict | undefi
   }
 };
 
-/** The image check for one asset (platform key); undefined when unavailable. */
-async function checkAsset(ctx: StudioContext, asset: AssetRef, rating: ContentRating): Promise<{ verdict?: SafetyVerdict; costUsd: number }> {
+/** The image check for one asset (platform key); no verdict when unavailable. `called`: a check was sent. */
+async function checkAsset(ctx: StudioContext, asset: AssetRef, rating: ContentRating): Promise<{ verdict?: SafetyVerdict; costUsd: number; called: boolean }> {
   const deps = safetyDeps();
   const llm = deps.platformLlm();
-  if (!llm || !deps.classifierOn()) return { costUsd: 0 };
+  if (!llm || !deps.classifierOn()) return { costUsd: 0, called: false };
   let dataUrl: string;
   try {
     dataUrl = await ctx.assets.previewDataUrl(asset.path, 768);
@@ -142,18 +153,73 @@ async function checkAsset(ctx: StudioContext, asset: AssetRef, rating: ContentRa
     try {
       dataUrl = await ctx.assets.loadDataUrl(asset.path);
     } catch {
-      return { costUsd: 0 };
+      return { costUsd: 0, called: false };
     }
   }
   const check = await checkImage(llm, { dataUrl, rating, by: 'check', now: deps.now(), signal: ctx.signal });
-  if (!check) return { costUsd: 0 };
-  return { verdict: check.verdict, costUsd: check.costUsd ?? SAFETY_CHECK_USD };
+  if (!check) return { costUsd: 0, called: true };
+  return { verdict: check.verdict, costUsd: check.costUsd ?? SAFETY_CHECK_USD, called: true };
 }
 
-async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  for (let i = 0; i < items.length; i += size) out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+/** `fn` over every item, at most `limit` at a time; results in the items' order, never in finishing order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(lanes);
   return out;
+}
+
+type TextVerdict = { assessed?: SafetyVerdict['assessed']; categories: SafetyCategory[]; model?: string };
+
+/** One picture's part of the gate, kept apart until every picture is in (so the order is fixed). */
+interface ImageJudgement {
+  result: { status: SafetyStatus; reasons: string[] };
+  /** Its line in checkedHash (none for a page that is not drawn). */
+  hashLine?: string;
+  blocker?: SafetyBlocker;
+  op?: DocOp;
+  costUsd: number;
+  /** A platform check was sent for it in this gate. */
+  called: boolean;
+  /** That check came back with no usable verdict (a timeout, a limit, an unreadable answer). */
+  unusable: boolean;
+}
+
+/**
+ * The platform classifier over every window, TEXT_PARALLEL at a time. The strictest rating wins and
+ * categories are merged; one window that can't be checked leaves the text unchecked (null). Stops
+ * early once a window is unusable or rated X — nothing after it can change the outcome. The cost of
+ * every window that answered is reported, even when the text ends up unchecked; `unusable` counts the
+ * windows that were sent and came back with no answer.
+ */
+async function classifyWindows(ctx: StudioContext, parts: string[], rating: ContentRating): Promise<{ verdict: TextVerdict | null; costUsd: number; unusable: number }> {
+  const llm = safetyDeps().platformLlm();
+  if (!llm) return { verdict: null, costUsd: 0, unusable: 0 };
+  let costUsd = 0;
+  let assessed: SafetyVerdict['assessed'] | undefined;
+  const categories = new Set<SafetyCategory>();
+  let model: string | undefined;
+  for (let i = 0; i < parts.length; i += TEXT_PARALLEL) {
+    const batch = await Promise.all(parts.slice(i, i + TEXT_PARALLEL).map((w) => classifyText(llm, { text: w, rating, surface: 'publish', signal: ctx.signal })));
+    const unusable = batch.filter((c) => !c).length;
+    for (const c of batch) {
+      if (!c) continue;
+      costUsd += c.costUsd ?? SAFETY_TEXT_USD;
+      if (!assessed || ratingRank(c.assessed) > ratingRank(assessed)) assessed = c.assessed;
+      c.categories.forEach((cat) => categories.add(cat));
+      model ??= c.model;
+    }
+    if (unusable) return { verdict: null, costUsd, unusable };
+    if (assessed === 'X') break;
+  }
+  return { verdict: assessed ? { assessed, categories: [...categories], ...(model ? { model } : {}) } : null, costUsd, unusable: 0 };
 }
 
 /** Gate a publish (both visibilities, every published language). */
@@ -178,10 +244,18 @@ export async function runPublishGateImpl(
     logger.info('comic_publish_gate_text_too_long', { projectId: ctx.projectId, chars: words.length });
     throw new StudioError('LIMIT', TOO_MUCH_TEXT_MESSAGE, { status: 409 });
   }
+  const started = Date.now();
+  const elapsed = () => Math.max(0, Math.round(Date.now() - started));
 
-  const judge = async (target: RenderTarget, asset: AssetRef | undefined): Promise<{ status: SafetyStatus; reasons: string[] }> => {
-    if (!asset) return { status: 'unchecked', reasons: ['Not drawn yet'] };
+  // One picture, judged on its own: nothing shared is touched here (the caller folds the parts in
+  // a fixed order once every picture is in).
+  const judge = async (target: RenderTarget, asset: AssetRef | undefined): Promise<ImageJudgement> => {
+    if (!asset) return { result: { status: 'unchecked', reasons: ['Not drawn yet'] }, costUsd: 0, called: false, unusable: false };
     let verdict = asset.safety;
+    let op: DocOp | undefined;
+    let spent = 0;
+    let called = false;
+    let unusable = false;
     // A render-QC pass came from the call that also read the author's script (vision.ts), so it is
     // not vouched for until an image-only check agrees (S14). QC blocks and over-ratings stand (a
     // re-check could only loosen them); pre-filter-only operator mode keeps QC verdicts.
@@ -189,91 +263,103 @@ export async function runPublishGateImpl(
     // Unchecked or still pending (a fail-open render): check it now. Blocked stays blocked.
     if (qcPass || (!verdict?.quarantined && !verdict?.assessed)) {
       const checked = await checkAsset(ctx, asset, rating);
-      costUsd += checked.costUsd;
+      spent = checked.costUsd;
+      called = checked.called;
+      unusable = checked.called && !checked.verdict;
       if (checked.verdict) {
         // Committed as by:'check' (paid once per asset); never looser than what QC saw.
         verdict = qcPass && verdict ? { ...stricterVerdict(verdict, checked.verdict), by: 'check' } : checked.verdict;
-        ops.push({ op: 'asset_meta', path: asset.path, patch: { safety: verdict } });
+        op = { op: 'asset_meta', path: asset.path, patch: { safety: verdict } };
       } else if (qcPass) {
         verdict = undefined; // the re-rate couldn't run: unchecked → needs_check → the honest 503
       }
     }
     const status = safetyStatusOf(verdict, rating);
-    statusesForHash.push(`${target.kind}:${'id' in target ? target.id : ''}:${asset.path}:${verdict?.assessed || status}`);
-    if (status !== 'pass') blockers.push({ target, status, categories: verdict?.categories || [], ...(verdict?.notes?.[0] ? { note: verdict.notes[0] } : {}) });
-    return { status, reasons: reasonsFor(status, verdict, rating) };
+    return {
+      result: { status, reasons: reasonsFor(status, verdict, rating) },
+      hashLine: `${target.kind}:${'id' in target ? target.id : ''}:${asset.path}:${verdict?.assessed || status}`,
+      ...(status !== 'pass' ? { blocker: { target, status, categories: verdict?.categories || [], ...(verdict?.notes?.[0] ? { note: verdict.notes[0] } : {}) } } : {}),
+      ...(op ? { op } : {}),
+      costUsd: spent,
+      called,
+      unusable
+    };
   };
 
-  // Pages (deduplicated, in the requested order).
+  // Pages (deduplicated, in the requested order), then the cover (only when it is drawn and included).
   const pageIds = [...new Set((opts.pageIds || []).filter((id) => typeof id === 'string' && id))];
-  const pageResults = await inBatches(pageIds, PARALLEL, async (id) => [id, await judge({ kind: 'page', id }, findPage(doc, id)?.render.asset)] as const);
-  const pages = Object.fromEntries(pageResults);
-
-  // Cover (only when it is drawn and included).
   const coverAsset = doc.cover.render.asset;
-  const cover = opts.includeCover && coverAsset ? await judge({ kind: 'cover' }, coverAsset) : null;
-
-  /**
-   * The platform classifier over every window (batches of PARALLEL). The strictest rating wins and
-   * categories are merged; one window that can't be checked leaves the text unchecked (null). Stops
-   * early once a window is unusable or rated X — nothing after it can change the outcome.
-   */
-  async function classifyWindows(parts: string[]): Promise<{ assessed?: SafetyVerdict['assessed']; categories: SafetyCategory[]; model?: string } | null> {
-    const llm = deps.platformLlm();
-    if (!llm) return null;
-    let assessed: SafetyVerdict['assessed'] | undefined;
-    const categories = new Set<SafetyCategory>();
-    let model: string | undefined;
-    for (let i = 0; i < parts.length; i += PARALLEL) {
-      const batch = await Promise.all(parts.slice(i, i + PARALLEL).map((w) => classifyText(llm, { text: w, rating, surface: 'publish', signal: ctx.signal })));
-      let unusable = false;
-      for (const c of batch) {
-        if (!c) {
-          unusable = true;
-          continue;
-        }
-        costUsd += c.costUsd ?? SAFETY_TEXT_USD;
-        if (!assessed || ratingRank(c.assessed) > ratingRank(assessed)) assessed = c.assessed;
-        c.categories.forEach((cat) => categories.add(cat));
-        model ??= c.model;
-      }
-      if (unusable) return null;
-      if (assessed === 'X') break;
-    }
-    return assessed ? { assessed, categories: [...categories], ...(model ? { model } : {}) } : null;
-  }
+  const pictures: { target: RenderTarget; asset: AssetRef | undefined }[] = [
+    ...pageIds.map((id) => ({ target: { kind: 'page' as const, id }, asset: findPage(doc, id)?.render.asset })),
+    ...(opts.includeCover && coverAsset ? [{ target: { kind: 'cover' as const }, asset: coverAsset }] : [])
+  ];
 
   // The text verdict is cached by hash. Long text (more than one window) hashes with a version
   // prefix, so a verdict taken from a sampled read before windowing is never reused; short text
   // keeps its exact hash (no re-check).
   const windows = gateWindows(words);
   const textHash = sha256Hex(`${windows.length > 1 ? 'w2\n' : ''}${rating}\n${words}`).slice(0, 16);
-  let text: { status: SafetyStatus; reasons: string[] };
   const cached = doc.safety?.text;
-  let textVerdict: { assessed?: SafetyVerdict['assessed']; categories: SafetyCategory[]; model?: string } | null = null;
   // A pass the pre-filter gave on its own (pre-filter-only operator mode) was never read by a model:
   // once the classifier is on it is not reused (a block still is — it can only keep text out).
   const prefilterOnlyPass = cached?.model === 'prefilter' && cached.assessed !== 'X' && deps.classifierOn();
-  if (cached && cached.hash === textHash && cached.assessed && !prefilterOnlyPass) {
-    textVerdict = { assessed: cached.assessed, categories: cached.categories || [], ...(cached.model ? { model: cached.model } : {}) };
-  } else if (!words.trim()) {
-    textVerdict = { assessed: 'G', categories: [], model: 'empty' };
-  } else {
+  /**
+   * The words' verdict; `checked`: it was worked out in this gate (not reused, not empty);
+   * `unusable`: windows sent to the classifier that came back with no answer.
+   */
+  const judgeText = async (): Promise<{ verdict: TextVerdict | null; op?: DocOp; costUsd: number; checked: boolean; unusable: number }> => {
+    if (cached && cached.hash === textHash && cached.assessed && !prefilterOnlyPass) {
+      return { verdict: { assessed: cached.assessed, categories: cached.categories || [], ...(cached.model ? { model: cached.model } : {}) }, costUsd: 0, checked: false, unusable: 0 };
+    }
+    if (!words.trim()) return { verdict: { assessed: 'G', categories: [], model: 'empty' }, costUsd: 0, checked: false, unusable: 0 };
+    let verdict: TextVerdict | null = null;
+    let spent = 0;
+    let unusable = 0;
     const pre = prefilterWindows(windows, rating);
     if (pre.decision === 'block') {
-      textVerdict = { assessed: 'X', categories: pre.categories, model: 'prefilter' };
+      verdict = { assessed: 'X', categories: pre.categories, model: 'prefilter' };
     } else if (!deps.classifierOn()) {
       // The operator chose pre-filter-only mode (COMIC_SAFETY_CLASSIFIER=off): clear text is within
       // the rating; anything ambiguous stays unchecked (never published unread). An outage with
       // the classifier ON is different: it never clears (below).
-      if (pre.decision === 'clear') textVerdict = { assessed: rating, categories: [], model: 'prefilter' };
+      if (pre.decision === 'clear') verdict = { assessed: rating, categories: [], model: 'prefilter' };
     } else {
-      textVerdict = await classifyWindows(windows);
+      ({ verdict, costUsd: spent, unusable } = await classifyWindows(ctx, windows, rating));
     }
-    if (textVerdict?.assessed) {
-      ops.push({ op: 'safety', patch: { text: { hash: textHash, assessed: textVerdict.assessed, categories: textVerdict.categories, at, ...(textVerdict.model ? { model: textVerdict.model } : {}) } } });
-    }
+    const op: DocOp | undefined = verdict?.assessed
+      ? { op: 'safety', patch: { text: { hash: textHash, assessed: verdict.assessed, categories: verdict.categories, at, ...(verdict.model ? { model: verdict.model } : {}) } } }
+      : undefined;
+    return { verdict, ...(op ? { op } : {}), costUsd: spent, checked: true, unusable };
+  };
+
+  // Every picture in one pool, the words alongside.
+  let imagesMs = 0;
+  let textMs = 0;
+  const [judged, textPart] = await Promise.all([
+    mapLimit(pictures, GATE_IMAGE_PARALLEL, (p) => judge(p.target, p.asset)).then((r) => {
+      imagesMs = elapsed();
+      return r;
+    }),
+    judgeText().then((r) => {
+      textMs = elapsed();
+      return r;
+    })
+  ]);
+
+  // Folded in a fixed order (pages as requested, the cover, then the words), whichever call answered first.
+  for (const j of judged) {
+    costUsd += j.costUsd;
+    if (j.op) ops.push(j.op);
+    if (j.hashLine) statusesForHash.push(j.hashLine);
+    if (j.blocker) blockers.push(j.blocker);
   }
+  const pages = Object.fromEntries(pageIds.map((id, i) => [id, judged[i].result] as const));
+  const cover = pictures.length > pageIds.length ? judged[pageIds.length].result : null;
+
+  costUsd += textPart.costUsd;
+  if (textPart.op) ops.push(textPart.op);
+  const textVerdict = textPart.verdict;
+  let text: { status: SafetyStatus; reasons: string[] };
   if (!textVerdict?.assessed) {
     text = { status: 'unchecked', reasons: ["The text couldn't be checked right now"] };
     blockers.push({ target: { kind: 'text' }, status: 'unchecked', categories: [] });
@@ -332,5 +418,20 @@ export async function runPublishGateImpl(
       })
       .catch(() => undefined);
   }
+  // Counts and milliseconds only: no words, no reasons, no user id. The *Unusable counts are checks
+  // that were sent and came back with no verdict, so a needs_check line says which side failed.
+  logger.info('comic_publish_gate_timing', {
+    projectId: ctx.projectId,
+    images: pictures.filter((p) => p.asset).length,
+    imagesChecked: judged.filter((j) => j.called).length,
+    imagesUnusable: judged.filter((j) => j.unusable).length,
+    imagesMs,
+    textWindows: windows.length,
+    textChecked: textPart.checked,
+    textUnusable: textPart.unusable,
+    textMs,
+    totalMs: elapsed(),
+    status
+  });
   return { status, rating, pages, cover, text, checkedHash, costUsd };
 }
