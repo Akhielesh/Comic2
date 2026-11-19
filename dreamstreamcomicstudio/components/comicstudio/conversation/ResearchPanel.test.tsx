@@ -71,6 +71,20 @@ describe('pictures that are safe to use', () => {
     expect(screen.queryByRole('button', { name: 'Show pictures' })).toBeNull();
   });
 
+  it('moves focus to the pictures "Show pictures" revealed, and never takes focus when they show at once', () => {
+    const { unmount } = render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={results()} />);
+    const show = screen.getByRole('button', { name: 'Show pictures' });
+    show.focus();
+    fireEvent.click(show);
+    const list = screen.getByRole('list', { name: 'Image references' });
+    expect(list).toHaveFocus();
+    expect(list).toHaveAttribute('tabindex', '-1');
+    unmount();
+    render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={results()} kidsSafe={false} />);
+    expect(screen.getByRole('list', { name: 'Image references' })).not.toHaveFocus();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('a new search hides the pictures again in a kids comic', async () => {
     vi.mocked(post).mockResolvedValue(results());
     const { container } = render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} />);
@@ -145,13 +159,23 @@ describe('articles', () => {
     expect(screen.queryByText(/English/)).toBeNull();
   });
 
-  it('says "Pinned to this comic" for a pinned source instead of offering it again', () => {
-    const isPinned = vi.fn((url: string) => url === article.source || url === picture('Free', 'CC0').source);
-    render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={results({ articles: [article, telugu] })} kidsSafe={false} isPinned={isPinned} />);
-    expect(screen.getAllByText('Pinned to this comic')).toHaveLength(2);
+  it('says "Pinned to this comic": a pinned article is not offered again, a pinned picture can still be attached', async () => {
+    const free = picture('Free', 'CC0');
+    const isPinned = vi.fn((url: string) => url === article.source || url === free.source || url === picture('Share', 'CC BY-SA 4.0').source);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })));
+    const add = vi.fn();
+    render(<ResearchPanel projectId="comic_1" onAdd={add} suppliedResults={results({ articles: [article, telugu] })} kidsSafe={false} isPinned={isPinned} />);
+    expect(screen.getAllByText('Pinned to this comic')).toHaveLength(3);
     expect(screen.getAllByRole('button', { name: 'Add context' })).toHaveLength(1);
-    expect(within(tile('Free')).queryByRole('button', { name: 'Add image' })).toBeNull();
-    expect(within(tile('Free')).getByText('Pinned to this comic')).toBeInTheDocument();
+    // Attachments belong to one message: the pinned CC0 picture keeps its action next to the note.
+    expect(within(tile('Free')).getByText('Pinned to this comic')).toHaveClass('truncate');
+    fireEvent.click(within(tile('Free')).getByRole('button', { name: 'Add image' }));
+    await waitFor(() => expect(add).toHaveBeenCalledWith(expect.objectContaining({ source: free.source }), expect.objectContaining({ type: 'image/png' })));
+    // Pinned or not, a CC BY-SA picture is still reference only.
+    expect(within(tile('Share')).getByText('Pinned to this comic')).toBeInTheDocument();
+    expect(within(tile('Share')).getByText('Reference only')).toBeInTheDocument();
+    expect(within(tile('Share')).queryByRole('button', { name: /Add image/ })).toBeNull();
+    expect(within(tile('Old')).queryByText('Pinned to this comic')).toBeNull();
     expect(within(tile('Old')).getByRole('button', { name: 'Add image' })).toBeInTheDocument();
   });
 });

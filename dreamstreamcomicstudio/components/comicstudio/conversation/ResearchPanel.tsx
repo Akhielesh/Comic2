@@ -50,6 +50,18 @@ export function ResearchPanel({ projectId, onAdd, suppliedResults, kidsSafe = tr
   const pictures = results ? results.images.map((image) => image.source).join('\n') : '';
   const [shownFor, setShownFor] = useState('');
   const showPictures = !kidsSafe || (!!pictures && shownFor === pictures);
+  // "Show pictures" goes away once tapped: focus moves to the pictures it revealed, never back to <body>.
+  const picturesRef = useRef<HTMLUListElement>(null);
+  const focusPictures = useRef(false);
+  useEffect(() => {
+    if (!showPictures || !focusPictures.current) return;
+    focusPictures.current = false;
+    picturesRef.current?.focus();
+  }, [showPictures]);
+  const revealPictures = () => {
+    focusPictures.current = true;
+    setShownFor(pictures);
+  };
   const queryId = useId();
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
@@ -130,11 +142,16 @@ export function ResearchPanel({ projectId, onAdd, suppliedResults, kidsSafe = tr
           )}
           {results.images.length > 0 && !showPictures && (
             <div>
-              <Button size="sm" variant="outline" onClick={() => setShownFor(pictures)}><Images aria-hidden className="size-3.5" /> Show pictures</Button>
+              <Button size="sm" variant="outline" onClick={revealPictures}><Images aria-hidden className="size-3.5" /> Show pictures</Button>
             </div>
           )}
           {results.images.length > 0 && showPictures && (
-            <ul className="m-0 grid min-w-0 list-none grid-cols-[repeat(auto-fill,minmax(min(100%,8rem),1fr))] gap-2 p-0" aria-label="Image references">
+            <ul
+              ref={picturesRef}
+              tabIndex={-1}
+              className="m-0 grid min-w-0 list-none grid-cols-[repeat(auto-fill,minmax(min(100%,8rem),1fr))] gap-2 p-0 focus:outline-none"
+              aria-label="Image references"
+            >
               {results.images.map((result) => (
                 <PictureTile key={result.source} result={result} busy={busy} pinned={pinned(result.source)} onAdd={() => void addImage(result)} />
               ))}
@@ -191,7 +208,10 @@ function ArticleItem({ result, busy, pinned, onAdd }: { result: ComicResearchRes
   );
 }
 
-/** One picture: the image, a one-line title, a one-line credit, and what may be done with it. */
+/**
+ * One picture: the image, a one-line title, a one-line credit, and what may be done with it. A pinned picture keeps
+ * "Add image": an attachment belongs to one message, so the creator can attach the same picture again later.
+ */
 function PictureTile({ result, busy, pinned, onAdd }: { result: ComicResearchResult; busy: boolean; pinned: boolean; onAdd: () => void }) {
   const titleId = useId();
   // A picture Commons cannot serve (offline, blocked, removed) keeps its place as an empty well, never a broken image.
@@ -209,14 +229,13 @@ function PictureTile({ result, busy, pinned, onAdd }: { result: ComicResearchRes
       )}
       <p id={titleId} title={result.title} dir="auto" className="mt-1 truncate text-[12px] font-semibold">{result.title}</p>
       {credit && <p title={credit} dir="auto" className={cn('truncate', NOTE)}>{credit}</p>}
+      {pinned && <p title={PINNED} className={cn('truncate', NOTE)}>{PINNED}</p>}
       <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <a href={result.source} target="_blank" rel="noreferrer" className={LINK}>
           Open source <ExternalLink aria-hidden className="size-3 shrink-0" />
           <span className="sr-only"> for {result.title}</span>
         </a>
-        {pinned ? (
-          <span className={NOTE}>{PINNED}</span>
-        ) : isAttachable(result) ? (
+        {isAttachable(result) ? (
           <Button size="sm" variant="ghost" disabled={busy} onClick={onAdd}><ImagePlus aria-hidden className="size-3.5" /> Add image</Button>
         ) : (
           <span className={NOTE} title="Only public-domain and CC0 pictures can be attached for drawing">Reference only</span>
