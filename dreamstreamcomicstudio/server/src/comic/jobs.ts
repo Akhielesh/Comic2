@@ -171,7 +171,7 @@ import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from 
 import { cropForPanel, cropPanelContext, panelContextBox, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
 import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
 import { panelizeAfterLetter } from './panelize/server.js';
-import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout, PANEL_EDIT_REFERENCE_PATH } from './prompts.js';
+import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout, paletteWords, PANEL_EDIT_REFERENCE_PATH } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, mergeRenderVerdicts, onRenderVerdict, screenUploadPreview, takePageCheckSlot, takeRenderSafetyFollowups } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
@@ -229,8 +229,9 @@ const REQUEUE_MAX_MS = 120_000;
  * of jitter, so parallel jobs that failed together do not all come back in the same second.
  */
 const RATE_LIMIT_BACKOFF_FACTOR = 5;
-/** Looks one style run may draw (stylepick: the writer takes 1–6; the tool and the matcher clamp to 2–6). */
-const MAX_STYLE_DIRECTIONS = 6;
+/** Looks one style run may draw (stylepick: the writer takes 1–6; the tool and the matcher clamp to 2–6). The route
+ *  screens at least this many directions (routes/comic.ts MAX_SCREENED_DIRECTIONS; comic.routes.test.ts pins it). */
+export const MAX_STYLE_DIRECTIONS = 6;
 const MIN_STYLE_COUNT = 2;
 const DEFAULT_STYLE_DIRECTIONS = 3;
 const MAX_PATCH_OPS = 200;
@@ -4573,6 +4574,15 @@ const sanitizeDirections = (raw: unknown): { name: string; spec: string }[] =>
     .filter((d) => d.name && d.spec)
     .slice(0, MAX_STYLE_DIRECTIONS);
 
+/**
+ * A preset drawn as a look: its spec plus its colours and avoid list, so the test (and the style it locks when picked)
+ * holds what use_preset would apply. Deterministic, so a failed look's re-send still matches its option.
+ */
+const presetLookSpec = (preset: StylePreset): string => {
+  const colours = paletteWords(preset.palette);
+  return [preset.spec, colours ? `Palette: ${colours}.` : '', preset.avoid.length ? `Avoid: ${preset.avoid.join(', ')}.` : ''].filter(Boolean).join(' ');
+};
+
 /** Known preset ids (deduped) as looks drawn from the preset's own name and spec (server text: never screened). */
 const presetDirections = (raw: unknown): { name: string; spec: string }[] => {
   const seen = new Set<string>();
@@ -4581,7 +4591,7 @@ const presetDirections = (raw: unknown): { name: string; spec: string }[] => {
     const preset = typeof id === 'string' ? getStylePreset(id.trim()) : undefined;
     if (!preset || seen.has(preset.id)) continue;
     seen.add(preset.id);
-    out.push({ name: preset.name, spec: preset.spec });
+    out.push({ name: preset.name, spec: presetLookSpec(preset) });
   }
   return out;
 };

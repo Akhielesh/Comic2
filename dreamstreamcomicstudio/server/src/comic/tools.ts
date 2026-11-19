@@ -111,7 +111,7 @@ import { LINE_TARGET_SCHEMA, balloonAtPosition, blockedLineIds, commitGuarded, l
 import { MODEL_ASK_RE } from './tools/models.js';
 import { LANGUAGE_HINT_RE } from './tools/languageAsk.js';
 import { SKIP_REVIEW_RE, detectNamedIp, joinList, nothingNextSteps } from './replies.js';
-import { DEFAULT_LOOKS, MAX_LOOKS, MIN_LOOKS, styleLooksAsk } from './styleAsk.js';
+import { DEFAULT_LOOKS, MAX_LOOKS, MIN_LOOKS, drawnLooksRedirect, styleLooksAsk } from './styleAsk.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
 
@@ -869,6 +869,25 @@ const panelBudgetNote = (d: ComicDoc, pageId: string, panelId: string): string |
   }
 };
 
+/** Accents folded ("Mœbius" → "Moebius", "Hergé" → "Herge") so the name lists below match every spelling. */
+const foldAccents = (text: string): string =>
+  text.normalize('NFKD').replace(/\p{M}/gu, '').replace(/œ/g, 'oe').replace(/Œ/g, 'Oe').replace(/æ/g, 'ae').replace(/Æ/g, 'Ae');
+/** Artists and titles the two shared lists miss, often asked for as a look. */
+const STYLE_NAME_RE =
+  /\b(?:junji ito|ito junji|mignola|hellboy|tezuka|astro boy|spider[- ]?verse|calvin (?:and|&) hobbes|watterson|frank miller|sin city|jim lee|alex ross|otomo|uderzo|goscinny|asterix|schulz|kirby)\b/i;
+/** "in the style of <Name>", "à la <Name>", "inspired by <Name>": a capitalised name after the phrase is someone's look. */
+const AFTER_NAME_RE = /\b(?:[Ii]n the style of|[Ii]n the manner of|[Ii]nspired by|[Aa] la)\s+(?:(?:[Tt]he|[Aa]n?)\s+)?([A-Z][\p{L}'’-]*)/gu;
+/** Capitalised words after those phrases that name a place, a period or a movement, not a person or a brand. */
+const GENERIC_STYLE_WORD_RE =
+  /^(?:Japanese|Chinese|Korean|Indian|Persian|Mughal|Arabic|French|Franco|Belgian|Italian|Spanish|Mexican|German|Dutch|Swiss|Nordic|Scandinavian|Celtic|Russian|Soviet|American|British|European|Asian|African|Western|Eastern|Art|Ukiyo|Renaissance|Baroque|Rococo|Victorian|Edwardian|Gothic|Medieval|Golden|Silver|Bronze|Modern|Classic|Classical|Vintage|Retro|Pop|Noir|Manga|Anime|Old|Early|Late|Mid|Bauhaus|Impressionist|Expressionist|Cubist|Futurist|Risograph|Riso|Woodblock|Watercolou?r|Ink|Sunday|Saturday)$/;
+
+/** Whether a style direction names an artist, studio or brand (assets.md §13): never sent to the image model. */
+const namesArtistOrBrand = (name: string, spec: string): boolean => {
+  const text = foldAccents(`${name}. ${spec}`);
+  if (LIBRARY_IP_BLOCKLIST.test(text) || STYLE_NAME_RE.test(text) || detectNamedIp(text).length) return true;
+  return [...text.matchAll(AFTER_NAME_RE)].some((m) => !GENERIC_STYLE_WORD_RE.test(m[1]));
+};
+
 export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): DirectorTool[] {
   const state =
     turn ||
@@ -1190,6 +1209,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (presetId) {
           const preset = getStylePreset(presetId);
           if (!preset) throw argError(`Unknown preset. Use one of: ${STYLE_PRESETS.map((p) => p.id).join(', ')}.`);
+          // An ask to see drawn looks comes before picking a free preset for the user (stylepick SC-0, R1): refused
+          // here, in code, so the precedence costs no prompt space.
+          const looksAsk = styleLooksAsk(state.userText);
+          if (looksAsk) throw argError(drawnLooksRedirect(looksAsk));
           Object.assign(patch, {
             name: preset.name,
             spec: preset.spec,
@@ -1235,10 +1258,11 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'propose_styles',
       'paid',
-      // Kept short: core tools sit in every director prompt (golden/scenarios.test.ts caps the median).
-      `Draw N looks of THIS comic (default ${DEFAULT_LOOKS}, max ${MAX_LOOKS}); waits for Approve. count alone = your picks; directions/presetIds only for looks the user named.`,
+      // Kept short: core tools sit in every director prompt (golden/scenarios.test.ts caps the median; the range and
+      // the default are said once, on count).
+      'Draw N looks of THIS comic; waits for Approve. count alone = your picks; directions/presetIds = looks the user named.',
       schema({
-        count: I(`${MIN_LOOKS}–${MAX_LOOKS}`),
+        count: I(`${MIN_LOOKS}–${MAX_LOOKS}, default ${DEFAULT_LOOKS}`),
         directions: { type: 'array', items: { type: 'object', properties: { name: S('2–4 words.'), spec: S('Technique, 35–80 words.') }, required: ['name', 'spec'] } },
         presetIds: { type: 'array', items: { type: 'string' } }
       }),
@@ -1257,7 +1281,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           .filter((x) => x.name && x.spec);
         // An artist, studio or brand is never sent to the image model (assets.md §13; decisions-final #5): the
         // Director's own words reach no screening, so they are checked here before anything is quoted.
-        if (directions.some((x) => LIBRARY_IP_BLOCKLIST.test(`${x.name} ${x.spec}`) || detectNamedIp(`${x.name}. ${x.spec}`).length)) {
+        if (directions.some((x) => namesArtistOrBrand(x.name, x.spec))) {
           throw argError('Describe the technique, not the artist, studio or brand (for example "soft watercolour washes, loose ink lines") and call propose_styles again.');
         }
         const names = [...presetIds.map((id) => getStylePreset(id)!.name), ...directions.map((x) => x.name)].map((n) => n.trim().toLowerCase());

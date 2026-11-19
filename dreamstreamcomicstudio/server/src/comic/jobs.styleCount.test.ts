@@ -86,11 +86,17 @@ describe('presetIds and directions', () => {
     const ctx = testContext(session);
     await runAction(ctx, { type: 'render_style_options', presetIds: ['noir-ink', 'woodcut'] }, { confirmed: true });
     expect(vi.mocked(proposeStyleDirections)).not.toHaveBeenCalled();
-    expect(session.doc.style.options.map((o) => [o.name, o.spec])).toEqual([
-      ['Noir ink', getStylePreset('noir-ink')!.spec],
-      ['Woodcut / linocut', getStylePreset('woodcut')!.spec]
-    ]);
+    expect(session.doc.style.options.map((o) => o.name)).toEqual(['Noir ink', 'Woodcut / linocut']);
     expect(ctx.imagesFake.calls).toHaveLength(2);
+    // Each look carries its preset's spec, colours and avoid list, so it draws like use_preset would.
+    const noir = getStylePreset('noir-ink')!;
+    const spec = session.doc.style.options[0].spec;
+    expect(spec.startsWith(noir.spec)).toBe(true);
+    expect(spec).toMatch(/ Palette: [a-z].+\./);
+    expect(spec).toContain(`Avoid: ${noir.avoid.join(', ')}.`);
+    const prompt = ctx.imagesFake.calls.find((c) => c.prompt.includes(noir.spec))!.prompt;
+    expect(prompt).toContain('Avoid: full color, soft airbrushing, cute proportions.');
+    expect(session.doc.style.options[1].spec).toContain(`Avoid: ${getStylePreset('woodcut')!.avoid.join(', ')}.`);
   });
 
   it('presets first, then directions, at most 6 in all; unknown and repeated preset ids are dropped', () => {

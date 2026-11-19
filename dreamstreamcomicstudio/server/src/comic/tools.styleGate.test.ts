@@ -135,7 +135,12 @@ describe('propose_styles arguments', () => {
     for (const direction of [
       { name: 'Soft wonder', spec: 'Like Studio Ghibli: lush painted skies, gentle characters.' },
       { name: 'Ligne', spec: 'In the style of Moebius, clean lines and pastel deserts.' },
-      { name: 'Marvel punch', spec: 'Bold heroic inks with halftone dots.' }
+      { name: 'Marvel punch', spec: 'Bold heroic inks with halftone dots.' },
+      // Accents are folded before the name lists run, and "in the style of <Name>" is refused whoever it names.
+      { name: 'Desert lines', spec: 'Mœbius lines, clean contours and pastel deserts.' },
+      { name: 'Spirals', spec: 'In the style of Junji Ito: eerie spirals, fine hatching.' },
+      { name: 'Halftone pop', spec: 'Spider-Verse halftone, offset colour plates.' },
+      { name: 'Pulp', spec: 'Heavy shadows inspired by Mike Mignola, flat colour.' }
     ]) {
       setup(newComic(), 'draw 2 looks');
       const out = await propose({ directions: [direction, { name: 'Plain', spec: 'Clean outlines, flat colour.' }] });
@@ -145,6 +150,17 @@ describe('propose_styles arguments', () => {
       expect(ctx.imagesFake.calls).toHaveLength(0);
       expect(ctx.session.doc.spend.totalUsd).toBe(0);
     }
+  });
+
+  it('technique words that only look like names still pass (nationalities, movements, lower case)', async () => {
+    setup(newComic(), 'draw 2 looks');
+    const out = await propose({
+      directions: [
+        { name: 'Woodblock', spec: 'Inspired by Japanese woodblock prints: flat colour fields, carved outlines.' },
+        { name: 'Nouveau', spec: 'In the style of Art Nouveau posters, whiplash curves, muted golds; inspired by classic noir lighting.' }
+      ]
+    });
+    expect(out).toMatch(/^Waiting for the user to approve/);
   });
 
   it('repeated names are refused', async () => {
@@ -169,12 +185,38 @@ describe('propose_styles arguments', () => {
     setup(newComic(), 'hi');
     const spec = tools.get('propose_styles')!.spec.function;
     const params = spec.parameters as { properties: Record<string, { type?: string; description?: string; items?: { type?: string } }> };
-    expect(params.properties.count).toEqual({ type: 'integer', description: '2–6' });
+    // The range and the default live on count only (said once: the description sits in every director prompt).
+    expect(params.properties.count).toEqual({ type: 'integer', description: '2–6, default 3' });
     expect(params.properties.directions.type).toBe('array');
     expect(params.properties.presetIds).toEqual({ type: 'array', items: { type: 'string' } });
-    expect(spec.description).toMatch(/default 3, max 6/);
+    expect(spec.description).not.toMatch(/max 6/);
     expect(spec.description).toMatch(/waits for Approve/);
-    expect(spec.description).toMatch(/only for looks the user named/);
-    expect(spec.description.length).toBeLessThan(200);
+    expect(spec.description).toMatch(/directions\/presetIds = looks the user named/);
+    expect(spec.description.length).toBeLessThan(140);
+  });
+});
+
+describe('set_style on an ask to see drawn looks', () => {
+  const setStyle = (args: Record<string, unknown>) => tools.get('set_style')!.execute(args);
+  const REDIRECT =
+    'Error: The user asked to see drawn looks. Call propose_styles with count 3 (and presetIds or directions only for looks they named). It shows the price and waits for their Approve.';
+
+  it('a free preset is not picked for the user when they asked to see looks; nothing changes', async () => {
+    setup(newComic(), 'generate 3 of the best style options for this');
+    expect(await setStyle({ presetId: 'noir-ink' })).toBe(REDIRECT);
+    expect(ctx.session.doc.style.status).toBe('empty');
+    expect(ctx.session.doc.style.presetId).toBeUndefined();
+    // A drafted style is not swapped either.
+    setup(newComic((d) => (d.style = { ...d.style, status: 'drafted', name: 'Ink', spec: 'Bold ink outlines, flat colour.' })), 'show me 3 looks');
+    expect(await setStyle({ presetId: 'woodcut' })).toBe(REDIRECT);
+    expect(ctx.session.doc.style).toMatchObject({ status: 'drafted', name: 'Ink' });
+  });
+
+  it('a preset the user named, a custom style and a lock still work', async () => {
+    setup(newComic(), 'use the noir look');
+    expect(await setStyle({ presetId: 'noir-ink' })).toMatch(/^Style: Noir ink \(drafted\)/);
+    setup(newComic(), 'show me 3 looks');
+    expect(await setStyle({ name: 'Ink', spec: 'Bold ink outlines, flat colour, soft grey washes for depth.' })).toMatch(/^Style: Ink/);
+    expect(await setStyle({ lock: true })).toMatch(/\(locked\)/);
   });
 });

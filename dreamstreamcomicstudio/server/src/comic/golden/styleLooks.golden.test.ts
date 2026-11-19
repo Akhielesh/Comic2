@@ -1,7 +1,8 @@
 // @vitest-environment node
 // Golden scenario golden/scenarios/style-looks.json (stylepick SC-0; liveturn PLAN-2 must keep it green): an ask to
-// see drawn looks ends in an Approve card for N looks, even when the model first calls the free presets tool (it
-// refuses toward propose_styles); a which-look question still gets the free presets card. The compiled system
+// see drawn looks ends in an Approve card for N looks, even when the model first picks a free preset (set_style
+// presetId) or calls the free presets tool (both refuse toward propose_styles); a which-look question still gets the
+// free presets card. The compiled system
 // prompt carries rule 4's looks sentence. Scripted model replies and fake images only: no network, $0.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -19,6 +20,9 @@ interface Turn {
   director?: Array<{ text?: string; toolCalls?: { name: string; args: unknown }[] }>;
   expect?: {
     toolResultIncludes?: string;
+    /** How many tool results carry toolResultIncludes (each refused free-preset call adds one). */
+    toolResultCount?: number;
+    styleStatus?: string;
     gateReason?: string;
     gateAction?: Record<string, unknown>;
     gateTitle?: string;
@@ -91,6 +95,12 @@ describe(`golden: ${scenario.name}`, () => {
       const cards = (reply.cards || []).map((c) => c.type);
       const e = turn.expect || {};
       if (e.toolResultIncludes) expect(JSON.stringify(director.map((c) => c.messages)), label).toContain(e.toolResultIncludes);
+      if (e.toolResultIncludes && e.toolResultCount !== undefined) {
+        // The last director call holds every tool result of the turn once.
+        const transcript = JSON.stringify(director[director.length - 1]?.messages ?? []);
+        expect(transcript.split(e.toolResultIncludes).length - 1, `${label}: refused calls`).toBe(e.toolResultCount);
+      }
+      if (e.styleStatus) expect(session.doc.style.status, `${label}: no preset was picked for the user`).toBe(e.styleStatus);
       if (e.gateReason) expect(session.doc.gate, label).toMatchObject({ status: 'open', reason: e.gateReason });
       if (e.gateAction) expect(session.doc.gate?.action, label).toMatchObject(e.gateAction);
       if (e.gateTitle) expect(session.doc.gate?.title, label).toBe(e.gateTitle);

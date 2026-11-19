@@ -98,6 +98,24 @@ describe('suggest_presets on an ask to see drawn looks (stylepick SC-0)', () => 
     expect(turn.cards.map((c) => c.type)).toEqual(['style_presets']);
   });
 
+  it('an ask to browse the free presets, or words about looks already there, gets the free card', async () => {
+    for (const userText of ['show me the free styles', 'show me the preset styles', 'can I see the styles in the library', 'none of the 3 looks work']) {
+      const { turn, tools } = asking(userText);
+      expect(await tools.suggest_presets.execute({}), userText).toMatch(/^Showing 4 styles/);
+      expect(turn.cards.map((c) => c.type), userText).toEqual(['style_presets']);
+    }
+  });
+
+  it('use_preset refuses an ask to see drawn looks the same way (the style stays as it was)', async () => {
+    const { ctx, tools } = asking('draw 4 styles for this');
+    expect(await tools.use_preset.execute({ presetId: 'noir-ink' })).toBe(
+      'Error: The user asked to see drawn looks. Call propose_styles with count 4 (and presetIds or directions only for looks they named). It shows the price and waits for their Approve.'
+    );
+    expect(ctx.session.doc.style.status).toBe('empty');
+    const named = asking('use the noir look');
+    expect(await named.tools.use_preset.execute({ presetId: 'noir-ink' })).toContain(FREE_NOTE);
+  });
+
   it('the group rule sends a see/draw ask to propose_styles and a which ask to suggest_presets', () => {
     const rule = libraryToolGroup.promptRules!(kidsDoc())!;
     expect(rule).toMatch(/asks which look fits, call suggest_presets/);

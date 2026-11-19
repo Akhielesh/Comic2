@@ -3,10 +3,11 @@
 //   suggest_presets {presetIds? (1–6), note?}  FREE — posts a `style_presets` card: the best-fitting
 //                                             curated looks (rankPresets, deterministic) shown with
 //                                             the platform library's preview art (procedural art
-//                                             when none is published). For "which look fits?"; an
-//                                             ask to SEE drawn looks (styleAsk.ts) is refused toward
-//                                             propose_styles (stylepick SC-0).
-//   use_preset {presetId, withBoard?}         FREE — the use_preset action (software only).
+//                                             when none is published). For "which look fits?" and
+//                                             "show me the free styles"; an ask to SEE drawn looks
+//                                             (styleAsk.ts) is refused toward propose_styles (SC-0).
+//   use_preset {presetId, withBoard?}         FREE — the use_preset action (software only); refused
+//                                             toward propose_styles on an ask to see drawn looks.
 //
 // Phase gate: the style is empty or drafted. Neither tool ever generates an image: library
 // generation runs only from the admin console after an explicit admin click.
@@ -15,7 +16,7 @@ import { newId, type Card, type ComicDoc } from '../../../../shared/comic/doc.js
 import { STYLE_PRESETS, getStylePreset, rankPresets } from '../../../../shared/comic/stylePresets.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import type { DirectorTurn } from '../tools.js';
-import { styleLooksAsk } from '../styleAsk.js';
+import { drawnLooksRedirect, styleLooksAsk } from '../styleAsk.js';
 import type { StudioContext } from '../types.js';
 import { FREE_NOTE, runUsePreset } from '../actions/library.js';
 
@@ -76,11 +77,7 @@ function suggestPresetsTool(ctx: StudioContext, turn: DirectorTurn): DirectorToo
       // An ask to SEE drawn looks is not answered with clip art (stylepick SC-0): a deterministic redirect, no model
       // judgement. The free card stays for "which look fits?".
       const ask = styleLooksAsk(turn.userText);
-      if (ask) {
-        throw toolArgError(
-          `The user asked to see drawn looks. Call propose_styles with count ${ask.count} (and presetIds or directions only for looks they named). It shows the price and waits for their Approve.`
-        );
-      }
+      if (ask) throw toolArgError(drawnLooksRedirect(ask));
       const doc = ctx.session.doc;
       const ids = parsePresetIds(doc, args.presetIds);
       const note = cleanNote(args.note);
@@ -111,6 +108,9 @@ function usePresetTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
     async (args) => {
       const presetId = typeof args.presetId === 'string' ? args.presetId.trim() : '';
       if (!getStylePreset(presetId)) throw toolArgError(`Unknown preset. Use one of: ${presetList()}.`);
+      // A preset picked for the user is not an answer to an ask to see drawn looks (the same redirect as above).
+      const ask = styleLooksAsk(turn.userText);
+      if (ask) throw toolArgError(drawnLooksRedirect(ask));
       const started = await runUsePreset(
         ctx,
         { type: 'use_preset', presetId, ...(args.withBoard === true ? { withBoard: true } : {}) },

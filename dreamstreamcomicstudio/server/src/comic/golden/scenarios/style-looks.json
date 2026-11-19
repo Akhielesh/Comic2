@@ -1,18 +1,21 @@
 {
   "name": "style-looks",
-  "about": "An ask to see drawn looks ends in an Approve card for N looks of this comic, even when the model first reaches for the free presets (refused toward propose_styles); a which-look question still gets the free presets card.",
+  "about": "An ask to see drawn looks ends in an Approve card for N looks of this comic, even when the model first picks a free preset or reaches for the free presets card (both refused toward propose_styles); a which-look question still gets the free presets card.",
   "doc": "lake-brief",
   "turns": [
     {
       "say": "generate 3 of the best style options for this",
-      "expectTools": ["propose_styles", "suggest_presets"],
+      "expectTools": ["propose_styles", "suggest_presets", "set_style"],
       "director": [
+        { "toolCalls": [{ "name": "set_style", "args": { "presetId": "watercolor-storybook" } }] },
         { "toolCalls": [{ "name": "suggest_presets", "args": {} }] },
         { "toolCalls": [{ "name": "propose_styles", "args": { "count": 3 } }] },
         { "text": "" }
       ],
       "expect": {
         "toolResultIncludes": "Error: The user asked to see drawn looks. Call propose_styles with count 3",
+        "toolResultCount": 2,
+        "styleStatus": "empty",
         "gateReason": "policy",
         "gateAction": { "type": "render_style_options", "count": 3 },
         "gateTitle": "Draw 3 looks picked for your story?",
