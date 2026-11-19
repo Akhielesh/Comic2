@@ -10,12 +10,15 @@
 //  - Settled: a stream left. At most one alert, in this order: failed (a server error inside the stream, or a new studio
 //    error with a server code, never Stop, BUSY or a lost connection), a new needs-you, drawn / drawn with issues,
 //    translated / a translation that needs a look, published / couldn't publish, a reply nobody alerted yet.
+//    Translation alerts come only from a stream that translated (a translate action, an approved translate gate, or a
+//    turn that posted a translation card), and name only the languages it wrote: an edit that leaves an edition stale is
+//    not a translation.
 //  - Stop: a stream that ends while the studio is cancelling is the person's own Stop: silent.
 //  - A lost connection (a transport error with no server code) is never alerted: the server may still finish the turn.
 //
 // Keys use message, card, gate and picture ids, so a replayed stream (liveturn's attach) dedupes against the first.
 
-import type { Card, ComicDoc, Msg, RenderState } from '../../../shared/comic/doc';
+import type { Card, ComicDoc, LanguageEdition, Msg, RenderState, TextTranslation, TranslationFailure } from '../../../shared/comic/doc';
 import { editionProgress } from '../../../shared/comic/i18n';
 import { anyRenderBusy, needsYouOf, type NeedsWhy, type NeedsYou } from '../../../shared/comic/attention';
 import type { AlertDraft, AlertKind } from '../../../services/alerts/types';
@@ -150,26 +153,58 @@ const drawnDraft = (frame: StudioAlertFrame, memo: TransitionMemo, start: ComicD
   return { kind: 'drawn', key: `comic:${frame.projectId}:drawn:${reported}`, ...draftBase(frame), count: drawn.length, pictures: !allPages };
 };
 
-const progressMark = (doc: ComicDoc | null | undefined, lang: string): string => {
-  if (!doc) return '';
+const translationCardIds = (doc: ComicDoc | null | undefined): Set<string> => {
+  const ids = new Set<string>();
+  for (const m of conv(doc)) for (const c of Array.isArray(m?.cards) ? (m.cards as Card[]) : []) if (c?.type === 'translation') ids.add(c.id);
+  return ids;
+};
+
+/** The stream ran a translation: a translate action, an approved translate gate, or a turn that posted a translation card. */
+const translated = (s: StreamInfo, start: ComicDoc | null, doc: ComicDoc): boolean => {
+  if (s.actionType === 'translate') return true;
+  if (s.actionType === 'approve_gate') return start?.gate?.action?.type === 'translate';
+  if (s.kind !== 'message') return false;
+  const before = translationCardIds(start);
+  for (const id of translationCardIds(doc)) if (!before.has(id)) return true;
+  return false;
+};
+
+/** A translation written (new, or rewritten) between the two docs. */
+const wrote = (was: TextTranslation | undefined, now: TextTranslation | undefined): boolean =>
+  !!now && (!was || was.at !== now.at || was.sourceHash !== now.sourceHash || was.text !== now.text);
+const triedAgain = (was: TranslationFailure | undefined, now: TranslationFailure | null | undefined): boolean =>
+  !!now && (!was || was.at !== now.at || was.attempts !== now.attempts);
+
+/** The edition received work between the two docs: a line or a title written, or an attempt that failed recorded. */
+const editionWorkedOn = (was: LanguageEdition | undefined, now: LanguageEdition): boolean => {
+  const lines = now.lines && typeof now.lines === 'object' ? now.lines : {};
+  for (const [id, t] of Object.entries(lines)) if (wrote(was?.lines?.[id], t)) return true;
+  if (wrote(was?.cover?.title, now.cover?.title) || wrote(was?.cover?.tagline, now.cover?.tagline)) return true;
+  if (wrote(was?.brief?.title, now.brief?.title) || wrote(was?.brief?.logline, now.brief?.logline)) return true;
+  for (const [id, f] of Object.entries(now.failures ?? {})) if (triedAgain(was?.failures?.[id], f)) return true;
+  return false;
+};
+
+const incompleteEdition = (doc: ComicDoc, lang: string): boolean => {
   try {
     const p = editionProgress(doc, lang);
-    return `${p.total}/${p.done}/${p.missing}/${p.stale}/${p.staleEdited}`;
+    return p.total === 0 || p.done < p.total;
   } catch {
-    return '';
+    return true;
   }
 };
 
-const translateDraft = (frame: StudioAlertFrame, start: ComicDoc | null): AlertDraft | null => {
+const translateDraft = (frame: StudioAlertFrame, s: StreamInfo, start: ComicDoc | null): AlertDraft | null => {
   const doc = frame.doc;
   const editions = doc?.i18n?.editions;
-  if (!doc || !editions) return null;
-  const changed = Object.keys(editions).filter((lang) => progressMark(start, lang) !== progressMark(doc, lang)).sort();
+  if (!doc || !editions || !translated(s, start, doc)) return null;
+  const before = start?.i18n?.editions ?? {};
+  // Only the languages this stream wrote: a source edit raises an edition's stale count, which is not a translation.
+  const changed = Object.keys(editions)
+    .filter((lang) => !!editions[lang] && editionWorkedOn(before[lang], editions[lang]))
+    .sort();
   if (!changed.length) return null;
-  const incomplete = changed.filter((lang) => {
-    const p = editionProgress(doc, lang);
-    return p.total === 0 || p.done < p.total;
-  });
+  const incomplete = changed.filter((lang) => incompleteEdition(doc, lang));
   const key = `comic:${frame.projectId}:translate:${changed.join(',')}:${doc.rev}`;
   if (incomplete.length) return { kind: 'translate_issues', key, ...draftBase(frame), languages: incomplete };
   return { kind: 'translated', key, ...draftBase(frame), languages: changed };
@@ -240,7 +275,7 @@ export function studioTransitions(prev: StudioAlertFrame | null, next: StudioAle
       }
     }
     if (!draft) draft = drawnDraft(next, memo, start);
-    if (!draft) draft = translateDraft(next, start);
+    if (!draft) draft = translateDraft(next, s, start);
     if (!draft) draft = publishDraft(next, start);
     if (!draft && s.kind === 'message' && !alerted && !s.errored) {
       const msgId = newestAssistantId(next.doc);

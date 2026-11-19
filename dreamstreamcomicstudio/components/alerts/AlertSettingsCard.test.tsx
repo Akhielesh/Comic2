@@ -64,8 +64,19 @@ describe('AlertSettingsCard', () => {
     render(<AlertSettingsCard />);
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     expect(bus.playChimeNow).toHaveBeenCalledTimes(2);
-    expect(bus.playChimeNow).toHaveBeenNthCalledWith(1, 'ready', { gesture: true });
-    expect(bus.playChimeNow).toHaveBeenNthCalledWith(2, 'needsYou', { gesture: true, after: 0.75 });
+    expect(bus.playChimeNow).toHaveBeenNthCalledWith(1, 'ready', { gesture: true, prefs: { sound: true, volume: 'normal' } });
+    expect(bus.playChimeNow).toHaveBeenNthCalledWith(2, 'needsYou', { gesture: true, after: 0.75, prefs: { sound: true, volume: 'normal' } });
+  });
+
+  it('Play uses the card’s own store: Soft in a memory store plays Soft, whatever this browser saved', () => {
+    window.localStorage.setItem(ALERT_PREFS_KEY, JSON.stringify({ sound: false, volume: 'normal', level: 'all' }));
+    __resetAlertPrefsForTests();
+    const store = createMemoryPrefsStore();
+    render(<AlertSettingsCard store={store} onChanged={() => undefined} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Soft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    expect(bus.playChimeNow).toHaveBeenCalledTimes(2);
+    for (const call of bus.playChimeNow.mock.calls as unknown as [string, { prefs?: unknown }][]) expect(call[1].prefs).toEqual({ sound: true, volume: 'soft' });
   });
 
   it('a memory store keeps the browser untouched (the QA scene)', () => {

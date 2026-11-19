@@ -55,10 +55,11 @@ const countChange = (prefs: AlertPrefs): void => {
     });
 };
 
-/** Play Ready, then Needs you, from this one press (the press also unlocks the audio). */
-export const playBothChimes = (): void => {
-  void playChimeNow('ready', { gesture: true });
-  void playChimeNow('needsYou', { gesture: true, after: 0.75 });
+/** Play Ready, then Needs you, from this one press (the press also unlocks the audio), with the card's own prefs. */
+export const playBothChimes = ({ sound, volume }: Pick<AlertPrefs, 'sound' | 'volume'>): void => {
+  const prefs = { sound, volume };
+  void playChimeNow('ready', { gesture: true, prefs });
+  void playChimeNow('needsYou', { gesture: true, after: 0.75, prefs });
 };
 
 export function AlertSettingsCard({ store = localPrefsStore, onChanged = countChange }: AlertSettingsCardProps): React.ReactElement {
@@ -106,7 +107,7 @@ export function AlertSettingsCard({ store = localPrefsStore, onChanged = countCh
       </div>
 
       <div className={ROW}>
-        <Button variant="outline" size="sm" onClick={playBothChimes} disabled={!prefs.sound}>
+        <Button variant="outline" size="sm" onClick={() => playBothChimes(prefs)} disabled={!prefs.sound}>
           <Play aria-hidden />
           Play
         </Button>

@@ -23,7 +23,9 @@ Preferences → Alerts). QA scene: `/qa/comic-qa.html?surface=app&scene=alerts`.
 
 Rules (`services/alerts/rules.ts`, every row unit-tested): the same key never alerts twice (the 200 newest are kept);
 "Only when I'm needed" passes needs-you and failure kinds only; alerts within 400 ms share one chime and Needs you wins;
-at most one chime every 4 s; at most 10 alerts wait while away (the count says how many came); two alert toasts within
+at most one chime every 4 s; at most 10 alerts wait while away (the count says how many came; past ten the oldest Ready
+alert goes first, so a question or a failure is never pushed out by later replies and Open still goes to it); a toast
+held while the window was unfocused counts as shown only once it reached the screen; two alert toasts within
 8 s become the summary; an alert toast waits while someone else's toast is on screen (an app toast, a timeline Undo,
 History's restore) and shows when the slot frees, or is dropped after 60 s; an alert toast goes away once the person
 opens what it is about. The only timer is the 400 ms chime window, and it exists only while a chime is due. Nothing in
@@ -39,7 +41,7 @@ the core makes a network request or wakes the backend.
 | `approval` | A paid step is held for Approve (an open gate) | Needs you |
 | `style` | Looks drawn and waiting to be picked | Needs you |
 | `drawn` / `drawn_issues` | Pages, cover or sheets drawn since the stream started (a redraw counts) / some failed | Ready / Needs you |
-| `translated` / `translate_issues` | Every changed edition complete / one incomplete | Ready / Needs you |
+| `translated` / `translate_issues` | A stream that translated (a Translate action, an approved translate gate, or a turn that posted a translation card) wrote these languages, each now complete / one incomplete. An edit that only leaves an edition stale is not a translation | Ready / Needs you |
 | `published` / `publish_failed` | The chat Publish card moved to done / failed | Ready / Needs you |
 | `failed` | A stream ended with a server error (never Stop, BUSY or a lost connection) | Needs you |
 | `chat_reply` / `chat_question` / `chat_confirm` / `chat_failed` | A chat answer finished / holds a clarify card / a calendar confirm card / failed | Ready / Needs you |
@@ -78,7 +80,9 @@ Both peak at −14 dBFS at Normal and about −20 dBFS at Soft; no fundamental s
 No audio context exists before the person presses something, or while the sound is off. While the sound is on, one
 capture-phase passive `pointerdown`/`keydown` listener waits for the first press; there the context is created, resumed
 inside the gesture and suspended again, and the listener goes away. Where the browser has an audio session (Safari
-16.4+) it is set to "ambient", so the chime mixes with music and obeys the iPhone silent switch. To play, the context is
+16.4+) it is "ambient" only while a chime plays, so the chime mixes with music and obeys the iPhone silent switch, and
+it goes back to "auto" when the last chime ends: the session is page-wide, and dictation and calls need it free. A
+session something else set (a call or a recording's "play-and-record") is never changed. To play, the context is
 resumed, the notes scheduled, and it is suspended when the last note ends; if the browser keeps it suspended, the chime
 is skipped and the toast and the count still carry the alert. Sign-out closes it. The Settings Play button is itself a
 press, so it unlocks too. Reduced motion does not mute the chime. A tab the person muted in the browser stays silent (the
@@ -105,8 +109,8 @@ alerts on the main site, each with its own preferences and audio unlock. Nothing
 - `setLooking(target | null, owner)` when something is open in the source, cleared on unmount; `isLooking(target)`,
   `lookingTarget()` and `onLookingChange(fn)` to read it.
 - `onAlertsStop(fn)` runs at sign-out and account switches (a stream held after the person left a comic aborts there).
-- `playChimeNow(tier, { gesture?, after? })` plays a chime through the person's prefs (the Play button, the classic
-  generator's finish).
+- `playChimeNow(tier, { gesture?, after?, prefs? })` plays a chime through the person's prefs, or the sound and volume
+  given (the Settings card passes its own store's; the classic generator's finish uses this browser's).
 
 Comic Studio feeds `studioTransitions(prev, next, memo, now)` with frames built by `studioFrameOf(projectId, state)`
 from each rendered state (mounted) or from each event folded through `studioReducer` (a held stream): both produce the
@@ -127,10 +131,13 @@ context of its own).
 
 ## Device checks
 
-| Browser | Chime in another comic | Chime from a hidden tab | Title count | Return toast | Silent switch mutes | Music keeps playing |
-|---|---|---|---|---|---|---|
-| Chrome desktop | not yet checked | not yet checked | not yet checked | not yet checked | — | — |
-| Firefox desktop | not yet checked | not yet checked | not yet checked | not yet checked | — | — |
-| macOS Safari | not yet checked | not yet checked | not yet checked | not yet checked | — | not yet checked |
-| iPhone Safari | not yet checked | expected none | — | not yet checked | not yet checked | not yet checked |
-| Android Chrome | not yet checked | not yet checked | — | not yet checked | — | not yet checked |
+| Browser | Chime in another comic | Chime from a hidden tab | Title count | Return toast | Silent switch mutes | Music keeps playing | Dictation after a chime |
+|---|---|---|---|---|---|---|---|
+| Chrome desktop | not yet checked | not yet checked | not yet checked | not yet checked | — | — | not yet checked |
+| Firefox desktop | not yet checked | not yet checked | not yet checked | not yet checked | — | — | not yet checked |
+| macOS Safari | not yet checked | not yet checked | not yet checked | not yet checked | — | not yet checked | not yet checked |
+| iPhone Safari | not yet checked | expected none | — | not yet checked | not yet checked | not yet checked | not yet checked |
+| Android Chrome | not yet checked | not yet checked | — | not yet checked | — | not yet checked | not yet checked |
+
+"Dictation after a chime": play a chime (Settings → Play), then dictate in the studio composer; the microphone must
+start and the words arrive (the session is back to "auto" once the chime ends).

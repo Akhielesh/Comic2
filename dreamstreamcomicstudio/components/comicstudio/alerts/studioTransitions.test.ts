@@ -208,6 +208,71 @@ describe('translate', () => {
     expect(s.alerts).toHaveLength(1);
     expect(s.alerts[0]).toMatchObject({ kind: 'translate_issues', languages: ['fr'] });
   });
+
+  /** A translate stream writes the whole Spanish edition: "Translation ready". */
+  const translateAll = (s: Studio, doc: ComicDoc) => {
+    s.start('t1', 'action', 'translate').ops('t1', [{ op: 'edition', lang: 'es', patch: {} }], 'job');
+    s.ops('t1', [{ op: 'translations', lang: 'es', lines: lines(doc, 99) } as DocOp], 'job').end('t1');
+  };
+  /** The first line's words change, so its Spanish line goes stale. */
+  const editFirstLine: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p2', id: 'pg_1_l1', patch: { text: 'Hold it right there!' } };
+
+  it('a talk-only turn that edits a translated line alerts for its reply, never for the translation it made stale', () => {
+    const doc = baseDoc();
+    const s = new Studio(doc);
+    translateAll(s, doc);
+    s.start('m1').ops('m1', [userMsg('u1')]);
+    s.ops('m1', [editFirstLine, reply('a1')]).end('m1');
+    expect(s.kinds()).toEqual(['translated', 'reply']);
+  });
+
+  it('the same edit made by the Director: the reply still alerts when the turn settles', () => {
+    const doc = baseDoc();
+    const s = new Studio(doc);
+    translateAll(s, doc);
+    s.start('m1').ops('m1', [userMsg('u1')]);
+    s.ops('m1', [editFirstLine, reply('a1')], 'director').end('m1');
+    expect(s.kinds()).toEqual(['translated', 'reply']);
+  });
+
+  it('a drawing run never reports the editions a source edit made stale', () => {
+    const doc = baseDoc();
+    const s = new Studio(doc);
+    translateAll(s, doc);
+    s.start('r1', 'action', 'render_pages').ops('r1', [editFirstLine], 'director').ops('r1', [drawn('pg_2')], 'job').end('r1');
+    expect(s.kinds()).toEqual(['translated', 'drawn']);
+  });
+
+  it('an approved translate gate reports the languages it wrote', () => {
+    const doc = baseDoc();
+    doc.gate = { ...gate, id: 'g_tr', action: { type: 'translate', languages: ['es'] } as Gate['action'], imageCount: 0 };
+    const s = new Studio(doc);
+    s.start('a1', 'action', 'approve_gate').ops('a1', [{ op: 'edition', lang: 'es', patch: {} }], 'job');
+    s.ops('a1', [{ op: 'translations', lang: 'es', lines: lines(doc, 99) } as DocOp], 'job').end('a1');
+    expect(s.kinds()).toEqual(['translated']);
+    expect(s.alerts[0]).toMatchObject({ languages: ['es'] });
+  });
+
+  it('a Director turn that posts a translation card and writes the edition reports it at the settle', () => {
+    const doc = baseDoc();
+    const s = new Studio(doc);
+    s.start('m1').ops('m1', [userMsg('u1'), reply('a1', [{ type: 'translation', id: 'tr1', languages: ['es'] }], 'Translating into Spanish.')]);
+    s.ops('m1', [{ op: 'edition', lang: 'es', patch: {} }], 'job');
+    s.ops('m1', [{ op: 'translations', lang: 'es', lines: lines(doc, 99) } as DocOp], 'job').end('m1');
+    expect(s.kinds()).toEqual(['reply', 'translated']);
+  });
+
+  it('only the languages a translate run wrote are reported, not another edition the same run left stale', () => {
+    const doc = baseDoc();
+    const s = new Studio(doc);
+    translateAll(s, doc);
+    s.start('m1').ops('m1', [userMsg('u1')]).ops('m1', [editFirstLine, reply('a1')], 'director').end('m1');
+    s.start('t2', 'action', 'translate').ops('t2', [{ op: 'edition', lang: 'fr', patch: {} }], 'job');
+    // French is written from the edited words, so it is complete; Spanish stays one line stale and is not named.
+    s.ops('t2', [{ op: 'translations', lang: 'fr', lines: lines(s.state.doc!, 99) } as DocOp], 'job').end('t2');
+    expect(s.kinds()).toEqual(['translated', 'reply', 'translated']);
+    expect(s.alerts[2]).toMatchObject({ languages: ['fr'] });
+  });
 });
 
 describe('publish (the chat Publish card)', () => {

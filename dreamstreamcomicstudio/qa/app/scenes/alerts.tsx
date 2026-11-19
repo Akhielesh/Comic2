@@ -1,6 +1,7 @@
 // QA scene `alerts` (notify NF-4, NF-5; the scene contract is in qa/app/index.tsx): every alert the core can raise, as
 // the static toast card the person sees (fixed phrases around invented titles), the summary toast, the Alerts settings
-// card on in-memory prefs (this browser's are never touched, nothing is counted), and the two chimes on Play buttons.
+// card on in-memory prefs (this browser's are never touched, nothing is counted), and the two chimes on Play buttons
+// (at the scene's prefs, so the card's Volume applies to them too).
 // Nothing here reaches the network; the chimes play only from a press (that press unlocks the audio).
 import React from 'react';
 import { BellRing, Volume2 } from 'lucide-react';
@@ -78,10 +79,10 @@ function Chimes() {
     <SectionCard title="Chimes" description="Two short synthesised chimes, quiet by default. They play only after you press something on the page." icon={<Volume2 />}>
       <div className={STACK} data-qa-alert-chimes="">
         <div className={ROW}>
-          <Button variant="outline" onClick={() => void playChimeNow('ready', { gesture: true })}>
+          <Button variant="outline" onClick={() => void playChimeNow('ready', { gesture: true, prefs: scenePrefs.get() })}>
             Play Ready
           </Button>
-          <Button variant="outline" onClick={() => void playChimeNow('needsYou', { gesture: true })}>
+          <Button variant="outline" onClick={() => void playChimeNow('needsYou', { gesture: true, prefs: scenePrefs.get() })}>
             Play Needs you
           </Button>
         </div>

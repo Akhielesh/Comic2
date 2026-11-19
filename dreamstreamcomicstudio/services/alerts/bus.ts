@@ -12,7 +12,7 @@
 //   setLooking(target | null, owner)          a source says what is open in it; each owner clears only its own
 //   isLooking(target) / lookingTarget()       the tab is visible and focused and that target is open
 //   onLookingChange(fn)                       told when the target, the visibility or the focus changes
-//   playChimeNow(tier, { gesture?, after? })  the Play button and the classic generator (honours the prefs)
+//   playChimeNow(tier, { gesture?, after?, prefs? })  the Play button and the classic generator (honours the prefs)
 //   onAlertsStop(fn)                          run once at every stopAlerts (returns the unsubscribe)
 // Open on a toast only navigates (`open(target)`); it never runs an action or a spend.
 
@@ -22,7 +22,7 @@ import { playChime } from './chime';
 import { loadAlertPrefs, subscribeAlertPrefs } from './prefs';
 import { createAlertRules, type AlertRules, type AlertToastSpec } from './rules';
 import { setTabBadge } from './tabBadge';
-import { sameTarget, type AlertDraft, type AlertKind, type AlertTarget, type ChimeTier } from './types';
+import { sameTarget, type AlertDraft, type AlertKind, type AlertPrefs, type AlertTarget, type ChimeTier } from './types';
 
 export interface StartAlertsOptions {
   /** The signed-in person (a different id starts afresh). */
@@ -227,11 +227,13 @@ export interface PlayChimeNowOptions {
   gesture?: boolean;
   /** Seconds from now, in the same audio context (Ready, then Needs you, from one press). */
   after?: number;
+  /** The sound and volume to play with (the Settings card passes its own store's); this browser's prefs otherwise. */
+  prefs?: Pick<AlertPrefs, 'sound' | 'volume'>;
 }
 
-/** Plays a chime now if the person's sound is on, at their volume. Resolves whether it played. */
+/** Plays a chime now if the sound is on, at the person's volume. Resolves whether it played. */
 export async function playChimeNow(tier: ChimeTier, opts: PlayChimeNowOptions = {}): Promise<boolean> {
-  const prefs = loadAlertPrefs();
+  const prefs = opts.prefs ?? loadAlertPrefs();
   if (!prefs.sound) return false;
   if (opts.gesture) unlockAudio();
   return playChime(tier, prefs.volume, { after: opts.after ?? 0 });

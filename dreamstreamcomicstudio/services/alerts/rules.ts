@@ -10,13 +10,14 @@
 //
 // Also: "Only when I'm needed" passes needs-you and failure kinds only; alerts within 400 ms share one chime and Needs
 // you wins; at most one chime every 4 s; the same key never twice (the 200 newest kept); while away at most 10 alerts
-// wait and come back as one toast, or a summary of several, without the ones about what the person now looks at; two
-// alert toasts within 8 s become the summary; an alert toast waits while someone else's toast is on screen and shows
-// when the slot frees (no timer), unless it is older than 60 s. The only timer is the 400 ms chime window, and it
-// exists only while a chime is due.
+// wait (past that the oldest Ready alert goes first, so a question is never pushed out by replies) and come back as one
+// toast, or a summary of several, without the ones about what the person now looks at; two alert toasts within 8 s
+// become the summary; an alert toast waits while someone else's toast is on screen and shows when the slot frees (no
+// timer), unless it is older than 60 s. The only timer is the 400 ms chime window, and it exists only while a chime is
+// due.
 
 import { alertCopy, byUrgency, summaryCopy } from './copy';
-import { passesLevel, tierOf, toneOf, type AlertDraft, type AlertKind, type AlertPrefs, type AlertTarget, type AlertTone, type ChimeTier } from './types';
+import { isFailureKind, isNeedsKind, passesLevel, tierOf, toneOf, type AlertDraft, type AlertKind, type AlertPrefs, type AlertTarget, type AlertTone, type ChimeTier } from './types';
 
 export const ALERT_RULES = Object.freeze({
   coalesceMs: 400,
@@ -71,8 +72,21 @@ export interface AlertRules {
 
 interface Pending {
   draft: AlertDraft;
+  /** Its toast reached the screen (a held toast has not, until the slot frees). */
   shown: boolean;
 }
+
+const urgent = (p: Pending) => isNeedsKind(p.draft.kind) || isFailureKind(p.draft.kind);
+
+/** Over the cap: drop the oldest Ready alert, or the oldest of all when every one waiting is urgent. */
+const capped = (pending: Pending[]): Pending[] => {
+  const out = pending.slice();
+  while (out.length > ALERT_RULES.pendingMax) {
+    const i = out.findIndex((p) => !urgent(p));
+    out.splice(i < 0 ? 0 : i, 1);
+  }
+  return out;
+};
 
 export function createAlertRules(env: RulesEnv, out: RulesOutput): AlertRules {
   const keys = new Set<string>();
@@ -145,8 +159,8 @@ export function createAlertRules(env: RulesEnv, out: RulesOutput): AlertRules {
       let outcome: PostOutcome = 'pending';
       if (visible) outcome = showNow(draft);
       if (away) {
-        pending.push({ draft, shown: visible });
-        if (pending.length > ALERT_RULES.pendingMax) pending = pending.slice(-ALERT_RULES.pendingMax);
+        pending.push({ draft, shown: outcome === 'shown' });
+        pending = capped(pending);
         missed += 1;
         out.badge(missed);
       }
@@ -177,6 +191,8 @@ export function createAlertRules(env: RulesEnv, out: RulesOutput): AlertRules {
       }
       held = null;
       out.toast(spec);
+      // A toast held while the window was unfocused is on screen now: the return does not show it again.
+      for (const p of pending) if (spec.drafts.includes(p.draft)) p.shown = true;
     },
 
     reset() {

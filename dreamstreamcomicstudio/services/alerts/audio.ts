@@ -3,9 +3,11 @@
 // pointerdown/keydown listener waits for the first press, makes the context there, resumes it inside that gesture and
 // suspends it again, and goes away. Before that press, and while the sound is off, no context exists. The context runs
 // only while a chime plays (chime.ts resumes it and suspends it when the last note ends), so it costs nothing between
-// chimes; it is closed on sign-out. Where the browser has an audio session (Safari 16.4+) it is set to "ambient": the
-// chime mixes with the person's music and obeys the iPhone's silent switch. Reduced motion does not mute it (it is the
-// cue, not motion). Every call is guarded: a browser without Web Audio, or one that refuses it, just stays silent.
+// chimes; it is closed on sign-out. Where the browser has an audio session (Safari 16.4+) it is "ambient" only while a
+// chime plays, so the chime mixes with the person's music and obeys the iPhone's silent switch, and it goes back to
+// "auto" when the last chime ends: the session is page-wide, and dictation or a call needs it free. A session someone
+// else set (a call or a recording sets "play-and-record") is never touched. Reduced motion does not mute the chime (it
+// is the cue, not motion). Every call is guarded: a browser without Web Audio, or one that refuses it, stays silent.
 
 type AudioContextCtor = new () => AudioContext;
 
@@ -13,6 +15,41 @@ let ctx: AudioContext | null = null;
 let disarm: (() => void) | null = null;
 /** Chimes scheduled and not ended (the context stays running until the last one ends). */
 let playing = 0;
+/** This module set the audio session to "ambient" for the chimes playing now (and gives it back when they end). */
+let holdsSession = false;
+
+const audioSession = (): { type: string } | undefined => {
+  try {
+    return typeof navigator !== 'undefined' ? (navigator as unknown as { audioSession?: { type: string } }).audioSession : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** A chime starts: "ambient" while it plays, but only over the default session (never over a call's or a recording's). */
+const holdAmbientSession = () => {
+  if (holdsSession) return;
+  try {
+    const session = audioSession();
+    if (!session || session.type !== 'auto') return;
+    session.type = 'ambient';
+    holdsSession = session.type === 'ambient';
+  } catch {
+    /* an audio session that refuses the type: the default session plays the chime too */
+  }
+};
+
+/** The last chime ended: back to "auto", unless someone else took the session meanwhile. */
+const releaseAmbientSession = () => {
+  if (!holdsSession) return;
+  holdsSession = false;
+  try {
+    const session = audioSession();
+    if (session && session.type === 'ambient') session.type = 'auto';
+  } catch {
+    /* nothing to give back */
+  }
+};
 
 const ctorOf = (): AudioContextCtor | null => {
   try {
@@ -42,12 +79,6 @@ const suspendIfIdle = () => {
  * there (which is what unlocks audio) and suspends it again once that settles, unless a chime has started meanwhile.
  */
 export function unlockAudio(): AudioContext | null {
-  try {
-    const session = (typeof navigator !== 'undefined' ? (navigator as unknown as { audioSession?: { type: string } }).audioSession : undefined);
-    if (session && session.type !== 'ambient') session.type = 'ambient';
-  } catch {
-    /* an audio session that refuses the type: the default session plays the chime too */
-  }
   if (!ctx || ctx.state === 'closed') {
     const Ctor = ctorOf();
     if (!Ctor) return null;
@@ -111,17 +142,20 @@ export function closeAudio(): void {
   const closing = ctx;
   ctx = null;
   playing = 0;
+  releaseAmbientSession();
   if (closing && closing.state !== 'closed') quietly(() => closing.close());
 }
 
-/** chime.ts: a chime is about to play (keeps the context running). */
+/** chime.ts: a chime is about to play, before the context resumes (keeps it running; the session is ambient). */
 export const beginPlay = (): void => {
   playing += 1;
+  holdAmbientSession();
 };
 
-/** chime.ts: a chime ended (the context is suspended once none is left). */
+/** chime.ts: a chime ended (the context is suspended and the session given back once none is left). */
 export const endPlay = (): void => {
   playing = Math.max(0, playing - 1);
+  if (playing === 0) releaseAmbientSession();
   suspendIfIdle();
 };
 
@@ -131,4 +165,5 @@ export function __resetAudioForTests(): void {
   disarm = null;
   ctx = null;
   playing = 0;
+  holdsSession = false;
 }

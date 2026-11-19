@@ -226,6 +226,77 @@ describe('while away and on return', () => {
     expect(lastBadge()).toBe(0);
   });
 
+  it('past the cap, Ready alerts go first: one question and ten replies while hidden, Open still goes to the question', () => {
+    const rules = make();
+    page.visible = false;
+    page.focused = false;
+    rules.post(draft('question', NIGHT));
+    for (let i = 0; i < ALERT_RULES.pendingMax; i += 1) rules.post(draft('reply', SPICE, { title: `Comic ${i}` }));
+    expect(lastBadge()).toBe(ALERT_RULES.pendingMax + 1);
+    page.visible = true;
+    page.focused = true;
+    rules.returned();
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ title: '11 updates', kind: 'question', target: NIGHT });
+    expect(toasts[0].drafts).toHaveLength(ALERT_RULES.pendingMax);
+  });
+
+  it('past the cap with only urgent alerts waiting, the oldest goes', () => {
+    const rules = make();
+    page.visible = false;
+    page.focused = false;
+    const first = draft('question', NIGHT);
+    rules.post(first);
+    for (let i = 0; i < ALERT_RULES.pendingMax; i += 1) rules.post(draft('failed', SPICE, { title: `Comic ${i}` }));
+    page.visible = true;
+    page.focused = true;
+    rules.returned();
+    expect(toasts[0].drafts).toHaveLength(ALERT_RULES.pendingMax);
+    expect(toasts[0].drafts).not.toContain(first);
+  });
+
+  it('a toast held while the window was unfocused, then dropped after 60 s, still shows when the person comes back', () => {
+    const rules = make();
+    page.focused = false;
+    page.busy = true;
+    expect(rules.post(draft('reply'))).toBe('held');
+    vi.advanceTimersByTime(ALERT_RULES.holdMaxMs + 1);
+    page.busy = false;
+    rules.slotFreed();
+    expect(toasts).toEqual([]);
+    page.focused = true;
+    rules.returned();
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ kind: 'reply', target: SPICE });
+  });
+
+  it('a toast held while the window was unfocused and shown when the slot freed is not shown again on return', () => {
+    const rules = make();
+    page.focused = false;
+    page.busy = true;
+    rules.post(draft('reply'));
+    page.busy = false;
+    rules.slotFreed();
+    expect(toasts).toHaveLength(1);
+    page.focused = true;
+    rules.returned();
+    expect(toasts).toHaveLength(1);
+    expect(lastBadge()).toBe(0);
+  });
+
+  it('a toast still held when the person comes back shows once', () => {
+    const rules = make();
+    page.focused = false;
+    page.busy = true;
+    rules.post(draft('reply'));
+    page.focused = true;
+    page.busy = false;
+    rules.returned();
+    expect(toasts).toHaveLength(1);
+    rules.slotFreed();
+    expect(toasts).toHaveLength(1);
+  });
+
   it('on return, an alert about what the person now looks at is dropped; one left shows as itself', () => {
     const rules = make();
     page.visible = false;

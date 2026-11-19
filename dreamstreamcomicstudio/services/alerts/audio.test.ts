@@ -58,6 +58,7 @@ class FakeCtx {
 const flush = async () => {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 };
+const session = () => (navigator as unknown as { audioSession: { type: string } }).audioSession;
 const press = () => window.dispatchEvent(new Event('pointerdown'));
 
 beforeEach(() => {
@@ -103,12 +104,23 @@ describe('audio unlock', () => {
     expect(ctx.resume).toHaveBeenCalledTimes(1);
   });
 
-  it('a key press unlocks too; the audio session is set to ambient where the browser has one', () => {
+  it('a key press unlocks too; unlocking leaves the audio session as it was', () => {
     (navigator as { audioSession?: { type: string } }).audioSession = { type: 'auto' };
     armAudioUnlock();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(made).toHaveLength(1);
-    expect((navigator as unknown as { audioSession: { type: string } }).audioSession.type).toBe('ambient');
+    expect(session().type).toBe('auto');
+  });
+
+  it('a call or a recording that owns the audio session keeps it: unlock and a chime leave play-and-record alone', async () => {
+    (navigator as { audioSession?: { type: string } }).audioSession = { type: 'play-and-record' };
+    unlockAudio();
+    expect(session().type).toBe('play-and-record');
+    await flush();
+    expect(await playChime('ready', 'normal')).toBe(true);
+    expect(session().type).toBe('play-and-record');
+    made[0].oscillators.at(-1)!.onended?.();
+    expect(session().type).toBe('play-and-record');
   });
 
   it('turning the sound off closes the context; on again re-arms for the next press', async () => {
@@ -183,6 +195,51 @@ describe('playChime', () => {
     ctx.oscillators.at(-1)!.onended?.();
     expect(ctx.suspend).toHaveBeenCalledTimes(1);
     expect(ctx.oscillators.at(-1)!.start).toHaveBeenCalledWith(ctx.currentTime + 0.75 + CHIMES.needsYou.notes[1].at);
+  });
+
+  it('the audio session is ambient only while a chime plays, and goes back to auto when the last one ends', async () => {
+    (navigator as { audioSession?: { type: string } }).audioSession = { type: 'auto' };
+    unlockAudio();
+    await flush();
+    const ctx = made[0];
+    const played = playChime('ready', 'normal');
+    expect(session().type).toBe('ambient'); // set before the context resumes
+    expect(await played).toBe(true);
+    await playChime('needsYou', 'normal', { after: 0.75 });
+    const first = ctx.oscillators.slice(0, CHIMES.ready.notes.length * CHIMES.ready.partials.length);
+    first.at(-1)!.onended?.();
+    expect(session().type).toBe('ambient');
+    ctx.oscillators.at(-1)!.onended?.();
+    expect(session().type).toBe('auto');
+  });
+
+  it('a call that takes the audio session while a chime plays keeps it when the chime ends', async () => {
+    (navigator as { audioSession?: { type: string } }).audioSession = { type: 'auto' };
+    unlockAudio();
+    await flush();
+    await playChime('ready', 'normal');
+    session().type = 'play-and-record';
+    made[0].oscillators.at(-1)!.onended?.();
+    expect(session().type).toBe('play-and-record');
+  });
+
+  it('a chime that cannot play gives the audio session back at once', async () => {
+    (navigator as { audioSession?: { type: string } }).audioSession = { type: 'auto' };
+    unlockAudio();
+    await flush();
+    resumable = false;
+    expect(await playChime('needsYou', 'normal')).toBe(false);
+    expect(session().type).toBe('auto');
+  });
+
+  it('sign-out during a chime gives the audio session back', async () => {
+    (navigator as { audioSession?: { type: string } }).audioSession = { type: 'auto' };
+    unlockAudio();
+    await flush();
+    await playChime('ready', 'normal');
+    expect(session().type).toBe('ambient');
+    closeAudio();
+    expect(session().type).toBe('auto');
   });
 
   it('skips the sound when the browser keeps the context suspended', async () => {

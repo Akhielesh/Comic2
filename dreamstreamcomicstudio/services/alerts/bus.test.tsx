@@ -242,4 +242,13 @@ describe('playChimeNow (the Play button, the classic generator)', () => {
     expect(await playChimeNow('ready', { gesture: true })).toBe(false);
     expect(audio.playChime).toHaveBeenCalledTimes(2);
   });
+
+  it('given prefs (the Settings card’s store), plays with those instead of this browser’s', async () => {
+    saveAlertPrefs({ sound: false, volume: 'normal' });
+    expect(await playChimeNow('ready', { gesture: true, prefs: { sound: true, volume: 'soft' } })).toBe(true);
+    expect(audio.playChime).toHaveBeenLastCalledWith('ready', 'soft', { after: 0 });
+    saveAlertPrefs({ sound: true });
+    expect(await playChimeNow('ready', { prefs: { sound: false, volume: 'normal' } })).toBe(false);
+    expect(audio.playChime).toHaveBeenCalledTimes(1);
+  });
 });
