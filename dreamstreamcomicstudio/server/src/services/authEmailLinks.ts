@@ -157,14 +157,21 @@ const MAIN_HANDOFF_VIEWS = new Set([
 ]);
 
 /**
- * Strict allowlist for the handoff into the main app (`next` on /auth/callback): '/', '/models'
- * or '/?view=<known view>'. Anything else (other origins, '//host', encoded tricks) → null.
+ * The main front page as a handoff destination: its escape hatch (?home=1, never redirected). The bare '/' is sent to
+ * Comic Studio for a browser without the member hint (services/productHost.ts frontPageToComicsUrl), and a handoff
+ * navigates there before the new session has set that hint.
+ */
+const MAIN_FRONT_PAGE_PATH = '/?home=1';
+
+/**
+ * Strict allowlist for the handoff into the main app (`next` on /auth/callback): the front page (always as
+ * '/?home=1'), '/models' or '/?view=<known view>'. Anything else (other origins, '//host', encoded tricks) → null.
  */
 export const parseMainHandoffPath = (value: unknown): string | null => {
-  if (value === undefined || value === null || value === '') return '/';
+  if (value === undefined || value === null || value === '') return MAIN_FRONT_PAGE_PATH;
   if (typeof value !== 'string' || value.length > 64) return null;
-  if (value === '/' || value === '/models') return value;
-  if (value === '/?view=how-it-works') return '/';
+  if (value === '/' || value === MAIN_FRONT_PAGE_PATH || value === '/?view=how-it-works') return MAIN_FRONT_PAGE_PATH;
+  if (value === '/models') return value;
   const m = /^\/\?view=([a-z][a-z-]{0,23})$/.exec(value);
   return m && MAIN_HANDOFF_VIEWS.has(m[1]) ? value : null;
 };
@@ -213,7 +220,7 @@ export const buildHandoffLink = ({ to, mainOrigin, hashedToken, verificationType
   }
   // `next` always rides along: it tells the main app this is a handoff, so it goes straight on
   // to the page instead of stopping at "Authentication successful".
-  const path = parseMainHandoffPath(next) ?? '/';
+  const path = parseMainHandoffPath(next) ?? MAIN_FRONT_PAGE_PATH;
   const base = mainOrigin.replace(/\/+$/, '');
   return `${base}/auth/callback?${token}&next=${encodeURIComponent(path)}`;
 };

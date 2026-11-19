@@ -5,7 +5,9 @@
 //
 // Every function is defensive: a missing SUPABASE_SERVICE_ROLE_KEY or a transient DB error
 // must never crash a request or block an essential email, so failures degrade to safe
-// defaults (and are logged), mirroring services/telemetryStore.ts.
+// defaults (and are logged), mirroring services/telemetryStore.ts. The one exception is
+// upsertSubscriber, which throws when nothing was stored, so a signup is never told it was
+// saved when it was not (the route answers 503 and the form saves the row itself).
 
 import crypto from 'crypto';
 import { getSupabaseAdmin } from './supabase.js';
@@ -255,52 +257,61 @@ const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string
   return out;
 };
 
+/** A waitlist write that did not happen (the route answers 503 and the form saves the row itself). */
+const storeFailed = (step: string, error?: { code?: string; message?: string } | null): Error =>
+  new Error(`waitlist ${step} failed${error?.code ? ` (${error.code})` : ''}`);
+
 /**
- * Upsert a waitlist subscriber and return what happened. For 'updates' we (re)issue a
- * confirm token unless the address is already confirmed. For 'access' an existing row
- * (there is no confirm flow) reports 'already_registered' and is left untouched —
- * except that newly provided intent (product interests / feedback) is merged in, so
- * someone re-registering with picks still gets them recorded.
- * Idempotent on (lower(email), kind).
+ * Store a waitlist signup and return what happened. Idempotent on (lower(email), kind).
+ * - A new address gets one row: its metadata and intent (product interests / feedback), unconfirmed.
+ * - An address already on the list keeps its row as it is: rows are keyed by an email the caller
+ *   supplies, so a repeat (or a stranger) never replaces the answers stored there. The one exception is
+ *   an unconfirmed 'updates' row when `reissueToken` is set (interest emails on, so a fresh confirm link
+ *   is about to be sent): only its confirm token and clock are renewed. With emails off nothing is
+ *   renewed, so a confirm link sent earlier keeps working.
+ * Throws when nothing could be stored (no service role, or the database refused): supabase-js returns
+ * its errors instead of throwing, so each one is read here. A unique violation on insert (two requests
+ * at once) counts as already on the list.
  */
 export const upsertSubscriber = async (
   email: string,
   kind: 'updates' | 'access',
   token: string,
   metadata: Record<string, unknown> = {},
-  intent?: SubscriberIntent
+  intent?: SubscriberIntent,
+  options: { reissueToken?: boolean } = {}
 ): Promise<{ outcome: SubscribeOutcome }> => {
   const db = adminOrNull();
   const normalized = normalizeEmail(email);
-  if (!db) return { outcome: 'pending' };
+  if (!db) throw storeFailed('store (no service role)');
   const intentCols = sanitizeIntent(intent);
 
-  const { data: existing } = await db
+  const { data: existing, error: lookupError } = await db
     .from('waitlist_signups')
     .select('id, confirmed')
     .eq('email', normalized)
     .eq('kind', kind)
     .limit(1)
     .maybeSingle();
+  if (lookupError) throw storeFailed('lookup', lookupError);
 
   const now = new Date().toISOString();
   if (existing) {
-    // Merge any newly provided intent onto the existing row (never clears old picks).
-    if (Object.keys(intentCols).length) {
-      await db.from('waitlist_signups').update(intentCols).eq('id', (existing as { id: string }).id);
-    }
-    // 'access' rows have no confirm step — the email is simply already on the list.
+    const row = existing as { id: string; confirmed?: boolean };
+    // 'access' rows have no confirm step: the email is simply already on the list.
     if (kind === 'access') return { outcome: 'already_registered' };
-    if ((existing as { confirmed?: boolean }).confirmed) return { outcome: 'already_confirmed' };
-    // Re-issue a fresh token + restart the expiry clock.
-    await db
+    if (row.confirmed) return { outcome: 'already_confirmed' };
+    if (!options.reissueToken) return { outcome: 'already_registered' };
+    // A fresh confirm link is about to be sent: renew the token and restart its expiry clock.
+    const { error: renewError } = await db
       .from('waitlist_signups')
       .update({ confirm_token: token, confirm_sent_at: now, unsubscribed_at: null })
-      .eq('id', (existing as { id: string }).id);
+      .eq('id', row.id);
+    if (renewError) throw storeFailed('token renewal', renewError);
     return { outcome: 'pending' };
   }
 
-  await db.from('waitlist_signups').insert({
+  const { error: insertError } = await db.from('waitlist_signups').insert({
     email: normalized,
     kind,
     source: typeof metadata.source === 'string' ? metadata.source : null,
@@ -310,6 +321,10 @@ export const upsertSubscriber = async (
     confirm_token: token,
     confirm_sent_at: now
   });
+  if (insertError) {
+    if (insertError.code === '23505') return { outcome: 'already_registered' };
+    throw storeFailed('insert', insertError);
+  }
   return { outcome: 'new' };
 };
 

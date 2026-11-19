@@ -226,6 +226,37 @@ describe('a small Library looks deliberate', () => {
     expect(container.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|bg-slate-50|text-white|orange|#[0-9a-f]{6}\b/i);
   });
 
+  it('one or two comics read as wide cards like the samples (cover, title, date, a read link), never a near-empty row', async () => {
+    for (const count of [1, 2]) {
+      fakeSupabase.reset();
+      rows.value = manyRows(count);
+      const view = render(<PublicGallery onReadComic={vi.fn()} />);
+      await screen.findByText('Story 000');
+      const list = screen.getByRole('list');
+      expect(list).toHaveAttribute('data-layout', 'few');
+      const cards = screen.getAllByTestId('gallery-card');
+      expect(cards).toHaveLength(count);
+      for (const card of cards) {
+        expect(card).toHaveAttribute('data-layout', 'wide');
+        // One link per card, holding the cover and saying where it goes, with the date and likes beside it.
+        const link = within(card).getByRole('link', { name: /^Read Story/ });
+        expect(link.querySelector('img')).not.toBeNull();
+        expect(within(link).getByText('Read comic')).toBeInTheDocument();
+        expect(within(card).getByText('Likes:')).toBeInTheDocument();
+        expect(within(card).getByText(/\d{4}/)).toBeInTheDocument();
+      }
+      view.unmount();
+    }
+  });
+
+  it('three comics or more keep the cover grid', async () => {
+    rows.value = manyRows(3);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(screen.getByRole('list')).not.toHaveAttribute('data-layout');
+    for (const card of screen.getAllByTestId('gallery-card')) expect(card).not.toHaveAttribute('data-layout');
+  });
+
   it('an empty Library shows no comics section, no "0 comics" and no empty shelf: just the samples', async () => {
     rows.value = [rows.value[2]];
     render(<PublicGallery onReadComic={vi.fn()} />);

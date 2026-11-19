@@ -20,6 +20,7 @@ import {
   cleanBlock,
   cleanLine,
   interestMetadata,
+  interestThanks,
   knownFeatures,
   knownStudios,
   type InterestAnswers
@@ -99,11 +100,17 @@ export const readInterestAnswers = (body: Record<string, unknown>): Checked<Inte
   };
 };
 
-/** The one answer every valid address gets, per kind, whatever its history. */
+/** The one answer every valid address gets, per kind, whatever its history (here: with no optional answers). */
 export const NEUTRAL_REPLY = {
   access: { ok: true, status: 'registered', message: INTEREST_THANKS.access },
   updates: { ok: true, status: 'registered', message: INTEREST_THANKS.updates }
 } as const;
+
+/** NEUTRAL_REPLY for one request: it thanks for the answers when some were sent (what was sent, never the address). */
+export const neutralReply = (kind: 'access' | 'updates', answers: InterestAnswers) => ({
+  ...NEUTRAL_REPLY[kind],
+  message: interestThanks(kind, answers)
+});
 
 const invalid = (message: string) => ({ ok: false, status: 'invalid', message });
 
@@ -144,9 +151,12 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       ...(comment ? { feedback: comment } : {})
     };
     const token = newConfirmToken();
+    const emailsOn = interestEmailsOn();
     let outcome: string;
     try {
-      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers.value), intent));
+      // An address already on the list keeps its row as it is; only with emails on does an unconfirmed
+      // 'updates' row get a fresh confirm token (the link about to be sent). A store that saved nothing throws.
+      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers.value), intent, { reissueToken: emailsOn }));
     } catch (err) {
       console.warn('[newsletter] store failed', (err as Error)?.message);
       return res
@@ -154,15 +164,16 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         .json({ ok: false, status: 'unavailable', message: 'We could not save that just now. Please try again in a moment.' });
     }
 
-    if (interestEmailsOn()) {
-      // Best-effort and never awaited: a mailer failure must not change the answer.
+    if (emailsOn) {
+      // Best-effort and never awaited: a mailer failure must not change the answer. A confirm email only goes
+      // with a token the store just wrote (a new row, or a renewed one), so its link always matches the row.
       if (kind === 'access' && outcome === 'new') void sendAccessRequested(email, firstName, reqMeta(req));
-      if (kind === 'updates' && outcome !== 'already_confirmed') {
+      if (kind === 'updates' && (outcome === 'new' || outcome === 'pending')) {
         const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
         void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
       }
     }
-    return res.status(200).json(NEUTRAL_REPLY[kind]);
+    return res.status(200).json(neutralReply(kind, answers.value));
   } catch (err) {
     next(err);
   }

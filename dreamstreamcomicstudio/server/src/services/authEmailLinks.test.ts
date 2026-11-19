@@ -129,14 +129,19 @@ describe('sign-in handoff links', () => {
   });
 
   it('into the main app: /auth/callback with an allowlisted next path', () => {
+    // The main front page is reached through its escape hatch (/?home=1): the bare '/' would send a browser without
+    // the member hint to Comic Studio before the new session could set it.
     expect(buildHandoffLink({ to: 'main', mainOrigin: `${APP}/`, hashedToken: 'h', verificationType: 'magiclink' })).toBe(
-      `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F`
+      `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F%3Fhome%3D1`
+    );
+    expect(buildHandoffLink({ to: 'main', mainOrigin: APP, hashedToken: 'h', verificationType: 'magiclink', next: '/' })).toBe(
+      `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F%3Fhome%3D1`
     );
     expect(buildHandoffLink({ to: 'main', mainOrigin: APP, hashedToken: 'h', verificationType: 'magiclink', next: '/?view=chat' })).toBe(
       `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F%3Fview%3Dchat`
     );
     expect(buildHandoffLink({ to: 'main', mainOrigin: APP, hashedToken: 'h', verificationType: 'magiclink', next: '//evil.example' })).toBe(
-      `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F`
+      `${APP}/auth/callback?token_hash=h&type=magiclink&next=%2F%3Fhome%3D1`
     );
     expect(() => buildHandoffLink({ to: 'live', mainOrigin: APP, hashedToken: '', verificationType: 'magiclink' })).toThrow();
     expect(() => buildHandoffLink({ to: 'live', mainOrigin: APP, hashedToken: 'h', verificationType: 'email_change' })).toThrow();
@@ -151,11 +156,14 @@ describe('sign-in handoff links', () => {
     for (const bad of ['//evil.example', 'https://evil.example/#/monitor', '/live#/studio', '/live?e=x', '/live#/monitor/abc', 'javascript:alert(1)', '/other', 42]) {
       expect(parseStreamHandoffPath(bad)).toBeNull();
     }
-    for (const ok of ['/', '/models', '/?view=chat', '/?view=settings', '/?view=privacy']) {
+    for (const ok of ['/models', '/?view=chat', '/?view=settings', '/?view=privacy', '/?home=1']) {
       expect(parseMainHandoffPath(ok)).toBe(ok);
     }
-    expect(parseMainHandoffPath(undefined)).toBe('/');
-    expect(parseMainHandoffPath('/?view=how-it-works')).toBe('/');
+    // The front page itself always goes through its escape hatch.
+    expect(parseMainHandoffPath('/')).toBe('/?home=1');
+    expect(parseMainHandoffPath(undefined)).toBe('/?home=1');
+    expect(parseMainHandoffPath('')).toBe('/?home=1');
+    expect(parseMainHandoffPath('/?view=how-it-works')).toBe('/?home=1');
     for (const bad of ['//evil.example', 'https://evil.example', '/?view=chat&x=1', '/?view=nope', '/share/abc', '/\\evil.example', 42]) {
       expect(parseMainHandoffPath(bad)).toBeNull();
     }
@@ -189,7 +197,7 @@ describe('small parsers', () => {
       `${APP}/auth/callback?token_hash=h&type=magiclink`
     );
     expect(buildHandoffLink({ to: 'main', mainOrigin: APP, hashedToken: 'h', verificationType: 'magiclink', next: '/', signInNonce: sn })).toBe(
-      `${APP}/auth/callback?token_hash=h&type=magiclink&sn=${sn}&next=%2F`
+      `${APP}/auth/callback?token_hash=h&type=magiclink&sn=${sn}&next=%2F%3Fhome%3D1`
     );
   });
 

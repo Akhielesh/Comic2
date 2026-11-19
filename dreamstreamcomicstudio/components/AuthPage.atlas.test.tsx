@@ -16,7 +16,13 @@ vi.mock('../services/supabase', () => ({
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('./WaitlistForm', () => ({ WaitlistForm: () => <div data-testid="waitlist" /> }));
+vi.mock('./WaitlistForm', () => ({
+  WaitlistForm: ({ onJoined }: { onJoined?: (email: string) => void }) => (
+    <div data-testid="waitlist">
+      <button type="button" onClick={() => onJoined?.('reader@example.com')}>Pretend saved</button>
+    </div>
+  )
+}));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
 
 import { AuthPage } from './AuthPage';
@@ -134,6 +140,14 @@ describe('AuthPage on Atlas', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
   });
 
+  it('after the thank-you, the intro that asked for the email and answers is gone', () => {
+    render(<AuthPage initialMode="request-access" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    expect(screen.getByText(/Leave your email, and a few answers if you like\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pretend saved' }));
+    expect(screen.queryByText(/Leave your email/)).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
+  });
+
   it('reads its mode once, at mount: App keys it per request, so a header "Request access" on the open page switches the form', () => {
     const h = { onLoginSuccess: vi.fn(), onOpenPrivacy: vi.fn(), onOpenTerms: vi.fn() };
     const { rerender } = render(<AuthPage key="auth-1" initialMode="signin" {...h} />);
@@ -162,5 +176,24 @@ describe('AuthPage on Atlas', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
     expect(screen.getByTestId('auth-brand')).toHaveTextContent('DreamStream');
     expect(screen.getByRole('main').className.split(/\s+/)).toContain('min-h-[100dvh]');
+  });
+
+  it('on the comics host, a member of the main site finds their way back to its front page (never the bare "/")', () => {
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, hostname: 'comics.dreamstreamstudio.ai' } });
+    try {
+      for (const initialMode of ['signin', 'request-access'] as const) {
+        render(<AuthPage initialMode={initialMode} onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+        const link = screen.getByRole('link', { name: 'Sign in there' });
+        expect(link).toHaveAttribute('href', 'https://dreamstreamstudio.ai/?home=1');
+        for (const cls of DENSITY.coarseSquare.split(' ')) expect(link.className.split(/\s+/)).toContain(cls);
+        cleanup();
+      }
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+    // On the main site itself the card is already there: no such link.
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    expect(screen.queryByRole('link', { name: 'Sign in there' })).toBeNull();
   });
 });

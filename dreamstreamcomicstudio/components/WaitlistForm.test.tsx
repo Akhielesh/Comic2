@@ -31,7 +31,7 @@ describe('WaitlistForm: register interest', () => {
     render(<WaitlistForm kind="access" source="auth-request-access" />);
     expect(emailField()).toBeRequired();
     expect(screen.getByRole('textbox', { name: /First name/ })).not.toBeRequired();
-    const group = screen.getByRole('group', { name: /What would you use\?/ });
+    const group = screen.getByRole('group', { name: /What would you use, or like to see\?/ });
     const boxes = Array.from(group.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
     expect(boxes.map((b) => b.value)).toEqual(['chat', 'translations', 'series', 'library', 'print']);
     for (const name of [
@@ -45,12 +45,13 @@ describe('WaitlistForm: register interest', () => {
     }
     expect(screen.getByRole('textbox', { name: /Something else/ })).toHaveAttribute('maxLength', '120');
     const others = screen.getByRole('group', { name: /Other studios you would try/ });
+    // Only studios that exist: Code Studio was retired (docs/decisions/0005-retire-code-studio.md).
     expect(Array.from(others.querySelectorAll('input[type="checkbox"]')).map((b) => (b as HTMLInputElement).value)).toEqual([
       'chat_studio',
-      'code_studio',
       'stream_studio',
       'dashboards'
     ]);
+    expect(screen.queryByRole('checkbox', { name: 'Code Studio' })).toBeNull();
     // Every question is optional: only the email is required.
     for (const box of screen.getAllByRole('checkbox')) expect(box).not.toBeRequired();
     expect(screen.getByRole('textbox', { name: /Something else/ })).not.toBeRequired();
@@ -107,6 +108,29 @@ describe('WaitlistForm: register interest', () => {
     expect(onJoined).toHaveBeenCalledWith('reader@example.com');
   });
 
+  it('a bad email is shown at the field: marked invalid, described, focused; nothing is sent and no other alert shows', async () => {
+    for (const kind of ['access', 'updates'] as const) {
+      const view = render(<WaitlistForm kind={kind} />);
+      const form = emailField().closest('form')!;
+      // The form checks the address itself, so the browser's own bubbles never compete with it.
+      expect(form).toHaveAttribute('novalidate');
+      for (const bad of ['', 'reader', 'reader@example']) {
+        fireEvent.change(emailField(), { target: { value: bad } });
+        submitForm();
+        await settle();
+        expect(submit).not.toHaveBeenCalled();
+        expect(emailField()).toHaveAttribute('aria-invalid', 'true');
+        expect(emailField()).toHaveAccessibleDescription(bad ? 'That email does not look right. Please check it.' : 'Please enter your email address.');
+        expect(document.activeElement).toBe(emailField());
+        expect(screen.queryByRole('alert')).toBeNull();
+      }
+      // Editing the address clears the mark.
+      fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
+      expect(emailField()).not.toHaveAttribute('aria-invalid');
+      view.unmount();
+    }
+  });
+
   it('a failure is an honest alert and keeps everything typed', async () => {
     submit.mockResolvedValueOnce({ ok: false, status: 'unavailable', message: 'We could not save that just now. Please try again in a moment.' });
     render(<WaitlistForm kind="access" />);
@@ -128,7 +152,7 @@ describe('WaitlistForm: register interest', () => {
 
   it('kind "updates" is the email alone, with no questions', async () => {
     submit.mockResolvedValue({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.updates });
-    render(<WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />);
+    render(<WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Add me to the list" />);
     expect(screen.queryByRole('group')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getAllByRole('textbox')).toHaveLength(1);

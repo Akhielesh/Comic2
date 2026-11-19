@@ -129,6 +129,12 @@ const isMissingGalleryColumn = (failure: { code?: string }) =>
  * with a handful, every comic is already on screen and the tools would only add clutter.
  */
 export const LIBRARY_TOOLS_MIN = 6;
+/**
+ * With this many comics or fewer (and no tools, filter or further pages) a cover grid would leave most of its row
+ * empty, so each comic is a wide card instead: the cover beside its title, date and a read link, the shape of the
+ * Studio samples below it.
+ */
+export const LIBRARY_FEW_MAX = 2;
 
 async function hydratePreview(project: PublicProject): Promise<PublicProject> {
     // Never sign or display owner-writable draft images for a v4 publication.
@@ -336,6 +342,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     // An empty Library shows no comics section at all (no empty shelf, no "0 comics"): the samples stay.
     const showComics = loading || loadingMore || filtering || hasMore || !!loadNotice || filteredProjects.length > 0;
     const shownCount = total ?? filteredProjects.length;
+    const few = !showTools && !hasMore && filteredProjects.length > 0 && filteredProjects.length <= LIBRARY_FEW_MAX;
     const countText = loading || isSearching ? 'Finding your next read…'
         : loadNotice && projects.length === 0 ? 'Comics are temporarily unavailable.'
         : `${shownCount} ${shownCount === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}`;
@@ -380,17 +387,22 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: showTools ? 8 : 2 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
             ) : (
                 <>
-                    {filteredProjects.length > 0 && <ul className="library-grid">
+                    {filteredProjects.length > 0 && <ul className="library-grid" data-layout={few ? 'few' : undefined}>
                         {filteredProjects.map((project, index) => {
                             const covers = coverCandidates(project);
                             const slug = shareSlugOf(project);
                             const likes = project.likesCount || 0;
-                            return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} className="library-card">
+                            const cover = <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}{!few && <span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span>}</div>;
+                            const published = <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>;
+                            // A wide card keeps one link (cover, title, date and "Read comic"); the likes sit beside it, outside the link.
+                            return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} data-layout={few ? 'wide' : undefined} className="library-card">
                                 <a href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={`Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
-                                    <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}<span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span></div>
-                                    <h3>{project.name}</h3>
+                                    {cover}
+                                    {few
+                                        ? <div className="library-wide-copy"><h3>{project.name}</h3>{published}<span className="library-read-link" aria-hidden>Read comic <ArrowRight /></span></div>
+                                        : <h3>{project.name}</h3>}
                                 </a>
-                                <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                                {!few && published}
                                 <div className="library-card-stats">
                                     {/* Reading needs no account: a visitor sees the likes, a signed-in reader can add one. */}
                                     {user
@@ -412,7 +424,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     );
 
     return (
-        <div data-comics-library="" data-comic-theme={theme} className="comics-library">
+        <main data-comics-library="" data-comic-theme={theme} className="comics-library">
             <div className="comics-shell-width library-content">
                 {sample && (
                     <section aria-labelledby="library-sample-title" className="library-reader">
@@ -447,6 +459,6 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                     )}
                 </div>
             </div>
-        </div>
+        </main>
     );
 };

@@ -6,12 +6,19 @@ import {
   cleanBlock,
   cleanLine,
   interestMetadata,
+  interestThanks,
   knownFeatures,
   knownStudios,
   type InterestAnswers
 } from '../shared/interest';
 
-export { INTEREST_COUNT_FROM, INTEREST_FEATURES, INTEREST_LIMITS, INTEREST_STUDIOS } from '../shared/interest';
+export {
+  INTEREST_COUNT_FROM,
+  INTEREST_FEATURES,
+  INTEREST_FEATURES_QUESTION,
+  INTEREST_LIMITS,
+  INTEREST_STUDIOS
+} from '../shared/interest';
 export type { InterestFeature, InterestStudio } from '../shared/interest';
 
 /**
@@ -38,8 +45,11 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** How long the form waits for the server before saving the row directly. */
 export const SUBSCRIBE_DEADLINE_MS = 8000;
 
-/** The one success answer per kind, whichever path saved the row. Promises no email. */
-export const NEUTRAL_SUCCESS: Record<WaitlistKind, string> = INTEREST_THANKS;
+/**
+ * The success answer per kind when no optional answers were sent, whichever path saved the row. Promises no email.
+ * With answers, register interest thanks for them too (shared/interest.ts interestThanks).
+ */
+export const NEUTRAL_SUCCESS: Record<WaitlistKind, string> = { access: INTEREST_THANKS.access, updates: INTEREST_THANKS.updates };
 const UNAVAILABLE = 'We could not save that just now. Please try again in a moment.';
 const RATE_LIMITED = 'Too many tries from this connection. Please wait a few minutes and try again.';
 
@@ -53,9 +63,10 @@ export const interpretSubscribeResponse = (
   httpStatus: number,
   data: Partial<WaitlistResult> | null,
   kind: WaitlistKind = 'access',
-  pageHasCheck: boolean = turnstileEnabled()
+  pageHasCheck: boolean = turnstileEnabled(),
+  answers: WaitlistAnswers = {}
 ): WaitlistResult | null => {
-  if (httpOk && data && data.ok === true) return { ok: true, status: 'registered', message: NEUTRAL_SUCCESS[kind] };
+  if (httpOk && data && data.ok === true) return { ok: true, status: 'registered', message: interestThanks(kind, answers) };
   if (httpStatus === 429) return { ok: false, status: 'rate-limited', message: RATE_LIMITED };
   if (httpStatus === 400 && data?.status === 'verify') {
     // With no check on the page the person cannot pass one; save the row directly.
@@ -103,12 +114,20 @@ const subscribeViaApi = async (
       body: JSON.stringify({ email, kind, captchaToken, ...(source ? { source } : {}), ...answers })
     });
     const data = (await res.json().catch(() => null)) as Partial<WaitlistResult> | null;
-    return interpretSubscribeResponse(res.ok, res.status, data, kind);
+    return interpretSubscribeResponse(res.ok, res.status, data, kind, turnstileEnabled(), answers);
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
+};
+
+/** What is wrong with an address before anything is sent (the words the server would use), or null when it will do. */
+export const checkWaitlistEmail = (rawEmail: string): string | null => {
+  const email = rawEmail.trim().toLowerCase();
+  if (!email) return 'Please enter your email address.';
+  if (!EMAIL_REGEX.test(email) || email.length > 320) return 'That email does not look right. Please check it.';
+  return null;
 };
 
 /**
@@ -123,10 +142,8 @@ export const submitWaitlistEmail = async (
   answers: WaitlistAnswers = {}
 ): Promise<WaitlistResult> => {
   const email = rawEmail.trim().toLowerCase();
-  if (!email) return { ok: false, status: 'invalid', message: 'Please enter your email address.' };
-  if (!EMAIL_REGEX.test(email) || email.length > 320) {
-    return { ok: false, status: 'invalid', message: 'That email does not look right. Please check it.' };
-  }
+  const emailProblem = checkWaitlistEmail(email);
+  if (emailProblem) return { ok: false, status: 'invalid', message: emailProblem };
   const clean = cleanAnswers(answers);
   const rawSource =
     typeof metadata.source === 'string' ? metadata.source : typeof window !== 'undefined' ? window.location.pathname : '';
@@ -147,12 +164,12 @@ export const submitWaitlistEmail = async (
       const code = (error as { code?: string }).code;
       // 23505: already on the list for this kind. Same answer as a new address.
       if (code === '23505' || /duplicate key|already exists/i.test(error.message || '')) {
-        return { ok: true, status: 'registered', message: NEUTRAL_SUCCESS[kind] };
+        return { ok: true, status: 'registered', message: interestThanks(kind, clean) };
       }
       console.warn('[waitlist] save failed', (error as { code?: string }).code ?? 'unknown');
       return { ok: false, status: 'unavailable', message: UNAVAILABLE };
     }
-    return { ok: true, status: 'registered', message: NEUTRAL_SUCCESS[kind] };
+    return { ok: true, status: 'registered', message: interestThanks(kind, clean) };
   } catch {
     return { ok: false, status: 'unavailable', message: UNAVAILABLE };
   }

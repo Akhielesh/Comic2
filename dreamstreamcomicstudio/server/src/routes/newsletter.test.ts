@@ -154,6 +154,27 @@ describe('INTEREST_EMAILS=on', () => {
     await fetch(`${base}/api/newsletter/confirm?e=a%40example.com&t=abc`, { redirect: 'manual' });
     expect(mailer.sendNewsletterWelcome).toHaveBeenCalledTimes(1);
   });
+
+  it('asks the store to renew a confirm token, and mails one only when the store wrote it', async () => {
+    store.upsertSubscriber.mockResolvedValueOnce({ outcome: 'pending' });
+    await post({ email: 'repeat@example.com', kind: 'updates' });
+    expect((store.upsertSubscriber.mock.calls[0] as unknown[])[5]).toEqual({ reissueToken: true });
+    expect(mailer.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    // Already on the list and nothing renewed (or already confirmed): a link would not match the row, so none goes.
+    for (const outcome of ['already_registered', 'already_confirmed']) {
+      store.upsertSubscriber.mockResolvedValueOnce({ outcome });
+      await post({ email: 'repeat@example.com', kind: 'updates' });
+    }
+    expect(mailer.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('emails off: an address already on the list is left as it is', () => {
+  it('asks the store not to renew any confirm token (an earlier confirm link keeps working)', async () => {
+    await post({ email: 'repeat@example.com', kind: 'updates' });
+    await post({ email: 'repeat@example.com', kind: 'access', comment: 'hello' });
+    for (const call of store.upsertSubscriber.mock.calls as unknown[][]) expect(call[5]).toEqual({ reissueToken: false });
+  });
 });
 
 describe('one neutral answer for every address', () => {
@@ -177,6 +198,15 @@ describe('one neutral answer for every address', () => {
     for (const reply of Object.values(NEUTRAL_REPLY)) {
       expect(reply.message).not.toMatch(/email|inbox|account|invite|access|already/i);
     }
+  });
+
+  it('thanks for the answers only when some were sent; the address never changes the body', async () => {
+    const plain = await post({ email: 'new@example.com', kind: 'access' });
+    const answered = await post({ email: 'repeat@example.com', kind: 'access', comment: 'Hello' });
+    expect(plain.body).toEqual(NEUTRAL_REPLY.access);
+    expect(plain.body.message).not.toMatch(/answers/);
+    expect(answered.body).toMatchObject({ ok: true, status: 'registered' });
+    expect(answered.body.message).toMatch(/Your answers help shape what we build next\.$/);
   });
 
   it('a store failure answers 503, never a success', async () => {

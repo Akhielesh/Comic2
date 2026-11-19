@@ -83,7 +83,8 @@ import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from '
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
-import { FRONT_PAGE_STAY_PARAM, mainAppUrl, syncMemberHint } from './services/productHost';
+import { mainFrontPageUrl } from './services/productHost';
+import { useMemberHint } from './hooks/useMemberHint';
 import { safeNext } from './services/safeNext';
 import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
@@ -224,11 +225,10 @@ export const appRootClass = (view: string, gated: boolean, comicsChrome = false)
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
-  // The main site's member hint cookie follows the session (set while signed in, removed on sign-out) so the
-  // edge serves members their own front page instead of sending them to Comic Studio. It only observes auth state.
-  useEffect(() => {
-    if (!authLoading) syncMemberHint(!!user);
-  }, [authLoading, user]);
+  // The main site's member hint cookie follows this tab's session (set while signed in, removed when this tab signs
+  // out; a tab that merely opens signed out leaves it) so the edge serves members their own front page instead of
+  // sending them to Comic Studio. It only observes auth state (hooks/useMemberHint.ts).
+  useMemberHint(!!user, authLoading);
   const isAdmin = useIsAdmin();
   // Diagnostics are admin-only: gated on the server's answer for THIS account (bound to the
   // user id, so an account switch never runs the check on the previous account's answer).
@@ -364,7 +364,7 @@ const App: React.FC = () => {
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
-  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Request access"
+  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Register interest"
   // pressed while the sign-in page is already open remounts it on the step asked for (an invite still wins there).
   const [authRequest, setAuthRequest] = useState(0);
 
@@ -441,7 +441,7 @@ const App: React.FC = () => {
   // (services/productHost.ts frontPageToComicsUrl), so they would never reach the FAQ.
   const handleOpenFaq = () => {
     if (comicsHost.active) {
-      window.location.assign(mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`));
+      window.location.assign(mainFrontPageUrl('#home-faq'));
       return;
     }
     handleBackToHome();

@@ -121,7 +121,8 @@ export const MAIN_FRONT_PAGE_TO_COMICS = true;
 
 /** Query keys that carry no intent (campaign and click tracking). Only these ride along to the comics host. */
 export const FRONT_PAGE_TRACKING_KEYS: ReadonlySet<string> = new Set(['ref', 'fbclid', 'gclid', 'li_fat_id', 'msclkid']);
-const isTrackingKey = (key: string): boolean => /^utm_[a-z0-9_]+$/i.test(key) || FRONT_PAGE_TRACKING_KEYS.has(key);
+/** True for a query key that carries no intent (utm_*, or one of FRONT_PAGE_TRACKING_KEYS). */
+export const isTrackingKey = (key: string): boolean => /^utm_[a-z0-9_]+$/i.test(key) || FRONT_PAGE_TRACKING_KEYS.has(key);
 
 /**
  * The member hint: a non-secret cookie the main site sets while someone is signed in there. It grants
@@ -133,6 +134,13 @@ const MEMBER_HINT_MAX_AGE = 60 * 60 * 24 * 365;
 
 /** The escape hatch: the main front page with ?home=1 is always served (a member with no hint yet signs in there). */
 export const FRONT_PAGE_STAY_PARAM = 'home';
+
+/**
+ * The main site's own front page, whatever the switch: `https://dreamstreamstudio.ai/?home=1` (plus an optional
+ * fragment such as `#home-faq`). Links that mean "the DreamStream home page" use this, never the bare '/', which
+ * sends a browser without the member hint to Comic Studio.
+ */
+export const mainFrontPageUrl = (hash = ''): string => mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1${hash}`);
 
 /** True when a Cookie header carries the member hint (ds_member=1). */
 export const hasMemberHint = (cookieHeader: string | null | undefined): boolean =>

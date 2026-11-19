@@ -3,6 +3,7 @@ import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, ChevronRight, 
 import { Button } from './Button';
 import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
+import { UPDATES_CARD } from '../shared/interest';
 import { useAuth } from '../contexts/AuthContext';
 import { comicsEntryUrl } from '../services/productHost';
 import { SUPPORT_EMAIL } from './legal/contacts';
@@ -395,19 +396,19 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
-      {/* Stay updated — email capture */}
+      {/* The Stream Studio list (kind 'updates'): it promises no email while none are sent (shared/interest.ts UPDATES_CARD). */}
       <section id="stay-updated" className="py-20 px-6 bg-brand-blue border-y-4 border-black scroll-mt-24">
         <div className="max-w-3xl mx-auto">
           <div className="bg-white border-4 border-black rounded-2xl shadow-comic p-8 md:p-10 text-center">
             <div className="inline-flex items-center gap-2 bg-brand-yellow border-2 border-black px-3 py-1 rounded-full font-mono text-[11px] font-bold uppercase tracking-widest mb-5">
-              <Mail size={12} /> Stay in the loop
+              <Mail size={12} /> {UPDATES_CARD.eyebrow}
             </div>
-            <h2 className="text-3xl md:text-4xl font-display mb-3">Want to stay updated?</h2>
+            <h2 className="text-3xl md:text-4xl font-display mb-3">{UPDATES_CARD.title}</h2>
             <p className="font-comic text-slate-600 max-w-xl mx-auto mb-7">
-              Get Stream Studio beta updates, early access invites, launch notes, and the heads-up when new creator workflows go live. No spam — just the useful stuff.
+              {UPDATES_CARD.body}
             </p>
             <div className="max-w-lg mx-auto">
-              <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />
+              <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel={UPDATES_CARD.button} />
             </div>
             <p className="text-xs font-mono text-slate-400 mt-4">
               Prefer email? Reach us at{' '}

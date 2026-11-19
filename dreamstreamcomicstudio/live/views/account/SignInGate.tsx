@@ -87,7 +87,8 @@ function GatePage({ title, children, linkNote = true }: { title: string; childre
         )}
       </div>
       <div className="gate-foot">
-        <a href={mainAppUrl('/')}>DreamStream home</a>
+        {/* The main front page's escape hatch (?home=1): the bare '/' sends a browser without the member hint to Comic Studio. */}
+        <a href={mainAppUrl('/?home=1')}>DreamStream home</a>
         <LiveLegalLinks compact />
       </div>
     </main>

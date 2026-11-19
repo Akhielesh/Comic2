@@ -43,6 +43,17 @@ interface TurnstileProps {
   className?: string;
 }
 
+/** The widget's normal size is a fixed 300 px; anything narrower (a phone card) gets the compact one. */
+export const TURNSTILE_NORMAL_WIDTH = 300;
+
+/** 'compact' when the space the widget sits in is known and narrower than the normal widget, else 'normal'. */
+export const turnstileSize = (available: number): 'normal' | 'compact' =>
+  available > 0 && available < TURNSTILE_NORMAL_WIDTH ? 'compact' : 'normal';
+
+/** The page's own theme (the `dark` class services/theme.ts puts on <html>), not the system's. */
+export const turnstileTheme = (): 'light' | 'dark' =>
+  typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+
 /** Imperatively reset all Turnstile widgets (call after a submit so a fresh token is issued). */
 export const resetTurnstile = (): void => {
   try {
@@ -64,13 +75,16 @@ export const Turnstile: React.FC<TurnstileProps> = ({ onToken, onExpire, action,
     loadScript()
       .then(() => {
         if (cancelled || !ref.current || !window.turnstile) return;
+        // The box it may fill: its parent (a centring row leaves the empty widget itself 0 px wide).
+        const available = ref.current.parentElement?.clientWidth || ref.current.clientWidth;
         widgetId.current = window.turnstile.render(ref.current, {
           sitekey: TURNSTILE_SITE_KEY,
           action,
           callback: (token: string) => cbs.current.onToken(token),
           'expired-callback': () => cbs.current.onExpire?.(),
           'error-callback': () => cbs.current.onExpire?.(),
-          theme: 'light'
+          size: turnstileSize(available),
+          theme: turnstileTheme()
         });
       })
       .catch(() => {

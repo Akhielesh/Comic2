@@ -103,9 +103,9 @@ describe('POST /api/auth/handoff', () => {
     const r = await post({ to: 'main', path: '/?view=chat' }, { origin: STREAM });
     expect(r.status).toBe(200);
     expect(r.json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F%3Fview%3Dchat`);
-    expect((await post({ to: 'main' }, { origin: STREAM })).json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F`);
+    expect((await post({ to: 'main' }, { origin: STREAM })).json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F%3Fhome%3D1`);
     // A developer's localhost keeps its own origin (it is on the strict allowlist).
-    expect((await post({ to: 'main' }, { origin: 'http://localhost:3000' })).json.url).toBe('http://localhost:3000/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F');
+    expect((await post({ to: 'main' }, { origin: 'http://localhost:3000' })).json.url).toBe('http://localhost:3000/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F%3Fhome%3D1');
   });
 
   it('echoes the receiving app’s sign-in nonce (only a well-formed one)', async () => {
@@ -113,7 +113,7 @@ describe('POST /api/auth/handoff', () => {
     expect((await post({ to: 'live', path: '#/monitor', sn }, { origin: APP })).json.url).toBe(
       `${STREAM}/?token_hash=secret-hash&type=magiclink&sn=${sn}&after=monitor`
     );
-    expect((await post({ to: 'main', sn }, { origin: STREAM })).json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&sn=${sn}&next=%2F`);
+    expect((await post({ to: 'main', sn }, { origin: STREAM })).json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&sn=${sn}&next=%2F%3Fhome%3D1`);
     expect((await post({ to: 'live', sn: 'x&next=//evil.example' }, { origin: APP })).json.url).toBe(`${STREAM}/?token_hash=secret-hash&type=magiclink`);
   });
 

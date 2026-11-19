@@ -45,7 +45,7 @@ describe('WaitlistForm on an Atlas surface (the sign-in card’s "Register inter
       ...screen.getByRole('group', { name: /What would you use/ }).querySelectorAll('[data-slot="checkbox-row"]'),
       ...screen.getByRole('group', { name: /Other studios/ }).querySelectorAll('[data-slot="checkbox-row"]')
     ];
-    expect(rows).toHaveLength(9);
+    expect(rows).toHaveLength(8);
     for (const row of rows) for (const cls of DENSITY.coarse.split(' ')) expect(row.className.split(/\s+/)).toContain(cls);
   });
 
@@ -59,12 +59,12 @@ describe('WaitlistForm on an Atlas surface (the sign-in card’s "Register inter
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('the main site’s "Stay updated" form takes the same token look', () => {
-    const { container } = render(<WaitlistForm kind="updates" buttonLabel="Keep me posted" />);
+  it('the main site’s list form takes the same token look', () => {
+    const { container } = render(<WaitlistForm kind="updates" buttonLabel="Add me to the list" />);
     expect(container.innerHTML).not.toMatch(LEGACY);
     // One field named for assistive tech (no visible label, so it suits a page's own fixed card) and the ds button.
     expect(emailField()).toBeRequired();
     expect(emailField().closest('[data-slot="field"]')?.querySelector('label')).toHaveClass('sr-only');
-    expect(screen.getByRole('button', { name: 'Keep me posted' })).toHaveAttribute('data-slot', 'button');
+    expect(screen.getByRole('button', { name: 'Add me to the list' })).toHaveAttribute('data-slot', 'button');
   });
 });

@@ -12,21 +12,30 @@ around what people want. Nobody is emailed for registering.
 - `components/WaitlistForm.tsx` (kind `access`), built from the `components/ds` primitives
   (Field, Input, Textarea, Checkbox, Button) on the page tokens, light and dark, 320 px up:
   - Email address (required) and first name (optional), side by side from `sm`.
-  - "What would you use?" (optional checklist): making a comic by chatting, translations into
-    other languages, series and collections, publishing to the public Library, printing and export.
+  - "What would you use, or like to see?" (optional checklist): making a comic by chatting, translations
+    into other languages, series and collections (not built yet, hence "or like to see"), publishing to the
+    public Library, printing and export.
   - "Something else" (optional, 120 characters).
-  - "Other studios you would try" (optional): Chat Studio, Code Studio, Stream Studio, Dashboards,
-    the studios the form already offered before this change.
+  - "Other studios you would try" (optional): Chat Studio, Stream Studio, Dashboards. Only studios that
+    exist: Code Studio was retired (`docs/decisions/0005-retire-code-studio.md`); `code_studio` and
+    `comic_studio` stay accepted from older open tabs but are not asked.
   - "Anything you would like to tell us" (optional, 1,000 characters; the limit is shown, and a
     running count from 800).
   - One line: sign-up is not open yet and the answers shape what gets built next.
   - Each checklist is a `fieldset` with a `legend`; each row is a 44 px target under a coarse pointer.
-- Success: "Thank you, you are on the list. Your answers help shape what we build next."
-  It promises no email, is the same for every address, and takes focus.
-- Errors are plain alerts that keep everything typed: a bad email, "We could not save that
-  just now", too many tries (429), or the verification check when the page shows one.
-- Kind `updates` (the main site's "Keep me posted") is one email field (its label for assistive
-  tech only, as before) and the button, with the same neutral thank-you.
+- Success: "Thank you, you are on the list.", plus "Your answers help shape what we build next." only
+  when answers were sent (it depends on what was sent, never on the address). It promises no email
+  and takes focus; the card's intro sentence goes away once it shows.
+- A bad or empty email is shown at the field (the form is `noValidate`, so the browser's own bubbles
+  never compete): the field is marked invalid, the message describes it, and focus moves to it.
+  Everything else is one plain alert under the form that keeps everything typed: "We could not save
+  that just now", too many tries (429), or the verification check when the page shows one.
+- The verification widget (when a site key is set) is compact in a card narrower than 300 px and
+  follows the page's light or dark theme.
+- Kind `updates` (the main site's list card, `UPDATES_CARD` in `shared/interest.ts`) is one email field
+  (its label for assistive tech only, as before) and the button "Add me to the list", with the plain
+  "Thank you, you are on the list." While interest emails are off the card says that no emails are
+  sent yet; it promises no updates, invites or launch notes.
 
 ## One vocabulary, one stored shape (`shared/interest.ts`)
 
@@ -35,8 +44,11 @@ module used by the server route and by the form's direct save, so a row reads th
 path wrote it.
 
 - `cleanLine` (first name, something else, source): every control character, the line and
-  paragraph separators, the bidi embedding, override and isolate controls and the byte order mark
-  become spaces; runs of spaces collapse. Zero-width joiners stay (scripts and emoji need them).
+  paragraph separators, the bidi marks and the bidi embedding, override and isolate controls, the
+  invisible format characters (zero-width space, word joiner and invisible operators, the deprecated
+  format controls, the interlinear annotation marks) and the byte order mark become spaces; tag
+  characters (invisible text software can still read) are removed; runs of spaces collapse. The
+  zero-width non-joiner and joiner stay (scripts and emoji need them). Limits count what is left.
 - `cleanBlock` (comment): the same, but line breaks stay (CRLF folded, at most one blank line).
 - `interestMetadata(source, answers)` is the row's `metadata`:
   `{ source?, answers?: { v: 1, features?, other?, studios?, comment?, firstName? } }`.
@@ -48,11 +60,11 @@ path wrote it.
 
 | Case | Answer |
 |---|---|
-| Any valid address (new, already on the list, has an account, holds an invite) | `200 { ok: true, status: 'registered', message }`, identical per kind |
+| Any valid address (new, already on the list, has an account, holds an invite) | `200 { ok: true, status: 'registered', message }`, identical per kind and per "answers sent or not" |
 | Malformed email, or an answer over its limit or of the wrong type | `400 { ok: false, status: 'invalid', message }` |
 | Bot check failed | `400 { ok: false, status: 'verify', message }` |
 | Too many requests | `429` (the existing `systemRateLimit` on `/api/newsletter`) |
-| The store threw | `503 { ok: false, status: 'unavailable', message }` |
+| Nothing was stored (no service role, or the database refused) | `503 { ok: false, status: 'unavailable', message }`; the form then saves the row itself |
 
 - No account lookup and no invite re-send on this path, so nothing about the address reaches the
   caller. An invited person uses the link in their invite email; an admin can re-send it.
@@ -64,6 +76,13 @@ path wrote it.
 - Where answers are stored: the existing `metadata` jsonb column of `waitlist_signups`
   (`metadata.answers`). The server also copies the comment into the existing `feedback` column and
   the studio picks into `product_interests`. **No schema change is needed.**
+- The store (`server/src/services/emailStore.ts` `upsertSubscriber`) reads every error supabase-js
+  returns and throws when nothing was stored, so a failed save is never answered as a saved one. A
+  unique violation on insert (two requests at once) counts as already on the list.
+- An address already on the list keeps its row exactly as it is: rows are keyed by an email the caller
+  supplies, so a repeat (or anyone else posting that address) never replaces its answers. The one write
+  is for an unconfirmed `updates` row while interest emails are on: a fresh confirm token, which the
+  confirm email then carries.
 
 ## The form's direct save (`services/waitlist.ts`)
 
@@ -78,22 +97,22 @@ the person to try again. The direct save sends nothing.
 Off unless the backend variable is exactly `on`. Leave it unset; it is deliberately not in
 `api-proxy/wrangler.jsonc`.
 
-- Off: registering stores the row and sends nothing; the confirm link in older emails still
-  confirms, without the welcome email.
-- On: a new `access` row gets `access-requested`; an `updates` row that is not yet confirmed
-  gets `newsletter-confirm`; the confirm link sends `newsletter-welcome`. The answer to the
-  caller does not change.
+- Off: registering stores the row and sends nothing, and an existing row's confirm token is left as
+  it is, so the confirm link in older emails still confirms (without the welcome email).
+- On: a new `access` row gets `access-requested`; a new or unconfirmed `updates` row gets a fresh
+  confirm token and `newsletter-confirm` (sent only with a token the store just wrote); the confirm
+  link sends `newsletter-welcome`. The answer to the caller does not change.
 - Never governed by it: admin invites (`beta-invite`), auth emails, member notifications.
 - `updates` rows stored while it is off are unconfirmed and must not be mailed as marketing.
 
 ## Known limits
 
-- On a repeat registration the store keeps the first row's `metadata`; a repeat's answers reach
-  only `feedback` and `product_interests` (`server/src/services/emailStore.ts`, unchanged here).
+- On a repeat registration the store keeps the first row as it is (`metadata`, `feedback` and
+  `product_interests`); a repeat's answers are not stored.
 - Answers are read in the Supabase dashboard (`metadata->'answers'`); there is no admin screen yet.
 
 ## Tests
 
-`server/src/routes/newsletter.test.ts`, `shared/interest.test.ts`, `services/waitlist.test.ts`,
-`components/WaitlistForm.test.tsx`, `components/WaitlistForm.atlas.test.tsx`,
-`components/AuthPage.atlas.test.tsx`.
+`server/src/routes/newsletter.test.ts`, `server/src/services/emailStore.subscribe.test.ts`,
+`shared/interest.test.ts`, `services/waitlist.test.ts`, `components/WaitlistForm.test.tsx`,
+`components/WaitlistForm.atlas.test.tsx`, `components/AuthPage.atlas.test.tsx`, `components/Turnstile.test.tsx`.

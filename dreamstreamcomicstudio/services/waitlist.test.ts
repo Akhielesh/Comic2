@@ -19,7 +19,7 @@ import {
   interpretSubscribeResponse,
   submitWaitlistEmail
 } from './waitlist';
-import { interestMetadata } from '../shared/interest';
+import { INTEREST_THANKS, interestMetadata } from '../shared/interest';
 
 const reply = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
@@ -41,6 +41,10 @@ describe('interpretSubscribeResponse', () => {
       status: 'registered',
       message: NEUTRAL_SUCCESS.access
     });
+  });
+  it('thanks for the answers only when some were sent', () => {
+    expect(interpretSubscribeResponse(true, 200, { ok: true }, 'access', false, {})?.message).toBe('Thank you, you are on the list.');
+    expect(interpretSubscribeResponse(true, 200, { ok: true }, 'access', false, { comment: 'Hi' })?.message).toBe(INTEREST_THANKS.accessWithAnswers);
   });
   it('429 is an honest wait-a-moment', () => {
     expect(interpretSubscribeResponse(false, 429, null)?.status).toBe('rate-limited');
@@ -76,7 +80,7 @@ describe('submitWaitlistEmail', () => {
       studios: ['stream_studio'],
       comment: ' hi '
     });
-    expect(res).toEqual({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
+    expect(res).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers });
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body).toEqual({ email: 'a@b.co', kind: 'access', source: 'auth', features: ['chat'], studios: ['stream_studio'], comment: 'hi' });
     expect(insert).not.toHaveBeenCalled();
@@ -94,7 +98,7 @@ describe('submitWaitlistEmail', () => {
     const pending = submitWaitlistEmail('a@b.co', 'access', { source: 'auth' }, undefined, answers);
     await vi.advanceTimersByTimeAsync(SUBSCRIBE_DEADLINE_MS + 1);
     const res = await pending;
-    expect(res).toEqual({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
+    expect(res).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers });
     expect(insert).toHaveBeenCalledWith({
       email: 'a@b.co',
       kind: 'access',

@@ -6,7 +6,7 @@ import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 import { clearSignInIntents } from '../services/pendingSignIn';
-import { isComicsHost } from '../services/productHost';
+import { isComicsHost, mainFrontPageUrl } from '../services/productHost';
 import { Button } from './ds/Button';
 import { Checkbox } from './ds/Checkbox';
 import { Field } from './ds/Field';
@@ -58,6 +58,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         pendingInviteCode ? 'signup' : initialMode === 'request-access' && !SIGNUPS_ENABLED ? 'request-access' : 'signin'
     );
     const [isLoading, setIsLoading] = useState(false);
+    /** Register interest saved: the thank-you replaces the intro that asked for it. */
+    const [joined, setJoined] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const [captchaToken, setCaptchaToken] = useState('');
@@ -384,15 +386,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             <span className={`${CHIP} ${CHIP_VARIANT.outline}`}>
                                 Private beta
                             </span>
-                            <p className="text-[length:var(--ds-text-base)] leading-relaxed text-[var(--ds-muted)]">
-                                Comic Studio is in a small private beta. Leave your email, and a few answers if you
-                                like.
-                            </p>
+                            {/* The intro asks for the email and answers: once saved, the thank-you speaks alone. */}
+                            {!joined && (
+                                <p className="text-[length:var(--ds-text-base)] leading-relaxed text-[var(--ds-muted)]">
+                                    Comic Studio is in a small private beta. Leave your email, and a few answers if you
+                                    like.
+                                </p>
+                            )}
                             <WaitlistForm
                                 kind="access"
                                 source="auth-request-access"
                                 buttonLabel="Register interest"
                                 onSignIn={chooseSignIn}
+                                onJoined={() => setJoined(true)}
                             />
                             <p className="text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
                                 Already have an account?{' '}
@@ -619,6 +625,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     </>)}
                 </div>
             </div>
+
+            {/* Sessions are per host, and the main site's bare front page now opens Comic Studio: a member of the main
+                site (its other studios) gets back to its own front page here, never through the bare "/". */}
+            {comicsHost ? (
+                <p className="mt-6 text-center text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
+                    The other DreamStream studios are on the main site.{' '}
+                    <a href={mainFrontPageUrl()} className={`inline-flex items-center justify-center ${textLink} font-medium ${DENSITY.coarseSquare}`}>
+                        Sign in there
+                    </a>
+                </p>
+            ) : null}
 
             <p className="mt-8 text-center text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
                 &copy; 2026 DreamStream Inc. All rights reserved.

@@ -9,18 +9,21 @@ import { Input, Textarea } from './ds/Input';
 import {
   INTEREST_COUNT_FROM,
   INTEREST_FEATURES,
+  INTEREST_FEATURES_QUESTION,
   INTEREST_LIMITS,
   INTEREST_STUDIOS,
+  checkWaitlistEmail,
   submitWaitlistEmail,
   type InterestFeature,
   type InterestStudio,
   type WaitlistKind
 } from '../services/waitlist';
+import { UPDATES_CARD } from '../shared/interest';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 
 interface WaitlistFormProps {
-  /** 'updates' = keep me posted (the email alone), 'access' = register interest (with the optional questions). */
+  /** 'updates' = the main site's list (the email alone), 'access' = register interest (with the optional questions). */
   kind?: WaitlistKind;
   /** Free-form tag stored with the row so we know which surface it came from. */
   source?: string;
@@ -69,10 +72,12 @@ function CheckList<T extends string>({
 
 /**
  * Register interest (kind 'access'): the email, then a few optional questions (first name, which Comic
- * Studio abilities they would use and something else, other studios they would try, any comment) and one
- * plain line that sign-up is not open yet. Kind 'updates' is the email alone. Built from the ds primitives
- * on the page tokens, so it reads in light and dark; no comic chrome. Every saved address gets the same
- * thank-you, which promises no email. On an error everything typed stays, so trying again is one press.
+ * Studio abilities they would use or like to see and something else, other studios they would try, any
+ * comment) and one plain line that sign-up is not open yet. Kind 'updates' is the email alone. Built from
+ * the ds primitives on the page tokens, so it reads in light and dark; no comic chrome. Every saved address
+ * gets the same thank-you, which promises no email. A bad address is shown at its field (noValidate: the
+ * form checks it, not the browser's bubbles); other errors are one alert. On an error everything typed
+ * stays, so trying again is one press.
  */
 export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   kind = 'updates',
@@ -92,7 +97,10 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState('');
+  /** A problem with the address itself, shown at the field (the alert under the form is for everything else). */
+  const [emailError, setEmailError] = useState<string | null>(null);
   const doneRef = useRef<HTMLDivElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
   // Move focus to the thank-you so keyboard and screen-reader users land on the outcome.
   useEffect(() => {
@@ -102,6 +110,15 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'loading') return;
+    // The address first, at its field: marked invalid, described, and focused, so the problem is where the person is.
+    const problem = checkWaitlistEmail(email);
+    if (problem) {
+      setEmailError(problem);
+      setStatus('idle');
+      setMessage(null);
+      emailRef.current?.focus();
+      return;
+    }
     if (turnstileEnabled() && !captchaToken) {
       setStatus('error');
       setMessage('Please complete the verification check first.');
@@ -155,15 +172,17 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     <T extends string>(set: React.Dispatch<React.SetStateAction<T[]>>) =>
     (id: T, on: boolean) =>
       set((prev) => (on ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((v) => v !== id)));
-  const label = buttonLabel ?? (askQuestions ? 'Register interest' : 'Keep me posted');
+  const label = buttonLabel ?? (askQuestions ? 'Register interest' : UPDATES_CARD.button);
   const optional = <span className="font-normal text-[var(--ds-muted)]">(optional)</span>;
 
   const emailInput = (
     <Input
+      ref={emailRef}
       type="email"
       value={email}
       onChange={(e) => {
         setEmail(e.target.value);
+        setEmailError(null);
         clearError();
       }}
       placeholder={placeholder}
@@ -191,12 +210,12 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     ) : null;
 
   if (!askQuestions) {
-    // Keep me posted: one field and the button, side by side from sm. The label is for assistive tech only, as
+    // The list (kind 'updates'): one field and the button, side by side from sm. The label is for assistive tech only, as
     // before, so the form also suits a page's own fixed card.
     return (
-      <form onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-3', className)}>
+      <form noValidate onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-3', className)}>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start">
-          <Field label="Email address" hideLabel required className="flex-1">
+          <Field label="Email address" hideLabel required error={emailError ?? undefined} className="flex-1">
             {emailInput}
           </Field>
           {submit}
@@ -208,9 +227,9 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   }
 
   return (
-    <form onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-5', className)}>
+    <form noValidate onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-5', className)}>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-        <Field label="Email address" required>
+        <Field label="Email address" required error={emailError ?? undefined}>
           {emailInput}
         </Field>
         <Field label={<>First name {optional}</>}>
@@ -219,7 +238,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
-        <CheckList legend="What would you use?" name="features" options={INTEREST_FEATURES} picked={features} onToggle={toggleIn(setFeatures)} />
+        <CheckList legend={INTEREST_FEATURES_QUESTION} name="features" options={INTEREST_FEATURES} picked={features} onToggle={toggleIn(setFeatures)} />
         <Field label={<>Something else {optional}</>}>
           <Input
             value={featureOther}

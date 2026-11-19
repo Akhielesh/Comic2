@@ -11,6 +11,7 @@ import {
   frontPageToComicsUrl,
   hasMemberHint,
   mainAppUrl,
+  mainFrontPageUrl,
   memberHintCookie,
   syncMemberHint,
 } from './productHost';
@@ -186,14 +187,30 @@ describe('member hint cookie', () => {
 });
 
 describe('links from the comics host into the main front page', () => {
-  it('the FAQ link goes through the escape hatch, so a visitor without the hint reaches the FAQ', () => {
-    const faq = mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`);
-    expect(go(faq)).toBeNull();
+  it('mainFrontPageUrl is the escape hatch, so a visitor without the hint reaches the main front page', () => {
+    expect(mainFrontPageUrl()).toBe('https://dreamstreamstudio.ai/?home=1');
+    expect(mainFrontPageUrl('#home-faq')).toBe(`https://dreamstreamstudio.ai/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`);
+    expect(go(mainFrontPageUrl())).toBeNull();
+    expect(go(mainFrontPageUrl('#home-faq'))).toBeNull();
     // The bare address would bounce the same visitor back to Comic Studio.
     expect(go(mainAppUrl('/#home-faq'))).toBe(COMICS);
+  });
+
+  it('the FAQ link goes through the escape hatch', () => {
     const app = readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
     const handler = app.slice(app.indexOf('const handleOpenFaq'), app.indexOf('const navigateToReader'));
-    expect(handler).toContain('mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`)');
+    expect(handler).toContain("mainFrontPageUrl('#home-faq')");
     expect(handler).not.toContain("mainAppUrl('/#home-faq')");
+  });
+
+  it('no link that means "the DreamStream home page" points at the bare front page', () => {
+    // Stream Studio's sign-in gate ("DreamStream home") and every other mainAppUrl caller: never the bare '/'.
+    const files = ['App.tsx', 'live/views/account/SignInGate.tsx', 'components/AuthPage.tsx', 'components/comicshost/hostRouting.ts'];
+    for (const file of files) {
+      const src = readFileSync(path.join(__dirname, '..', file), 'utf8');
+      expect(src, file).not.toMatch(/mainAppUrl\(\s*(?:'\/'|"\/"|`\/`)?\s*\)/);
+    }
+    const gate = readFileSync(path.join(__dirname, '..', 'live/views/account/SignInGate.tsx'), 'utf8');
+    expect(gate).toContain(`mainAppUrl('/?${FRONT_PAGE_STAY_PARAM}=1')`);
   });
 });

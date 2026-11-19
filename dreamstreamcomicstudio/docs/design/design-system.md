@@ -759,9 +759,11 @@ each (they start closed, so an open modal never hides the page from the smoke), 
 every status. The content kit has its own scene too, `qa/app/scenes/ds-content.tsx` (DS-R1). DS-3 (S2): the comics landing, the
 sign-in card, the tester invite, Project info and its image gallery, and the legacy share link's state views compose the
 DS primitives and recipes; their guard baselines are 0; QA scenes landing, auth, auth-signin, auth-access, shared. The
-sign-in card's "Request access" renders `WaitlistForm` with `variant="atlas"` (S2b verify): the DS Field, Input and
-Textarea, `FILTER_CHIP` toggles (44 px under a coarse pointer) and the default Button, with the card's status callouts;
-the legacy `light` / `dark` looks stay for the home page. The app
+sign-in card's "Register interest" renders `WaitlistForm` kind `access` on the page tokens: the DS Field and Input
+(email, first name, "Something else"), two Checkbox lists in `fieldset`s with legends (44 px rows under a coarse
+pointer), the comment Textarea with its visible limit and the default Button; an email error sits at its Field, the
+card's status callouts carry the rest. Kind `updates` (the main site's list card) is the email Field and the Button
+alone. The app
 shell has the `shell` scene (DS-2). A new primitive is not done until the gallery shows it
 (`components/ds/gallery.test.tsx` checks every primitive is there).
 

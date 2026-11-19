@@ -24,6 +24,12 @@ The rule runs twice: as PostgREST filters in the query (`filterPublicListing`: h
 again on the rows that come back (`isPubliclyListed`, a backstop). The Library's first page asks for an exact count, so
 "N comics" counts every listed comic, less any the backstop dropped.
 
+What the rule is, and is not: it decides what the public lists show and count. It is not access control. Every
+`projects` row with `is_public = true` stays readable through the API under the existing select policy (public or
+owner), as before this release; an older public comic is hidden from lists, not made private. Making older public
+rows reachable by id only would take a view or function that applies the rule and a narrower select policy (a
+schema change, not part of this release).
+
 ## Older comics
 
 `LEGACY_PUBLIC_LISTING = false`: comics made before the current Comic Studio are not listed or counted anywhere public.
@@ -34,7 +40,9 @@ constant to true brings back the old rule (public and not held) for every list a
 
 With `LIBRARY_TOOLS_MIN` (6) comics or fewer the Library shows the comics and nothing else: no search box, sort,
 Kids-friendly toggle or visible count (the count stays in a screen-reader status). With none it shows the Studio samples
-alone, never an empty shelf. Cards carry no maker name: profiles are readable by their owner only, and a publication's
+alone, never an empty shelf. With one or two (`LIBRARY_FEW_MAX`) a cover grid would leave most of its row empty, so
+each comic is a wide card the shape of the Studio samples below it: the cover on the left; title, date and "Read
+comic" on the right (one link), the likes at its foot; two a row from `sm`, one below. The page is the `<main>` landmark. Cards carry no maker name: profiles are readable by their owner only, and a publication's
 "show my name" choice is not on the listing row.
 
 ## Reading without an account
