@@ -7,7 +7,8 @@ import { createDirectorTurn } from '../tools.js';
 import * as publication from '../publication/publication.js';
 import { createMemoryPublicationStore } from '../publication/store.js';
 import { PUBLISH_ACTIONS } from '../actions/publish.js';
-import { publicationSummary, publishToolGroup } from './publish.js';
+import { lineSourceHash } from '../../../../shared/comic/i18n.js';
+import { leftOutLine, publicationSummary, publishCardFor, publishToolGroup } from './publish.js';
 import { configureSafety } from '../safety/deps.js';
 import { installSafetyFakes, resetSafety } from '../safety/testkit.js';
 
@@ -75,10 +76,11 @@ describe('publish tool group', () => {
     expect(await live.tools.get_share_link.execute({ language: 'hi' })).toMatch(/edition isn't published/);
   });
 
-  it('publish_comic only names the editions it would publish as blockers (readiness lists every edition the doc holds)', async () => {
+  it('on a live link, publish_comic only names the editions it would publish as blockers (readiness lists every edition the doc holds)', async () => {
     const doc = drawn();
     doc.format = { ...doc.format, lettering: 'overlay' };
     doc.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };
     const { tools } = toolsFor(doc);
     const sourceOnly = await tools.publish_comic.execute({ visibility: 'unlisted' });
     expect(sourceOnly).not.toMatch(/Hindi/);
@@ -100,6 +102,94 @@ describe('publish tool group', () => {
     expect(await tools.update_publication.execute({})).toMatch(/^Nothing to change\. Settings: .*allow_embed, show_creator/);
     expect(publicationSummary(doc)[0]).toMatch(/^Published: public · \/c\/Ab3…/);
     expect(publicationSummary(doc)[0]).not.toContain('Ab3dEf6hIj9kLm2nP');
+  });
+});
+
+// PUB-5: the director's card never asks the server to publish a language that is not ready.
+/** Overlay lettering; every `ready` edition fully translated and reviewed, every `unready` one waiting for review. */
+const withEditions = (doc: ComicDoc, ready: string[], unready: string[] = []): ComicDoc => {
+  doc.format = { ...doc.format, lettering: 'overlay' };
+  const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+  const edition = (lang: string, status: 'reviewed' | 'machine') => ({
+    lang,
+    lines: Object.fromEntries(lines.map((l) => [l.id, { text: `${lang}: ${l.text}`, status, sourceHash: lineSourceHash(l), at: 1 }])),
+    balloons: {},
+    register: 'everyday' as const
+  });
+  doc.i18n = { editions: Object.fromEntries([...ready.map((l) => [l, edition(l, 'reviewed')]), ...unready.map((l) => [l, edition(l, 'machine')])]), glossary: [] };
+  return doc;
+};
+const LEFT_OUT_TELUGU = "Telugu isn't reviewed yet, so the card leaves it out. Add it to the link with one tap once it's ready.";
+
+describe('publish_comic asks only for finished languages (PUB-5)', () => {
+  it('first publish, nothing named: the original plus every finished edition; an unfinished one is named, never a blocker', async () => {
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(turn.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted', languages: ['en', 'hi'] } })]);
+    expect(text).toContain(LEFT_OUT_TELUGU);
+    expect(text).not.toMatch(/Heads-up/);
+    expect(text).toMatch(/Publish card shown: unlisted, in English \+ Hindi, 3\/3 pages drawn/);
+    expect(text).toMatch(/NOT published yet/);
+  });
+
+  it('first publish with the model naming Hindi and Telugu: the card carries Hindi only and names Telugu', async () => {
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    const text = await tools.publish_comic.execute({ visibility: 'public', languages: ['en', 'hi', 'te'] });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'public', languages: ['en', 'hi'] } })]);
+    expect(text).toContain(LEFT_OUT_TELUGU);
+    expect(text).not.toMatch(/Heads-up/);
+  });
+
+  it('the model names Telugu only: the card publishes the original and names Telugu', async () => {
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted', languages: ['te'], default_language: 'te' });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en'] } })]);
+    expect(text).toContain(LEFT_OUT_TELUGU);
+  });
+
+  it('"publish it in Hindi" keeps readers starting in Hindi once the original is added to the request', async () => {
+    const { tools, turn } = toolsFor(withEditions(drawn(), ['hi'], ['te']));
+    await tools.publish_comic.execute({ visibility: 'unlisted', languages: ['hi'] });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' } })]);
+  });
+
+  it('several unfinished editions are named together; a comic with no editions keeps the plain request', async () => {
+    const doc = withEditions(drawn(), [], ['te', 'ta']);
+    const { tools, turn } = toolsFor(doc);
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted' } })]);
+    expect(text).toContain("Telugu and Tamil aren't reviewed yet, so the card leaves them out. Add them to the link with one tap once they're ready.");
+    const plain = toolsFor(drawn());
+    expect(await plain.tools.publish_comic.execute({ visibility: 'unlisted' })).not.toMatch(/leaves/);
+    expect(plain.turn.cards).toEqual([expect.objectContaining({ request: { visibility: 'unlisted' } })]);
+  });
+
+  it('caps the card at 12 languages and names the edition past the cap', async () => {
+    const ready = ['hi', 'te', 'ta', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ur', 'es', 'fr'];
+    const { tools, turn } = toolsFor(withEditions(drawn(), ready));
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    const card = turn.cards[0] as { request?: { languages?: string[] } };
+    expect(card.request?.languages).toEqual(['en', ...ready.slice(0, 11)]);
+    expect(text).toContain('One link carries at most 12 languages, so the card leaves out French.');
+  });
+
+  it('live link: languages unchanged (a plain Update never adds or drops one); an unready live language stays a named blocker', async () => {
+    const doc = withEditions(drawn(), ['hi'], ['te']);
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en', 'te'] };
+    const { tools, turn } = toolsFor(doc);
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(turn.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'update', request: { visibility: 'unlisted' } })]);
+    expect(text).toMatch(/Heads-up: Telugu: /);
+    expect(text).not.toMatch(/leaves/);
+    expect(text).not.toMatch(/Hindi/);
+  });
+
+  it('publishCardFor is the one builder: the free router gets the same card the tool shows', () => {
+    const { card, leftOut } = publishCardFor(withEditions(drawn(), ['hi'], ['te']), 'unlisted');
+    expect(card).toMatchObject({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted', languages: ['en', 'hi'] } });
+    expect(leftOut).toEqual([{ lang: 'te', why: 'unreviewed' }]);
+    expect(leftOutLine(leftOut)).toBe(LEFT_OUT_TELUGU);
+    expect(leftOutLine([])).toBe('');
   });
 });
 

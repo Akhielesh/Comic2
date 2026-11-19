@@ -2,9 +2,11 @@
 //
 // routeIntent: read-only requests the stream route answers BEFORE the director, for $0 and with
 // no model call — "show me the pages", "how many panels?", "what's left / how much will it
-// cost?", and "generate all pages" when every page is already drawn and current (the owner's
-// real session redrew a ready page for that sentence). Anything it is not sure about returns
-// null and goes to the director. Narrow, whole-message English patterns only.
+// cost?", "generate all pages" when every page is already drawn and current (the owner's
+// real session redrew a ready page for that sentence), and "publish it" / "share it" (the
+// Publish card, or the Share card once the link is live; the card never publishes by itself).
+// Anything it is not sure about returns null and goes to the director. Narrow, whole-message
+// English patterns only.
 //
 // parseIntent: phase-2 structural edits (flag COMIC_FAST_INTENTS, wired by the route in wave 2):
 // "swap pages 2 and 3", "delete page 4", "make the shouts red" → one FREE tool call with its args.
@@ -13,7 +15,7 @@
 // "make it a whisper" with a balloon selected is applied by the deterministic dialogue engine, with no model call, and
 // answered with its own sentence and an Undo chip. Anything less than certain goes to the director.
 
-import { isPageStale, isTargetStale, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
+import { isPageStale, isTargetStale, newId, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
 import { dialogueFastOn } from '../../../shared/comic/capabilities.js';
 import { dialogueFastPath } from '../../../shared/comic/dialogue/index.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
@@ -23,12 +25,14 @@ import { formatUsd } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan.js';
 import { costFormatter, type CostFormatter } from './costText.js';
 import { drawnBookLine, nothingNextSteps } from './replies.js';
+import { drawnPages } from './publication/snapshot.js';
 import { breakdownCardFor } from './tools/breakdown.js';
 import { sanitizeLetteringOps } from './tools/lettering.js';
+import { leftOutLine, publishCardFor } from './tools/publish.js';
 import type { StudioContext } from './types.js';
 
 export interface RoutedIntent {
-  kind: 'show_pages' | 'nothing_to_draw';
+  kind: 'show_pages' | 'nothing_to_draw' | 'publish_card';
   reply: string;
   cards: Card[];
   nextSteps: NextStep[];
@@ -85,6 +89,9 @@ const DRAW_ALL_BOOK_RE = [
   /^(?:finish|complete) (?:it|the comic|the book|my comic|everything)$/,
   /^(?:draw|generate|render) everything(?: that'?s? (?:left|missing))?$/
 ];
+
+/** "publish it", "share the comic" — these whole messages only; "publish it in Hindi" and longer go to the director. */
+const PUBLISH_CARD_RE = [/^publish(?: (?:it|this|my comic|the comic|the book))?$/, /^share(?: (?:it|my comic|the comic))?$/];
 
 const anyMatch = (list: RegExp[], t: string) => list.some((re) => re.test(t));
 
@@ -143,6 +150,36 @@ function breakdownNextSteps(doc: ComicDoc, byok: boolean): NextStep[] {
   return steps.slice(0, 6);
 }
 
+const PUBLISH_CARD_REPLY = "Here's your Publish card. Nothing is published until you tap Publish. Readers can read and download, never edit.";
+
+/** "Page 2 is still drawing; tap Publish once it's done." ('' when nothing is drawing): publishing waits for every page. */
+function stillDrawingLine(doc: ComicDoc): string {
+  const isBusy = (status: string | undefined) => status === 'queued' || status === 'rendering';
+  const pages = doc.pages.filter((p) => isBusy(p.render.status)).map((p) => p.n);
+  const cover = isBusy(doc.cover?.render?.status);
+  if (!pages.length && !cover) return '';
+  const pageWords = pages.length ? `${pages.length === 1 ? 'Page' : 'Pages'} ${pages.length === 1 ? pages[0] : `${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`}` : '';
+  const what = [pageWords, cover ? (pageWords ? 'the cover' : 'The cover') : ''].filter(Boolean).join(' and ');
+  const many = pages.length + (cover ? 1 : 0) > 1;
+  return `${what} ${many ? 'are' : 'is'} still drawing; tap Publish once ${many ? "they're" : "it's"} done.`;
+}
+
+/**
+ * "publish it" / "share it" (PUB-5): the card, for free. A live link → the Share card. Not published and at least one
+ * page drawn → a pending Publish card, Link only, carrying only finished languages (publishCardFor, the director tool's
+ * own builder) and naming any it left out. Paused by moderation, or nothing drawn → null: the director answers, and
+ * its publish_comic reads the live moderation hold, which the doc mirror alone cannot decide.
+ */
+function publishCardIntent(doc: ComicDoc): RoutedIntent | null {
+  const m = doc.publication;
+  if (m?.status === 'suspended') return null;
+  if (m?.status === 'live' && m.slug) return { kind: 'publish_card', reply: "Here's your link.", cards: [{ type: 'share', id: newId('card') }], nextSteps: [] };
+  if (!drawnPages(doc).length) return null;
+  const { card, leftOut } = publishCardFor(doc, 'unlisted');
+  const reply = [PUBLISH_CARD_REPLY, leftOutLine(leftOut), stillDrawingLine(doc)].filter(Boolean).join(' ');
+  return { kind: 'publish_card', reply, cards: [card], nextSteps: [] };
+}
+
 /**
  * Answer a read-only request for $0 (no model call), or null to let the director handle it.
  * Callers skip this when the message has attachments.
@@ -153,6 +190,8 @@ export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean;
   const byok = !!opts.byok;
   // Prices in the user's terms (governed users: "≈2% of your usage").
   const cost = opts.cost ?? costFormatter();
+
+  if (anyMatch(PUBLISH_CARD_RE, t)) return publishCardIntent(doc);
 
   if (anyMatch(DRAW_ALL_PAGES_RE, t) || anyMatch(DRAW_ALL_BOOK_RE, t)) {
     const wantsBook = anyMatch(DRAW_ALL_BOOK_RE, t);
