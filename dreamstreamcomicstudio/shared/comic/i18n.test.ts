@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { editionViewDoc } from '../../components/comicstudio/mobile/editor/editorModel';
-import { normalizeDoc, type ComicDoc, type LanguageEdition, type Line } from './doc';
+import { isValidNextStep, normalizeDoc, type ComicDoc, type LanguageEdition, type Line, type NextStep, type TranslationFailure } from './doc';
 import { applyOps, type DocOp } from './ops';
+import { fixPlanFor, translationProblems } from './translationProblems';
+import { inverseOps } from './undo';
 import {
   editionProgress,
   editionReadiness,
@@ -232,5 +234,340 @@ describe('normalizeI18n / publicI18n', () => {
     expect(pub.glossary).toEqual([]);
     expect(pub.editions.hi.lines.pg_1_l1).toEqual({ text: 'HI:Old Delhi. Before the heat.', status: 'reviewed', sourceHash: '', at: 0 });
     expect('register' in pub.editions.hi).toBe(false);
+  });
+});
+
+// ── STU-T0: failure records, readiness with addresses, old documents ─────────
+
+/** Today's editionReadiness, verbatim (before STU-T0): the golden the problems-based one must reproduce. */
+const legacyReadiness = (doc: ComicDoc, lang: string, overflowLineIds?: string[]) => {
+  if (lang === doc.format.language) return { publishable: true, issues: [] as { code: string; count: number; blocking: boolean; text: string }[] };
+  const issues: { code: string; count: number; blocking: boolean; text: string }[] = [];
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const edition = i18nOf(doc).editions[lang];
+  const p = editionProgress(doc, lang);
+  if (!edition) {
+    issues.push({ code: 'missing', count: Math.max(1, p.total), blocking: true, text: 'This language has not been added yet.' });
+    return { publishable: false, issues };
+  }
+  const needs = (line: Line) => !!normalizeSource(line.text) && line.noTranslate !== true;
+  if (p.missing) issues.push({ code: 'missing', count: p.missing, blocking: true, text: `${plural(p.missing, 'line')} not translated yet.` });
+  const stale = p.stale + p.staleEdited;
+  if (stale) issues.push({ code: 'stale', count: stale, blocking: true, text: `${plural(stale, 'line')} changed since translating.` });
+  if (p.unreviewed) issues.push({ code: 'unreviewed', count: p.unreviewed, blocking: true, text: `${plural(p.unreviewed, 'line')} waiting for review.` });
+  let major = 0;
+  for (const line of lines(doc)) {
+    const status = translationStatus(doc, lang, line);
+    if ((status === 'machine' || status === 'reviewed' || status === 'edited') && edition.lines[line.id]?.issue?.severity === 'major') major += 1;
+  }
+  if (major) issues.push({ code: 'major_issue', count: major, blocking: true, text: `${plural(major, 'line')} flagged by the review.` });
+  if (doc.format.lettering === 'in_art') {
+    const pages = doc.pages.filter((pg) => pg.panels.some((panel) => panel.lines.some(needs))).length;
+    if (pages) issues.push({ code: 'in_art_pages', count: pages, blocking: true, text: `${plural(pages, 'page')} have lettering painted into the art; translated editions need overlay lettering.` });
+  }
+  const overflow = (overflowLineIds || []).length;
+  if (overflow) issues.push({ code: 'overflow', count: overflow, blocking: false, text: `${plural(overflow, 'balloon')} may be tight in this language.` });
+  if (p.coverTitle === 'in_art_only') issues.push({ code: 'cover_in_art', count: 1, blocking: false, text: 'The cover title is painted in the source language.' });
+  return { publishable: !issues.some((i) => i.blocking), issues };
+};
+
+const failureOf = (doc: ComicDoc, lineId: string, reason: TranslationFailure['reason'] = 'unsafe'): TranslationFailure => ({
+  reason,
+  sourceHash: lineSourceHash(lines(doc).find((l) => l.id === lineId)!),
+  attempts: 1,
+  at: 7
+});
+
+/** One doc per readiness situation the app meets. */
+const readinessCases = (): [string, ComicDoc, string, string[]?][] => {
+  const t = translated();
+  const machine = translated('machine');
+  const flag = (doc: ComicDoc, id: string, severity: 'major' | 'minor' = 'major') =>
+    applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: id, patch: { status: 'machine', issue: { severity, note: 'Wrong meaning.' } } }]);
+  const refused = applyOps(t, [{ op: 'translation', lang: 'hi', lineId: 'pg_2_l4', patch: null }]);
+  i18nOf(refused).editions.hi.failures = { pg_2_l4: failureOf(refused, 'pg_2_l4') };
+  const reviewFailed = applyOps(t, [{ op: 'translation', lang: 'hi', lineId: 'pg_3_l1', patch: { status: 'machine' } }]);
+  i18nOf(reviewFailed).editions.hi.failures = { pg_3_l1: failureOf(reviewFailed, 'pg_3_l1', 'provider') };
+  const mixed = applyOps(flag(flag(machine, 'pg_1_l1'), 'pg_6_l5', 'minor'), [
+    { op: 'translation', lang: 'hi', lineId: 'pg_2_l1', patch: null },
+    { op: 'translation', lang: 'hi', lineId: 'pg_2_l2', patch: null },
+    { op: 'line', pageId: 'pg_4', panelId: 'pg_4_p3', id: 'pg_4_l4', patch: { text: 'You owe me, Maya.' } },
+    { op: 'translation', lang: 'hi', lineId: 'pg_5_l3', patch: { status: 'edited' } },
+    { op: 'line', pageId: 'pg_5', panelId: 'pg_5_p3', id: 'pg_5_l3', patch: { text: 'Stop, thief!' } },
+    { op: 'translation', lang: 'hi', lineId: 'pg_6_l1', patch: { status: 'edited', issue: { severity: 'major', note: 'Off.' } } }
+  ]);
+  const inArt = applyOps(mixed, [{ op: 'format', patch: { lettering: 'in_art' } }]);
+  const paintedCover = normalizeDoc(JSON.parse(JSON.stringify(t)));
+  paintedCover.cover = { ...paintedCover.cover, lettering: 'in_art', render: { status: 'ready', history: [], asset: { path: 'u/proj/cover.png', w: 1000, h: 1500, source: 'generated', at: 1 } } };
+  return [
+    ['all reviewed', t, 'hi'],
+    ['all machine', machine, 'hi'],
+    ['one major among reviewed', flag(t, 'pg_1_l1'), 'hi'],
+    ['one major among machine', flag(machine, 'pg_3_l2'), 'hi'],
+    ['minor note on machine', flag(t, 'pg_1_l1', 'minor'), 'hi'],
+    ['refused line', refused, 'hi'],
+    ['failed review', reviewFailed, 'hi'],
+    ['everything at once', mixed, 'hi'],
+    ['in-art lettering', inArt, 'hi'],
+    ['overflow warning', t, 'hi', ['pg_2_l2', 'pg_1_l4', 'ghost']],
+    ['overflow on a mixed edition', mixed, 'hi', ['pg_6_l2']],
+    ['painted cover', paintedCover, 'hi'],
+    ['language not added', t, 'te'],
+    ['source language', t, 'en'],
+    ['empty doc, no edition', normalizeDoc({ id: 'empty' }), 'hi']
+  ];
+};
+
+describe('editionReadiness from the problems list (STU-T0)', () => {
+  it("golden: today's codes, counts, texts and blocking rules on every case", () => {
+    for (const [name, doc, lang, overflow] of readinessCases()) {
+      const now = editionReadiness(doc, lang, overflow);
+      const strip = now.issues.map(({ code, count, blocking, text }) => ({ code, count, blocking, text }));
+      expect({ publishable: now.publishable, issues: strip }, name).toEqual(legacyReadiness(doc, lang, overflow));
+    }
+  });
+
+  it('literal texts stay exactly as the publish refusal and the tab show them', () => {
+    const cases = Object.fromEntries(readinessCases().map(([name, doc, lang, o]) => [name, editionReadiness(doc, lang, o).issues.map((i) => i.text)]));
+    expect(cases['one major among reviewed']).toEqual(['1 line flagged by the review.']);
+    expect(cases['everything at once']).toEqual(['2 lines not translated yet.', '2 lines changed since translating.', '24 lines waiting for review.', '2 lines flagged by the review.']);
+    expect(cases['language not added']).toEqual(['This language has not been added yet.']);
+  });
+
+  it('each line issue names its lines: refs (first 5, reading order) and where ("page N, panel M, line K")', () => {
+    const [, mixed] = readinessCases().find(([n]) => n === 'everything at once')!;
+    const r = editionReadiness(mixed, 'hi');
+    const byCode = Object.fromEntries(r.issues.map((i) => [i.code, i]));
+    expect(byCode.missing.refs?.map((x) => x.lineId)).toEqual(['pg_2_l1', 'pg_2_l2']);
+    expect(byCode.missing.where).toBe('page 2, panel 1, line 1 and page 2, panel 2, line 1');
+    expect(byCode.stale.where).toBe('page 4, panel 3, line 2 and page 5, panel 3, line 1');
+    expect(byCode.major_issue.refs?.map((x) => x.lineId)).toEqual(['pg_1_l1', 'pg_6_l1']);
+    expect(byCode.major_issue.where).toBe('page 1, panel 1, line 1 and page 6, panel 1, line 1');
+    // 24 waiting lines: five refs, the address names three and counts the rest.
+    expect(byCode.unreviewed.refs).toHaveLength(5);
+    expect(byCode.unreviewed.refs?.[0]).toEqual({ lineId: 'pg_1_l2', pageId: 'pg_1', page: 1, panel: 2, line: 1, kind: 'whisper', speakerId: 'ch_maya' });
+    expect(byCode.unreviewed.where).toBe('page 1, panel 2, line 1; page 1, panel 3, line 1; page 1, panel 3, line 2 and 21 more');
+    // The text is still the text, word for word.
+    expect(byCode.major_issue.text).toBe('2 lines flagged by the review.');
+  });
+
+  it('a refused line counts as not translated, and is addressed like any other', () => {
+    const [, refused] = readinessCases().find(([n]) => n === 'refused line')!;
+    const issue = editionReadiness(refused, 'hi').issues[0];
+    expect(issue).toMatchObject({ code: 'missing', count: 1, text: '1 line not translated yet.', where: 'page 2, panel 3, line 2' });
+  });
+
+  it('overflow names its balloons in reading order (unknown ids dropped from the address, never from the count)', () => {
+    const o = editionReadiness(translated(), 'hi', ['pg_2_l2', 'pg_1_l4', 'ghost']).issues[0];
+    expect(o).toMatchObject({ code: 'overflow', count: 3, blocking: false, text: '3 balloons may be tight in this language.' });
+    expect(o.refs?.map((x) => x.lineId)).toEqual(['pg_1_l4', 'pg_2_l2']);
+    expect(o.where).toBe('page 1, panel 3, line 2 and page 2, panel 2, line 1');
+  });
+
+  it('page-wide and whole-language issues carry no address', () => {
+    for (const [name, doc, lang] of readinessCases()) {
+      for (const i of editionReadiness(doc, lang).issues) {
+        if (i.code === 'in_art_pages' || i.code === 'cover_in_art' || (i.code === 'missing' && i.text.startsWith('This language'))) {
+          expect(i.refs, name).toBeUndefined();
+          expect(i.where, name).toBeUndefined();
+        }
+      }
+    }
+  });
+});
+
+describe('failure records (STU-T0): stored per edition, never published', () => {
+  const raw = (failures: unknown) => ({ editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday', failures } }, glossary: [] });
+
+  it('normalizeI18n keeps valid failures and drops malformed ones', () => {
+    const out = normalizeI18n(
+      raw({
+        pg_1_l1: { reason: 'unsafe', sourceHash: 'abcd1234', attempts: 2, at: 100 },
+        'cover.title': { reason: 'timeout', sourceHash: 'abcd1234', attempts: 1, at: 100 },
+        a: { reason: 'provider', sourceHash: 'h', attempts: 1, at: 1, model: 'x', text: 'leak' },
+        bad_reason: { reason: 'nope', sourceHash: 'h', attempts: 1, at: 1 },
+        no_hash: { reason: 'empty', attempts: 1, at: 1 },
+        empty_hash: { reason: 'empty', sourceHash: '', attempts: 1, at: 1 },
+        zero: { reason: 'empty', sourceHash: 'h', attempts: 0, at: 1 },
+        nan_at: { reason: 'empty', sourceHash: 'h', attempts: 1, at: Number.NaN },
+        not_obj: 'unsafe',
+        '': { reason: 'empty', sourceHash: 'h', attempts: 1, at: 1 }
+      }),
+      'en'
+    );
+    expect(out.editions.hi.failures).toEqual({
+      pg_1_l1: { reason: 'unsafe', sourceHash: 'abcd1234', attempts: 2, at: 100 },
+      'cover.title': { reason: 'timeout', sourceHash: 'abcd1234', attempts: 1, at: 100 },
+      a: { reason: 'provider', sourceHash: 'h', attempts: 1, at: 1 } // no model name, no text
+    });
+  });
+
+  it('attempts stay 1..9: a count above 9 is kept as 9 (a tenth refusal never turns the line into a plain missing one)', () => {
+    const out = normalizeI18n(raw({ a: { reason: 'unsafe', sourceHash: 'h', attempts: 14, at: 1 }, b: { reason: 'unsafe', sourceHash: 'h', attempts: 2.7, at: 1 } }), 'en');
+    expect(out.editions.hi.failures).toEqual({ a: { reason: 'unsafe', sourceHash: 'h', attempts: 9, at: 1 }, b: { reason: 'unsafe', sourceHash: 'h', attempts: 2, at: 1 } });
+  });
+
+  it('at most 2,000 entries: the 2,001st is dropped', () => {
+    const many: Record<string, unknown> = {};
+    for (let i = 0; i < 2001; i += 1) many[`l${i}`] = { reason: 'timeout', sourceHash: 'h', attempts: 1, at: i };
+    const kept = normalizeI18n(raw(many), 'en').editions.hi.failures!;
+    expect(Object.keys(kept)).toHaveLength(2000);
+    expect(kept.l1999).toBeDefined();
+    expect(kept.l2000).toBeUndefined();
+  });
+
+  it('an edition with no (or only malformed) failures has no failures key', () => {
+    expect('failures' in normalizeI18n(raw({}), 'en').editions.hi).toBe(false);
+    expect('failures' in normalizeI18n(raw({ x: { reason: 'nope' } }), 'en').editions.hi).toBe(false);
+    expect('failures' in normalizeI18n(raw('nope'), 'en').editions.hi).toBe(false);
+  });
+
+  it('publicI18n never carries failures', () => {
+    const doc = translated();
+    i18nOf(doc).editions.hi.failures = { pg_1_l1: failureOf(doc, 'pg_1_l1') };
+    const pub = publicI18n(i18nOf(doc), ['hi']);
+    expect('failures' in pub.editions.hi).toBe(false);
+    expect(JSON.stringify(pub)).not.toContain('failures');
+  });
+});
+
+describe('failure records through ops (STU-T0)', () => {
+  const failuresOf = (doc: ComicDoc) => i18nOf(doc).editions.hi.failures;
+
+  it('a translations op with empty lines and failures records them; null deletes one; unknown ids are ignored', () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l1', 'timeout');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f, 'brief.title': { ...f, reason: 'timeout' }, ghost: f, constructor: f } }]);
+    expect(failuresOf(doc)).toEqual({ pg_1_l1: f, 'brief.title': f });
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: null } }]);
+    expect(failuresOf(doc)).toEqual({ 'brief.title': f });
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { 'brief.title': null } }]);
+    expect(failuresOf(doc)).toBeUndefined();
+    // Nothing to change: the translations stay exactly as they were.
+    expect(i18nOf(applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { ghost: f } }], 1))).toEqual(i18nOf(doc));
+    expect(i18nOf(applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {} }], 1))).toEqual(i18nOf(doc));
+  });
+
+  it('a translations op that writes a line clears that line’s failure (even one set in the same op)', () => {
+    let doc = translated();
+    const f1 = failureOf(doc, 'pg_1_l1');
+    const f2 = failureOf(doc, 'pg_1_l2', 'provider');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f1, pg_1_l2: f2 } }]);
+    const l1 = lines(doc)[0];
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: { pg_1_l1: { text: 'नया', status: 'machine', sourceHash: lineSourceHash(l1), at: 9 } }, failures: { pg_1_l1: f1 } }]);
+    expect(failuresOf(doc)).toEqual({ pg_1_l2: f2 });
+  });
+
+  it("the author's translation op keeps the line's failure (their words win anyway); edition_text clears a title's", () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l1');
+    const f2 = failureOf(doc, 'pg_1_l2');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f, pg_1_l2: f2, 'brief.title': f } }]);
+    doc = applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: { text: 'मेरे शब्द', status: 'edited' } }]);
+    expect(failuresOf(doc)).toEqual({ pg_1_l1: f, pg_1_l2: f2, 'brief.title': f });
+    // Under the author's own current words the record is no problem at all.
+    expect(translationProblems(doc, 'hi').some((p) => p.ref.lineId === 'pg_1_l1')).toBe(false);
+    doc = applyOps(doc, [{ op: 'edition_text', lang: 'hi', field: 'brief.title', value: { text: 'केसर चोर', status: 'edited', sourceHash: '', at: 1 } }]);
+    expect(Object.keys(failuresOf(doc)!).sort()).toEqual(['pg_1_l1', 'pg_1_l2']);
+    // Removing the author's words brings the refusal back (the record still matches the source).
+    doc = applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: null }]);
+    expect(translationProblems(doc, 'hi').find((p) => p.ref.lineId === 'pg_1_l1')).toMatchObject({ kind: 'refused', fix: 'creator' });
+  });
+
+  it('undo of the author’s words on a refused line keeps it refused: no paid retry is offered', () => {
+    let doc = applyOps(translated(), [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l2', patch: null }]);
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l2: failureOf(doc, 'pg_1_l2') } }]);
+    // Lines only (this edition has no titles translated: those never block and never make a button).
+    const problems = (d: ComicDoc) => translationProblems(d, 'hi').filter((p) => !p.ref.field).map((p) => [p.ref.lineId, p.kind, p.fix]);
+    expect(problems(doc)).toEqual([['pg_1_l2', 'refused', 'creator']]);
+    expect(fixPlanFor(translationProblems(doc, 'hi'))).toBeNull();
+    const edit: DocOp[] = [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l2', patch: { text: 'मेरे शब्द', status: 'edited', sourceHash: lineSourceHash(lines(doc)[1]), at: 9 } }];
+    const edited = applyOps(doc, edit);
+    expect(problems(edited)).toEqual([]);
+    const undone = applyOps(edited, inverseOps(doc, edit));
+    expect(i18nOf(undone).editions.hi).toEqual(i18nOf(doc).editions.hi);
+    expect(problems(undone)).toEqual([['pg_1_l2', 'refused', 'creator']]);
+    expect(fixPlanFor(translationProblems(undone, 'hi'))).toBeNull();
+  });
+
+  it('at the 2,000 cap, the clears in an op make room for its adds whatever their order', () => {
+    const base = translated();
+    const many = Array.from({ length: 2001 }, (_, i): Line => ({ id: `x${i}`, kind: 'speech', text: `Line ${i}` }));
+    const big: ComicDoc = { ...base, pages: base.pages.map((p, i) => (i ? p : { ...p, panels: p.panels.map((pn, j) => (j ? pn : { ...pn, lines: [...pn.lines, ...many] })) })) };
+    const f: TranslationFailure = { reason: 'timeout', sourceHash: 'h', attempts: 1, at: 1 };
+    let doc = applyOps(big, [{ op: 'translations', lang: 'hi', lines: {}, failures: Object.fromEntries(many.slice(0, 2000).map((l) => [l.id, f])) }]);
+    expect(Object.keys(failuresOf(doc)!)).toHaveLength(2000);
+    // Full: a 2,001st record is not kept.
+    expect(failuresOf(applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { x2000: f } }]))!.x2000).toBeUndefined();
+    // The add comes first and the clear second in the same op: the add is kept all the same.
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { x2000: f, x0: null } }]);
+    expect(failuresOf(doc)!.x2000).toEqual(f);
+    expect(failuresOf(doc)!.x0).toBeUndefined();
+    expect(Object.keys(failuresOf(doc)!)).toHaveLength(2000);
+  });
+
+  it('a server write drops failure records of lines that no longer exist (kept while the line is only in the trash)', () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l2');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l2: f, pg_6_l1: { ...f, sourceHash: lineSourceHash(lines(doc).find((l) => l.id === 'pg_6_l1')!) } } }]);
+    // The line is removed: its record stays until the next server write (so undoing the removal keeps it)…
+    const removal: DocOp[] = [{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p2', id: 'pg_1_l2', patch: null }];
+    const removed = applyOps(doc, removal);
+    expect(Object.keys(failuresOf(removed)!).sort()).toEqual(['pg_1_l2', 'pg_6_l1']);
+    const undone = applyOps(removed, inverseOps(doc, removal));
+    expect(failuresOf(undone)).toEqual(failuresOf(doc));
+    // …and a trashed page keeps its lines' records.
+    const trashed = applyOps(removed, [{ op: 'page_delete', id: 'pg_6', deletedAt: 5 }]);
+    // The next server write drops the orphan only.
+    const next = applyOps(trashed, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: failureOf(doc, 'pg_1_l1') } }]);
+    expect(Object.keys(failuresOf(next)!).sort()).toEqual(['pg_1_l1', 'pg_6_l1']);
+    // Even a server write that changes nothing else tidies it away.
+    const tidy = applyOps(removed, [{ op: 'translations', lang: 'hi', lines: {} }]);
+    expect(Object.keys(failuresOf(tidy)!)).toEqual(['pg_6_l1']);
+  });
+
+  it('edition: null removes every failure with the edition; a register change keeps them', () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l1');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f } }]);
+    doc = applyOps(doc, [{ op: 'edition', lang: 'hi', patch: { register: 'formal' } }]);
+    expect(failuresOf(doc)).toEqual({ pg_1_l1: f });
+    doc = applyOps(doc, [{ op: 'edition', lang: 'hi', patch: null }]);
+    expect(i18nOf(doc).editions.hi).toBeUndefined();
+    doc = applyOps(doc, [{ op: 'edition', lang: 'hi', patch: {} }]);
+    expect(i18nOf(doc).editions.hi).toEqual({ lang: 'hi', lines: {}, balloons: {}, register: 'everyday' });
+  });
+
+  it('a failure round-trips through a save (JSON) and normalizeDoc', () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l1');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f } }]);
+    const back = normalizeDoc(JSON.parse(JSON.stringify(doc)));
+    expect(i18nOf(back).editions.hi.failures).toEqual({ pg_1_l1: f });
+  });
+});
+
+describe('old documents (STU-T0): every new field is optional, nothing is added on load', () => {
+  it('a stored comic with editions and no failures round-trips unchanged', () => {
+    const stored = JSON.parse(JSON.stringify(translated('machine'))) as ComicDoc;
+    // As stored before STU-T0: no failures anywhere.
+    expect(JSON.stringify(stored)).not.toContain('failures');
+    const loaded = normalizeDoc(stored);
+    expect(JSON.stringify(loaded)).not.toContain('failures');
+    expect(loaded.i18n).toEqual(stored.i18n);
+    const again = normalizeDoc(JSON.parse(JSON.stringify(loaded)));
+    expect(JSON.stringify(again)).toBe(JSON.stringify(loaded));
+    expect(editionReadiness(loaded, 'hi').issues.map(({ code, count, blocking, text }) => ({ code, count, blocking, text }))).toEqual(legacyReadiness(stored, 'hi').issues);
+  });
+
+  it('a stored chat keeps both the old open_tab chip and the new one that names a line, through a save and a load', () => {
+    const old: NextStep = { label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } };
+    const show: NextStep = { label: 'Show the line', client: { type: 'open_tab', tab: 'languages', review: { lang: 'hi', lineId: 'pg_4_l1' } } };
+    const fix: NextStep = { label: 'Fix Hindi', action: { type: 'translate', languages: ['hi'], redo: ['pg_4_l1'], chunkLines: 10, quotedUsd: 0.01 }, usd: 0.01 };
+    for (const step of [old, show, fix]) expect(isValidNextStep(step), step.label).toBe(true);
+    const doc = normalizeDoc(makeSampleDoc());
+    doc.conversation = [{ id: 'm1', role: 'assistant', text: 'Done.', at: 1, nextSteps: [old, show, fix] }];
+    const loaded = normalizeDoc(JSON.parse(JSON.stringify(doc)));
+    expect(loaded.conversation[0].nextSteps).toEqual([old, show, fix]);
   });
 });

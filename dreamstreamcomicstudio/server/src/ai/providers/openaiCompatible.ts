@@ -11,12 +11,17 @@
 // NOTE: written against each provider's documented OpenAI-compatible API; like the
 // existing OpenRouter/NVIDIA providers it cannot be runtime-verified in the build
 // sandbox (no outbound network). Validate end-to-end with a real key per provider.
+//
+// Calls made with a person's own key (ctx.byok) go only to the maker's registry address
+// (shared/providers.ts), never follow a redirect, and fail with vendorHttpError (status,
+// vendor code and a redacted, capped detail; never the raw body).
 
 import { CHAT_STREAM_MAX_TOTAL_MS } from '../../config.js';
 import { withRetry } from '../utils.js';
-import { modelTimeoutError } from './errors.js';
+import { modelTimeoutError, vendorHttpError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { staticModelsFor } from './staticModels.js';
+import { getProviderDef } from '../../../../shared/providers.js';
 import type {
   AIProvider,
   AIProviderId,
@@ -49,12 +54,31 @@ export interface OpenAICompatibleConfig {
   supportsImages?: boolean;
   /** Human label for error messages. */
   label: string;
+  /**
+   * The maker's fixed address for calls made with a person's own key (ctx.byok). A *_BASE_URL
+   * override (cfg.baseUrl) only ever applies to platform calls, so a stray override can never
+   * send someone's key to another host. Defaults to the shared/providers.ts registry entry.
+   */
+  ownKeyBaseUrl?: string;
+  /**
+   * How a request's JSON schema is sent: 'json_schema' passes it as structured output
+   * ({ type: 'json_schema', json_schema: { name, schema, strict } }, OpenAI); 'json_object'
+   * (the default) asks for any JSON object and relies on the prompt plus the repair round.
+   */
+  jsonSchemaMode?: 'json_object' | 'json_schema';
 }
 
 const VISION_HINT = /\b(vl|vlm|vision|multimodal|4o|4\.1|gpt-5|gemini|grok-[24]|claude|glm-4\.5v)\b/i;
 const REASONING_HINT = /\b(o1|o3|o4|r1|reasoner|reasoning|thinking|grok-[34].*(mini|reasoning)|glm-4\.[56]|gpt-5)\b/i;
 
+/** OpenAI's structured-output names allow [A-Za-z0-9_-]{1,64}. */
+const schemaName = (name: string): string => (String(name || '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'response');
+
 export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIProvider => {
+  const ownKeyBaseUrl = cfg.ownKeyBaseUrl || getProviderDef(cfg.id)?.baseUrl || cfg.baseUrl;
+  /** Own-key calls always go to the maker's fixed address; platform calls may use the override. */
+  const baseFor = (ctx?: ProviderContext): string => (ctx?.byok ? ownKeyBaseUrl : cfg.baseUrl);
+
   const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(cfg.extraHeaders || {}) };
     if (ctx?.apiKey) headers['Authorization'] = `Bearer ${ctx.apiKey}`;
@@ -70,15 +94,17 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${cfg.baseUrl}${path}`, {
+      const res = await fetch(`${baseFor(ctx)}${path}`, {
         method: init.method || 'GET',
         headers: buildHeaders(ctx),
         body: init.body,
-        signal: controller.signal
+        signal: controller.signal,
+        // A redirect could carry the Authorization header somewhere else: refuse it.
+        redirect: 'error'
       });
       if (!res.ok) {
         const errBody = await res.text().catch(() => '');
-        throw new Error(`${cfg.label} ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
+        throw vendorHttpError(cfg.label, path, res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
       }
       return (await res.json()) as T;
     } catch (err) {
@@ -134,7 +160,14 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
     const body: Record<string, unknown> = { model: req.model };
     if (typeof req.temperature === 'number') body.temperature = req.temperature;
     if (typeof req.maxTokens === 'number') body.max_tokens = req.maxTokens;
-    if (req.jsonSchema || req.jsonMode) body.response_format = { type: 'json_object' };
+    if (req.jsonSchema && cfg.jsonSchemaMode === 'json_schema') {
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: { name: schemaName(req.jsonSchema.name), schema: req.jsonSchema.schema, strict: req.jsonSchema.strict ?? true }
+      };
+    } else if (req.jsonSchema || req.jsonMode) {
+      body.response_format = { type: 'json_object' };
+    }
     if (cfg.supportsReasoningEffort && req.reasoningEffort) body.reasoning_effort = req.reasoningEffort;
     if (cfg.supportsTools !== false && req.tools && req.tools.length) {
       body.tools = req.tools;
@@ -245,15 +278,16 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
 
     armIdle();
     try {
-      const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      const res = await fetch(`${baseFor(ctx)}/chat/completions`, {
         method: 'POST',
         headers: buildHeaders(ctx),
         body: JSON.stringify({ ...buildBaseBody(req), messages: req.messages, stream: true, stream_options: { include_usage: true } }),
-        signal: controller.signal
+        signal: controller.signal,
+        redirect: 'error'
       });
       if (!res.ok || !res.body) {
         const errBody = await res.text().catch(() => '');
-        throw new Error(`${cfg.label} stream failed: ${res.status} ${res.statusText} ${errBody.slice(0, 300)}`);
+        throw vendorHttpError(cfg.label, 'stream', res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
       }
 
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();

@@ -17,6 +17,8 @@
 import { NVIDIA_BASE_URL, NVIDIA_REQUEST_TIMEOUT_MS } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { modelTimeoutError } from './errors.js';
+import { redactSecrets } from '../../lib/redact.js';
+import { PROVIDER_REGISTRY } from '../../../../shared/providers.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import type {
   AIProvider,
@@ -38,6 +40,13 @@ const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   return headers;
 };
 
+/**
+ * Calls made with a person's own key (ctx.byok) go only to NVIDIA's registry address; an
+ * NVIDIA_BASE_URL override applies to platform and key-free calls (the public model list) only.
+ */
+const OWN_KEY_BASE_URL = PROVIDER_REGISTRY.nvidia.baseUrl;
+const baseFor = (ctx?: ProviderContext): string => (ctx?.byok ? OWN_KEY_BASE_URL : NVIDIA_BASE_URL);
+
 const nvidiaFetch = async <T = any>(
   path: string,
   init: { method?: string; body?: string },
@@ -47,15 +56,17 @@ const nvidiaFetch = async <T = any>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${NVIDIA_BASE_URL}${path}`, {
+    const res = await fetch(`${baseFor(ctx)}${path}`, {
       method: init.method || 'GET',
       headers: buildHeaders(ctx),
       body: init.body,
-      signal: controller.signal
+      signal: controller.signal,
+      // A redirect could carry the Authorization header somewhere else: refuse it.
+      redirect: 'error'
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`NVIDIA ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
+      throw new Error(`NVIDIA ${path} failed: ${res.status} ${res.statusText} ${redactSecrets(errBody).slice(0, 500)}`);
     }
     return (await res.json()) as T;
   } catch (err) {

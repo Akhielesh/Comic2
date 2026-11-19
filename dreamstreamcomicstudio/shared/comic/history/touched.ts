@@ -204,8 +204,14 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
       case 'translation':
       case 'edition_balloon':
         return editionLineKeys(doc, op.lang, [op.lineId]);
-      case 'translations':
-        return editionLineKeys(doc, op.lang, Object.keys(op.lines || {}));
+      case 'translations': {
+        // Failure records (STU-T0) live in the edition's own section: name it when the op sets or clears one, or when
+        // the edition holds any (a written line, or a line no longer in the doc, loses its record).
+        const keys = editionLineKeys(doc, op.lang, Object.keys(op.lines || {}));
+        const sets = !!op.failures && typeof op.failures === 'object' && Object.keys(op.failures).length > 0;
+        const held = Object.keys(doc?.i18n?.editions?.[op.lang]?.failures || {}).length > 0;
+        return sets || held ? [...keys, K.edition(op.lang)] : keys;
+      }
       case 'edition_text':
         return [K.edition(op.lang)];
       case 'glossary_term':

@@ -859,6 +859,23 @@ export interface BalloonGeometryOverride {
 }
 export type TranslationRegister = 'everyday' | 'formal' | 'code_mixed';
 export type EditionTextField = 'cover.title' | 'cover.tagline' | 'brief.title' | 'brief.logline';
+/**
+ * Why the last attempt at a line (or title) did not produce a translation (STU-T0). SERVER-WRITTEN, never published
+ * (publicI18n builds new objects without it). It counts only while `sourceHash` equals the line's current source hash,
+ * and not under the author's own current words; a server write of that line's translation removes it (the author's
+ * edit does not, so undoing the edit keeps it). No model name, no text.
+ *   unsafe   the content check refused every wording the translator gave
+ *   timeout  the translator call ran out of time
+ *   provider the provider failed (or, on a line that has a machine translation, its review call failed)
+ *   empty    the translator answered nothing for it
+ */
+export interface TranslationFailure {
+  reason: 'unsafe' | 'timeout' | 'provider' | 'empty';
+  sourceHash: string;
+  /** Attempts that failed this way in a row, 1..9 (9 = nine or more). */
+  attempts: number;
+  at: number;
+}
 export interface LanguageEdition {
   /** BCP-47 tag from LANGUAGES (languages.ts); never the source language. */
   lang: string;
@@ -869,6 +886,9 @@ export interface LanguageEdition {
   /** lineId → geometry override for this language only (style stays on Line.style). */
   balloons: Record<string, BalloonGeometryOverride>;
   register: TranslationRegister;
+  /** Line id (or EditionTextField such as 'cover.title') → why its last translation attempt failed. Absent = none
+   *  (old docs never have it). ≤ TRANSLATION_FAILURES_MAX entries; never published. */
+  failures?: Record<string, TranslationFailure>;
 }
 export interface GlossaryTerm {
   id: string;
@@ -1027,7 +1047,9 @@ export type StudioTab = 'story' | 'cast' | 'style' | 'pages' | 'media' | 'langua
 export type ClientAction =
   | { type: 'open_reader'; immersive?: boolean; guided?: boolean }
   | { type: 'open_page'; pageId: string }
-  | { type: 'open_tab'; tab: StudioTab }
+  /** `review` (STU-T0; Languages only): also open that language's translation review, filtered to what needs a look
+   *  and scrolled to `lineId`. An older client ignores it and just opens the tab. */
+  | { type: 'open_tab'; tab: StudioTab; review?: { lang: string; lineId?: string } }
   | { type: 'open_share' }
   | { type: 'undo' }
   | { type: 'set_mode'; mode: StudioMode }

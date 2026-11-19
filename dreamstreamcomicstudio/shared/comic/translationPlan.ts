@@ -10,6 +10,8 @@
 //   6 duplicate        the same lineSourceHash is already translated here        → freeLines 'duplicate'
 //                      (a duplicate inside this plan waits for its twin: `deferred`)
 //   7 loose match      only case/punctuation/spacing of the source changed       → freeLines 'loose_match'
+//   – refused          the content check refused this source before (a stored    → skipped (refusedSkipped), even with
+//                      'unsafe' failure on the current hash)                        force; only `redo` sends it again
 //   8 everything else  the translator (writer-class model), then the linguist review (always)
 //
 // The token estimate is deterministic (§8.4); the server turns it into USD with the resolved route's
@@ -37,11 +39,35 @@ export interface TranslationPlan {
   toReview?: string[];
   /** Linguist calls (≤ REVIEW_CHUNK_LINES lines each). */
   reviewCalls?: number;
+  /** Set only when the plan was asked for smaller translator calls (STU-T0): the line cap the run must chunk with
+   *  (`chunkTranslation(plan.toTranslate, plan.chunkLines)`), so the quote and the run stay equal. */
+  chunkLines?: number;
+  /** Set only when > 0 (STU-T0): lines and titles left out because the content check refused their current source (a
+   *  stored 'unsafe' failure). Never quoted, never charged; only `redo` naming them sends them again. */
+  refusedSkipped?: number;
+}
+
+/** The plan options a `translate` action carries (ops.ts TranslateAction). */
+export interface TranslationPlanOptions {
+  pageIds?: string[];
+  /** STU-T0: the scope — only these line ids (and title fields such as 'cover.title') are planned. */
+  lineIds?: string[];
+  /** STU-T0: translate these ids again although current (the author's edits still need overwriteEdits); also the only
+   *  way a line or title the content check refused on its current source is planned again. */
+  redo?: string[];
+  /** STU-T0: translator calls of at most 10 or 20 lines (anything else: TRANSLATE_CHUNK_LINES). */
+  chunkLines?: 10 | 20;
+  force?: boolean;
+  overwriteEdits?: boolean;
 }
 
 /** One translator call carries ≤ 40 lines or ≤ 3 pages (whichever comes first), split on page boundaries. */
 export const TRANSLATE_CHUNK_LINES = 40;
 export const TRANSLATE_CHUNK_PAGES = 3;
+/** The smaller call sizes a "Try again in smaller parts" may ask for (STU-T0). */
+export const TRANSLATE_SMALL_CHUNKS: readonly number[] = [10, 20];
+/** The line cap for a plan's chunkLines option: 10 or 20, else TRANSLATE_CHUNK_LINES. */
+export const chunkLinesOf = (v: unknown): number => (typeof v === 'number' && TRANSLATE_SMALL_CHUNKS.includes(v) ? v : TRANSLATE_CHUNK_LINES);
 /** One linguist call reviews ≤ 60 lines. */
 export const REVIEW_CHUNK_LINES = 60;
 /** Prefix of the issue note left when the review replaced a translation (its `suggestion` is the original). */
@@ -187,8 +213,10 @@ export const sourceTokens = (text: string, sourceLang: string): number => {
 
 const round = (n: number) => Math.round(n);
 
-/** Chunk the page groups of a plan: ≤ TRANSLATE_CHUNK_LINES lines or ≤ TRANSLATE_CHUNK_PAGES pages per call. */
-export const chunkTranslation = (toTranslate: TranslationPlan['toTranslate']): { pageId: string; lineIds: string[] }[][] => {
+/** Chunk the page groups of a plan: ≤ `maxLines` (default TRANSLATE_CHUNK_LINES; a whole number 1..40, anything else
+ *  is the default) lines or ≤ TRANSLATE_CHUNK_PAGES pages per call. planTranslation estimates with the same chunks. */
+export const chunkTranslation = (toTranslate: TranslationPlan['toTranslate'], maxLines: number = TRANSLATE_CHUNK_LINES): { pageId: string; lineIds: string[] }[][] => {
+  const max = Number.isInteger(maxLines) && maxLines >= 1 && maxLines <= TRANSLATE_CHUNK_LINES ? maxLines : TRANSLATE_CHUNK_LINES;
   const chunks: { pageId: string; lineIds: string[] }[][] = [];
   let current: { pageId: string; lineIds: string[] }[] = [];
   let lines = 0;
@@ -200,10 +228,10 @@ export const chunkTranslation = (toTranslate: TranslationPlan['toTranslate']): {
   for (const group of toTranslate) {
     let ids = group.lineIds.slice();
     while (ids.length) {
-      if (current.length >= TRANSLATE_CHUNK_PAGES || lines >= TRANSLATE_CHUNK_LINES) flush();
+      if (current.length >= TRANSLATE_CHUNK_PAGES || lines >= max) flush();
       // Keep a page whole when it fits in a fresh chunk; split only pages longer than one chunk.
-      if (lines > 0 && lines + ids.length > TRANSLATE_CHUNK_LINES && ids.length <= TRANSLATE_CHUNK_LINES) flush();
-      const room = TRANSLATE_CHUNK_LINES - lines;
+      if (lines > 0 && lines + ids.length > max && ids.length <= max) flush();
+      const room = max - lines;
       const take = ids.slice(0, room);
       ids = ids.slice(room);
       current.push({ pageId: group.pageId, lineIds: take });
@@ -270,11 +298,13 @@ export const estimateTranslationTokens = ({ doc, lang, chunks, review }: TokenIn
 /** Rank of a stored translation as a duplicate source (lower is better). */
 const twinRank = (e: TextTranslation): number => (e.issue?.severity === 'major' ? 4 : 0) + (e.issue ? 1 : 0) + (e.status === 'machine' ? 2 : 0);
 
-/** The best CURRENT translation per source hash in an edition (what a duplicate line copies, path 6). */
-export const bestTwins = (doc: ComicDoc, lang: string): Map<string, TextTranslation> => {
+/** The best CURRENT translation per source hash in an edition (what a duplicate line copies, path 6). Lines in
+ *  `exclude` (being translated again) are never a twin. */
+export const bestTwins = (doc: ComicDoc, lang: string, exclude?: ReadonlySet<string>): Map<string, TextTranslation> => {
   const entries = i18nOf(doc).editions[lang]?.lines ?? {};
   const out = new Map<string, TextTranslation>();
   for (const { line } of linesInOrder(doc)) {
+    if (exclude?.has(line.id)) continue;
     const e = entries[line.id];
     if (!e) continue;
     const h = lineSourceHash(line);
@@ -287,19 +317,43 @@ export const bestTwins = (doc: ComicDoc, lang: string): Map<string, TextTranslat
 
 // ── The plan ─────────────────────────────────────────────────────────────────
 
-/** Software-first plan (i18n.md §8.2 paths 1–7 are $0); deterministic token estimate (§8.4). */
-export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: string[]; force?: boolean; overwriteEdits?: boolean }): TranslationPlan {
+const idList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string' && !!id).slice(0, DOC_LIMITS.translateLineIds) : [];
+
+/**
+ * Software-first plan (i18n.md §8.2 paths 1–7 are $0); deterministic token estimate (§8.4).
+ * STU-T0 options: `lineIds` scopes the plan to those lines (and the title fields it names); `redo` plans those ids
+ * again although current — like `force`, but for them only, and an author's edit still needs `overwriteEdits`;
+ * `chunkLines` (10 | 20) estimates with smaller translator calls. Each list reads at most DOC_LIMITS.translateLineIds
+ * ids; unknown ids are ignored. A line or title with a stored 'unsafe' failure on its current source is left out (even
+ * with `force`) and counted in `refusedSkipped`, unless `redo` names it.
+ */
+export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationPlanOptions): TranslationPlan {
   const spec = languageSpec(lang);
   if (!spec || spec.code !== lang || sameLanguage(lang, doc.format.language)) return emptyPlan(lang);
   const plan = emptyPlan(lang);
   const force = opts?.force === true;
   const overwrite = opts?.overwriteEdits === true;
   const scope = opts?.pageIds?.length ? new Set(opts.pageIds) : null;
+  const lineScopeIds = idList(opts?.lineIds);
+  const lineScope = Array.isArray(opts?.lineIds) && opts!.lineIds.length ? new Set(lineScopeIds) : null;
+  const redo = new Set(idList(opts?.redo));
+  const maxLines = chunkLinesOf(opts?.chunkLines);
+  if (maxLines !== TRANSLATE_CHUNK_LINES) plan.chunkLines = maxLines;
   const edition = i18nOf(doc).editions[lang];
   const entries = edition?.lines ?? {};
+  // A line (or title) the content check refused on its CURRENT source is never re-sent blindly: the same words would
+  // meet the same check (and be charged). Only `redo` names it back in; a changed source makes the record old.
+  const failures = edition?.failures;
+  const refusedHere = (id: string, hash: string): boolean => {
+    if (redo.has(id) || !failures || !Object.prototype.hasOwnProperty.call(failures, id)) return false;
+    const f = failures[id];
+    return f.reason === 'unsafe' && f.sourceHash === hash;
+  };
+  let refusedSkipped = 0;
 
-  // Current translations in this edition by source hash (duplicates, path 6).
-  const byHash = force ? new Map<string, TextTranslation>() : bestTwins(doc, lang);
+  // Current translations in this edition by source hash (duplicates, path 6); a line being redone is no twin.
+  const byHash = force ? new Map<string, TextTranslation>() : bestTwins(doc, lang, redo);
   // First line of each source hash queued for the translator in THIS plan (in-plan duplicates wait).
   const queued = new Map<string, string>();
   const groups = new Map<string, string[]>();
@@ -314,13 +368,15 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
 
   for (const { page, line } of linesInOrder(doc)) {
     if (scope && !scope.has(page.id)) continue;
+    if (lineScope && !lineScope.has(line.id)) continue;
     const text = normalizeSource(line.text);
     if (!text) continue;
     const hash = lineSourceHash(line);
     const entry = entries[line.id];
     const current = !!entry && entry.sourceHash === hash;
+    const forced = force || redo.has(line.id);
     // 1 · up to date
-    if (current && !force) {
+    if (current && !forced) {
       plan.upToDate += 1;
       // The same rule as editionProgress.unreviewed: a line flagged MAJOR was judged and waits for the author.
       if (entry.status === 'machine' && entry.issue?.severity !== 'major') plan.toReview!.push(line.id);
@@ -355,19 +411,24 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
       plan.freeLines.push({ lineId: line.id, text: localizePunctuation(replaced === text ? form : replaced, lang), reason: 'glossary_only' });
       continue;
     }
-    // 6 · duplicate already translated in this edition
-    const twin = byHash.get(hash);
+    // 6 · duplicate already translated in this edition (never for a line being redone: it wants a new wording)
+    const twin = forced ? undefined : byHash.get(hash);
     if (twin) {
       plan.freeLines.push({ lineId: line.id, text: twin.text, reason: 'duplicate' });
       continue;
     }
     // 7 · loose match (only case / punctuation / spacing changed)
-    if (entry && !current && !force) {
+    if (entry && !current && !forced) {
       const old = looseOldSource(line, entry.sourceHash);
       if (old !== undefined) {
         plan.freeLines.push({ lineId: line.id, text: carryTrailingMark(entry.text, old, text, lang), reason: 'loose_match' });
         continue;
       }
+    }
+    // refused before on this very source (free paths above still apply: they never ask the translator)
+    if (refusedHere(line.id, hash)) {
+      refusedSkipped += 1;
+      continue;
     }
     // in-plan duplicate: copied for free after its twin is translated
     const first = queued.get(hash);
@@ -381,16 +442,22 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
   }
   plan.toTranslate = pageOrder.map((pageId) => ({ pageId, lineIds: groups.get(pageId)! }));
 
-  // Cover and brief texts (whole-comic runs only).
+  // Cover and brief texts (whole-comic runs only; with a line scope, only the fields it names).
   if (!scope) {
     const seen = new Set<string>();
     for (const field of EDITION_FIELDS) {
+      if (lineScope && !lineScope.has(field)) continue;
       const source = editionTextSource(doc, field);
       if (!source) continue;
       const entry = editionTextEntry(doc, lang, field);
-      const current = !!entry && entry.sourceHash === textSourceHash(source);
-      if (current && !force) continue;
+      const sourceHash = textSourceHash(source);
+      const current = !!entry && entry.sourceHash === sourceHash;
+      if (current && !(force || redo.has(field))) continue;
       if (entry?.status === 'edited' && !overwrite) continue;
+      if (refusedHere(field, sourceHash)) {
+        refusedSkipped += 1;
+        continue;
+      }
       // cover.title usually repeats brief.title: one translation serves both (the run copies it).
       const key = source.toLowerCase();
       if (seen.has(key) && field.startsWith('cover.')) {
@@ -402,9 +469,11 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
     }
   }
 
+  if (refusedSkipped) plan.refusedSkipped = refusedSkipped;
+
   // Token estimate.
   const lineById = new Map(linesInOrder(doc).map(({ line }) => [line.id, line] as const));
-  const chunkTexts = chunkTranslation(plan.toTranslate).map((chunk) => chunk.flatMap((g) => g.lineIds.map((id) => lineById.get(id)?.text || '')));
+  const chunkTexts = chunkTranslation(plan.toTranslate, maxLines).map((chunk) => chunk.flatMap((g) => g.lineIds.map((id) => lineById.get(id)?.text || '')));
   const coverSources = [...new Set(plan.coverTexts.map((f) => editionTextSource(doc, f)))];
   if (coverSources.length) {
     if (chunkTexts.length) chunkTexts[0] = [...chunkTexts[0], ...coverSources];

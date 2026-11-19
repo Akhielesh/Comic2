@@ -18,6 +18,7 @@ import {
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
+import { reasoningBudget } from '../reasoning.js';
 import { modelTimeoutError, makeProviderError } from './errors.js';
 import { markSharedKeyCapped } from '../providerCircuit.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
@@ -35,6 +36,8 @@ import {
   type FreeModelPredicate
 } from '../privacy/openrouterPolicy.js';
 import { logger } from '../../lib/logger.js';
+import { redactSecrets } from '../../lib/redact.js';
+import { PROVIDER_REGISTRY } from '../../../../shared/providers.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -53,21 +56,9 @@ const JSON_REPAIR_INSTRUCTION =
 // Reasoning/thinking model families (id-based), kept in sync with the client capability index.
 const REASONING_MODEL_RE = /(?:^|[/:_-])(?:o1|o3|o4-mini|r1|qwq|deepseek-r1?|magistral|phi-4-reasoning|grok-3-mini)(?:[:_-]|$)|reasoning|thinking/i;
 
-// Bound the thinking budget so chat stays responsive. Unbounded `effort: 'high'` was
-// running 55-109s in production (the model rambling in its thinking phase). A capped
-// reasoning token budget keeps small/medium turns fast (they finish well under the
-// ceiling) while still allowing meaningful reasoning; genuinely deep work uses the agent
-// swarm, whose depth comes from running many agents rather than one giant reasoning call.
-// (Env-overridable via REASONING_BUDGET_* if a deployment wants more headroom.)
-//
-// Exported so callers that must also size max_tokens around the thinking budget (reasoning
-// tokens count against max_tokens, and Anthropic requires max_tokens > budget) can reuse
-// the exact same numbers instead of hard-coding a second copy.
-export const reasoningBudget = (effort: 'low' | 'medium' | 'high'): number => {
-  const defaults = { low: 1024, medium: 2048, high: 4096 };
-  const raw = Number(process.env[`REASONING_BUDGET_${effort.toUpperCase()}`]);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaults[effort];
-};
+// The bounded thinking budget lives in ai/reasoning.ts (shared with the Anthropic adapter and
+// comic/llm.ts); it is re-exported here for the callers that import it from this module.
+export { reasoningBudget };
 
 const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   const headers: Record<string, string> = {
@@ -79,6 +70,13 @@ const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   return headers;
 };
 
+/**
+ * Calls made with a person's own key (ctx.byok) go only to OpenRouter's registry address; an
+ * OPENROUTER_BASE_URL override applies to platform and key-free calls only.
+ */
+const OWN_KEY_BASE_URL = PROVIDER_REGISTRY.openrouter.baseUrl;
+const baseFor = (ctx?: ProviderContext): string => (ctx?.byok ? OWN_KEY_BASE_URL : OPENROUTER_BASE_URL);
+
 const openRouterFetch = async <T = any>(
   path: string,
   init: { method?: string; body?: string },
@@ -88,11 +86,13 @@ const openRouterFetch = async <T = any>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${OPENROUTER_BASE_URL}${path}`, {
+    const res = await fetch(`${baseFor(ctx)}${path}`, {
       method: init.method || 'GET',
       headers: buildHeaders(ctx),
       body: init.body,
-      signal: controller.signal
+      signal: controller.signal,
+      // A redirect could carry the Authorization header somewhere else: refuse it.
+      redirect: 'error'
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -102,7 +102,7 @@ const openRouterFetch = async <T = any>(
       // (and keeps the existing message-based retriable detection working).
       const err = makeProviderError(
         res.status,
-        `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`
+        `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${redactSecrets(errBody).slice(0, 500)}`
       );
       // Open the shared-key circuit breaker on a capacity error so subsequent chat routes to
       // free models instead of hammering the capped platform key. Scoped to the PLATFORM key —
@@ -536,15 +536,16 @@ const streamOnce = async (
 
   armIdle();
   try {
-    const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${baseFor(ctx)}/chat/completions`, {
       method: 'POST',
       headers: buildHeaders(ctx),
       body: JSON.stringify({ ...buildBaseBody(req), messages: req.messages, stream: true, stream_options: { include_usage: true } }),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     });
     if (!res.ok || !res.body) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`OpenRouter stream failed: ${res.status} ${res.statusText} ${errBody.slice(0, 300)}`);
+      throw new Error(`OpenRouter stream failed: ${res.status} ${res.statusText} ${redactSecrets(errBody).slice(0, 300)}`);
     }
 
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -610,7 +611,7 @@ const streamOnce = async (
     if (streamError) {
       const status = Number(streamError.code) || 502;
       const err = new Error(
-        `OpenRouter stream failed: ${status} ${String(streamError.message || 'stream error').slice(0, 300)}`
+        `OpenRouter stream failed: ${status} ${redactSecrets(String(streamError.message || 'stream error')).slice(0, 300)}`
       ) as Error & { streamed?: boolean };
       err.streamed = Boolean(text || toolAcc.size);
       throw err;

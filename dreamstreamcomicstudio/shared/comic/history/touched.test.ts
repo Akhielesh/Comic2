@@ -1,6 +1,6 @@
 // touchedKeys / opActor (versions plan §4.1–§4.2) and describeChanges (§4.3) on real ops (H0).
 import { describe, expect, it } from 'vitest';
-import { normalizeDoc } from '../doc';
+import { normalizeDoc, type ComicDoc } from '../doc';
 import { applyOps, type DocOp } from '../ops';
 import { historyV5Doc } from './__fixtures__/books';
 import { changeItemsFromDiff, describeChanges, pageRangeText } from './describe';
@@ -31,6 +31,33 @@ describe('touchedKeys', () => {
       const keys = touchedKeys(op, doc);
       for (const k of changed) expect(keys, `${op.op} must name ${k}`).toContain(k);
     }
+  });
+
+  it('names the edition section when a failure record changes (STU-T0: the records live in ed:<lang>)', () => {
+    const base = v5();
+    const f = { reason: 'unsafe' as const, sourceHash: 'h', attempts: 1, at: 1 };
+    const withFailures = applyOps(base, [{ op: 'translations', lang: 'te', lines: {}, failures: { pg_1_l1: f, pg_2_l2: f } }], 5);
+    const orphaned = applyOps(withFailures, [{ op: 'line', pageId: 'pg_2', panelId: 'pg_2_p2', id: 'pg_2_l2', patch: null }], 5);
+    const cases: [string, ComicDoc, DocOp][] = [
+      ['failures only', base, { op: 'translations', lang: 'te', lines: {}, failures: { pg_1_l1: f } }],
+      ['a cleared record', withFailures, { op: 'translations', lang: 'te', lines: {}, failures: { pg_1_l1: null } }],
+      ['a written line loses its record', withFailures, { op: 'translations', lang: 'te', lines: { pg_1_l1: { text: 't', status: 'machine', sourceHash: 'h', at: 1 } } }],
+      ['an orphan record tidied by a server write', orphaned, { op: 'translations', lang: 'te', lines: { pg_1_l2: { text: 't', status: 'machine', sourceHash: 'h', at: 1 } } }],
+      ["the author's edit keeps the record", withFailures, { op: 'translation', lang: 'te', lineId: 'pg_1_l1', patch: { text: 'mine', status: 'edited' } }],
+      ['a title written by the run', withFailures, { op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 't', status: 'machine', sourceHash: 'h', at: 1 } }]
+    ];
+    for (const [name, doc, op] of cases) {
+      const after = applyOps(doc, [op], 5);
+      const a = sectionSignatures(doc);
+      const b = sectionSignatures(after);
+      const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]).sort();
+      expect(changed.length, name).toBeGreaterThan(0);
+      const keys = touchedKeys(op, doc);
+      for (const k of changed) expect(keys, `${name} must name ${k}`).toContain(k);
+    }
+    // A failures-only commit is the run's (attributed), not an unowned change.
+    expect(opActor(cases[0][2], 'job', base)).toBe('ai');
+    expect(touchedKeys(cases[0][2])).toEqual(['ed:te']);
   });
 
   it('a reorder and forward-only records touch nothing', () => {
