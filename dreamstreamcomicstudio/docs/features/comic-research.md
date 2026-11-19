@@ -9,8 +9,17 @@ change it in the same change that alters the behaviour.
 - **Research sheet** (`components/comicstudio/conversation/StudioComposer.tsx`, the composer's research button, label
   "Research for your comic"; the panel is `ResearchPanel.tsx`, lazy-loaded). One search box ("Place, event, or topic",
   2-120 characters) and a Search button. Results:
-  - up to **4 Wikipedia articles**: title, one-line description, a "Source" link and **Add context**;
-  - up to **6 Wikimedia Commons pictures**: thumbnail, title, credit and licence, a "Source" link and **Add image**.
+  - up to **4 Wikipedia articles**: title, the description (or the article's opening when a result carries one)
+    clamped to 2 lines with **More**/**Less** when it overflows, a "Wikipedia" link ("Wikipedia · <language name>"
+    for an article that is not English) and **Add context**;
+  - up to **6 Wikimedia Commons pictures**: thumbnail, a one-line title, a one-line credit and licence (12 px), an
+    "Open source" link and **Add image** for CC0 and public-domain pictures only; CC BY and CC BY-SA pictures show a
+    muted "Reference only" instead. A thumbnail that cannot load becomes an empty tile.
+  - The pictures wait behind one **Show pictures** button unless the comic is rated PG-13 (`kidsSafe`; the
+    Director's card reads the comic's effective rating, the composer's sheet passes none, so it always asks). The tap
+    holds for that set of pictures only; a new search asks again.
+  - A source the comic keeps as pinned shows "Pinned to this comic" (read from `doc.research` through
+    `pinnedSourceUrls`; nothing writes pinned sources yet).
 - **Director tool** `research_comic` (`server/src/comic/tools/research.ts`, group `research`). It is offered only on a
   turn whose message asks for it in words such as "research", "fact-check", "look up", "find references",
   "historical sources" or "real-world references". It runs the same search and adds a **Research sources** card
@@ -33,18 +42,22 @@ change it in the same change that alters the behaviour.
   script, no member IP (they are server-to-server). Nothing checks what the words are: the member types them in the
   sheet, and the Director writes its own, with only a prompt hint to send public search terms. The research code and route write no log line with the search words.
 - **Browser → Wikimedia:** the thumbnails load from `upload.wikimedia.org` with no referrer and no credentials, when
-  the results show. The privacy page names this under "Research in Comic Studio" (`components/PrivacyPolicy.tsx`,
+  the pictures show: with the results on a PG-13 comic's Director card, otherwise after the **Show pictures** tap. The privacy page names this under "Research in Comic Studio" (`components/PrivacyPolicy.tsx`,
   section 3).
 
 ## The allowlist (`shared/comic/research.ts`, `normalizeComicResearch`)
 
-- Article links: `https://en.wikipedia.org/wiki/…` only. Picture pages: `https://commons.wikimedia.org/wiki/File:…`.
+- Article links: `https://{code}.wikipedia.org/wiki/…` for the languages in the registry only (`WIKI_HOSTS`, built
+  from `LANGUAGES` in `shared/comic/languages.ts`; `zh-Hans` is `zh.wikipedia.org`); the server still searches
+  English Wikipedia only. Picture pages: `https://commons.wikimedia.org/wiki/File:…`.
   Thumbnails: `upload.wikimedia.org` or `thumb.wikimedia.org` under `/wikipedia/commons/thumb/`. No other scheme,
   host, port or credentials; query and fragment are dropped; at most 2,048 characters.
 - Pictures need a licence of CC0, public domain, CC BY or CC BY-SA (with an optional version); the CC BY ones are
-  kept only with a named credit.
-- Text has tags and control characters removed and is capped: title 160 (pictures 235), description 260,
-  licence 65, credit 160 characters.
+  kept only with a named credit. Only CC0 and public-domain pictures can be attached (`ATTACHABLE_LICENCES`,
+  `isAttachable`). This is worked out from the licence on every read and never stored, so older stored cards
+  follow the same rule.
+- Text has tags, control characters and bidi controls removed and is capped: title 160 (pictures 235),
+  description 260, article opening 600, licence 65, credit 160 characters.
 
 ## Budget, cache and limits
 
@@ -72,7 +85,7 @@ change it in the same change that alters the behaviour.
 | `server/src/comic/research.ts` | the two look-ups, parsing, cache |
 | `server/src/comic/tools/research.ts` | the Director tool and its card |
 | `server/src/routes/comic.ts` | the sheet's route |
-| `shared/comic/research.ts` | result types, text caps, the link and licence allowlist |
+| `shared/comic/research.ts` | result types, text caps, the link and licence allowlist, which licences can be attached; also the research-state shape and the subject guard (nothing calls those two yet) |
 | `components/comicstudio/conversation/ResearchPanel.tsx` | the sheet and the card's selector |
 | `components/comicstudio/conversation/cards/ResearchCard.tsx` | the Director's card |
 | `docs/DATA_CONNECTORS.md` | the "Comic research" row |
