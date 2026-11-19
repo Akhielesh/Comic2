@@ -4,8 +4,9 @@
 // gateDecision, then calls runTranslation (actions/i18n.ts). The run is software-first:
 //   1. free paths (copies, punctuation, glossary-only lines, duplicates, loose matches) + glossary seed
 //   2. the translator — the WRITER-CLASS chain — per chunk, languages up to TRANSLATE_CONCURRENCY (6) at a
-//      time, validated + repaired; a chunk that hits a rate limit or a provider 5xx is retried once; a "no"
-//      from the spending allowance stops every language
+//      time, validated + repaired; the text client already gives every call one more try (a rate limit after
+//      3 s, a provider 5xx after 1.5 s), and a chunk the provider still rate-limits after that is asked once
+//      more here, 8 to 15 s later; a "no" from the spending allowance stops every language
 //   3. the linguist review with a gloss — ALWAYS
 //   4. duplicates of the fresh lines copied for free, spend recorded, an APPENDED completion message
 // A rerun over unchanged text makes no model call at all (caching by sourceHash in planTranslation).
@@ -252,12 +253,16 @@ interface LanguageResult {
   error?: string;
   usd: number;
   byok: boolean;
-  /** Chunks of this language that were asked a second time (rate limit / provider 5xx). */
+  /** Chunks of this language that were asked a second time here (a rate limit the text client could not ride out). */
   retries?: number;
+  /** Translator calls of this language that failed, by error code (counts only; a RATE_LIMIT is a call the text client tried twice). */
+  callErrors?: Record<string, number>;
   /** Wall time of this language in the run. */
   ms?: number;
   /** Set when the spending allowance said no in this or another lane: no more chunks were started. */
   stoppedBy?: 'billing';
+  /** The allowance's own words, set only on the lane that heard the "no" (the run's message leads with them). */
+  denied?: string;
 }
 
 /**
@@ -279,12 +284,17 @@ async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>
 
 /**
  * Languages translated at once (3 before 2026-11-19). Each lane holds at most one allowance hold and one
- * provider call; lower it if the `comic_translate_timing` line shows rate-limit retries on people's own keys.
+ * provider call. Lower it if the `comic_translate_timing` line shows `callErrors.RATE_LIMIT` with `byok: true`
+ * (people's own keys meeting their rate limit).
  */
 export const TRANSLATE_CONCURRENCY = 6;
 
-/** Run knobs (tests shorten the wait): the lanes, and the wait before a chunk's one retry (min..max, jittered). */
-export const TRANSLATE_TIMINGS = { lanes: TRANSLATE_CONCURRENCY, retryMinMs: 1500, retryMaxMs: 3000 };
+/**
+ * Run knobs (tests shorten the wait): the lanes, and the wait before a chunk's one retry here (min..max,
+ * jittered). It is well past the text client's own 3 s rate-limit retry, so a per-minute limit has had time to
+ * ease and six lanes that met it together do not come back together.
+ */
+export const TRANSLATE_TIMINGS = { lanes: TRANSLATE_CONCURRENCY, retryMinMs: 8000, retryMaxMs: 15000 };
 
 /** The wait before a chunk is asked again: uniformly between retryMinMs and retryMaxMs. */
 export const chunkRetryDelayMs = (random: () => number = Math.random): number => {
@@ -294,26 +304,23 @@ export const chunkRetryDelayMs = (random: () => number = Math.random): number =>
 };
 
 /**
- * Failures that never get a second ask: Stop, the allowance, no key, and a timeout (it already waited the
- * role's full time and was billed an estimate; asking again could bill a second one).
- */
-const NEVER_RETRY = new Set(['CANCELLED', 'BILLING_DENIED', 'NO_TEXT_KEY', 'TIMEOUT']);
-
-/**
- * True for a chunk failure worth one more ask: a provider rate limit (429) or a provider 5xx, as the text
- * client's error carries it, or NOT_AVAILABLE. The text client marks its permanent failures (a rejected key,
- * a key out of credits) `retryable: false`; those are not provider 5xx and are not asked again.
+ * True for a chunk failure worth one more ask HERE: a provider rate limit (RATE_LIMIT, or a bare 429), or a
+ * NOT_AVAILABLE (nothing was sent). Every other failure is not asked again by the lanes:
+ *  - the text client (llm.ts) already gave the call its one more try: a rate limit after 3 s; a provider 5xx,
+ *    a network blip, an empty reply or a model not found after 1.5 s. A failure that reaches here has been
+ *    asked twice, and stacking a second layer on it would double the requests a struggling key gets;
+ *  - an unreadable reply was answered (and paid for at the provider) twice already; the text client
+ *    deliberately does not pay a third time, and a failed call is never billed, so the platform (or the
+ *    person's own key, untracked) would pay for every extra ask;
+ *  - Stop, the allowance, no key, a timeout (it waited the role's full time and was billed an estimate), a
+ *    rejected key, a key out of credits, a safety refusal: asking again changes nothing or costs again.
+ * A rate limit is the one failure a longer wait fixes (a per-minute limit outlasts the text client's 3 s).
  */
 export function chunkRetryable(err: unknown): boolean {
-  if (err instanceof StudioError) {
-    if (NEVER_RETRY.has(err.code)) return false;
-    if (err.code === 'RATE_LIMIT' || err.code === 'NOT_AVAILABLE') return true;
-    return err.retryable && (err.status === 429 || (err.status >= 500 && err.status < 600));
-  }
+  if (err instanceof StudioError) return err.code === 'RATE_LIMIT' || err.code === 'NOT_AVAILABLE';
   if (!err || typeof err !== 'object') return false;
   const tagged = err as { status?: unknown; statusCode?: unknown };
-  const status = Number(tagged.status ?? tagged.statusCode);
-  return status === 429 || (status >= 500 && status < 600);
+  return Number(tagged.status ?? tagged.statusCode) === 429;
 }
 
 /** Wait `ms`, ending early when Stop is pressed (the caller checks the signal after). */
@@ -333,6 +340,11 @@ const waitUnlessStopped = (ms: number, signal: AbortSignal): Promise<void> =>
 interface RunStop {
   /** The allowance's own words, from the first lane it refused. */
   billing?: string;
+  /**
+   * A chunk's retry here met another rate limit: the key stays limited past the wait, so no other chunk of this
+   * run is asked a second time (each ask is already two requests through the text client).
+   */
+  noRetry?: boolean;
 }
 
 const ratingOf = (ctx: StudioContext) => ctx.rating ?? effectiveRating(ctx.session.doc, (ctx.caps ?? DEFAULT_CAPS).ratingCeiling).rating;
@@ -373,14 +385,18 @@ const emptyResult = (lang: string): LanguageResult => ({
   usd: 0,
   byok: false,
   retries: 0,
+  callErrors: {},
   ms: 0
 });
 
-/** The allowance said no: every lane stops (the first refusal's words are kept for the run's message). */
+/** The allowance said no to this lane: every lane stops, and this lane keeps the words for the run's message. */
 const stopForBilling = (stop: RunStop, res: LanguageResult, message: string) => {
   if (stop.billing === undefined) stop.billing = message;
   res.stoppedBy = 'billing';
+  res.denied = message;
 };
+
+const codeOf = (err: unknown): string => (err instanceof StudioError ? err.code : 'INTERNAL');
 
 async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, signal: AbortSignal, onPage: (label: string) => (ok: boolean) => void, stop: RunStop = {}): Promise<LanguageResult> {
   const spec = languageSpec(lang)!;
@@ -413,25 +429,37 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
       // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
       // paid for, so its lines are kept), exactly like a render that is already drawing. Each ask reads the
       // doc as it is then (the author may have edited lines during a retry's wait).
-      const ask = () => {
+      const ask = async () => {
         const doc = ctx.session.doc;
-        return translateChunk(llmT, { doc, lang, pages: chunkPages(doc, chunk), extras: i === 0 ? extras : [], rating });
+        try {
+          return await translateChunk(llmT, { doc, lang, pages: chunkPages(doc, chunk), extras: i === 0 ? extras : [], rating });
+        } catch (err) {
+          const callErrors = (res.callErrors ??= {});
+          callErrors[codeOf(err)] = (callErrors[codeOf(err)] || 0) + 1;
+          throw err;
+        }
       };
       try {
         let result: Awaited<ReturnType<typeof translateChunk>>;
         try {
           result = await ask();
         } catch (err) {
-          // A rate limit or a provider 5xx gets ONE more ask after a short jittered wait, before the chunk's
-          // lines count as failed. A failed call held nothing back (billedLlm released its hold), so the
-          // success path and its price are unchanged.
-          if (!chunkRetryable(err)) throw err;
+          // A rate limit the text client could not ride out (its own retry came 3 s later) gets ONE more ask
+          // here, 8 to 15 s later with jitter, before the chunk's lines count as failed. A failed call held
+          // nothing back (billedLlm released its hold), so the success path and its price are unchanged. Once
+          // a retry meets another rate limit, the rest of the run asks nothing twice (stop.noRetry).
+          if (!chunkRetryable(err) || stop.noRetry) throw err;
           await waitUnlessStopped(chunkRetryDelayMs(), signal);
           if (cancelled(signal)) throw cancelledError();
-          if (stop.billing !== undefined) throw err;
+          if (stop.billing !== undefined || stop.noRetry) throw err;
           res.retries = (res.retries || 0) + 1;
-          logger.warn('comic_translate_chunk_retry', { projectId: ctx.projectId, lang, code: err instanceof StudioError ? err.code : 'PROVIDER', status: err instanceof StudioError ? err.status : undefined });
-          result = await ask();
+          logger.warn('comic_translate_chunk_retry', { projectId: ctx.projectId, lang, code: codeOf(err) });
+          try {
+            result = await ask();
+          } catch (again) {
+            if (chunkRetryable(again)) stop.noRetry = true;
+            throw again;
+          }
         }
         // Ops against the doc as it is NOW (the author may have edited lines while the chunk was out).
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
@@ -552,8 +580,9 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
     if (editionReadiness(doc, r.lang).publishable) ready.push(languageSpec(r.lang)?.endonym || r.lang);
   }
   const anyCancelled = results.some((r) => r.cancelled);
-  // The allowance's "no" stopped every lane: its words lead (once), whatever else a lane reported.
-  const billingStop = results.some((r) => r.stoppedBy === 'billing') ? results.find((r) => r.stoppedBy === 'billing' && r.error)?.error : undefined;
+  // The allowance's "no" stopped every lane: its own words (from the lane that heard it) lead, once, whatever
+  // else a lane reported before or while the stop came.
+  const billingStop = results.find((r) => r.denied)?.denied;
   const errors = [...new Set([billingStop, ...results.map((r) => r.error)].filter((e): e is string => !!e))];
   const usd = round4(results.reduce((s, r) => s + r.usd, 0));
   let head: string;
@@ -569,7 +598,11 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
       : ' Cost $0 — done by the editor, no AI cost.';
   const lines = [head, ...parts];
   if (errors.length) {
-    const stopped = billingStop && results.length > 1 ? ' Every language stopped there; the lines already written are kept.' : '';
+    // Which languages the "no" cut short: all of them, or only some (a language that had already finished
+    // is not one of them). One language alone needs no such sentence.
+    const halted = billingStop ? results.filter((r) => r.stoppedBy === 'billing') : [];
+    const who = halted.length < 2 ? '' : halted.length === results.length ? 'Every language' : joinList(halted.map((r) => englishName(r.lang)));
+    const stopped = who ? ` ${who} stopped there; the lines already written are kept.` : '';
     lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'}${stopped} Translate again to retry — only the missing lines are charged.`);
   }
   const fix = overlayFix(doc, byok);
@@ -766,6 +799,11 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     logger.info('comic_translate_done', { projectId: ctx.projectId, langs: codes, usd, translated: results.reduce((n, r) => n + r.translated, 0), free: freeCount + results.reduce((n, r) => n + r.free, 0) });
     // Counts and milliseconds only (no words, no user): tells whether 6 lanes meet rate limits on own keys
     // (`byok`: the translator ran on the person's own key, where the lane count should come down first).
+    // `callErrors` counts the translator calls that failed, by code: a RATE_LIMIT there is a call the provider
+    // still rate-limited after the text client's own retry; `retries` counts the chunks asked again here. A
+    // single 429 the text client rode out shows only in its own `comic_llm_retry` line.
+    const callErrors: Record<string, number> = {};
+    for (const r of results) for (const [code, n] of Object.entries(r.callErrors || {})) callErrors[code] = (callErrors[code] || 0) + n;
     logger.info('comic_translate_timing', {
       projectId: ctx.projectId,
       byok: textRoleIsByok('translator', ctx.keys),
@@ -774,6 +812,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
       ms: Date.now() - runStarted,
       perLangMs: Object.fromEntries(results.map((r) => [r.lang, r.ms ?? 0])),
       retries: results.reduce((n, r) => n + (r.retries || 0), 0),
+      callErrors,
       failedLines: results.reduce((n, r) => n + r.failed, 0),
       stoppedBy: stop.billing !== undefined ? 'billing' : results.some((r) => r.cancelled) ? 'user' : null
     });
