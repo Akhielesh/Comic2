@@ -1,7 +1,8 @@
 // A platform library image with a procedural fallback (contract §13.3, assets.md §6; owner P1-LIBRARY).
 //
-// Published previews take priority. Curated presets can use bundled artwork when the published
-// preview is missing or fails. Other assets use the caller's procedural art.
+// Published previews take priority. A look's preview (style.<id>) falls back to the look's own static picture when the
+// published preview is missing or fails: the same file LookArt paints, from lookSources.ts (the one place a look's files
+// are named), so a look never shows different art on different surfaces. Other assets use the caller's procedural art.
 // While the image loads and decodes the fallback stays visible underneath; only once the picture is
 // decoded (components/ds/useImageReveal) does it fade in over it (opacity, plus a 2 % settle on fine
 // pointers; none under reduced motion, none for a picture the browser already holds), and when that
@@ -23,7 +24,7 @@ import {
   useImageReveal
 } from '../../ds/useImageReveal';
 import { useComicLibrary } from './useComicLibrary';
-import { bundledStylePreview } from './sampleArt';
+import { lookFileOf, lookIdOfPreview, lookSourcesOf, type LookFile } from './lookSources';
 
 export interface LibraryImageProps {
   /** Library id, e.g. "style.watercolor-storybook". */
@@ -37,16 +38,22 @@ export interface LibraryImageProps {
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
-function BundledPreview({ src, alt, className, fallback }: Pick<LibraryImageProps, 'alt' | 'className' | 'fallback'> & { src: string }) {
+/** A look's static tile picture for a library id ("style.<presetId>"), from lookSources; none for any other id. */
+const lookTileOf = (id: string): LookFile | undefined => {
+  const look = lookIdOfPreview(id);
+  return look ? lookFileOf(lookSourcesOf(look), 'tile') : undefined;
+};
+
+function BundledPreview({ file, alt, className, fallback }: Pick<LibraryImageProps, 'alt' | 'className' | 'fallback'> & { file: LookFile }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <>{fallback}</>;
 
   return (
     <img
-      src={src}
+      src={file.src}
       alt={alt ?? ''}
-      width={480}
-      height={240}
+      width={file.size?.width}
+      height={file.size?.height}
       loading="lazy"
       decoding="async"
       className={className}
@@ -104,8 +111,8 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
   if (!asset && (library.status === 'idle' || library.status === 'loading')) return <>{fallback}</>;
 
   if (!asset || reveal.phase === 'error') {
-    const bundled = bundledStylePreview(id);
-    return bundled ? <BundledPreview key={bundled} src={bundled} alt={alt} className={className} fallback={fallback} /> : <>{fallback}</>;
+    const bundled = lookTileOf(id);
+    return bundled ? <BundledPreview key={bundled.src} file={bundled} alt={alt} className={className} fallback={fallback} /> : <>{fallback}</>;
   }
 
   const srcSet = [

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LibraryIndex } from '../../../shared/comic/library';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
 import { LibraryImage } from './LibraryImage';
+import { LookArt } from './LookArt';
 import { StylePresetsCard, STYLE_PRESETS_FREE_NOTE } from './StylePresetsCard';
 import { LIBRARY_CACHE_KEY, __resetComicLibraryForTests, libraryApi, loadComicLibrary, sanitizeIndex, useComicLibrary } from './useComicLibrary';
 import { feature } from './index';
@@ -122,8 +123,14 @@ describe('useComicLibrary', () => {
 });
 
 describe('LibraryImage', () => {
-  it('uses bundled art for a curated style when the library is unavailable', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('x', { status: 503 })));
+  it('bundled art for a curated style: at once on the style surfaces (LookArt, no index), and LibraryImage still falls back to it', async () => {
+    const spy = vi.fn(async () => new Response('x', { status: 503 }));
+    vi.stubGlobal('fetch', spy);
+    // The style pickers no longer wait for the library: the bundled file is in the first render, nothing is fetched.
+    const look = render(<LookArt presetId="noir-ink" size="tile" />);
+    expect(look.container.querySelector('img')).toHaveAttribute('src', '/assets/comic-sample/noir-ink-thumb.webp');
+    expect(spy).not.toHaveBeenCalled();
+    look.unmount();
     const { container } = render(<LibraryImage id="style.noir-ink" fallback={<span>procedural</span>} />);
     await waitFor(() => expect(container.querySelector('img')).toHaveAttribute('src', '/assets/comic-sample/noir-ink-thumb.webp'));
   });

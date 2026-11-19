@@ -7,7 +7,10 @@ import { normalizeDoc, type Card } from '../../../shared/comic/doc';
 import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
 import { quoteRenderPages } from '../../../shared/comic/plan';
 import { noticeChipState, noticeChips } from '../conversation/cards/NoticeCard';
-import { PAPER_BOAT_SCRIPT, QA_FIXTURES, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
+import { PAPER_BOAT_SCRIPT, QA_FIXTURES, QA_LOOKS_OPTION_PRESETS, QA_LOOKS_PRESET_IDS, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
+import { cardSettle } from '../../../shared/comic/settle';
+import { getStylePreset } from '../../../shared/comic/stylePresets';
+import { SAMPLE_LOOKS } from '../library/sampleArt';
 import { SLUG_RE } from '../../../shared/comic/publication';
 import { clearQaOps, makeQaUrlFor, parseQaParams, qaDocFromParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
 import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
@@ -378,6 +381,29 @@ describe('useQaController', () => {
     expect(c.caps.liveAgent?.conflicts).toBe(true);
     // Every other state keeps the fixture's conversation as it was.
     expect(qaSceneFromParams(parseQaParams('')).doc!.conversation.some((m) => m.cards?.some((x) => x.type === 'conflict'))).toBe(false);
+  });
+
+  it('state=looks: the last reply carries an open "Styles that fit" card and an open question with preset pictures (SC-1)', () => {
+    expect(parseQaParams('?state=looks').state).toBe('looks');
+    const scene = qaSceneFromParams(parseQaParams('?surface=studio&state=looks'));
+    expect(scene).not.toHaveProperty('caps');
+    const doc = scene.doc!;
+    const at = doc.conversation.length - 1;
+    const last = doc.conversation[at];
+    expect(last.role).toBe('assistant');
+    const [presets, question] = last.cards as [Extract<Card, { type: 'style_presets' }>, Extract<Card, { type: 'options' }>];
+    expect(presets).toMatchObject({ type: 'style_presets', presetIds: [...QA_LOOKS_PRESET_IDS] });
+    expect(question.type).toBe('options');
+    expect(question.choices.map((c) => c.visual)).toEqual(QA_LOOKS_OPTION_PRESETS.map((presetId) => ({ kind: 'preset', presetId })));
+    // Every id is a real look, and the six Paper Boat looks are the card's.
+    for (const id of [...QA_LOOKS_PRESET_IDS, ...QA_LOOKS_OPTION_PRESETS]) expect(getStylePreset(id), id).toBeTruthy();
+    expect([...QA_LOOKS_PRESET_IDS].sort()).toEqual([...SAMPLE_LOOKS].sort());
+    // Nothing comes after it, so both cards show in full (neither settles), and normalizeDoc keeps them whole.
+    expect(cardSettle(doc, at, presets).state).not.toBe('settled');
+    expect(cardSettle(doc, at, question).state).toBe('open');
+    expect(normalizeDoc(doc).conversation.at(-1)!.cards).toEqual(last.cards);
+    // Every other state keeps the fixture's conversation as it was.
+    expect(qaSceneFromParams(parseQaParams('')).doc!.conversation.some((m) => m.cards?.some((x) => x.type === 'style_presets'))).toBe(false);
   });
 
   it('recordQaOp stores JSON copies (later mutation never rewrites history)', () => {
