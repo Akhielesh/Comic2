@@ -547,12 +547,15 @@ describe('useStudio — cancel and cleanup', () => {
     await waitFor(() => expect(api.loadStudioProject).toHaveBeenCalledTimes(2));
   });
 
-  it('unmounting aborts open streams', async () => {
+  it('unmounting hands the director turn and running actions to the next studio instead of aborting them (liveturn LT-2)', async () => {
     const hook = await setup();
     act(() => void hook.result.current.send('bye'));
-    const s = lastStream();
+    const turn = lastStream();
+    act(() => void hook.result.current.act({ type: 'render_pages' }));
+    const render = lastStream();
     hook.unmount();
-    expect(s.signal?.aborted).toBe(true);
+    expect(turn.signal?.aborted).toBe(false);
+    expect(render.signal?.aborted).toBe(false);
   });
 
   it('flushes a pending edit on unmount instead of dropping it', async () => {
