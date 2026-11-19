@@ -102,6 +102,31 @@ describe('ImmersiveReader', () => {
     expect(screen.getByTestId('reader-live').textContent).toBe('The End.');
   });
 
+  it('a tap on the End card’s Up next cover (in the turn-back third) never turns the book back', () => {
+    reduce = true;
+    setViewport(360, 740);
+    render(
+      <ImmersiveReader
+        doc={drawnDoc()}
+        urlFor={fakeUrlFor}
+        intro={false}
+        onExit={() => undefined}
+        endCard={{ upNext: { href: '/c/brick-bridge', title: 'Brick Bridge', coverUrl: 'https://media.example.test/pub/brick-bridge/cover-w480.webp' } }}
+      />
+    );
+    press('End');
+    expect(counter()).toBe('The End');
+    const stage = screen.getByTestId('book-stage');
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 360, height: 740, right: 360, bottom: 740, x: 0, y: 0, toJSON: () => ({}) });
+    const cover = within(stage).getByTestId('end-card').querySelector('[data-part="up-next"] img') as HTMLElement;
+    // x = 60 of 360: inside the left 30%, which turns back in a left-to-right book.
+    act(() => {
+      fireEvent.pointerDown(cover, { clientX: 60, clientY: 400, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerUp(cover, { clientX: 60, clientY: 400, pointerId: 1, pointerType: 'touch' });
+    });
+    expect(counter()).toBe('The End');
+  });
+
   it('a right-to-left comic turns forward with ←', () => {
     reduce = true;
     const doc = drawnDoc();
