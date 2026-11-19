@@ -8,7 +8,7 @@ import { resolvePlacements } from './useLetterPlans';
 import { computeSnap, snapTargets } from './SnapGuides';
 import { nextSelection, useLetteringSelection } from './useLetteringSelection';
 import { CoverTitleLayer, planCoverTitle } from './CoverTitleLayer';
-import { PresetGallery } from './PresetGallery';
+import { EDITION_LETTERING_NOTE, PresetGallery } from './PresetGallery';
 import { LetteringSvg } from './LetteringSvg';
 import { ShapePicker, TailPicker } from './ShapePicker';
 import { BUBBLE_SHAPES, TAIL_STYLES } from '../../../shared/comic/lettering/style';
@@ -76,6 +76,21 @@ describe('LetteringInspector', () => {
     expect(within(panel).getByRole('radiogroup', { name: 'Lettering style' }).querySelectorAll('[role="radio"]')).toHaveLength(8);
     expect(within(panel).getByRole('radiogroup', { name: 'Balloon type' }).querySelectorAll('[role="radio"]')).toHaveLength(6);
     expect(within(panel).queryByRole('tablist')).toBeNull();
+    // The original language: the style chips are live and nothing says otherwise.
+    expect(within(within(panel).getByRole('radiogroup', { name: 'Lettering style' })).getAllByRole('radio').some((r) => (r as HTMLButtonElement).disabled)).toBe(false);
+    expect(within(panel).queryByText(EDITION_LETTERING_NOTE)).toBeNull();
+  });
+
+  it('Easy in a translated edition: the style chips are shown disabled with one line saying why, and a tap changes nothing', () => {
+    // The style is the whole comic's, in every language: a pick from an edition would restyle the original too.
+    const { apply } = inspector(['pg_1_l4'], { editionLang: 'te' });
+    const row = screen.getByRole('region', { name: 'Comic lettering style' });
+    const chips = within(within(row).getByRole('radiogroup', { name: 'Lettering style' })).getAllByRole('radio');
+    expect(chips).toHaveLength(8);
+    expect(chips.every((c) => (c as HTMLButtonElement).disabled)).toBe(true);
+    expect(within(row).getByText(EDITION_LETTERING_NOTE)).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('radio', { name: 'Manga' }));
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('Easy: transparent bubbles, opacity steps and preset switching are one free op each', () => {
@@ -85,7 +100,7 @@ describe('LetteringInspector', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Clear' }));
     expect(apply).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l4'], patch: { fill: 'none' } }], { label: 'See-through bubble' });
     fireEvent.click(screen.getByRole('radio', { name: 'Kids storybook' }));
-    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'storybook', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'storybook', keepOverrides: false, auto: null } }], { label: 'Change lettering style', coalesce: 'lettering-style' });
   });
 
   it('Easy offers the six drawn sound styles and applies a visible curve through one undoable line edit', () => {
@@ -257,7 +272,8 @@ describe('previews and the cover title', () => {
     const onChange = vi.fn();
     const { container } = render(<PresetGallery value="classic" onChange={onChange} />);
     expect(container.querySelectorAll('[role="radio"]')).toHaveLength(8);
-    expect(container.querySelectorAll('svg [data-testid="balloon"]').length).toBeGreaterThanOrEqual(8);
+    // Three kinds per style (a caption, a speech balloon and a shout): 8 × 3.
+    expect(container.querySelectorAll('svg [data-testid="balloon"]').length).toBeGreaterThanOrEqual(24);
     fireEvent.click(screen.getByRole('radio', { name: /Noir/ }));
     expect(onChange).toHaveBeenCalledWith('noir');
   });

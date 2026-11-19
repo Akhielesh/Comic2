@@ -210,7 +210,7 @@ describe('Pro controls with the switch on', () => {
     const looks = screen.getByRole('radiogroup', { name: 'Lettering style' });
     expect(within(looks).getAllByRole('radio')).toHaveLength(9);
     fireEvent.click(within(looks).getByRole('radio', { name: /Shonen/ }));
-    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'shonen', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'shonen', keepOverrides: false, auto: null } }], { label: 'Change lettering style', coalesce: 'lettering-style' });
     expect(screen.getByTestId('named-styles')).toBeTruthy();
   });
 });

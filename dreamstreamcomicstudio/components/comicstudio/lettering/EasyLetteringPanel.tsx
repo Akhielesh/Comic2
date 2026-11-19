@@ -11,7 +11,7 @@ import type { PatchOptions } from '../types';
 import { ColorField, withAlpha } from './ColorField';
 import { FontPicker } from './FontPicker';
 import { EasyShapePicker } from './ShapePicker';
-import { PresetGallery } from './PresetGallery';
+import { EDITION_LETTERING_NOTE, LETTERING_STYLE_UNDO, PresetGallery } from './PresetGallery';
 import { SfxStylePicker } from './SfxStylePicker';
 import { paintOf } from './svgMarkup';
 import {
@@ -66,7 +66,7 @@ const seeThroughOf = (fill: string | undefined): SeeThrough | 'mixed' => {
   return a >= 0.95 ? 'solid' : a >= 0.72 ? 'soft' : 'see';
 };
 
-export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onAskAI, onDeselect }) => {
+export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onAskAI, onDeselect, editionLang }) => {
   const [ask, setAsk] = useState('');
   const ids = lines.map((l) => l.id);
   const one = lines.length === 1 ? lines[0] : undefined;
@@ -104,9 +104,20 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
         </section>
       )}
 
+      {/* The whole comic's style. A translated edition shows the styles but leaves them to the original language
+          (a pick would restyle every language), with the side panel's one line saying so. */}
       <section className={ROW} aria-label="Comic lettering style">
-        <p className={ROW_LABEL}>Comic style (every balloon)</p>
-        <PresetGallery variant="chips" value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => run(presetOps(id), 'Change lettering style')} lang={lang} />
+        <p className={ROW_LABEL}>Lettering style</p>
+        <PresetGallery
+          variant="chips"
+          value={doc.letterStyle?.presetId ?? 'classic'}
+          onChange={(id) => {
+            if (!editionLang) apply(presetOps(id), LETTERING_STYLE_UNDO);
+          }}
+          lang={editionLang ?? lang}
+          disabled={!!editionLang}
+        />
+        {editionLang && <p className="text-[11.5px] leading-snug text-[var(--ds-muted)]">{EDITION_LETTERING_NOTE}</p>}
       </section>
 
       {!sfxOnly && (

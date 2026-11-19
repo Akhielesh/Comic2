@@ -10,6 +10,10 @@
  * aria-pressed). On a pointer that really hovers the tile lifts (LIFT), every press dips (PRESS) and the chosen
  * tile's check pops in (`ds-pop`); under reduced motion only the ring and the check change. The chosen tile is
  * ringed in ink and carries a check, so the choice never rests on colour alone. No `transition-all`, no literal hue.
+ *
+ * `hint` (declutter DX-0) is the explanation that does not belong on the tile (a style's blurb): the button's native
+ * title (a hover hint on a mouse) and, always, its accessible description (a hidden span it points at with
+ * aria-describedby), so a screen reader announces it on focus and it never adds to the tile's name.
  */
 import React from 'react';
 import { Check } from 'lucide-react';
@@ -23,6 +27,8 @@ export type PresetSemantics = 'radio' | 'pressed';
 export interface PresetTileProps {
   label: string;
   description?: string;
+  /** Off-tile explanation: the native title and the accessible description (never visible text on the tile). */
+  hint?: string;
   art: React.ReactNode;
   /** CSS aspect-ratio of the art box ("4 / 5" by default). */
   aspect?: string;
@@ -30,6 +36,11 @@ export interface PresetTileProps {
   onSelect: () => void;
   semantics?: PresetSemantics;
   badge?: React.ReactNode;
+  /**
+   * The top corner the chosen check sits in ('right' by default). Art that draws into its top-right corner asks for
+   * 'left' (a right-to-left lettering sample starts there); the badge sits top-left, so 'left' is for badge-less tiles.
+   */
+  checkSide?: 'right' | 'left';
   disabled?: boolean;
   /** Roving focus (PresetGrid): only one tile in the tab order. */
   tabIndex?: number;
@@ -41,7 +52,8 @@ export interface PresetTileProps {
 /** The tile control: the panel radius, a hairline, the chosen ring in ink. */
 export const PRESET_TILE = `group/preset relative flex w-full min-w-0 flex-col gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-2 text-left ${RADIUS_PANEL} ${LIFT} ${PRESS} disabled:cursor-not-allowed disabled:opacity-50 aria-checked:border-[var(--ds-ink)] aria-pressed:border-[var(--ds-ink)] aria-checked:ring-1 aria-checked:ring-[var(--ds-ink)] aria-pressed:ring-1 aria-pressed:ring-[var(--ds-ink)] ${DENSITY.coarse}`;
 
-export function PresetTile({ label, description, art, aspect = '4 / 5', selected, onSelect, semantics = 'radio', badge, disabled = false, tabIndex, onKeyDown, buttonRef, className }: PresetTileProps) {
+export function PresetTile({ label, description, hint, art, aspect = '4 / 5', selected, onSelect, semantics = 'radio', badge, checkSide = 'right', disabled = false, tabIndex, onKeyDown, buttonRef, className }: PresetTileProps) {
+  const hintId = React.useId();
   return (
     <button
       ref={buttonRef}
@@ -50,6 +62,8 @@ export function PresetTile({ label, description, art, aspect = '4 / 5', selected
       aria-checked={semantics === 'radio' ? selected : undefined}
       aria-pressed={semantics === 'pressed' ? selected : undefined}
       disabled={disabled}
+      title={hint || undefined}
+      aria-describedby={hint ? hintId : undefined}
       tabIndex={tabIndex}
       onClick={onSelect}
       onKeyDown={onKeyDown}
@@ -62,7 +76,7 @@ export function PresetTile({ label, description, art, aspect = '4 / 5', selected
         {art}
       </MediaTile>
       {selected ? (
-        <span aria-hidden="true" data-slot="preset-check" className="ds-pop absolute right-3 top-3 inline-flex size-6 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-3.5">
+        <span aria-hidden="true" data-slot="preset-check" className={`ds-pop absolute ${checkSide === 'left' ? 'left-3' : 'right-3'} top-3 inline-flex size-6 items-center justify-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] [&_svg]:size-3.5`}>
           <Check strokeWidth={3} />
         </span>
       ) : null}
@@ -70,6 +84,12 @@ export function PresetTile({ label, description, art, aspect = '4 / 5', selected
         <span className="min-w-0 truncate text-[13px] font-medium leading-5 text-[var(--ds-ink)]">{label}</span>
         {description ? <span className="line-clamp-2 text-[12px] leading-4 text-[var(--ds-muted)]">{description}</span> : null}
       </span>
+      {/* `hidden`: out of the tile's name and never shown, yet still its description (aria-describedby reads it). */}
+      {hint ? (
+        <span id={hintId} hidden data-slot="preset-hint">
+          {hint}
+        </span>
+      ) : null}
     </button>
   );
 }

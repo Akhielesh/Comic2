@@ -74,13 +74,14 @@ describe('InspectorPanel', () => {
     for (const f of facts) expect(within(list).getByText(f.value)).toBeTruthy();
     expect(within(empty).getByText(INSPECTOR_EMPTY_HINT)).toBeTruthy();
     fireEvent.click(within(empty).getByRole('radio', { name: /Manga/ }));
-    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: false, auto: null } }], { label: 'Change lettering style', coalesce: 'lettering-style' });
   });
 
   it('a translated edition shows the look but leaves it to the original', () => {
     const { apply } = mount([], { editionLang: 'hi' });
     fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Lettering style' })).getByRole('radio', { name: /Manga/ }));
     expect(apply).not.toHaveBeenCalled();
+    expect(within(screen.getByRole('radiogroup', { name: 'Lettering style' })).getAllByRole('radio').every((r) => (r as HTMLButtonElement).disabled)).toBe(true);
     expect(screen.getByText(/belongs to the original language/)).toBeTruthy();
   });
 

@@ -14,7 +14,7 @@ import { LETTERING_PRESETS, type LetteringPresetId } from '../../../../shared/co
 import { cn } from '../../../../lib/utils';
 import { INK, MUTED, OVERLINE, RADIUS_CONTROL } from '../../../chat/studioDesign';
 import { LetteringInspector } from '../../lettering/LetteringInspector';
-import { PresetGallery } from '../../lettering/PresetGallery';
+import { EDITION_LETTERING_NOTE, LETTERING_STYLE_UNDO, PresetGallery } from '../../lettering/PresetGallery';
 import { NamedStyles } from '../../lettering/NamedStyles';
 import { linesOf, presetOps } from '../../lettering/styleOps';
 import { proFieldsWritable, proLooks } from './proSwitch';
@@ -57,11 +57,12 @@ export const EmptySelection: React.FC<Pick<PartPanelProps, 'doc' | 'page' | 'app
             pro
             value={doc.letterStyle?.presetId ?? 'classic'}
             lang={editionLang ?? doc.format?.language}
+            disabled={!!editionLang}
             onChange={(id) => {
-              if (!editionLang) apply(presetOps(id), { label: 'Change lettering style' });
+              if (!editionLang) apply(presetOps(id), LETTERING_STYLE_UNDO);
             }}
           />
-          {editionLang && <p className={cn('m-0 text-[11px] leading-snug', MUTED)}>The lettering style belongs to the original language — switch to it to change the look.</p>}
+          {editionLang && <p className={cn('m-0 text-[12px] leading-snug', MUTED)}>{EDITION_LETTERING_NOTE}</p>}
         </section>
       ) : (
         <p role="note" className={cn('m-0 bg-[var(--ds-well)] px-2 py-1.5 text-[11.5px] leading-snug', RADIUS_CONTROL, INK)}>
