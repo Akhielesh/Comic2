@@ -820,7 +820,8 @@ the new art. Reduced motion makes both transitions immediate.
   module, and the Models section says the line-up can change. The other models are offered to members who use their own
   API key (an account without model choice draws with the default only), and the page says exactly that.
 - **Features.** Four rows, each a few lines beside one real studio screen: the Director's plan card, the page editor's
-  lettering tools, the language picker and the Share sheet. Each row leads with a solid icon tile (ink, magenta, leaf,
+  lettering tools, the language picker and the Share sheet's settings; a phone gets a tighter crop of each. Each row
+  leads with a solid icon tile (ink, magenta, leaf,
   sky; never orange or ultramarine).
 - **Pricing** says only what is certain: an invite-only beta, sign-up not open yet, no prices announced, registering
   interest costs nothing. Models and Pricing carry no colour.
@@ -853,20 +854,26 @@ the art.
 They are real Comic Studio screens, captured from the QA app (the real components on the sample fixture `heist-12p`),
 never from production and never from anyone's comic. The fixture's page, cover and sheet images (`img=png`, requests to
 `/qa-assets/…`) were answered at capture time with the product's own sample art from `public/assets/comic-sample`
-(pages: two sample tiers on paper; the cover: The Paper Boat's), so every picture shows art made for the product.
+(pages: two sample tiers on paper; the cover: The Paper Boat's), so every picture shows art made for the product. The
+QA app's `script=paper-boat` rewrites the fixture's lines from a short script for that art (`withPaperBoatScript`), so
+no balloon repeats another on its page.
 
-1. Build the QA app (`npm run qa:build`) and serve `dist-qa` with `vite preview` on `127.0.0.1`. The capture scripts
-   (Playwright with the local Chromium, kept outside the repository) block every other host.
-2. Stills, at device scale 2, `skin=atlas&img=png&still=1`, light and dark (`theme=`): the plan card
-   (`surface=studio&tab=pages`, cut above its footnote), the page editor's lettering column in a 1024 px window, where
-   the page is drawn largest (`surface=editor&page=1&mode=pro`, cut before the AI panel and its usage words), the
-   language picker (`surface=studio&tab=languages` after "Add a language") and the Share sheet's link column
-   (`share=live-public`, cut above the embed code and the readers' numbers).
-3. The clip: `surface=reader&page=1` at 390×700 as a touch phone, two page turns forward and two back, ending on the
-   first page so the loop is seamless.
-4. Encode with ffmpeg: stills `-c:v libwebp -quality 75 -compression_level 6` (65 for the lettering page, whose art is
-   busy) at twice the display width; the clip at 280 px wide, 15 fps, as WebM (`libvpx-vp9 -crf 48`) and MP4
-   (`libx264 -crf 34`), its poster the first frame.
+1. Build the QA app (`npm run qa:build`, with placeholder `VITE_SUPABASE_*` values) and serve `dist-qa` with
+   `vite preview` on `127.0.0.1`. The capture scripts (Playwright with the local Chromium, kept outside the repository)
+   block every other host.
+2. Stills, `skin=atlas&img=png&still=1&script=paper-boat`, light and dark (`theme=`), each in a desktop picture (device
+   scale 2) and a phone crop (device scale 3, at most 340 CSS px wide, so its words stay at 11 CSS px or more in a
+   320 px window; `LandingShot` shows it below 560 px): the plan card (desktop as before; phone from a 360 px phone,
+   its heading to the end of "For"), the page editor's lettering column in a 1024 px window with nothing selected
+   (`surface=editor&page=1&mode=pro`, cut before the AI panel), and for the phone the same page drawn large in an
+   1800 × 2400 window, cut around its first balloon; the language picker (`surface=studio&tab=languages` after "Add a
+   language"; phone: its first 312 px); the Share sheet's visibility and link settings (`share=live-public`, cut below
+   the link row with its Share button and above the embed code; phone: from a 360 px phone).
+3. The clip: `surface=reader&page=1&script=paper-boat` at 390×700 as a touch phone, two page turns forward and two back,
+   ending on the first page so the loop is seamless.
+4. Encode: stills as WebP (quality 75; 65 to 70 for the busy lettering pages) at twice (desktop) or three times (phone)
+   the display width; the clip at 280 px wide, 15 fps, as WebM (`libvpx-vp9 -crf 51`) and MP4 (`libx264 -crf 36`), its
+   poster the first frame. A new capture gets new file names (`-v2`).
 5. Look at every frame before committing it: no price or usage words, no spend control, no model name, no error or
    failed tile, nothing only admins see.
 

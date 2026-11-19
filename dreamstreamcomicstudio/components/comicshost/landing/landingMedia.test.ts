@@ -27,7 +27,7 @@ const webpSize = (buf: Buffer): { w: number; h: number } => {
 };
 
 describe('landing media', () => {
-  const all = LANDING_MEDIA.flatMap((m) => [...sourcesOf(m.light), ...sourcesOf(m.dark)]);
+  const all = LANDING_MEDIA.flatMap((m) => [...sourcesOf(m.light), ...sourcesOf(m.dark), ...(m.phone ? [...sourcesOf(m.phone.light), ...sourcesOf(m.phone.dark)] : [])]);
 
   it('every source is same-origin under /landing/ and exists, within the cap', () => {
     for (const src of all) {
@@ -51,7 +51,18 @@ describe('landing media', () => {
           expect(w, src).toBe(m.width * 2);
           expect(Math.abs(h - m.height * 2), src).toBeLessThanOrEqual(2);
         }
+        // Every still has a phone crop: light and dark at three times its display size, narrow enough for a phone
+        // column (so the words in it stay at 11 CSS px or more at 320 px).
+        expect(m.phone, m.id).toBeTruthy();
+        expect(m.phone!.width, m.id).toBeLessThanOrEqual(340);
+        expect(m.phone!.light.webp).not.toBe(m.phone!.dark.webp);
+        for (const src of [m.phone!.light.webp!, m.phone!.dark.webp!]) {
+          const { w, h } = webpSize(readFileSync(fileOf(src)));
+          expect(w, src).toBe(m.phone!.width * 3);
+          expect(Math.abs(h - m.phone!.height * 3), src).toBeLessThanOrEqual(3);
+        }
       } else {
+        expect(m.phone).toBeUndefined();
         expect(m.light.webm && m.light.mp4 && m.light.poster).toBeTruthy();
         const { w, h } = webpSize(readFileSync(fileOf(m.light.poster!)));
         expect({ w, h }).toEqual({ w: m.width, h: m.height });

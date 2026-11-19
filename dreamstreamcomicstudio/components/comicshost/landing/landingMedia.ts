@@ -45,45 +45,63 @@ export interface LandingMedia {
   phone?: LandingPhoneCrop;
 }
 
-const still = (id: LandingMediaId, width: number, height: number, alt: string, caption: string): LandingMedia => ({
+const still = (
+  id: LandingMediaId,
+  width: number,
+  height: number,
+  alt: string,
+  caption: string,
+  file: string = id,
+  phone?: { width: number; height: number }
+): LandingMedia => ({
   id,
   kind: 'still',
   width,
   height,
   alt,
   caption,
-  light: { webp: `/landing/${id}-light.webp` },
-  dark: { webp: `/landing/${id}-dark.webp` }
+  light: { webp: `/landing/${file}-light.webp` },
+  dark: { webp: `/landing/${file}-dark.webp` },
+  ...(phone ? { phone: { ...phone, light: { webp: `/landing/${id}-phone-light.webp` }, dark: { webp: `/landing/${id}-phone-dark.webp` } } } : {})
 });
 
+// The studio's sample fixture is shown with script=paper-boat: every balloon on a page says something different.
 export const LANDING_MEDIA: readonly LandingMedia[] = [
   still(
     'plan',
     390,
     401,
-    'The Comic Director’s plan card, listing the comic’s story, format, audience, setting, locked look and cast, each with a Change button.',
-    'The Director’s plan for a sample project, agreed before anything is drawn.'
+    'The Comic Director’s plan card: the comic’s story, format, audience and more, each with a Change button.',
+    'The Director’s plan for a sample project, agreed before anything is drawn.',
+    'plan',
+    { width: 288, height: 366 }
   ),
   still(
     'lettering',
     480,
     560,
-    'The page editor with lettering tools for speech, thoughts, captions and sound effects above a lettered comic page.',
-    'The page editor on a sample project: every balloon is text you can drag and rewrite.'
+    'A comic page in the page editor, its speech, thought and caption balloons set as text over the art.',
+    'The page editor on a sample project: every balloon is text you can drag and rewrite.',
+    'lettering-v2',
+    { width: 300, height: 236 }
   ),
   still(
     'languages',
     560,
     305,
     'A language picker listing the languages a comic can be translated into, each written in its own script.',
-    'Adding a language from the Languages tab.'
+    'Adding a language from the Languages tab.',
+    'languages',
+    { width: 312, height: 335 }
   ),
   still(
     'share',
-    433,
-    500,
-    'Sharing options for a published comic: a read-only link, a choice of Private, Link only or Library plus link, and switches for downloads and embedding.',
-    'The Share sheet of a published sample comic.'
+    430,
+    258,
+    'Sharing settings for a published comic: Private, Link only or Library plus link, and switches for downloads, embedding and showing the creator’s username.',
+    'The Share sheet of a published sample comic.',
+    'share-v2',
+    { width: 336, height: 258 }
   ),
   {
     id: 'reader',
@@ -94,8 +112,8 @@ export const LANDING_MEDIA: readonly LandingMedia[] = [
     caption: 'Turning pages in the reader on a phone, with the studio’s sample art.',
     short: 'the reader on a phone',
     // The reader is dark in both themes, so one recording serves both.
-    light: { webm: '/landing/reader.webm', mp4: '/landing/reader.mp4', poster: '/landing/reader-poster.webp' },
-    dark: { webm: '/landing/reader.webm', mp4: '/landing/reader.mp4', poster: '/landing/reader-poster.webp' }
+    light: { webm: '/landing/reader-v2.webm', mp4: '/landing/reader-v2.mp4', poster: '/landing/reader-v2-poster.webp' },
+    dark: { webm: '/landing/reader-v2.webm', mp4: '/landing/reader-v2.mp4', poster: '/landing/reader-v2-poster.webp' }
   }
 ];
 
