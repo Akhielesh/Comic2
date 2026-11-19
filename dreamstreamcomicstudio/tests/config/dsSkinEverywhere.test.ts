@@ -194,7 +194,10 @@ describe('public/theme-boot.js (no flash of the light theme)', () => {
   it('reads the key and values services/theme.ts writes', () => {
     expect(THEME_TS).toContain("const KEY = 'ds.theme.v1';");
     expect(SOURCE).toContain("getItem('ds.theme.v1')");
-    expect(THEME_TS).toMatch(/v === 'dark' \|\| v === 'system' \? v : 'light'/);
+    // The same three values, and the same answer when nothing (or something unknown) is stored.
+    expect(THEME_TS).toMatch(/v === 'light' \|\| v === 'dark' \|\| v === 'system'/);
+    expect(THEME_TS).toContain("export const THEME_DEFAULT: ThemePreference = 'light';");
+    expect(SOURCE).toContain("var pref = 'light';");
   });
 
   it('sets .dark for a saved dark theme, and for "system" on a dark OS; light otherwise', () => {

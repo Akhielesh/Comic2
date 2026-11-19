@@ -1,11 +1,11 @@
 import React, { useId, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Palette, Plus, Settings, X } from 'lucide-react';
+import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Plus, Settings, X } from 'lucide-react';
 import type { Project } from '../../types';
 import { useFormFactor } from './mobile/useFormFactor';
 import { useFocusTrap } from './board/ui';
 import { useDialogA11y } from '../studio/kit/useDialogA11y';
 import { ModalPortal } from '../modals/ModalPortal';
-import { useComicTheme } from './useComicTheme';
+import { AppearanceButton } from '../account/AppearanceControl';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
 import '../comicshost/comicsShell.css';
@@ -56,7 +56,6 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const navId = useId();
-  const { theme, setTheme } = useComicTheme();
   const modalOpen = narrow && drawerOpen;
   const close = () => setDrawerOpen(false);
   useDialogA11y(modalOpen, close);
@@ -76,7 +75,7 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
       <header className="comic-workspace-header">
         <button type="button" className="comic-workspace-icon" onClick={toggle} aria-expanded={narrow ? drawerOpen : wideOpen} aria-controls={navId} aria-label={narrow ? 'Open comic navigation' : wideOpen ? 'Collapse comic navigation' : 'Expand comic navigation'}><Menu aria-hidden /></button>
         <span className="comic-workspace-title">{title}</span>
-        <button type="button" className="comic-workspace-icon" onClick={() => setTheme(theme === 'paper' ? 'atlas' : 'paper')} aria-label={theme === 'paper' ? 'Use Atlas theme' : 'Use Paper theme'}><Palette aria-hidden /></button>
+        <AppearanceButton paper className="comic-workspace-icon" />
         <button type="button" className="comic-workspace-icon" onClick={onAccount} aria-label="Open account settings"><Settings aria-hidden /></button>
       </header>
       <main className="comic-workspace-content">{children}</main>

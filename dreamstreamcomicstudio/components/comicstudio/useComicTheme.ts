@@ -1,66 +1,43 @@
 import { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import { COMIC_THEME_ATTRIBUTE, loadComicMaterial, subscribeComicMaterial, type ComicTheme } from '../../services/comicMaterial';
+import { loadThemePreference, syncThemeColorMeta } from '../../services/theme';
+import { setAppearance } from '../../services/appearance';
 
-export type ComicTheme = 'atlas' | 'paper';
+// Comic Studio's material, Atlas or the Paper look: the store is services/comicMaterial.ts (re-exported here for the
+// screens that read it); the person picks it with the mode through services/appearance.ts.
+export { COMIC_THEME_ATTRIBUTE, loadComicMaterial, setComicMaterial, subscribeComicMaterial, type ComicTheme } from '../../services/comicMaterial';
 
-// The blocking script in public/theme-boot.js reads the same key on the comics host.
-const THEME_KEY = 'ds.comic-theme.v1';
-const THEME_CHANGED = 'dreamstream:comic-theme-changed';
-const THEME_ATTRIBUTE = 'data-comic-theme';
 const defaultTheme = (): ComicTheme => 'atlas';
-let temporaryTheme: ComicTheme | undefined;
 
-const readTheme = (): ComicTheme => {
-  if (temporaryTheme) return temporaryTheme;
-  try {
-    return window.localStorage.getItem(THEME_KEY) === 'paper' ? 'paper' : 'atlas';
-  } catch {
-    return 'atlas';
-  }
-};
-
-const setTheme = (theme: ComicTheme): void => {
-  try {
-    window.localStorage.setItem(THEME_KEY, theme);
-    temporaryTheme = undefined;
-  } catch {
-    // Keep the chosen appearance for this tab if the browser blocks storage.
-    temporaryTheme = theme;
-  }
-  window.dispatchEvent(new Event(THEME_CHANGED));
-};
-
-const subscribe = (notify: () => void): (() => void) => {
-  const syncStorage = (event: StorageEvent) => {
-    if (event.key === THEME_KEY || event.key === null) notify();
-  };
-  window.addEventListener(THEME_CHANGED, notify);
-  window.addEventListener('storage', syncStorage);
-  return () => {
-    window.removeEventListener(THEME_CHANGED, notify);
-    window.removeEventListener('storage', syncStorage);
-  };
-};
+/** Atlas keeps the person's mode; Paper is the light Paper look. Either way both keys are written by the one writer. */
+const setTheme = (theme: ComicTheme): void => setAppearance(theme === 'paper' ? 'paper' : loadThemePreference());
 
 export function useComicTheme() {
-  return { theme: useSyncExternalStore(subscribe, readTheme, defaultTheme), setTheme };
+  return { theme: useSyncExternalStore(subscribeComicMaterial, loadComicMaterial, defaultTheme), setTheme };
 }
 
 const useBeforePaint = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
-/** Scope the full document when Comic Studio owns the screen, including dialogs portaled to body. */
+/**
+ * Scope the full document when Comic Studio owns the screen, including dialogs portaled to body: the one writer of
+ * <html data-comic-theme> after boot (App keeps it on for the whole comics host). The canvas changes with it, so the
+ * browser chrome follows, also when only the material changed (another tab picked Paper on the same light mode).
+ */
 export function useComicThemeScope(active: boolean): void {
   useBeforePaint(() => {
     if (!active) return;
     const root = document.documentElement;
     const sync = () => {
-      if (readTheme() === 'paper') root.setAttribute(THEME_ATTRIBUTE, 'paper');
-      else root.removeAttribute(THEME_ATTRIBUTE);
+      if (loadComicMaterial() === 'paper') root.setAttribute(COMIC_THEME_ATTRIBUTE, 'paper');
+      else root.removeAttribute(COMIC_THEME_ATTRIBUTE);
+      syncThemeColorMeta();
     };
     sync();
-    const unsubscribe = subscribe(sync);
+    const unsubscribe = subscribeComicMaterial(sync);
     return () => {
       unsubscribe();
-      root.removeAttribute(THEME_ATTRIBUTE);
+      root.removeAttribute(COMIC_THEME_ATTRIBUTE);
+      syncThemeColorMeta();
     };
   }, [active]);
 }

@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Code2, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { initTheme } from '../../services/theme';
+import { initTheme, syncThemeColorMeta } from '../../services/theme';
 import { getLockedChatModel, getShowChatModelSelector, onAppSettingsChanged } from '../../services/appSettings';
 import { applyLockedChatModel } from '../../services/chatModelResolve';
 import { ChatSidebar } from './ChatSidebar';
@@ -455,7 +455,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // and take it off again when leaving so the rest of the app stays light.
   useEffect(() => {
     initTheme();
-    return () => document.documentElement.classList.remove('dark');
+    return () => {
+      document.documentElement.classList.remove('dark');
+      syncThemeColorMeta();
+    };
   }, []);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   // The newest session list, readable synchronously (CHAT-0, bug B4). Every change to the list goes

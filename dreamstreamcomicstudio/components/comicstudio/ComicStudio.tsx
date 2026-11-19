@@ -53,7 +53,8 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN, isComicsHost } from '../../services/productHost';
-import { useComicTheme, useComicThemeScope } from './useComicTheme';
+import { useComicThemeScope } from './useComicTheme';
+import { AppearanceSegmented } from '../account/AppearanceControl';
 import { headerShowsQualityChip } from './qualityHome';
 import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
@@ -779,7 +780,6 @@ export const SettingsPanel: React.FC<{
   byok?: boolean;
 }> = ({ doc, patch, caps, byok }) => {
   const settings = doc.settings;
-  const { theme, setTheme } = useComicTheme();
   const ctx = useCostContext({ byok, caps });
   const cost = useMemo(() => costFormat(ctx), [ctx]);
   const setSettings = (p: Record<string, unknown>) => void patch([{ op: 'settings', patch: p as unknown as ComicDoc['settings'] }]);
@@ -893,16 +893,8 @@ export const SettingsPanel: React.FC<{
 
       <section>
         <SectionLabel>Appearance</SectionLabel>
-        <Segmented
-          label="Comic Studio theme"
-          value={theme}
-          onChange={setTheme}
-          options={[
-            { value: 'atlas', label: 'Atlas' },
-            { value: 'paper', label: 'Paper' }
-          ]}
-        />
-        <p className="mt-1.5 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">Applies to Comic Studio in this browser.</p>
+        <AppearanceSegmented paper />
+        <p className="mt-1.5 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">Light, Dark or Paper for Comic Studio in this browser.</p>
       </section>
     </div>
   );

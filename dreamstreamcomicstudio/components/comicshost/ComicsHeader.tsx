@@ -1,9 +1,9 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Menu as MenuIcon, Palette, UserRound, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Menu as MenuIcon, UserRound, X } from 'lucide-react';
 import type { ComicsHeaderCurrent } from './hostRouting';
 import { cn } from '../../lib/utils';
 import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
-import { useComicTheme } from '../comicstudio/useComicTheme';
+import { AppearanceButton, AppearanceSegmented } from '../account/AppearanceControl';
 import { AppHeader } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
@@ -59,7 +59,6 @@ interface MenuEntry {
   /** A hairline above it (the access row after the links). */
   separated?: boolean;
   current?: boolean;
-  compactOnly?: boolean;
 }
 
 export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
@@ -74,9 +73,6 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   onBrowseGallery,
   onShowSection
 }) => {
-  const { theme, setTheme } = useComicTheme();
-  const nextTheme = theme === 'atlas' ? 'paper' : 'atlas';
-  const themeLabel = nextTheme === 'paper' ? 'Use Paper theme' : 'Use Atlas theme';
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const headerRef = useRef<HTMLElement>(null);
@@ -122,8 +118,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
       ]
       : onSignInPage
         ? [] // the sign-in card itself switches between Sign in and Register interest
-        : [{ label: 'Register interest', run: onRequestAccess, separated: true }]),
-    { label: themeLabel, run: () => setTheme(nextTheme), separated: true, compactOnly: true }
+        : [{ label: 'Register interest', run: onRequestAccess, separated: true }])
   ];
 
   const brand = (
@@ -158,9 +153,9 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const actions = (
     <>
-      <IconButton label={themeLabel} variant="ghost" className="comics-header-theme" onClick={() => setTheme(nextTheme)}>
-        <Palette />
-      </IconButton>
+      {/* One overlay at a time: opening Appearance closes the menu (a press on the menu trigger closes Appearance, as
+          any press outside it does). */}
+      <AppearanceButton paper wrapperClassName="comics-header-theme" onOpenChange={(opened) => opened && setOpen(false)} />
       {signedIn ? (
         <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'comics-header-entry comics-header-my-comics', !home && 'comics-primary-action')} onClick={onOpenComics}>
           My comics
@@ -206,15 +201,21 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   return (
     <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} className="comics-header" innerClassName="comics-shell-width">
       <div className={cn('comics-shell-width pointer-events-none absolute inset-x-0 top-full flex justify-end', !accountMenu && 'expanded:hidden')}>
-        <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'comics-header-menu ds-scale-in pointer-events-auto mt-2 w-60 origin-top-right p-1')}>
+        <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'comics-header-menu ds-scale-in pointer-events-auto mt-2 w-72 origin-top-right p-1')}>
           <ul className="flex flex-col">
             {menu.map((entry) => (
-              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1', entry.compactOnly && 'comics-header-menu-theme')}>
+              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1')}>
                 <button type="button" aria-current={entry.current ? 'page' : undefined} className={MENU_ROW} onClick={choose(entry.run)}>
                   {entry.label}
                 </button>
               </li>
             ))}
+            {/* Below 600 the header's Appearance button steps aside (comicsShell.css) and the choice lives here; it stays
+                open while the person compares the looks. */}
+            <li className="comics-header-menu-theme mt-1 border-t border-[var(--ds-hairline)] px-2 pb-2 pt-2">
+              <p aria-hidden="true" className="mb-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]">Appearance</p>
+              <AppearanceSegmented paper fullWidth size="sm" />
+            </li>
           </ul>
         </div>
       </div>
