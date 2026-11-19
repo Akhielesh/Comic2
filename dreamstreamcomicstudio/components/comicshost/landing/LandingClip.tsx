@@ -119,7 +119,6 @@ export const LandingClip: React.FC<{ media: LandingMedia }> = ({ media }) => {
         title={null}
         variant="secondary"
         size="lg"
-        aria-pressed={!playing}
         className="landing-clip-toggle"
         onClick={toggle}
       >

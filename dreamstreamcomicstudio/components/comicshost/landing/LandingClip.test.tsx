@@ -85,11 +85,12 @@ describe('LandingClip', () => {
   it('plays in view and pauses out of view; the toggle says what it does and flips', async () => {
     const { container } = render(<LandingClip media={clip} />);
     const video = container.querySelector('video')!;
-    expect(toggle(/^Play:/)).toHaveAttribute('aria-pressed', 'true');
+    // The name says what a press does; it never also claims a pressed state (that would read "Play, pressed").
+    expect(toggle(/^Play:/)).not.toHaveAttribute('aria-pressed');
     view(video, true);
     await act(async () => undefined);
     expect(play).toHaveBeenCalledTimes(1);
-    expect(toggle(/^Pause:/)).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle(/^Pause:/)).not.toHaveAttribute('aria-pressed');
     view(video, false);
     expect(pause).toHaveBeenCalled();
     expect(toggle(/^Play:/)).toBeInTheDocument();

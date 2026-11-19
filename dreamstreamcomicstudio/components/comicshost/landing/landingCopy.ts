@@ -83,7 +83,7 @@ export const MODELS = {
       body: 'The studio’s model picker also lists {OTHER_MODELS}. Which ones you can pick depends on your account.'
     },
     {
-      title: 'Two quality levels',
+      title: 'Draft and Standard quality',
       body: '{DRAFT} makes quick {DRAFT_SIZE} pages to try the story. {STANDARD} makes {STANDARD_SIZE} pages.'
     },
     {

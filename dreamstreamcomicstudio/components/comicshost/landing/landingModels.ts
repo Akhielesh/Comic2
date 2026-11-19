@@ -1,6 +1,6 @@
 // The names and numbers the landing shows about the studio, read from the studio's own registries so the page cannot
 // drift from what members get: the image model new comics start on (the Draft and Standard tiers' model), the other
-// image models the studio's picker offers, the two quality levels a member picks between, the page cap, the built-in
+// image models the studio's picker offers, the two quality levels every member can use, the page cap, the built-in
 // looks and the languages a comic can be translated into. Only the names members see in the product (each model's
 // nickname, each tier's label) and sizes leave this module: never a registry id, a price, a grade or a benchmark.
 
@@ -25,7 +25,10 @@ export const OTHER_MODELS: readonly string[] = Object.freeze(
     .map((m) => m.nickname)
 );
 
-/** The two quality levels every member can pick between, in order: their names and page sizes. */
+/**
+ * The two quality levels every member can use (Draft and Standard), in order: their names and page sizes. Pro is left
+ * out: whether it runs depends on the account (StudioCaps.qualityTiers), so the page never promises it.
+ */
 export const QUALITY: ReadonlyArray<Readonly<{ name: string; pageSize: string }>> = Object.freeze(
   [TIER_PRESETS.draft, TIER_PRESETS.standard].map((tier) => Object.freeze({ name: tier.label, pageSize: tier.pageRes }))
 );

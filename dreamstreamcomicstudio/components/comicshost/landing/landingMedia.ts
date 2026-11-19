@@ -5,7 +5,7 @@
 // landingMedia.test.ts pins that every file exists, is within its budget and is listed here.
 //
 // `width` / `height` are the display size in CSS pixels; each still's WebP is twice that (sharp on 2x screens). A file
-// never changes in place: a new capture gets a new name, so the one-day cache can never show a stale picture.
+// never changes in place once shipped: a new capture gets a new name, so no cache can show a stale picture.
 
 export interface LandingSources {
   webp?: string;
@@ -50,8 +50,8 @@ export const LANDING_MEDIA: readonly LandingMedia[] = [
   ),
   still(
     'lettering',
-    560,
     480,
+    560,
     'The page editor with lettering tools for speech, thoughts, captions and sound effects above a lettered comic page.',
     'The page editor on a sample project: every balloon is text you can drag and rewrite.'
   ),

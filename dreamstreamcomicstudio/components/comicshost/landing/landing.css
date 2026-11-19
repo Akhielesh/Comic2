@@ -190,6 +190,14 @@
   box-shadow: var(--ds-shadow-soft);
 }
 .landing-register-form { margin-top: 24px; }
+/*
+ * The app's form stacks its email field over its button below 640 px with the field still `flex-1`: in a column that
+ * basis of 0 cancels the field's own height, so with a fine pointer it drew about 20 px tall. Restore its own height here,
+ * without touching the form (another team owns it); a flex basis of auto is a no-op for every other layout.
+ */
+@media (max-width: 639.98px) {
+  .landing-register-form label { flex-basis: auto; }
+}
 .landing-register-action { margin-top: 24px; }
 .landing-member { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 16px 0 0; font-size: 14px; color: var(--ds-muted); }
 

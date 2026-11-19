@@ -817,15 +817,17 @@ the new art. Reduced motion makes both transitions immediate.
 - **Read.** The Library (a real `/?view=gallery` link) and the featured comics through their share links, kept in
   `landing/flagship.ts` (the flagship opens its English edition), beside a short clip of the reader on a phone.
 - **Register your interest** renders the app's `WaitlistForm` (`kind="access"`) as it is: the form owns its fields, its
-  questions and what it says after sending. Members see "Open My comics" instead.
+  questions and what it says after sending. Members see "Open My comics" instead. Below 640 px `landing.css` gives the
+  form's stacked fields their own height back (a `flex-1` field in a column otherwise drew about 20 px tall in a narrow
+  desktop window).
 - **Questions** are native `<details className="ds-disclosure">`; the footer adds a row of links to the page's sections.
 
 ### The landing's pictures and clip
 
 `landing/landingMedia.ts` lists them; `LandingShot` draws a still (`loading="lazy"`, `decoding="async"`, declared size,
-alt text), `LandingClip` the clip. Files live in `public/landing/` (same origin), light and dark for each still; the
-reader is dark in both themes, so one recording serves both. Each file stays near 120 KB (`landingMedia.test.ts` pins
-the cap, the file list, the 2x still sizes and the alt text). The clip is muted and loops, loads nothing until it nears
+alt text), `LandingClip` the clip. Files live in `public/landing/` on the same origin, light and dark for each still;
+the reader is dark in both themes, so one recording serves both. Each file stays near 120 KB (`landingMedia.test.ts`
+pins the cap, the file list, the 2x still sizes and the alt text). The clip is muted and loops, loads nothing until it nears
 the screen (`preload="none"`), plays only while at least half of it is in view (an `IntersectionObserver`, no timer),
 one clip at a time, and under reduced motion shows its poster with a Play control; a visitor's pause holds.
 
@@ -839,13 +841,15 @@ never from production and never from anyone's comic. The fixture's page, cover a
 1. Build the QA app (`npm run qa:build`) and serve `dist-qa` with `vite preview` on `127.0.0.1`. The capture scripts
    (Playwright with the local Chromium, kept outside the repository) block every other host.
 2. Stills, at device scale 2, `skin=atlas&img=png&still=1`, light and dark (`theme=`): the plan card
-   (`surface=studio&tab=pages`, cut above its footnote), the lettering column (`surface=editor&page=1&mode=pro`), the
+   (`surface=studio&tab=pages`, cut above its footnote), the page editor's lettering column in a 1024 px window, where
+   the page is drawn largest (`surface=editor&page=1&mode=pro`, cut before the AI panel and its usage words), the
    language picker (`surface=studio&tab=languages` after "Add a language") and the Share sheet's link column
    (`share=live-public`, cut above the embed code and the readers' numbers).
 3. The clip: `surface=reader&page=1` at 390×700 as a touch phone, two page turns forward and two back, ending on the
    first page so the loop is seamless.
-4. Encode with ffmpeg: stills `-c:v libwebp -quality 75 -compression_level 6` at twice the display width; the clip at
-   280 px wide, 15 fps, as WebM (`libvpx-vp9 -crf 48`) and MP4 (`libx264 -crf 34`), its poster the first frame.
+4. Encode with ffmpeg: stills `-c:v libwebp -quality 75 -compression_level 6` (65 for the lettering page, whose art is
+   busy) at twice the display width; the clip at 280 px wide, 15 fps, as WebM (`libvpx-vp9 -crf 48`) and MP4
+   (`libx264 -crf 34`), its poster the first frame.
 5. Look at every frame before committing it: no price or usage words, no spend control, no model name, no error or
    failed tile, nothing only admins see.
 
