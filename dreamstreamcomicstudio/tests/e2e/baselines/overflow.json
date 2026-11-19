@@ -21,8 +21,6 @@
     "board-pages@phone-dark": { "textEscapes": 2 },
     "editor-easy@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
     "editor-pro@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
-    "public@narrow-light": { "textEscapes": 1 },
-    "public@phone-dark": { "textEscapes": 1 },
     "studio-busy@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
     "studio-cast@desk-light": { "textEscapes": 1 },
     "studio-cast@narrow-light": { "textEscapes": 1 },
@@ -37,8 +35,6 @@
     "studio-pages@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
     "studio-pages@narrow-light": { "textEscapes": 2 },
     "studio-pages@phone-dark": { "textEscapes": 2 },
-    "studio-read@narrow-light": { "textEscapes": 1 },
-    "studio-read@phone-dark": { "textEscapes": 1 },
     "studio-story@narrow-light": { "popoverEscapes": 1 },
     "studio-story@phone-dark": { "popoverEscapes": 1 },
     "studio-streaming@desk-light": { "textEscapes": 2, "popoverEscapes": 4 }
