@@ -224,16 +224,32 @@ const fitSources = (sources: ResearchSource[]): ResearchSource[] => {
   return out;
 };
 
+/**
+ * One entry per URL, at the place the URL first appears. A pin always survives: when any copy is pinned, the entry is
+ * the first pinned copy (its fields and origin), so a merged list holding an automatic copy before the creator's pin
+ * never quietly unpins the source.
+ */
+const uniqueSources = (entries: readonly unknown[]): ResearchSource[] => {
+  const at = new Map<string, number>();
+  const out: ResearchSource[] = [];
+  for (const entry of entries) {
+    const source = normalizeResearchSource(entry);
+    if (!source) continue;
+    const index = at.get(source.url);
+    if (index === undefined) {
+      at.set(source.url, out.length);
+      out.push(source);
+    } else if (source.origin === 'pinned' && out[index].origin !== 'pinned') {
+      out[index] = source;
+    }
+  }
+  return out;
+};
+
 export const normalizeResearchState = (value: unknown): ResearchState | undefined => {
   if (!record(value)) return undefined;
   const subject = typeof value.subject === 'string' ? guardResearchSubject(value.subject) : undefined;
-  const seen = new Set<string>();
-  const sources = (Array.isArray(value.sources) ? value.sources.slice(0, 64) : []).flatMap((entry): ResearchSource[] => {
-    const source = normalizeResearchSource(entry);
-    if (!source || seen.has(source.url)) return [];
-    seen.add(source.url);
-    return [source];
-  });
+  const sources = uniqueSources(Array.isArray(value.sources) ? value.sources.slice(0, 64) : []);
   const raw = typeof value.lookups === 'number' && Number.isFinite(value.lookups) ? Math.floor(value.lookups) : 0;
   const lookedUp = comicResearchText(value.lookedUp, RESEARCH_LIMITS.lookedUp);
   return {
@@ -244,16 +260,13 @@ export const normalizeResearchState = (value: unknown): ResearchState | undefine
   };
 };
 
-/** The URLs the creator pinned to this comic (a defensive read of `doc.research`; empty before RW-5). */
+/**
+ * The URLs the creator pinned to this comic (a defensive read of `doc.research`; empty before RW-5). Read through
+ * normalizeResearchState, so the card says "Pinned" for exactly the sources the comic keeps as pinned.
+ */
 export const pinnedSourceUrls = (doc: unknown): Set<string> => {
-  const research = record(doc) ? doc.research : undefined;
-  const sources = record(research) && Array.isArray(research.sources) ? research.sources.slice(0, 64) : [];
-  const urls = new Set<string>();
-  for (const entry of sources) {
-    const source = normalizeResearchSource(entry);
-    if (source?.origin === 'pinned') urls.add(source.url);
-  }
-  return urls;
+  const sources = normalizeResearchState(record(doc) ? doc.research : undefined)?.sources ?? [];
+  return new Set(sources.filter((source) => source.origin === 'pinned').map((source) => source.url));
 };
 
 // ── The subject guard (what may be sent to Wikipedia as a search) ────────────
@@ -276,27 +289,63 @@ const phoneLike = (text: string): boolean => {
   return false;
 };
 
+/** Controls, format characters and the other invisible code points: any of them can hide a name, a link or an address. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+const JOINERS: ReadonlySet<string> = new Set(['‌', '‍']);
+/** Scripts whose spelling needs ZWNJ and ZWJ (Indic conjuncts and chillus; the Urdu and Persian non-joiner). */
+const SHAPING_SCRIPTS: readonly RegExp[] = [
+  /\p{Script_Extensions=Devanagari}/u, /\p{Script_Extensions=Bengali}/u, /\p{Script_Extensions=Gurmukhi}/u, /\p{Script_Extensions=Gujarati}/u,
+  /\p{Script_Extensions=Tamil}/u, /\p{Script_Extensions=Telugu}/u, /\p{Script_Extensions=Kannada}/u, /\p{Script_Extensions=Malayalam}/u,
+  /\p{Script_Extensions=Arabic}/u
+];
+
+/** A ZWNJ or ZWJ that spells a word: right after a letter or sign of a shaping script, before one of the same script, a space or the end. */
+const spellingJoiner = (chars: readonly string[], i: number): boolean => {
+  const before = chars[i - 1];
+  const after = chars[i + 1];
+  return !!before && SHAPING_SCRIPTS.some((script) => script.test(before) && (after === undefined || /\s/.test(after) || script.test(after)));
+};
+
+/** Whether the text holds a control, a format character or another invisible code point, other than a joiner that spells a word. */
+const hidesText = (text: string): boolean => {
+  if (!INVISIBLE.test(text)) return false;
+  const chars = Array.from(text);
+  return chars.some((ch, i) => INVISIBLE.test(ch) && !(JOINERS.has(ch) && spellingJoiner(chars, i)));
+};
+
+/**
+ * The form every content check reads: compatibility forms folded (fullwidth letters and digits, ＠ and ﹫ become the plain
+ * ones), every default-ignorable code point dropped (zero-width spaces and joiners, soft hyphens, word joiners, direction
+ * marks), lower case. A name spelled with any of them still matches its plain spelling.
+ */
+const foldForCompare = (text: string): string => text.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu, '').toLowerCase();
+
+/** A dotted label followed by a top-level-domain-like run of letters, then a non-letter or the end ("site.in/about", "t.me"). */
+const DOMAIN_LIKE = /[\p{L}\p{N}-]\.[\p{L}\p{M}]{2,24}(?![\p{L}\p{M}\p{N}])/u;
+
 /**
  * The public name of a work, place, period or event, and nothing that could be a person's private data: 2-60
- * characters after trimming, at most 6 words, no `@`, link, run of 5+ digits, phone-like number or control character,
- * and none of `blockedNames` (case-insensitive substring; names under 2 characters are ignored).
+ * characters after trimming, at most 6 words, no control, format or other invisible character (a ZWNJ or ZWJ inside an
+ * Indic or Arabic-script word is spelling and stays), and in the folded text (foldForCompare) no `@`, no link or bare
+ * domain, no run of 5+ digits, no phone-like number and none of `blockedNames` (folded the same way; substring; names
+ * under 2 characters are ignored). "St. Louis", "U.S." and "D.C." pass: a space or a one-letter part follows each dot.
  */
 export const guardResearchSubject = (text: string, { blockedNames = [] }: { blockedNames?: readonly string[] } = {}): ResearchSubjectCheck => {
   if (typeof text !== 'string') return { ok: false, reason: 'length' };
   const trimmed = text.trim();
-  if (new RegExp(CONTROL_CHARS.source).test(trimmed)) return { ok: false, reason: 'control' };
+  if (hidesText(trimmed)) return { ok: false, reason: 'control' };
   const subject = trimmed.replace(/\s+/g, ' ');
   const length = Array.from(subject).length;
   if (length < 2 || length > RESEARCH_LIMITS.subject) return { ok: false, reason: 'length' };
   if (subject.split(' ').length > RESEARCH_LIMITS.subjectWords) return { ok: false, reason: 'words' };
-  if (/[@＠]/.test(subject)) return { ok: false, reason: 'email' };
-  if (/http|www\.|:\/\//i.test(subject)) return { ok: false, reason: 'link' };
-  if (DIGIT_RUN.test(subject)) return { ok: false, reason: 'number' };
-  if (phoneLike(subject)) return { ok: false, reason: 'phone' };
-  const lower = subject.toLowerCase();
+  const folded = foldForCompare(subject);
+  if (folded.includes('@')) return { ok: false, reason: 'email' };
+  if (/http|www\.|:\/\//.test(folded) || DOMAIN_LIKE.test(folded)) return { ok: false, reason: 'link' };
+  if (DIGIT_RUN.test(folded)) return { ok: false, reason: 'number' };
+  if (phoneLike(folded)) return { ok: false, reason: 'phone' };
   for (const name of blockedNames) {
-    const needle = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ').toLowerCase() : '';
-    if (Array.from(needle).length >= 2 && lower.includes(needle)) return { ok: false, reason: 'blocked_name' };
+    const needle = typeof name === 'string' ? foldForCompare(name).trim().replace(/\s+/g, ' ') : '';
+    if (Array.from(needle).length >= 2 && folded.includes(needle)) return { ok: false, reason: 'blocked_name' };
   }
   return { ok: true, subject };
 };

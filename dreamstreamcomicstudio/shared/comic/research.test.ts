@@ -184,6 +184,25 @@ describe('research sources and state (the doc contract, inert until used)', () =
     const urls = pinnedSourceUrls({ research: { sources: [source, picture, { ...source, url: telugu, origin: 'pinned' }, { ...picture, url: 'https://evil.test/x', origin: 'pinned' }] } });
     expect([...urls]).toEqual([picture.url, telugu]);
   });
+
+  it('keeps one entry per URL at its first place, and a pin is never lost to an automatic copy', () => {
+    const other = { ...source, url: 'https://en.wikipedia.org/wiki/Lanka' };
+    const pinnedCopy = { ...source, title: 'Ramayana (pinned)', extract: 'The creator’s pick.', origin: 'pinned' };
+    expect(normalizeResearchState({ sources: [source, pinnedCopy] })!.sources).toEqual([pinnedCopy]);
+    expect(normalizeResearchState({ sources: [source, other, pinnedCopy] })!.sources).toEqual([pinnedCopy, other]);
+    expect(normalizeResearchState({ sources: [pinnedCopy, source] })!.sources).toEqual([pinnedCopy]);
+    expect(normalizeResearchState({ sources: [pinnedCopy, { ...pinnedCopy, title: 'Later pin' }] })!.sources).toEqual([pinnedCopy]);
+    expect(normalizeResearchState({ sources: [source, { ...source, title: 'Later auto' }] })!.sources).toEqual([source]);
+    expect([...pinnedSourceUrls({ research: { sources: [source, pinnedCopy] } })]).toEqual([source.url]);
+  });
+
+  it('says "pinned" for exactly the sources the comic keeps (the same normalizer, the same cap)', () => {
+    const url = (i: number) => `https://en.wikipedia.org/wiki/Pin_${i}`;
+    const research = { sources: Array.from({ length: 10 }, (_, i) => ({ ...source, url: url(i), origin: 'pinned' })) };
+    const kept = normalizeResearchState(research)!.sources.map((s) => s.url);
+    expect([...pinnedSourceUrls({ research })]).toEqual(kept);
+    expect(kept).toHaveLength(8);
+  });
 });
 
 describe('guardResearchSubject', () => {
@@ -212,7 +231,34 @@ describe('guardResearchSubject', () => {
     ['Ramayana\nKyoto', false, 'control'],
     ['Rama‮yana', false, 'control'],
     ['Ramayana with Priya', false, 'blocked_name'],
-    ['ramayana with PRIYA SHARMA', false, 'blocked_name']
+    ['ramayana with PRIYA SHARMA', false, 'blocked_name'],
+    // Invisible characters hide a name from the compare: refused, never folded away and sent.
+    ['Ramayana with Pri​ya', false, 'control'], // zero-width space
+    ['Ramayana with Pri­ya', false, 'control'], // soft hyphen
+    ['Ramayana with Pri⁠ya', false, 'control'], // word joiner
+    ['Ramayana with Pri‌ya', false, 'control'], // ZWNJ between Latin letters
+    ['Ramayana with Pri‍ya', false, 'control'], // ZWJ between Latin letters
+    ['Rama‏yana', false, 'control'], // right-to-left mark
+    ['Rama﻿yana', false, 'control'], // zero-width no-break space inside the text
+    ['Ramayana Priㅤya', false, 'control'], // Hangul filler (a blank letter)
+    ['Ramayana with Ｐｒｉｙａ', false, 'blocked_name'], // fullwidth letters
+    // A joiner inside an Indic or Arabic-script word is spelling.
+    ['క్‍ష', 'క్‍ష'], // Telugu conjunct with ZWJ
+    ['അവന്‍', 'അവന്‍'], // Malayalam chillu written with ZWJ, at the end
+    ['کتاب‌خانہ', 'کتاب‌خانہ'], // Arabic-script non-joiner
+    // Bare domains, short links and every form of the at sign.
+    ['ravi-sharma.com', false, 'link'],
+    ['mysite.in/about', false, 'link'],
+    ['t.me/someone', false, 'link'],
+    ['visit example.com.', false, 'link'],
+    ['ｈｔｔｐ story', false, 'link'],
+    ['Ravi﹫home', false, 'email'],
+    ['St. Louis', 'St. Louis'],
+    ['U.S. Civil War', 'U.S. Civil War'],
+    ['Washington D.C.', 'Washington D.C.'],
+    ['J.R.R. Tolkien', 'J.R.R. Tolkien'],
+    ['Fate/stay night', 'Fate/stay night'],
+    ['World War I 1914/1918', 'World War I 1914/1918']
   ];
   it.each(cases)('%j', (text, subject, reason) => {
     const check = guardResearchSubject(text, { blockedNames: ['Priya', '', ' ', 'a'] });
@@ -222,6 +268,15 @@ describe('guardResearchSubject', () => {
   it('refuses anything that is not text and works without blocked names', () => {
     expect(guardResearchSubject(undefined as unknown as string)).toEqual({ ok: false, reason: 'length' });
     expect(guardResearchSubject('Ramayana with Priya')).toEqual({ ok: true, subject: 'Ramayana with Priya' });
+  });
+
+  it('folds blocked names the same way: fullwidth, zero-width and joiner spellings of a name still match', () => {
+    expect(guardResearchSubject('Ramayana with priya', { blockedNames: ['Ｐｒｉｙａ'] })).toEqual({ ok: false, reason: 'blocked_name' });
+    expect(guardResearchSubject('Ramayana with priya', { blockedNames: ['Pri​ya'] })).toEqual({ ok: false, reason: 'blocked_name' });
+    // A Telugu name typed with a joiner in the subject and without one in the cast list (and the other way round).
+    expect(guardResearchSubject('రామాయణం ప్‌రియ', { blockedNames: ['ప్రియ'] })).toEqual({ ok: false, reason: 'blocked_name' });
+    expect(guardResearchSubject('రామాయణం ప్రియ', { blockedNames: ['ప్‍రియ'] })).toEqual({ ok: false, reason: 'blocked_name' });
+    expect(guardResearchSubject('రామాయణం', { blockedNames: ['ప్రియ'] })).toEqual({ ok: true, subject: 'రామాయణం' });
   });
 });
 
