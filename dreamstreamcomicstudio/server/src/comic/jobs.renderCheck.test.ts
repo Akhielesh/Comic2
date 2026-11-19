@@ -6,11 +6,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
 import type { LlmRequest } from './types.js';
-import type { SafetyVerdict } from '../../../shared/comic/safety.js';
+import { effectiveRating, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
+import { logger } from '../lib/logger.js';
 import { JOB_TIMINGS, runAction } from './jobs.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { cleanAnswer } from './safety/fakes.js';
-import { runPublishGate } from './safety/index.js';
+import { runPublishGate, takePageCheckSlot } from './safety/index.js';
+import { CAPS } from './safety/deps.js';
 import { installSafetyFakes, resetSafety, type SafetyFakes } from './safety/testkit.js';
 import { analyzePageRender } from './vision.js';
 
@@ -47,9 +49,10 @@ const deferred = <T>() => {
 };
 
 const GOOD = 'u/user-1/p/proj-1/img/good.webp';
-/** One planned page, sheets drawn; optionally a previous drawing that passed. */
-const onePageDoc = (opts: { previous?: boolean } = {}): ComicDoc => {
+/** One planned page, sheets drawn; optionally a previous drawing that passed and the comic's chosen rating. */
+const onePageDoc = (opts: { previous?: boolean; rating?: ContentRating } = {}): ComicDoc => {
   const doc = plannedDoc();
+  if (opts.rating) doc.settings = { ...doc.settings, rating: opts.rating };
   doc.pages = doc.pages.slice(0, 1);
   doc.format.pageCount = 1;
   doc.cast.forEach((c) => (c.sheet = { ...emptyRender(), status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1, w: 1536, h: 1024 } }));
@@ -70,6 +73,9 @@ const storedVerdict = (ctx: TestContext, path: string): SafetyVerdict | undefine
   return [r.asset, ...r.history].find((a) => a?.path === path)?.safety;
 };
 const publishedPaths = (ctx: TestContext) => ctx.events.flatMap((e) => (e.type === 'urls' ? Object.keys(e.urls) : []));
+const noticeTexts = (ctx: TestContext) =>
+  ctx.session.doc.conversation.flatMap((m) => (m.cards || []).flatMap((c) => (c.type === 'notice' ? [c.text] : [])));
+const renderEvents = () => fakes.store.events.filter((e) => e.surface === 'render').map((e) => ({ layer: e.layer, decision: e.decision, assessed: e.assessed }));
 
 describe('render-time image check (PUB-1)', () => {
   it('a page the page check passes at PG-13 and the image check rates PG is stored PG-13 by:check (never looser than either)', async () => {
@@ -79,6 +85,76 @@ describe('render-time image check (PUB-1)', () => {
     expect(imageCalls()).toHaveLength(1);
     expect(storedVerdict(ctx, path)).toMatchObject({ assessed: 'PG-13', by: 'check', categories: ['violence', 'scary'] });
     expect(publishedPaths(ctx)).toContain(path);
+  });
+
+  // The image check is the stricter side: a wiring slip that stored the page check's answer as by:'check' would let a
+  // picture the image check rated over the comic (or X) be vouched for at $0, and the gate would clear it unseen.
+  it('the page check says G and the image check PG-13 on a PG comic: stored PG-13 by:check, the over-rating notice, and the gate holds it with no image call', async () => {
+    const doc = onePageDoc({ rating: 'PG' });
+    expect(effectiveRating(doc).rating).toBe('PG');
+    vi.mocked(analyzePageRender).mockResolvedValue(pageCheck({ assessed: 'G', by: 'qc', at: 2 }));
+    fakes.llm.script.vision = [imageSays('PG-13', ['violence'])];
+    const { ctx, path } = await drawPage(doc);
+    expect(storedVerdict(ctx, path)).toMatchObject({ assessed: 'PG-13', by: 'check', categories: ['violence'] });
+    expect(noticeTexts(ctx).some((t) => t.includes('came out PG-13') && t.includes('this comic is PG'))).toBe(true);
+    const before = imageCalls().length;
+    const gate = await runPublishGate(ctx, ctx.session.doc, { pageIds: ['pg_1'], includeCover: false, languages: [] });
+    expect(imageCalls().length - before).toBe(0);
+    expect(gate.pages.pg_1.status).toBe('over_rating');
+    expect(gate.status).not.toBe('cleared');
+  });
+
+  it('the page check says G and the image check X: quarantined, the previous version is back, never published', async () => {
+    vi.mocked(analyzePageRender).mockResolvedValue(pageCheck({ assessed: 'G', by: 'qc', at: 2 }));
+    fakes.llm.script.vision = [imageSays('X', ['graphic_gore'])];
+    const { ctx, path } = await drawPage(onePageDoc({ previous: true }));
+    expect(path).not.toBe(GOOD);
+    expect(ctx.assetsFake.quarantined.map((q) => q.path)).toEqual([path]);
+    expect(storedVerdict(ctx, path)).toMatchObject({ assessed: 'X', by: 'check', quarantined: true, categories: ['graphic_gore'] });
+    expect(ctx.session.doc.pages[0].render.asset?.path).toBe(GOOD);
+    expect(publishedPaths(ctx)).not.toContain(path);
+    expect(publishedPaths(ctx)).toContain(GOOD);
+    expect(renderEvents().filter((e) => e.decision === 'withhold').map((e) => e.layer)).toEqual(['vision_check', 'vision_check']);
+  });
+
+  it('a block only the page check found is recorded and cased as the page check’s, not the image check’s', async () => {
+    vi.mocked(analyzePageRender).mockResolvedValue(pageCheck({ assessed: 'X', categories: ['minor_sexual'], by: 'qc', at: 2 }));
+    fakes.llm.script.vision = [imageSays('G')];
+    const { ctx, path } = await drawPage(onePageDoc({ previous: true }));
+    expect(storedVerdict(ctx, path)).toMatchObject({ assessed: 'X', by: 'qc', quarantined: true });
+    expect(renderEvents()).toEqual([
+      { layer: 'vision_check', decision: 'allow', assessed: 'G' },
+      { layer: 'vision_qc', decision: 'withhold', assessed: 'X' }
+    ]);
+    expect(fakes.store.cases).toHaveLength(1);
+    expect(fakes.store.cases[0].target).toMatchObject({ path, check: { by: 'qc', categories: ['minor_sexual'] } });
+  });
+
+  it('past the hourly cap a page draw makes no image check: the page check’s verdict stays by:qc for the gate to re-rate', async () => {
+    const ctx = testContext(newSession(onePageDoc()));
+    for (let i = 0; i < CAPS.pageCheckPerHour; i += 1) expect(takePageCheckSlot(ctx)).toBe(true);
+    vi.mocked(analyzePageRender).mockResolvedValue(pageCheck({ assessed: 'PG', by: 'qc', at: 2 }));
+    fakes.llm.script.vision = [imageSays('PG')];
+    const info = vi.spyOn(logger, 'info');
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true }, { confirmed: true });
+    await ctx.settled();
+    const path = ctx.session.doc.pages[0].render.asset!.path;
+    expect(imageCalls()).toHaveLength(0);
+    expect(storedVerdict(ctx, path)).toMatchObject({ assessed: 'PG', by: 'qc' });
+    expect(publishedPaths(ctx)).toContain(path);
+    expect(info).toHaveBeenCalledWith('comic_render_check_timing', expect.objectContaining({ capped: true, failedOpen: false }));
+  });
+
+  it('logs how long each check took, with no content', async () => {
+    vi.mocked(analyzePageRender).mockResolvedValue(pageCheck({ assessed: 'G', by: 'qc', at: 2 }));
+    fakes.llm.script.vision = [imageSays('G')];
+    const info = vi.spyOn(logger, 'info');
+    await drawPage();
+    const timing = info.mock.calls.filter(([event]) => event === 'comic_render_check_timing');
+    expect(timing).toHaveLength(1);
+    const fields = timing[0][1] as Record<string, unknown>;
+    expect(Object.keys(fields).sort()).toEqual(['checkMs', 'failedOpen', 'projectId', 'qcMs', 'target']);
+    expect(fields).toMatchObject({ projectId: 'proj-1', failedOpen: false, qcMs: expect.any(Number), checkMs: expect.any(Number) });
   });
 
   it('the image check starts before the page check answers: both are in flight together', async () => {

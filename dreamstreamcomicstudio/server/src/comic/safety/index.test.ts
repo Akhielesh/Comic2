@@ -390,26 +390,27 @@ describe('mergeRenderVerdicts', () => {
   const check = (assessed: (typeof RATINGS)[number], o: Partial<SafetyVerdict> = {}): SafetyVerdict => ({ assessed, by: 'check', model: 'check-model', at: 20, ...o });
 
   it.each([
-    // [page check, image check, stored rating, notes from]
-    ['PG-13', 'PG', 'PG-13', 'qc'],
-    ['PG', 'PG-13', 'PG-13', 'check'],
-    ['G', 'X', 'X', 'check'],
-    ['X', 'G', 'X', 'qc'],
-    ['X', 'X', 'X', 'check'],
-    ['PG', 'PG', 'PG', 'check']
-  ] as const)('page check %s + image check %s → %s by:check, notes from the %s', (a, b, want, notesFrom) => {
+    // [page check, image check, stored rating, by, notes from]
+    ['PG-13', 'PG', 'PG-13', 'check', 'qc'],
+    ['PG', 'PG-13', 'PG-13', 'check', 'check'],
+    ['G', 'X', 'X', 'check', 'check'],
+    ['X', 'G', 'X', 'qc', 'qc'],
+    ['X', 'PG-13', 'X', 'qc', 'qc'],
+    ['X', 'X', 'X', 'check', 'check'],
+    ['PG', 'PG', 'PG', 'check', 'check']
+  ] as const)('page check %s + image check %s → %s by:%s, notes from the %s', (a, b, want, by, notesFrom) => {
     const merged = mergeRenderVerdicts(qc(a, { notes: ['from the page check'] }), check(b, { notes: ['from the image check'] }));
-    expect(merged).toMatchObject({ assessed: want, by: 'check' });
+    expect(merged).toMatchObject({ assessed: want, by });
     expect(merged?.notes).toEqual([notesFrom === 'qc' ? 'from the page check' : 'from the image check']);
     expect(merged?.model).toBe(notesFrom === 'qc' ? 'qc-model' : 'check-model');
   });
 
-  it('never looser than either answer, in every order', () => {
+  it('never looser than either answer, in every order; by:check unless the page check alone blocks', () => {
     for (const a of RATINGS) {
       for (const b of RATINGS) {
         const merged = mergeRenderVerdicts(qc(a), check(b))!;
         expect(RANK[merged.assessed as keyof typeof RANK], `${a} + ${b}`).toBe(Math.max(RANK[a], RANK[b]));
-        expect(merged.by).toBe('check');
+        expect(merged.by, `${a} + ${b}`).toBe(a === 'X' && b !== 'X' ? 'qc' : 'check');
         expect(safetyStatusOf(merged, 'PG')).toBe(safetyStatusOf(RANK[a] >= RANK[b] ? qc(a) : check(b), 'PG'));
       }
     }
@@ -437,16 +438,25 @@ describe('mergeRenderVerdicts', () => {
     expect(mergeRenderVerdicts()).toBeUndefined();
   });
 
+  it('neither answered: undefined, never an unrated verdict object', () => {
+    expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, undefined)).toBeUndefined();
+    expect(mergeRenderVerdicts(undefined, { by: 'check', at: 20 })).toBeUndefined();
+    expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, { by: 'check', at: 20 })).toBeUndefined();
+  });
+
   it('an answer without a rating counts as no answer: a page-check pass is never promoted to by:check by it', () => {
     const pass = qc('G');
     expect(mergeRenderVerdicts(pass, { by: 'check', at: 20 })).toEqual(pass);
     expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, check('PG'))).toEqual(check('PG'));
   });
 
-  it('a quarantined answer wins whatever the other says', () => {
+  it('a quarantined answer wins whatever the other says (credited to the check that quarantined it)', () => {
     const merged = mergeRenderVerdicts(qc('G', { quarantined: true }), check('G'));
-    expect(merged).toMatchObject({ quarantined: true, by: 'check' });
+    expect(merged).toMatchObject({ quarantined: true, by: 'qc' });
     expect(safetyStatusOf(merged, 'PG-13')).toBe('blocked');
+    const byImage = mergeRenderVerdicts(qc('G'), check('G', { quarantined: true }));
+    expect(byImage).toMatchObject({ quarantined: true, by: 'check' });
+    expect(safetyStatusOf(byImage, 'PG-13')).toBe('blocked');
   });
 });
 

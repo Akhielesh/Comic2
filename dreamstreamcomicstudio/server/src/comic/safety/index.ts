@@ -545,20 +545,31 @@ export async function checkRenderSafety(ctx: StudioContext, target: RenderTarget
 }
 
 /**
+ * May this page draw get the image-only check beside its page check (jobs.ts afterSave)? Every draw, page edit and panel
+ * fix pays for one on the platform key, BYOK draws and unpublished drafts included, so it is capped per user per hour
+ * like upload checks. Past the cap no call is made: the page check's verdict is stored as it is, and a pass stays
+ * by:'qc' for the publish gate to re-rate, as before render-time checks.
+ */
+export const takePageCheckSlot = (ctx: Pick<StudioContext, 'userId'>): boolean => takeSlot(`render:${ctx.userId}`, CAPS.pageCheckPerHour, HOUR);
+
+/**
  * One stored verdict from the two checks a new page gets side by side (jobs.ts afterSave): the page check (QC, which
  * also read the author's script) and the image-only check above. Both answered → the stricter of the two (higher
  * rating; X or a quarantine wins; categories merged; notes and model from the stricter, the image check's on a tie),
- * stored as by:'check' so the publish gate reuses it at $0 (S14: an image-only check has rated it). Only one answered →
- * that one exactly as it is, so a lone QC pass stays by:'qc' and the gate still re-rates it. Neither → undefined. An
- * answer with no rating (and no quarantine) counts as no answer.
+ * stored as by:'check' so the publish gate reuses it at $0 (S14: an image-only check has rated it). One exception: a
+ * block (X or quarantined) that only the page check found stays by:'qc', so the withhold row and a minors case name
+ * the check that made the call; the gate never re-rates a block, so this costs nothing. Only one answered → that one
+ * exactly as it is, so a lone QC pass stays by:'qc' and the gate still re-rates it. Neither → undefined. An answer with
+ * no rating (and no quarantine) counts as no answer.
  */
 export function mergeRenderVerdicts(qc?: SafetyVerdict, check?: SafetyVerdict): SafetyVerdict | undefined {
   const answered = (v?: SafetyVerdict): v is SafetyVerdict => !!v && (!!v.assessed || !!v.quarantined);
-  if (!answered(qc) || !answered(check)) return answered(qc) ? qc : answered(check) ? check : (qc ?? check);
+  if (!answered(qc) || !answered(check)) return answered(qc) ? qc : answered(check) ? check : undefined;
   const rank = (v: SafetyVerdict) => (v.quarantined ? ratingRank('X') : ratingRank(v.assessed!));
   const top = rank(qc) > rank(check) ? qc : check;
   const categories = [...new Set([...(qc.categories || []), ...(check.categories || [])])];
-  const out: SafetyVerdict = { ...top, by: 'check' };
+  const qcAloneBlocks = rank(qc) > rank(check) && rank(qc) === ratingRank('X');
+  const out: SafetyVerdict = { ...top, by: qcAloneBlocks ? 'qc' : 'check' };
   delete out.pending;
   delete out.categories;
   if (categories.length) out.categories = categories;

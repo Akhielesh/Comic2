@@ -172,7 +172,7 @@ import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
 import { panelizeAfterLetter } from './panelize/server.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout, PANEL_EDIT_REFERENCE_PATH } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
-import { checkRenderSafety, mergeRenderVerdicts, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
+import { checkRenderSafety, mergeRenderVerdicts, onRenderVerdict, screenUploadPreview, takePageCheckSlot, takeRenderSafetyFollowups } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
 import { breakdownCardFor } from './tools/breakdown.js';
 import {
@@ -3803,27 +3803,37 @@ class RenderRun {
   }
 
   /**
-   * After the save: QC + balloons (pages), the safety verdict, then the URL. The URL waits
-   * for the verdict, or 20 s at most for the owner's private view (decisions-final #10).
+   * After the save: QC + balloons (pages) beside the image-only check, the merged safety verdict, then the URL. The URL
+   * waits for the verdict, or 20 s at most for the owner's private view (decisions-final #10).
    * Resolves whether the verdict blocked the image and whether a previous version is back.
    */
   private async afterSave(job: ImageJob, asset: AssetRef, dataUrl: string): Promise<{ blocked: boolean; previousBack: boolean }> {
     const { ctx } = this;
     let verdict: SafetyVerdict | undefined;
-    // The page check's notices wait for the safety verdict: a page the content check withholds gets its safety card
-    // only (checkRenderSafety may find the block AFTER letterPage when the vision reply carried no safety block).
+    // The page check's notices wait for the merged verdict of both checks: a page either check withholds gets its
+    // safety card only.
     const held: Card[] = [];
+    const startedAt = Date.now();
+    let qcMs: number | undefined;
+    let checkMs: number | undefined;
+    let capped = false;
+    const imageCheck = () =>
+      checkRenderSafety(ctx, job.target, asset)
+        .catch(() => undefined)
+        .finally(() => (checkMs = Date.now() - startedAt));
     const work = (async () => {
       if (job.qcPageId) {
         // The image-only check (S14) runs beside the page check rather than only when QC gave no verdict: the page is
         // then stored by:'check' and publishing spends nothing on it (PUB-1). It reads the preview cached at save.
+        // Past the per-user hourly cap it is skipped and the page check's verdict stands (a pass stays by:'qc').
+        capped = !takePageCheckSlot(ctx);
         const [lettered, checked] = await Promise.all([
-          letterPage(ctx, job.qcPageId, dataUrl, this.signal, (card) => held.push(card)),
-          checkRenderSafety(ctx, job.target, asset).catch(() => undefined)
+          letterPage(ctx, job.qcPageId, dataUrl, this.signal, (card) => held.push(card)).finally(() => (qcMs = Date.now() - startedAt)),
+          capped ? undefined : imageCheck()
         ]);
         verdict = mergeRenderVerdicts(lettered.safety, checked);
       } else {
-        verdict = await checkRenderSafety(ctx, job.target, asset).catch(() => undefined);
+        verdict = await imageCheck();
       }
       await onRenderVerdict(ctx, job.target, asset, verdict);
     })();
@@ -3842,6 +3852,15 @@ class RenderRun {
     } catch (err) {
       logger.warn('comic_render_check_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
     }
+    // How long the owner waited on each check (no content): shows whether the image check is the long pole.
+    logger.info('comic_render_check_timing', {
+      projectId: ctx.projectId,
+      target: renderTargetKey(job.target),
+      ...(qcMs !== undefined ? { qcMs } : {}),
+      ...(checkMs !== undefined ? { checkMs } : {}),
+      ...(capped ? { capped: true } : {}),
+      failedOpen: published
+    });
     // Never "Checking…" forever: whatever the check found (or nothing — unchecked) is recorded.
     const still = findAsset(ctx.session.doc, asset.path);
     if (still?.safety?.pending) commitAs(ctx, [{ op: 'asset_meta', path: asset.path, patch: { safety: verdict ?? null } }], 'job');
