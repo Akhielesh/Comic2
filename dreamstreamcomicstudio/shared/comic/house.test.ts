@@ -9,6 +9,7 @@ import {
   HOUSE_CAPPED_PAYERS,
   HOUSE_CONFIG_DEFAULTS,
   HOUSE_CONTENT_RULES,
+  HOUSE_EXCLUDED_PRESETS,
   HOUSE_FAMILY_MODELS,
   HOUSE_GENRES,
   HOUSE_HELD_REASONS,
@@ -19,6 +20,7 @@ import {
   HOUSE_SOURCE_LANGUAGES,
   HOUSE_STAGES,
   HOUSE_STATUSES,
+  HOUSE_STYLE_PRESETS,
   HOUSE_TOPIC_BLOCKLIST,
   addHouseDays,
   calibrationSlates,
@@ -26,6 +28,8 @@ import {
   dayBudgetUsd,
   describeSlate,
   heldReasonForGate,
+  houseCreditOptional,
+  houseCreditStopped,
   houseDaysBetween,
   isHouseDay,
   normalizeHouseConfig,
@@ -46,6 +50,14 @@ import { getStylePreset, STYLE_PRESETS } from './stylePresets';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const START = '2026-12-01';
+/** A named-IP detector that finds nothing (the server passes detectNamedIp). */
+const NO_IP = { namedIp: () => [] as string[] };
+/** Words in a look's prompt text that ask for deities or devotional imagery. */
+const DEVOTIONAL_RE = /\bgods?\b|deity|deities|devotional|sacred/i;
+const presetText = (id: string) => {
+  const p = getStylePreset(id)!;
+  return [p.name, p.tagline, p.spec].join(' ');
+};
 
 /** Plans `days` consecutive days, feeding each day's slates back as the next days' 14-day history. */
 function simulate(days: number, opts: Partial<PlanDailySlateInput> = {}, count = 10): HouseSlate[][] {
@@ -115,7 +127,11 @@ function expectDayRules(slates: HouseSlate[], earlier: HouseSlate[][], registry:
     const p = getStylePreset(s.presetId)!;
     expect(s.colorMode, `${tag} colour follows the look`).toBe(p.colorMode ?? 'color');
   }
-  expect(count(slates, (s) => s.colorMode !== 'color'), `${tag} non-colour`).toBeGreaterThanOrEqual(Math.min(2, n));
+  expect(count(slates, (s) => s.colorMode !== 'color'), `${tag} non-colour`).toBeGreaterThanOrEqual(n >= 6 ? 3 : Math.min(2, n));
+  for (const s of slates) {
+    expect(HOUSE_EXCLUDED_PRESETS, `${tag} ${s.presetId} is not a house look`).not.toContain(s.presetId);
+    expect(presetText(s.presetId), `${tag} ${s.presetId} asks for devotional imagery`).not.toMatch(DEVOTIONAL_RE);
+  }
   // Audience and rating
   const want = { children: Math.round(n * 0.3), teen: Math.round(n * 0.3) };
   expect(count(slates, (s) => s.audience === 'children'), `${tag} children`).toBe(want.children);
@@ -367,6 +383,57 @@ describe('planDailySlate', () => {
     expectDayRules(slates, []);
   });
 
+  it('works out a credit\'s stop from lifetime spend: a budget from dayBudgetUsd at the stop stops that half', () => {
+    const byokVendors = ['openai'] as const;
+    const openai = HOUSE_CONFIG_DEFAULTS.payers.openai_credit;
+    const atStop = dayBudgetUsd(openai, { day: START, lifetimeUsd: 180 });
+    expect(atStop).toBe(0);
+    // The natural call: the budget from dayBudgetUsd and the lifetime spend, no `stopped` list.
+    const slates = planDailySlate({ day: START, count: 10, byokVendors, budgets: { openai_credit: atStop }, lifetimeUsd: { openai_credit: 180 } });
+    expect(slates).toHaveLength(5);
+    expect(slates.every((s) => s.family === 'gemini')).toBe(true);
+    expectDayRules(slates, []);
+    // Lifetime spend alone gives the same (the planner works out the budget too).
+    expect(planDailySlate({ day: START, count: 10, byokVendors, lifetimeUsd: { openai_credit: 250 } })).toEqual(slates);
+    // Below the stop the budget only leans the mix: 5 of 12 left.
+    const near = planDailySlate({ day: START, count: 10, byokVendors, lifetimeUsd: { openai_credit: 175 } });
+    expect(near).toHaveLength(10);
+    expect(count(near, (s) => s.family === 'openai')).toBe(2);
+    // The house OpenRouter key has no credit stop: any lifetime spend leaves its day cap.
+    const house = planDailySlate({ day: START, count: 10, byokVendors, lifetimeUsd: { house_openrouter: 1e6 } });
+    expect(house).toHaveLength(10);
+    expect(count(house, (s) => s.family === 'gemini')).toBe(5);
+    // A runway spreads the room: the planner reads the payer's own config.
+    const runway = { ...HOUSE_CONFIG_DEFAULTS, payers: { ...HOUSE_CONFIG_DEFAULTS.payers, openai_credit: { ...openai, runwayUntil: '2026-12-30' } } };
+    const spread = planDailySlate({ day: START, count: 10, byokVendors, config: runway, lifetimeUsd: { openai_credit: 0 } });
+    expect(count(spread, (s) => s.family === 'openai')).toBe(3); // 180 over 30 days = 6 of 12 left: weights 1 and 0.5
+  });
+
+  it('never uses a look whose prompt asks for deities or devotional imagery (house content rules)', () => {
+    expect(HOUSE_EXCLUDED_PRESETS).toEqual(['mythic-icon', 'indian-miniature']);
+    for (const id of HOUSE_EXCLUDED_PRESETS) {
+      expect(getStylePreset(id), id).toBeDefined();
+      expect(presetText(id), id).toMatch(DEVOTIONAL_RE);
+    }
+    // Every look a house slate may use is clear of it, so a new preset with such text fails here.
+    expect(HOUSE_STYLE_PRESETS.length).toBe(STYLE_PRESETS.length - HOUSE_EXCLUDED_PRESETS.length);
+    for (const p of HOUSE_STYLE_PRESETS) expect(presetText(p.id), p.id).not.toMatch(DEVOTIONAL_RE);
+    const looks = new Set<string>();
+    for (const n of [10, 7, 3]) for (const s of simulate(60, {}, n).flat()) looks.add(s.presetId);
+    for (const id of HOUSE_EXCLUDED_PRESETS) expect(looks.has(id), id).toBe(false);
+  });
+
+  it('ignores history rows dated on the run day or later, so a re-plan after a restart gives the same slate', () => {
+    const days = simulate(5);
+    const history = days.flat().map((s) => ({ day: s.day, presetId: s.presetId, genre: s.genre, kind: s.kind, model: s.model }));
+    const day = addHouseDays(START, 5);
+    const first = planDailySlate({ day, count: 10, history14d: history });
+    // The run day's own rows (written before the restart) and a stray later row are in the history now.
+    const own = first.map((s) => ({ day, presetId: s.presetId, genre: s.genre, kind: s.kind, model: s.model }));
+    const later = [{ day: addHouseDays(day, 1), presetId: first[0].presetId, genre: first[0].genre }];
+    expect(planDailySlate({ day, count: 10, history14d: [...history, ...own, ...later] })).toEqual(first);
+  });
+
   it('follows the owner\'s model weights', () => {
     const noOpenAi = { ...HOUSE_CONFIG_DEFAULTS, modelWeights: { 'gpt-image-2.6-sunburst': 0, 'gpt-image-2.6-flare': 0 } };
     const slates = planDailySlate({ day: START, count: 10, config: noOpenAi });
@@ -417,6 +484,22 @@ describe('calibrationSlates', () => {
     expect(s.aspect).toBe('4:3');
   });
 
+  it('swaps a paused calibration model within its family and records the swap; a hidden one moves without a record', () => {
+    const paused = calibrationSlates({ day: START, health: { 'nano-banana-pro': 'down' } });
+    expect(paused[0].model).toBe('nano-banana-2.1');
+    expect(paused[0].swap).toEqual({ from: 'nano-banana-pro', reason: 'paused' });
+    expect(paused[0].blocked).toBeUndefined();
+    for (const s of paused.slice(1)) expect(s.swap, s.model).toBeUndefined();
+    // A model that is only hidden is replaced without a paused record.
+    const hidden = calibrationSlates({ day: START, registry: withPickable(['gpt-image-2.6-sunburst'], false) });
+    expect(hidden[1].model).toBe('gpt-image-2.6-flare');
+    expect(hidden[1].swap).toBeUndefined();
+    // Every model of the family paused: held, not moved to the other family.
+    const held = calibrationSlates({ day: START, health: { 'nano-banana-pro': 'down', 'nano-banana-2.1': 'down' } });
+    expect(held[0].blocked).toBe('model_paused');
+    expect(held[0].family).toBe('gemini');
+  });
+
   it('premises are the public sample reader text', () => {
     for (const s of calibrationSlates({ day: START })) {
       expect(STORY_SOURCE).toContain(`title: '${s.calibration!.title}'`);
@@ -427,8 +510,8 @@ describe('calibrationSlates', () => {
 
 describe('checkHouseText (invented names only)', () => {
   it('passes an original premise', () => {
-    expect(checkHouseText('Two otters run a night bakery on a floating market and lose their best whisk.')).toEqual({ ok: true, hits: [] });
-    expect(checkHouseText(['Class president Mira plans the science fair.', 'A ram climbs the hill at dawn.']).ok).toBe(true);
+    expect(checkHouseText('Two otters run a night bakery on a floating market and lose their best whisk.', NO_IP)).toEqual({ ok: true, hits: [] });
+    expect(checkHouseText(['Class president Mira plans the science fair.', 'A ram climbs the hill at dawn.'], NO_IP).ok).toBe(true);
   });
 
   it('refuses religious texts and figures, in several scripts and with tricks', () => {
@@ -446,7 +529,7 @@ describe('checkHouseText (invented names only)', () => {
       'ブッダの旅', // voiced kana survive the normalisation
       'ﾌﾞｯﾀﾞの旅' // half-width forms fold to the same word
     ]) {
-      const r = checkHouseText(t);
+      const r = checkHouseText(t, NO_IP);
       expect(r.ok, t).toBe(false);
       expect(r.hits[0].topic, t).toBe('religion');
     }
@@ -454,25 +537,120 @@ describe('checkHouseText (invented names only)', () => {
 
   it('refuses real-people framings with invented names', () => {
     for (const t of ['President Varnok Tellurin saves the city', 'Prime Minister Quessaly Dorne wins', 'Based on the life of a famous inventor', 'A biopic of a pop star']) {
-      const r = checkHouseText(t);
+      const r = checkHouseText(t, NO_IP);
       expect(r.ok, t).toBe(false);
       expect(r.hits.map((h) => h.topic), t).toContain('real_person');
     }
   });
 
   it('refuses real events, politics, brands and existing characters', () => {
-    expect(checkHouseText('A love story during World War II').hits[0].topic).toBe('real_event');
-    expect(checkHouseText('Two rival political parties in a town').hits[0].topic).toBe('politics');
-    expect(checkHouseText('A kid who loves Pepsi').hits[0].topic).toBe('brand');
-    expect(checkHouseText('Sherlock Holmes in a submarine').hits[0].topic).toBe('existing_character');
+    expect(checkHouseText('A love story during World War II', NO_IP).hits[0].topic).toBe('real_event');
+    expect(checkHouseText('Two rival political parties in a town', NO_IP).hits[0].topic).toBe('politics');
+    expect(checkHouseText('A kid who loves Pepsi', NO_IP).hits[0].topic).toBe('brand');
+    expect(checkHouseText('Sherlock Holmes in a submarine', NO_IP).hits[0].topic).toBe('existing_character');
   });
 
   it('refuses LIBRARY_IP_BLOCKLIST hits and what the server\'s named-IP detector finds', () => {
-    const r = checkHouseText('A robot heist in the style of Pixar');
+    const r = checkHouseText('A robot heist in the style of Pixar', NO_IP);
     expect(r.ok).toBe(false);
     expect(r.hits[0]).toEqual({ topic: 'existing_character', term: 'Pixar' });
     const named = checkHouseText('A duck called Zibbo the Bright', { namedIp: (t) => (t.includes('Zibbo') ? ['Zibbo the Bright'] : []) });
     expect(named).toEqual({ ok: false, hits: [{ topic: 'existing_character', term: 'Zibbo the Bright' }] });
+  });
+
+  // Everyday text in the house's own source languages and genres: none of it may hold a comic.
+  it.each([
+    '¡Agárrate a la rama, Tomás!',
+    'A rama do arvoredo balança.',
+    'A parliament of owls gathers at dusk',
+    'The office politics of a bakery',
+    'Her crusade to save the old park',
+    'A cold war between two cats',
+    'A Hercules beetle climbs a leaf',
+    'Kali the kitten learns to swim',
+    'The ramen shop on Rama Street',
+    'イエスかノーで答えて！',
+    'Una guerra fría entre dos gatos',
+    'La elección de Mira: ¿pan o pastel?',
+    'El presidente de la clase organiza la feria',
+    'O presidente do clube de xadrez chega cedo'
+  ])('passes everyday text: %s', (t) => {
+    expect(checkHouseText(t, NO_IP)).toEqual({ ok: true, hits: [] });
+  });
+
+  it('still refuses the religious figures and named events those words stood for', () => {
+    for (const [t, topic] of [
+      ['Rama and Sita cross the ocean', 'religion'],
+      ['Sita waits for Rama in the forest', 'religion'],
+      ['Lord Rama returns home', 'religion'],
+      ['Jai Shri Ram, says the crowd', 'religion'],
+      ['Goddess Kali dances on the hill', 'religion'],
+      ['イエス様の話', 'religion'],
+      ['イエス・キリストの物語', 'religion'],
+      ['Party politics in a small town', 'politics'],
+      ['A parliamentary election in the village', 'politics'],
+      ['A spy story set in the Cold War', 'real_event'],
+      ['Knights ride off to the Crusades', 'real_event'],
+      ['Hercules wrestles the lion', 'existing_character']
+    ] as const) {
+      const r = checkHouseText(t, NO_IP);
+      expect(r.ok, t).toBe(false);
+      expect(r.hits.map((h) => h.topic), t).toContain(topic);
+    }
+  });
+
+  it('refuses titles of office, real events and politics in Spanish, Portuguese, French, Hindi and Japanese (invented names)', () => {
+    for (const [t, topic] of [
+      ['El presidente Varnok salva la ciudad', 'real_person'],
+      ['La presidenta Quessaly Dorne gana', 'real_person'],
+      ['O presidente Varnok salva a cidade', 'real_person'],
+      ['El primer ministro Tellurin habla', 'real_person'],
+      ['O primeiro-ministro Tellurin fala', 'real_person'],
+      ['Le Premier ministre Varnok parle', 'real_person'],
+      ['El gobernador Varnok inaugura el puente', 'real_person'],
+      ['प्रधानमंत्री वार्नोक शहर बचाते हैं', 'real_person'],
+      ['राष्ट्रपति वार्नोक का दिन', 'real_person'],
+      ['ヴァルノク大統領が街を救う', 'real_person'],
+      ['Una historia durante la Segunda Guerra Mundial', 'real_event'],
+      ['Uma história na Primeira Guerra Mundial', 'real_event'],
+      ['Pendant la Seconde Guerre mondiale', 'real_event'],
+      ['Espías en la Guerra Fría', 'real_event'],
+      ['Uma família no Holocausto', 'real_event'],
+      ['विश्व युद्ध के समय की कहानी', 'real_event'],
+      ['第二次世界大戦の物語', 'real_event'],
+      ['Dos partidos políticos en un pueblo', 'politics'],
+      ['A campanha eleitoral de Varnok', 'politics'],
+      ['Deux partis politiques dans un village', 'politics'],
+      ['चुनाव प्रचार का दिन', 'politics'],
+      ['二つの政党の争い', 'politics']
+    ] as const) {
+      const r = checkHouseText(t, NO_IP);
+      expect(r.ok, t).toBe(false);
+      expect(r.hits.map((h) => h.topic), t).toContain(topic);
+    }
+  });
+
+  it('reads the IP list on the composed text, so its "webtoon™" form matches', () => {
+    const r = checkHouseText('A Webtoon™ original', NO_IP);
+    expect(r.ok).toBe(false);
+    expect(r.hits).toEqual([{ topic: 'existing_character', term: 'Webtoon™' }]);
+    // The plain word is a comic kind, not a brand.
+    expect(checkHouseText('A webtoon about two otters', NO_IP).ok).toBe(true);
+    // Accent-folded forms still match.
+    expect(checkHouseText('A Pokémon-style monster', NO_IP).ok).toBe(false);
+  });
+
+  it('fails closed on input that is not text and on a missing named-IP detector', () => {
+    const notText = checkHouseText({ premise: 'A retelling of the Ramayana' } as never, NO_IP);
+    expect(notText).toEqual({ ok: false, hits: [], refused: 'not_text' });
+    expect(checkHouseText(['An otter bakery', 7] as never, NO_IP)).toEqual({ ok: false, hits: [], refused: 'not_text' });
+    expect(checkHouseText(null as never, NO_IP).refused).toBe('not_text');
+    // A runner that forgets the detector is refused instead of letting trademarked names through.
+    expect(checkHouseText('Shrek and Garfield open a bakery', {} as never)).toEqual({ ok: false, hits: [], refused: 'no_named_ip_check' });
+    expect(checkHouseText('An otter bakery', undefined as never).refused).toBe('no_named_ip_check');
+    // With the detector the same text is checked as usual.
+    expect(checkHouseText('Shrek and Garfield open a bakery', { namedIp: (t) => (t.includes('Shrek') ? ['Shrek'] : []) }).hits).toEqual([{ topic: 'existing_character', term: 'Shrek' }]);
+    expect(checkHouseText('An otter bakery', NO_IP)).toEqual({ ok: true, hits: [] });
   });
 
   it('the blocklist and the brief rules are written down', () => {
@@ -548,6 +726,34 @@ describe('dayBudgetUsd (runway)', () => {
     expect(dayBudgetUsd({ ...openai, dayCapUsd: Number.NaN }, { day: START, lifetimeUsd: 0 })).toBe(0);
     expect(dayBudgetUsd({ ...openai, dayCapUsd: -3 }, { day: START, lifetimeUsd: 0 })).toBe(0);
   });
+
+  it('never reads a day cap above the compiled day ceiling, even from a config that skipped normalizeHouseConfig', () => {
+    expect(dayBudgetUsd({ ...openai, dayCapUsd: 1e6, creditUsd: null }, { day: START, lifetimeUsd: 0 })).toBe(HOUSE_LIMITS.capDayMaxUsd);
+    expect(dayBudgetUsd({ ...openai, dayCapUsd: 1e6, creditUsd: 5_000 }, { day: START, lifetimeUsd: 0 })).toBe(HOUSE_LIMITS.capDayMaxUsd);
+    expect(dayBudgetUsd({ ...openai, dayCapUsd: 70 }, { day: START, lifetimeUsd: 0 })).toBe(70);
+  });
+});
+
+describe('houseCreditStopped', () => {
+  const openai = HOUSE_CONFIG_DEFAULTS.payers.openai_credit;
+  it('is true once lifetime spend reaches credit × stop share', () => {
+    expect(houseCreditStopped(openai, { lifetimeUsd: 0 })).toBe(false);
+    expect(houseCreditStopped(openai, { lifetimeUsd: 179.99 })).toBe(false);
+    expect(houseCreditStopped(openai, { lifetimeUsd: 180 })).toBe(true);
+    expect(houseCreditStopped(openai, { lifetimeUsd: 250 })).toBe(true);
+    // It agrees with dayBudgetUsd at the stop.
+    expect(dayBudgetUsd(openai, { day: START, lifetimeUsd: 180 })).toBe(0);
+    expect(dayBudgetUsd(openai, { day: START, lifetimeUsd: 179.99 })).toBeGreaterThan(0);
+  });
+
+  it('never stops a payer without a credit, and fails closed on bad input', () => {
+    expect(houseCreditStopped(HOUSE_CONFIG_DEFAULTS.payers.house_openrouter, { lifetimeUsd: 1e9 })).toBe(false);
+    expect(houseCreditStopped({ ...openai, creditUsd: 0 }, { lifetimeUsd: 0 })).toBe(true);
+    expect(houseCreditStopped(openai, { lifetimeUsd: Number.NaN })).toBe(true);
+    expect(houseCreditStopped({ ...openai, stopFraction: Number.NaN }, { lifetimeUsd: 0 })).toBe(true);
+    // The stop share is never read above its ceiling.
+    expect(houseCreditStopped({ ...openai, stopFraction: 5 }, { lifetimeUsd: 190 })).toBe(true);
+  });
 });
 
 describe('sanitizeHouseConfigPatch', () => {
@@ -620,6 +826,39 @@ describe('sanitizeHouseConfigPatch', () => {
     const r = sanitizeHouseConfigPatch({ capComicUsd: 7, dailyCount: 10, capDayUsd: 70, imageSlots: 2, releasePerDay: 10 });
     expect(r.ok).toBe(true);
   });
+
+  it('never lets the OpenAI or Anthropic credit stop be switched off (a cleared credit is refused)', () => {
+    for (const payer of ['openai_credit', 'anthropic_credit'] as const) {
+      expect(houseCreditOptional(payer), payer).toBe(false);
+      const r = sanitizeHouseConfigPatch({ payers: { [payer]: { creditUsd: null } } });
+      expect(r.ok, payer).toBe(false);
+      expect(r.errors, payer).toEqual([{ field: `payers.${payer}.creditUsd`, reason: 'a credit amount is required' }]);
+      // A real amount is still accepted.
+      expect(sanitizeHouseConfigPatch({ payers: { [payer]: { creditUsd: 50 } } }).ok, payer).toBe(true);
+    }
+    // The house OpenRouter key has its own daily limit: no credit is allowed there.
+    expect(houseCreditOptional('house_openrouter')).toBe(true);
+    const house = sanitizeHouseConfigPatch({ payers: { house_openrouter: { creditUsd: null } } });
+    expect(house.ok && house.config.payers.house_openrouter.creditUsd).toBe(null);
+  });
+
+  // Keys that name Object.prototype members must be unknown fields, never inherited checks.
+  const PROTO_KEYS = ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', '__defineGetter__'];
+  it.each(PROTO_KEYS)('refuses the body key %s as an unknown field and never throws', (key) => {
+    const top = JSON.parse(`{"${key}": 5}`) as unknown;
+    let r: ReturnType<typeof sanitizeHouseConfigPatch> | undefined;
+    expect(() => (r = sanitizeHouseConfigPatch(top))).not.toThrow();
+    expect(r!.ok).toBe(false);
+    expect(r!.errors).toEqual([{ field: key, reason: 'unknown field' }]);
+    const nested = JSON.parse(`{"payers": {"openai_credit": {"${key}": 9}}}`) as unknown;
+    expect(() => (r = sanitizeHouseConfigPatch(nested))).not.toThrow();
+    expect(r!.ok).toBe(false);
+    expect(r!.errors).toEqual([{ field: `payers.openai_credit.${key}`, reason: 'unknown field' }]);
+    // An object value under the key (the shape that made __proto__ throw) is refused the same way.
+    const objectValue = JSON.parse(`{"${key}": {"enabled": true}}`) as unknown;
+    expect(() => (r = sanitizeHouseConfigPatch(objectValue))).not.toThrow();
+    expect(r!.ok).toBe(false);
+  });
 });
 
 describe('normalizeHouseConfig (reading a stored row)', () => {
@@ -638,6 +877,34 @@ describe('normalizeHouseConfig (reading a stored row)', () => {
     expect(c.payers.openai_credit.creditUsd).toBe(0);
     expect(normalizeHouseConfig(undefined)).toEqual(HOUSE_CONFIG_DEFAULTS);
     expect(normalizeHouseConfig({ enabled: true, mode: 'daily' })).toMatchObject({ enabled: true, mode: 'daily' });
+  });
+
+  it('reads a null, missing or broken credit on the OpenAI and Anthropic payers as no room, never as no stop', () => {
+    for (const credit of [null, undefined, 'lots', Number.NaN]) {
+      const c = normalizeHouseConfig({
+        payers: { openai_credit: { creditUsd: credit, dayCapUsd: 12 }, anthropic_credit: { creditUsd: credit, dayCapUsd: 5 }, house_openrouter: { creditUsd: credit, dayCapUsd: 10 } }
+      });
+      expect(c.payers.openai_credit.creditUsd, String(credit)).toBe(0);
+      expect(c.payers.anthropic_credit.creditUsd, String(credit)).toBe(0);
+      expect(dayBudgetUsd(c.payers.anthropic_credit, { day: START, lifetimeUsd: 9999 }), String(credit)).toBe(0);
+      expect(dayBudgetUsd(c.payers.openai_credit, { day: START, lifetimeUsd: 0 }), String(credit)).toBe(0);
+      expect(houseCreditStopped(c.payers.openai_credit, { lifetimeUsd: 0 }), String(credit)).toBe(true);
+      // The house OpenRouter key keeps no credit stop (its own daily limit).
+      expect(c.payers.house_openrouter.creditUsd, String(credit)).toBeNull();
+      expect(dayBudgetUsd(c.payers.house_openrouter, { day: START, lifetimeUsd: 9999 }), String(credit)).toBe(10);
+    }
+    // A payer object with no credit field reads the same.
+    expect(normalizeHouseConfig({ payers: { anthropic_credit: { dayCapUsd: 5 } } }).payers.anthropic_credit.creditUsd).toBe(0);
+    // A stored amount is kept (clamped).
+    expect(normalizeHouseConfig({ payers: { openai_credit: { creditUsd: 150 } } }).payers.openai_credit.creditUsd).toBe(150);
+    expect(normalizeHouseConfig({ payers: { openai_credit: { creditUsd: 1e9 } } }).payers.openai_credit.creditUsd).toBe(HOUSE_LIMITS.creditMaxUsd);
+  });
+
+  it('keeps the finishing reserve no higher than the comic cap', () => {
+    const c = normalizeHouseConfig({ capComicUsd: 0.3, finishReserveUsd: 2 });
+    expect(c.capComicUsd).toBe(0.3);
+    expect(c.finishReserveUsd).toBeLessThanOrEqual(0.3);
+    expect(normalizeHouseConfig({ capComicUsd: 5, finishReserveUsd: 1.5 }).finishReserveUsd).toBe(1.5);
   });
 });
 

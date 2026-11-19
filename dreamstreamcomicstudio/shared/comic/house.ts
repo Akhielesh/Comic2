@@ -178,7 +178,10 @@ export const houseDaysBetween = (from: string, to: string): number => Math.round
 export interface HousePayerConfig {
   /** The payer's day budget before any runway spreading (USD). */
   dayCapUsd: number;
-  /** The credit the owner entered (USD); null = no credit stop (the house OpenRouter key has its own daily limit). */
+  /**
+   * The credit the owner entered (USD). null = no credit stop, allowed only on the house OpenRouter key (it has its own
+   * daily limit); the OpenAI and Anthropic credits always carry an amount (houseCreditOptional).
+   */
   creditUsd: number | null;
   /** Spending stops at creditUsd × stopFraction. */
   stopFraction: number;
@@ -274,8 +277,21 @@ const HOUSE_MODEL_IDS: ReadonlySet<string> = new Set(
   (Object.values(HOUSE_FAMILY_MODELS) as Readonly<Record<HouseTier, readonly string[]>>[]).flatMap((t) => [...t.standard, ...t.pro])
 );
 
+/**
+ * Payers whose credit may be left empty (no credit stop): only the house OpenRouter key, which has its own daily limit.
+ * The owner's OpenAI and Anthropic credits always carry an amount, so their 90% stop can never be switched off.
+ */
+const CREDIT_OPTIONAL_PAYERS: ReadonlySet<HouseCappedPayer> = new Set<HouseCappedPayer>(['house_openrouter']);
+/** True when a payer's credit may be null (no credit stop). */
+export const houseCreditOptional = (payer: HouseCappedPayer): boolean => CREDIT_OPTIONAL_PAYERS.has(payer);
+
+/** Field lookups that only see a map's own keys (a body key such as `toString` or `__proto__` is unknown). */
+const ownCheck = (fields: Readonly<Record<string, Check>>, key: string): Check | undefined =>
+  Object.prototype.hasOwnProperty.call(fields, key) ? fields[key] : undefined;
+
 const PAYER_FIELDS: Readonly<Record<keyof HousePayerConfig, Check>> = {
   dayCapUsd: usdCheck(HOUSE_LIMITS.capDayMaxUsd, true),
+  // Null is accepted here only for a credit-optional payer; the payer loop refuses it for the others.
   creditUsd: (v, field, errors) => (v === null ? true : usdCheck(HOUSE_LIMITS.creditMaxUsd)(v, field, errors)),
   stopFraction: (v, field, errors) => {
     if (!isNum(v) || v <= 0) return errors.push({ field, reason: 'must be a share above 0' }), false;
@@ -342,16 +358,18 @@ export function sanitizeHouseConfigPatch(raw: unknown, current: HouseConfig = HO
         }
         const out: HousePayerPatch = {};
         for (const [f, v] of Object.entries(p)) {
-          const check = (PAYER_FIELDS as Record<string, Check | undefined>)[f];
+          const check = ownCheck(PAYER_FIELDS, f);
           if (!check) errors.push({ field: `${base}.${f}`, reason: 'unknown field' });
-          else if (check(v, `${base}.${f}`, errors)) (out as Record<string, unknown>)[f] = v;
+          else if (f === 'creditUsd' && v === null && !houseCreditOptional(payer as HouseCappedPayer)) {
+            errors.push({ field: `${base}.${f}`, reason: 'a credit amount is required' });
+          } else if (check(v, `${base}.${f}`, errors)) (out as Record<string, unknown>)[f] = v;
         }
         payers[payer as HouseCappedPayer] = out;
       }
       patch.payers = payers;
       continue;
     }
-    const check = (TOP_FIELDS as Record<string, Check | undefined>)[key];
+    const check = ownCheck(TOP_FIELDS, key);
     if (!check) errors.push({ field: key, reason: 'unknown field' });
     else if (check(value, key, errors)) (patch as Record<string, unknown>)[key] = value;
   }
@@ -390,8 +408,16 @@ export function normalizeHouseConfig(raw: unknown): HouseConfig {
   for (const p of HOUSE_CAPPED_PAYERS) {
     const r = isPlainObject(rawPayers[p]) ? (rawPayers[p] as Record<string, unknown>) : {};
     const def = d.payers[p];
-    // null = no credit stop; a missing or broken amount falls back to the default; a negative one reads as 0 (no room).
-    const creditUsd = r.creditUsd === null ? null : isNum(r.creditUsd) ? Math.min(HOUSE_LIMITS.creditMaxUsd, Math.max(0, r.creditUsd)) : def.creditUsd;
+    // A negative amount reads as 0 (no room). On the house OpenRouter key null = no credit stop and a missing or broken
+    // amount falls back to the default; on the owner's credits a null, missing or broken amount reads as 0 (no room),
+    // never as no stop.
+    const creditUsd = isNum(r.creditUsd)
+      ? Math.min(HOUSE_LIMITS.creditMaxUsd, Math.max(0, r.creditUsd))
+      : !houseCreditOptional(p)
+        ? 0
+        : r.creditUsd === null
+          ? null
+          : def.creditUsd;
     payers[p] = {
       dayCapUsd: clampNum(r.dayCapUsd, 0, HOUSE_LIMITS.capDayMaxUsd, def.dayCapUsd),
       creditUsd,
@@ -453,12 +479,13 @@ const floorCents4 = (usd: number): number => Math.floor(usd * 10_000 + 1e-6) / 1
 /**
  * A payer's budget for one run day (USD): its day cap, never past its credit stop (credit × stop − lifetime spend),
  * and, with a runway date, the room left spread evenly over the days left (today included). A runway past the credit's
- * expiry ends at the expiry; after the expiry day the budget is 0. Any bad input gives 0 (fail closed).
+ * expiry ends at the expiry; after the expiry day the budget is 0. The day cap is never read above
+ * HOUSE_LIMITS.capDayMaxUsd, even from a config that skipped normalizeHouseConfig. Any bad input gives 0 (fail closed).
  */
 export function dayBudgetUsd(payer: Readonly<HousePayerConfig>, at: { day: string; lifetimeUsd: number }): number {
   if (!isHouseDay(at.day) || !isNum(payer.dayCapUsd) || payer.dayCapUsd <= 0 || !isNum(at.lifetimeUsd)) return 0;
   if (isHouseDay(payer.expiresOn) && at.day > payer.expiresOn) return 0;
-  const cap = payer.dayCapUsd;
+  const cap = Math.min(payer.dayCapUsd, HOUSE_LIMITS.capDayMaxUsd);
   if (payer.creditUsd === null) return floorCents4(cap);
   if (!isNum(payer.creditUsd) || !isNum(payer.stopFraction)) return 0;
   const room = payer.creditUsd * Math.min(payer.stopFraction, HOUSE_LIMITS.stopFractionMax) - Math.max(0, at.lifetimeUsd);
@@ -470,6 +497,18 @@ export function dayBudgetUsd(payer: Readonly<HousePayerConfig>, at: { day: strin
     budget = Math.min(budget, room / daysLeft);
   }
   return floorCents4(budget);
+}
+
+/**
+ * True when a payer's credit is at its stop: the lifetime spend has reached credit × stopFraction (owner question 5:
+ * that half stops, its slots are not moved). A payer without a credit (null, the house OpenRouter key) never stops
+ * here; a broken credit, share or spend reads as stopped (fail closed).
+ */
+export function houseCreditStopped(payer: Readonly<HousePayerConfig>, at: { lifetimeUsd: number }): boolean {
+  if (payer.creditUsd === null) return false;
+  if (!isNum(payer.creditUsd) || !isNum(payer.stopFraction) || !isNum(at.lifetimeUsd)) return true;
+  const stopAt = payer.creditUsd * Math.min(Math.max(0, payer.stopFraction), HOUSE_LIMITS.stopFractionMax);
+  return Math.max(0, at.lifetimeUsd) >= stopAt;
 }
 
 // ── Content rules ────────────────────────────────────────────────────────────────────────────
@@ -505,36 +544,50 @@ export const HOUSE_TOPIC_BLOCKLIST: readonly HouseTopicRule[] = Object.freeze([
     topic: 'religion',
     re: words("ramayana?|ramayan|mahabharata?|bhagavad[ -]?gita|rig ?veda|vedas|upanishads?|puranas|bible|biblical|biblia|quran|qur'?an|koran|coran|alcoran|torah|talmud|guru granth sahib|tripitaka|new testament|old testament")
   },
-  // Deities, prophets and religious figures.
+  // Deities, prophets and religious figures. Rama, Sita and Kali are also everyday words and names ("la rama" is a
+  // branch in Spanish and Portuguese, Kali a pet's name), so on their own they pass: Rama with Sita, a title before
+  // the name, or the epic's other figures hold the text.
   {
     topic: 'religion',
     re: words(
-      'lord (?:rama?|krishna|shiva|vishnu|ganesha?|hanuman|brahma|buddha)|rama|sita|ravana|krishna|arjuna|shiva|vishnu|ganesha|ganesh|hanuman|durga|kali|lakshmi|parvati|saraswati|brahma|jesus|jesucristo|christ|cristo|virgin mary|virgen maria|virgem maria|vierge marie|moses|prophet muhammad|muhammad|mohammed|mahoma|mahomet|maome|allah|the prophet|el profeta|o profeta|le prophete|buddha|buda|guru nanak|mahavira|yahweh|jehovah|holy spirit|pope|dalai lama'
+      'lord (?:rama?|krishna|shiva|vishnu|ganesha?|hanuman|brahma|buddha)|(?:sri|shri|shree) (?:rama?|krishna)|jai shri ram|goddess kali|maa? kali|kali (?:maa?|mata)|rama(?=[\\s\\S]*' + W_BEFORE + 'sita' + W_AFTER + ')|sita(?=[\\s\\S]*' + W_BEFORE + 'rama?' + W_AFTER + ')|ravana|lakshmana|krishna|arjuna|shiva|vishnu|ganesha|ganesh|hanuman|durga|lakshmi|parvati|saraswati|brahma|jesus|jesucristo|christ|cristo|virgin mary|virgen maria|virgem maria|vierge marie|moses|prophet muhammad|muhammad|mohammed|mahoma|mahomet|maome|allah|the prophet|el profeta|o profeta|le prophete|buddha|buda|guru nanak|mahavira|yahweh|jehovah|holy spirit|pope|dalai lama'
     )
   },
   // The same in Devanagari (Hindi sources).
   { topic: 'religion', re: words('रामायण|महाभारत|भगवद्गीता|कुरान|बाइबिल|बाइबल|श्रीराम|राम|सीता|रावण|कृष्ण|शिव|विष्णु|हनुमान|गणेश|दुर्गा|ब्रह्मा|अल्लाह|यीशु|ईसा मसीह|बुद्ध|पैगंबर') },
-  // Japanese (no spaces between words: plain substrings).
-  { topic: 'religion', re: /聖書|コーラン|キリスト|イエス|仏陀|ブッダ|釈迦|預言者|ムハンマド|アッラー/u },
+  // Japanese (no spaces between words: plain substrings). Bare イエス is also the everyday word for "yes".
+  { topic: 'religion', re: /聖書|コーラン|キリスト|イエス様|イエス・|仏陀|ブッダ|釈迦|預言者|ムハンマド|アッラー/u },
   // Real people: a political or religious title before a capitalised name (invented or not), and true-life framings.
+  // English, Spanish, Portuguese and French (accents stripped).
   {
     topic: 'real_person',
-    re: /(?<!(?:[Cc]lass|[Cc]lub|[Cc]ouncil|[Tt]eam|[Ss]tudent|[Ss]chool) )\b(?:[Pp]resident|[Pp]rime [Mm]inister|[Cc]hief [Mm]inister|[Vv]ice [Pp]resident|[Ss]enator|[Gg]overnor|[Cc]hancellor|[Mm]inister|[Cc]ongress(?:man|woman)|[Aa]yatollah)\s+[A-Z][\p{L}'’-]+/u
+    re: /(?<!(?:[Cc]lass|[Cc]lub|[Cc]ouncil|[Tt]eam|[Ss]tudent|[Ss]chool) )\b(?:[Pp]resident[ea]?|[Pp]rime [Mm]inister|[Cc]hief [Mm]inister|[Vv]ice [Pp]resident|[Ss]enator|[Ss]enador(?:a)?|[Ss]enateur|[Gg]overnor|[Gg]obernador(?:a)?|[Gg]overnador(?:a)?|[Gg]ouverneur|[Cc]hancellor|[Mm]inister|[Cc]ongress(?:man|woman)|[Aa]yatollah|[Pp]rimer [Mm]inistro|[Pp]rimera [Mm]inistra|[Pp]rimeiro[- ][Mm]inistro|[Pp]rimeira[- ][Mm]inistra|[Pp]remier [Mm]inistre)\s+[A-Z][\p{L}'’-]+/u
   },
+  // Hindi titles of office (Devanagari has no capitals, so the title alone holds the text).
+  { topic: 'real_person', re: words('प्रधानमंत्री|प्रधान मंत्री|मुख्यमंत्री|मुख्य मंत्री|राष्ट्रपति') },
+  { topic: 'real_person', re: /大統領|首相|総理大臣/u },
   {
     topic: 'real_person',
     re: words('based on the (?:true |real )?(?:life|story) of|biopic|biography of|real[- ]life (?:person|people|figure|hero)|famous (?:actor|actress|singer|cricketer|footballer|politician|scientist|celebrity)|celebrit(?:y|ies)')
   },
-  // Real historical events.
+  // Real historical events. "A cold war between two cats" and "her crusade" are figures of speech: only the named
+  // events hold the text.
   {
     topic: 'real_event',
-    re: words('world war(?: (?:i{1,2}|one|two|1|2))?|ww ?(?:i{1,2}|1|2)|holocaust|9/11|september 11|partition of india|cold war|crusades?|hiroshima|nagasaki|genocide|apartheid|french revolution|russian revolution|chernobyl')
+    re: words(
+      'world war(?: (?:i{1,2}|one|two|1|2))?|ww ?(?:i{1,2}|1|2)|holocaust|9/11|september 11|partition of india|the cold war|the crusades|hiroshima|nagasaki|genocide|apartheid|french revolution|russian revolution|chernobyl|(?:primera|segunda|primeira) guerra mundial|(?:premiere|seconde|deuxieme) guerre mondiale|(?:la|a) guerra fria|la guerre froide|holocausto|holocauste|las cruzadas|as cruzadas|les croisades|विश्व ?युद्ध'
+    )
   },
-  // Politics.
+  { topic: 'real_event', re: /世界大戦|ホロコースト/u },
+  // Politics. "Office politics" and "a parliament of owls" are everyday phrases: only party, campaign and election
+  // framings hold the text.
   {
     topic: 'politics',
-    re: words('political part(?:y|ies)|politics|politician|election campaign|campaign rally|parliament|prime minister|chief minister|bjp|democratic party|republican party|labour party|conservative party|communis[mt]|fascis[mt]|nazis?|left[- ]wing|right[- ]wing')
+    re: words(
+      'political part(?:y|ies)|party politics|political campaign|politician|election campaign|campaign rally|parliamentary election|general election|presidential election|prime minister|chief minister|bjp|democratic party|republican party|labour party|conservative party|communis[mt]|fascis[mt]|nazis?|left[- ]wing|right[- ]wing|partidos? politicos?|campana electoral|campanha eleitoral|elecciones (?:generales|presidenciales)|eleicoes (?:gerais|presidenciais)|eleicao presidencial|partis? politiques?|campagne electorale|election presidentielle|राजनीतिक (?:दल|पार्टी)|चुनाव प्रचार|आम चुनाव|चुनावी'
+    )
   },
+  { topic: 'politics', re: /政党/u },
   // Brands and products.
   {
     topic: 'brand',
@@ -542,9 +595,10 @@ export const HOUSE_TOPIC_BLOCKLIST: readonly HouseTopicRule[] = Object.freeze([
   },
   // Existing characters (public domain included: house stories are original). Studio and artist names are in
   // LIBRARY_IP_BLOCKLIST; trademarked characters are found by the server's detectNamedIp (passed as `namedIp`).
+  // Hercules is also a beetle and a moth: those pass.
   {
     topic: 'existing_character',
-    re: words('sherlock holmes|dr\\.? watson|dracula|frankenstein|alice in wonderland|peter pan|robin hood|tarzan|pinocchio|cinderella|snow white|rapunzel|little red riding hood|aladdin|sinbad|hercules')
+    re: words('sherlock holmes|dr\\.? watson|dracula|frankenstein|alice in wonderland|peter pan|robin hood|tarzan|pinocchio|cinderella|snow white|rapunzel|little red riding hood|aladdin|sinbad|hercules(?! (?:beetles?|moths?))|heracles')
   }
 ] as HouseTopicRule[]);
 
@@ -555,30 +609,50 @@ export interface HouseTextHit {
 export interface HouseTextCheck {
   ok: boolean;
   hits: HouseTextHit[];
+  /**
+   * Set when the check could not run, so the text is refused without hits (fail closed): `not_text` when the input is
+   * not a string or an array of strings (pass the brief's or plan's text fields, not the object), `no_named_ip_check`
+   * when the caller gave no named-IP detector.
+   */
+  refused?: 'not_text' | 'no_named_ip_check';
 }
+
+/** Invisible characters (soft hyphen, zero-width and direction marks, word joiners, BOM) dropped before matching. */
+const stripInvisible = (text: string): string => text.replace(/[­​-‏⁠-⁤﻿]/g, '');
 
 /**
  * Compatibility forms folded, Latin accents and invisible characters removed, spaces collapsed, then recomposed (so
  * Japanese voiced kana and half-width forms read as their usual letters): "Rām​āyaṇa" → "Ramayana".
  */
 const normalizeForCheck = (text: string): string =>
-  text
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/़/g, '') // Devanagari nukta
-    .replace(/[­​-‏⁠-⁤﻿]/g, '')
+  stripInvisible(
+    text
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/़/g, '') // Devanagari nukta
+  )
     .normalize('NFC')
     .replace(/\s+/g, ' ');
 
+/** Canonical composition only (no compatibility folding, accents kept): "Webtoon™" keeps its ™. */
+const composeForCheck = (text: string): string => stripInvisible(text.normalize('NFC')).replace(/\s+/g, ' ');
+
 const HITS_MAX = 10;
+
+/** The server's named-IP detector (server/src/comic/replies.ts detectNamedIp, which shared code cannot import). */
+export type HouseNamedIpDetector = (text: string) => readonly string[];
 
 /**
  * The second content check (the first is the brief prompt): refuses a brief or plan whose text names a blocked topic
  * (HOUSE_TOPIC_BLOCKLIST), a studio, artist or brand from LIBRARY_IP_BLOCKLIST, or a name the server's named-IP
- * detector finds (`opts.namedIp`, server/src/comic/replies.ts detectNamedIp, which shared code cannot import).
+ * detector finds (`opts.namedIp`, required). Fails closed: input that is not text, or a missing detector, is refused
+ * with `refused` set rather than passed.
  */
-export function checkHouseText(text: string | readonly string[], opts: { namedIp?: (text: string) => readonly string[] } = {}): HouseTextCheck {
-  const joined = (Array.isArray(text) ? text : [text]).filter((t): t is string => typeof t === 'string').join('\n');
+export function checkHouseText(text: string | readonly string[], opts: { namedIp: HouseNamedIpDetector }): HouseTextCheck {
+  const parts: readonly unknown[] = typeof text === 'string' ? [text] : Array.isArray(text) ? text : [text];
+  if (!parts.every((t): t is string => typeof t === 'string')) return { ok: false, hits: [], refused: 'not_text' };
+  if (typeof opts?.namedIp !== 'function') return { ok: false, hits: [], refused: 'no_named_ip_check' };
+  const joined = parts.join('\n');
   const norm = normalizeForCheck(joined);
   const hits: HouseTextHit[] = [];
   const add = (topic: HouseBlockedTopic, term: string) => {
@@ -590,9 +664,10 @@ export function checkHouseText(text: string | readonly string[], opts: { namedIp
       const re = new RegExp(rule.re.source, rule.re.flags.includes('g') ? rule.re.flags : `${rule.re.flags}g`);
       for (const m of norm.matchAll(re)) add(rule.topic, m[0]);
     }
+    // The IP list is read on the composed text too: compatibility folding turns its "webtoon™" into "webtoonTM".
     const ip = new RegExp(LIBRARY_IP_BLOCKLIST.source, `${LIBRARY_IP_BLOCKLIST.flags.replace('g', '')}g`);
-    for (const m of norm.matchAll(ip)) add('existing_character', m[0]);
-    if (opts.namedIp) for (const name of opts.namedIp(norm)) add('existing_character', name);
+    for (const t of [composeForCheck(joined), norm]) for (const m of t.matchAll(ip)) add('existing_character', m[0]);
+    for (const name of opts.namedIp(norm)) add('existing_character', name);
   }
   return { ok: hits.length === 0, hits };
 }
@@ -664,6 +739,15 @@ export const HOUSE_GENRES: readonly HouseGenre[] = freezeDeep<HouseGenre[]>([
 
 /** Non-English source languages (drawable scripts in languages.ts); every one gets an English edition. */
 export const HOUSE_SOURCE_LANGUAGES: readonly string[] = Object.freeze(['es', 'hi', 'pt', 'fr', 'ja']);
+
+/**
+ * Looks a house comic never uses: their prompt text asks for deities and devotional imagery, which the house content
+ * rules forbid, and checkHouseText never reads a preset's text (it goes straight into the writer and image prompts).
+ */
+export const HOUSE_EXCLUDED_PRESETS: readonly string[] = Object.freeze(['mythic-icon', 'indian-miniature']);
+/** The looks a house slate may use. */
+export const HOUSE_STYLE_PRESETS: readonly StylePreset[] = Object.freeze(STYLE_PRESETS.filter((p) => !HOUSE_EXCLUDED_PRESETS.includes(p.id)));
+const housePreset = (id: string): StylePreset | undefined => HOUSE_STYLE_PRESETS.find((p) => p.id === id);
 
 /** Looks too dark for a children's comic (a preference: relaxed only when nothing else is left). */
 const CHILD_UNSUITED_LOOKS: ReadonlySet<string> = new Set(['noir-ink', 'dark-fantasy', 'woodcut', 'brutalist', 'cyberpunk']);
@@ -738,9 +822,16 @@ export interface PlanDailySlateInput {
   registry?: readonly ImageModelSpec[];
   /** Registry id → health; 'down' is paused. */
   health?: Readonly<Record<string, HealthState | undefined>>;
+  /**
+   * Each capped payer's lifetime spend (USD, from the ledger). The planner then works out from config.payers which
+   * credits are at their stop (houseCreditStopped: that half stops) and, for a payer `budgets` does not name, its day
+   * budget (dayBudgetUsd). Pass it: a budget of 0 on its own reads as a day with no room and moves the slots.
+   */
+  lifetimeUsd?: Partial<Readonly<Record<HouseCappedPayer, number>>>;
   /** Each payer's day budget still available (USD); the mix leans away from a payer with little left. */
   budgets?: Partial<Readonly<Record<HouseCappedPayer, number>>>;
-  /** Payers at their credit stop: that half stops and its slots are not moved (owner question 5). */
+  /** Payers at their credit stop: that half stops and its slots are not moved (owner question 5). Added to the ones
+   *  `lifetimeUsd` shows at their stop. */
   stopped?: readonly HouseCappedPayer[];
   byokVendors?: readonly HouseByokVendor[];
 }
@@ -843,11 +934,13 @@ const usage = (history: readonly HouseHistoryEntry[], key: 'presetId' | 'genre')
  * The day's slates (spec §5.2). Deterministic: the seed is the day, so the same inputs give the same slate.
  *
  * - Image families: 5 Gemini and 5 OpenAI by default, re-weighted by the owner's model weights and by the share of each
- *   payer's day budget still available; a payer at its credit stop (`stopped`) stops its half without moving it.
+ *   payer's day budget still available; a payer at its credit stop (`stopped`, or worked out from `lifetimeUsd`) stops
+ *   its half without moving it.
  * - Tiers standard (about 60%) and pro (about 40% of each family that has a pickable pro model); never draft; 4K only
  *   for pro pages when `allow4k`.
  * - Kinds: at least 4 a day; at least 2 short silent pieces; long pieces in their kind's page range.
- * - Looks: at least 7 distinct a day, none used on either of the 2 days before; at least 2 non-colour looks.
+ * - Looks: at least 7 distinct a day, none used on either of the 2 days before; at least 2 non-colour looks (3 on a
+ *   day of 6 or more); never a look in HOUSE_EXCLUDED_PRESETS.
  * - Audiences 30% children, 40% general, 30% teen; at least 70% English sources; editions as HOUSE_LIMITS says.
  * - A paused model is swapped within its family (recorded); a family with every model paused is held, not moved.
  */
@@ -863,8 +956,17 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
   const rng = rngFor(`house-slate:${day}`);
 
   // 1. Families: the owner's weights × the share of the payer's day budget left. A stopped payer keeps its nominal
-  //    share in the split and is then dropped, so its half is not moved to the other payer.
-  const stopped = new Set(input.stopped ?? []);
+  //    share in the split and is then dropped, so its half is not moved to the other payer. With lifetime spend the
+  //    stops and the missing budgets come from config.payers.
+  const stopped = new Set<HouseCappedPayer>(input.stopped ?? []);
+  const budgets: Partial<Record<HouseCappedPayer, number>> = { ...(input.budgets ?? {}) };
+  for (const p of HOUSE_CAPPED_PAYERS) {
+    const spent = input.lifetimeUsd?.[p];
+    const payer = config.payers[p];
+    if (spent === undefined || !payer) continue;
+    if (houseCreditStopped(payer, { lifetimeUsd: spent })) stopped.add(p);
+    if (budgets[p] === undefined) budgets[p] = dayBudgetUsd(payer, { day, lifetimeUsd: spent });
+  }
   const pools = { gemini: familyPool(registry, config.modelWeights, 'gemini'), openai: familyPool(registry, config.modelWeights, 'openai') };
   const familyWeight = (f: HouseImageFamily): number => {
     // The family's weight is its most-wanted model's: turning one model off moves its slots to its sibling, not to
@@ -873,7 +975,7 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
     if (!all.length) return 0;
     const best = Math.max(...all.map((c) => c.weight));
     const payer = familyPayer(f, byok);
-    const left = input.budgets?.[payer];
+    const left = budgets[payer];
     const cap = config.payers[payer]?.dayCapUsd ?? 0;
     const share = stopped.has(payer) || left === undefined ? 1 : cap > 0 && isNum(left) ? Math.min(1, Math.max(0, left / cap)) : 0;
     return best * share;
@@ -955,11 +1057,12 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
   const recent = new Set(history.filter((h) => recentDays.has(h.day) && h.presetId).map((h) => h.presetId!));
   const looks = usage(history, 'presetId');
   const distinctTarget = Math.min(total, LOOKS_MIN_DISTINCT);
-  const nNonColour = Math.min(total, 2 + (total >= 6 && rng() < 1 / 3 ? 1 : 0));
+  // Three non-colour looks on a day of 6 or more, so the colour looks (13 for house comics) last the 3-day gap.
+  const nNonColour = Math.min(total, total >= 6 ? 3 : 2);
   const nonColourSlots = new Set(
     [...shuffle(rng, idx.filter((i) => drafts[i].audience !== 'children')), ...shuffle(rng, idx.filter((i) => drafts[i].audience === 'children'))].slice(0, nNonColour)
   );
-  const KIND_BOUND = new Set(STYLE_PRESETS.filter((p) => p.kind).map((p) => p.kind!));
+  const KIND_BOUND = new Set(HOUSE_STYLE_PRESETS.filter((p) => p.kind).map((p) => p.kind!));
   const lookOrder = [
     ...shuffle(rng, idx.filter((i) => nonColourSlots.has(i))),
     ...shuffle(rng, idx.filter((i) => !nonColourSlots.has(i) && KIND_BOUND.has(drafts[i].shape.kind))),
@@ -975,7 +1078,7 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
     let pick: string | undefined;
     if (chosen.length >= distinctTarget) {
       const reuse = (f: (p: StylePreset) => boolean) => {
-        const xs = chosen.filter((id) => f(STYLE_PRESETS.find((p) => p.id === id)!));
+        const xs = chosen.filter((id) => f(housePreset(id)!));
         return xs.length ? xs[Math.floor(rng() * xs.length)] : undefined;
       };
       pick = reuse((p) => colourOk(p) && kindOk(p) && audienceOk(p)) ?? reuse((p) => colourOk(p) && audienceOk(p)) ?? reuse(colourOk);
@@ -993,7 +1096,7 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
         () => true
       ];
       for (const tier of tiers) {
-        const cands = looks.order(shuffle(rng, STYLE_PRESETS.filter(tier)));
+        const cands = looks.order(shuffle(rng, HOUSE_STYLE_PRESETS.filter(tier)));
         if (cands.length) {
           pick = cands[0].id;
           break;
@@ -1038,7 +1141,7 @@ export function planDailySlate(input: PlanDailySlateInput): HouseSlate[] {
   // 8. The slates.
   return drafts.map((d, i): HouseSlate => {
     const spec = registry.find((m) => m.id === d.model)!;
-    const preset = STYLE_PRESETS.find((p) => p.id === d.presetId)!;
+    const preset = housePreset(d.presetId)!;
     return {
       day,
       slot: i + 1,
@@ -1130,7 +1233,7 @@ export function calibrationSlates(input: { day: string; registry?: readonly Imag
       } else blocked = 'model_paused';
     }
     const spec = registry.find((m) => m.id === model) ?? getImageModel(model)!;
-    const preset = STYLE_PRESETS.find((x) => x.id === story.presetId)!;
+    const preset = housePreset(story.presetId)!;
     return {
       day: input.day,
       slot: i + 1,
