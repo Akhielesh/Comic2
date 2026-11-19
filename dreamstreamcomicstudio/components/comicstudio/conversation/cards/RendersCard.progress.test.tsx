@@ -182,6 +182,62 @@ describe('several pages drawing at once', () => {
       off();
     }
   });
+
+  it('a lead page that passes its stuck time between two ticks still says so, and the other pages keep their clocks', () => {
+    const refresh = vi.fn();
+    const off = registerStudioRefresh(refresh);
+    try {
+      // Page 2 has drawn since T0 (usually ~20 s: stuck past 200 s); the clock's last tick lands right on the line.
+      vi.setSystemTime(T0 + 195_000);
+      const doc = runDoc(['drawn', 'drawing', 'queued']);
+      const { container, rerender, studio } = show(doc);
+      act(() => void vi.advanceTimersByTime(5 * TILE_CLOCK_MS));
+      expect(container.querySelector('[data-renders-stuck]')).toBeNull();
+      // 400 ms later, before the next tick, page 3 starts: a doc update re-renders the card.
+      vi.setSystemTime(T0 + 200_400);
+      const next = runDoc(['drawn', 'drawing', 'drawing']);
+      next.pages[2] = { ...next.pages[2], render: { status: 'rendering', history: [], updatedAt: T0 + 200_400 } };
+      rerender(<CardRenderer card={runCard(next)} studio={{ ...studio, doc: next } as ComicStudioController} />);
+      expect(container.querySelector('[data-renders-stuck]')).toHaveTextContent('Page 2 is taking much longer than usual');
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      // Page 3 still draws normally: the clock keeps running for it, and its time in Details moves on.
+      fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+      const row3 = () => within(screen.getByRole('list', { name: 'Each page' })).getAllByRole('listitem')[2];
+      expect(row3()).toHaveTextContent(/Drawing · 0s/);
+      act(() => void vi.advanceTimersByTime(5 * TILE_CLOCK_MS));
+      expect(row3()).toHaveTextContent(/Drawing · [4-5]s/);
+      expect(container.querySelector('[data-renders-stuck]')).not.toBeNull();
+      expect(container.querySelectorAll('.ds-live-dot').length).toBeLessThanOrEqual(1);
+      // Once page 3 lands too, nothing ticks: the clock stops.
+      const landed = runDoc(['drawn', 'drawing', 'drawn']);
+      rerender(<CardRenderer card={runCard(landed)} studio={{ ...studio, doc: landed } as ComicStudioController} />);
+      // One-off UI timeouts run out within a few seconds; the clock's interval would still be counted after them.
+      act(() => void vi.advanceTimersByTime(5 * TILE_CLOCK_MS));
+      expect(vi.getTimerCount()).toBe(0);
+      expect(container.querySelector('[data-renders-stuck]')).not.toBeNull();
+    } finally {
+      off();
+    }
+  });
+
+  it('a run whose pages all wait for an image slot reads as waiting, never as finished', () => {
+    const doc = runDoc(Array.from({ length: 8 }, (): Phase => 'queued'));
+    const { container } = show(doc);
+    const card = container.querySelector('[data-renders-progress]') as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card.querySelector('[data-progress-headline]')).toHaveTextContent(/^Drawing pages · 0 of 8 · waiting to start$/);
+    expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(container.querySelector('[data-renders-done]')).toBeNull();
+  });
+
+  it('one page waiting for a slot reads "Drawing page 2 · waiting to start"', () => {
+    const doc = runDoc(['drawn', 'queued']);
+    const card: Card = { type: 'renders', id: 'card_one', label: 'Drawing page 2', targets: [{ kind: 'page', id: 'pg_2' }] };
+    const { container } = show(doc, card);
+    expect(container.querySelector('[data-progress-headline]')).toHaveTextContent(/^Drawing page 2 · waiting to start$/);
+    expect(container.querySelector('[data-renders-done]')).toBeNull();
+  });
 });
 
 describe('when the run finishes', () => {
@@ -209,6 +265,73 @@ describe('when the run finishes', () => {
     const doc = runDoc(['drawn', 'drawn', 'drawn', 'drawn', 'drawn', 'drawn', 'none', 'none']);
     const { container } = show(doc);
     expect(container.querySelector('[data-renders-done]')).toHaveTextContent(/^6 of 8 pages drawn · 2 not drawn\s*View/);
+    // Details names which two.
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    const rows = within(screen.getByRole('list', { name: 'Each page' })).getAllByRole('listitem');
+    expect(rows.map((r) => r.textContent)).toEqual(['Page 7 · Not drawn', 'Page 8 · Not drawn']);
+  });
+
+  it('a run stopped before anything drew says it once, with nothing to View', () => {
+    const doc = runDoc(['none', 'none', 'none']);
+    const { container } = show(doc);
+    const line = container.querySelector('[data-renders-done]') as HTMLElement;
+    expect(line.textContent).toBe('3 pages not drawn');
+    expect(within(line).queryByRole('button')).toBeNull();
+    expect(container.querySelector('.lucide-check')).toBeNull();
+  });
+
+  it('a take the content check blocked is withheld, never counted as drawn', () => {
+    const doc = runDoc(['drawn', 'drawn']);
+    const blocked = doc.pages[1].render;
+    doc.pages[1] = { ...doc.pages[1], render: { ...blocked, asset: { ...blocked.asset!, safety: { assessed: 'X', quarantined: true, at: T0 } } } };
+    const { container } = show(doc);
+    const line = container.querySelector('[data-renders-done]') as HTMLElement;
+    expect(line).toHaveTextContent(/^1 of 2 pages drawn · 1 withheld\s*View/);
+    // No success mark: not everything was drawn.
+    expect(line.querySelector('.lucide-check')).toBeNull();
+    fireEvent.click(within(line).getByRole('button', { name: /Details/ }));
+    const rows = within(screen.getByRole('list', { name: 'Each page' })).getAllByRole('listitem');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent(/^Page 2 · Withheld \(didn’t pass the content check\)$/);
+  });
+
+  it('one page withheld says so and why', () => {
+    const doc = runDoc(['drawn', 'drawn']);
+    const blocked = doc.pages[1].render;
+    doc.pages[1] = { ...doc.pages[1], render: { ...blocked, asset: { ...blocked.asset!, safety: { assessed: 'X', at: T0 } } } };
+    const card: Card = { type: 'renders', id: 'card_one', label: 'Drawing page 2', targets: [{ kind: 'page', id: 'pg_2' }] };
+    const { container } = show(doc, card);
+    expect(container.querySelector('[data-renders-done]')).toHaveTextContent(/^Page 2 was withheld · didn’t pass the content check\s*View/);
+    expect(container.querySelector('.lucide-check')).toBeNull();
+  });
+
+  it('a stopped redraw counts only the pages this run drew; the rest show earlier pictures', () => {
+    // The run queued its 8 pages at `since`; 5 landed, then Stop put the earlier pictures back on the other 3.
+    const since = T0 - 60_000;
+    const doc = runDoc(MID.map(() => 'drawn'));
+    doc.pages = doc.pages.map((pg, i) =>
+      i < 5 ? pg : { ...pg, render: { ...pg.render, asset: { ...pg.render.asset!, at: since - 3_600_000 }, updatedAt: T0 } }
+    );
+    const card: Card = { ...runCard(doc), since } as Card;
+    const { container, studio } = show(doc, card);
+    const line = container.querySelector('[data-renders-done]') as HTMLElement;
+    expect(line).toHaveTextContent(/^5 of 8 pages drawn · 3 show earlier pictures\s*View/);
+    expect(line.querySelector('.lucide-check')).toBeNull();
+    fireEvent.click(within(line).getByRole('button', { name: /Details/ }));
+    const rows = within(screen.getByRole('list', { name: 'Each page' })).getAllByRole('listitem');
+    expect(rows.map((r) => r.textContent)).toEqual(['Page 6 · Earlier picture', 'Page 7 · Earlier picture', 'Page 8 · Earlier picture']);
+    fireEvent.click(within(line).getByRole('button', { name: /View/ }));
+    expect(studio.setTab).toHaveBeenCalledWith('pages');
+  });
+
+  it('a take this run drew still counts after an earlier version is put back (Use version)', () => {
+    const since = T0 - 60_000;
+    const doc = runDoc(['drawn', 'drawn']);
+    const pg = doc.pages[1];
+    // The run's take moved into history; the current picture is an older one.
+    doc.pages[1] = { ...pg, render: { ...pg.render, asset: { ...pg.render.asset!, path: 'u/x/p/old.png', at: since - 1 }, history: [{ ...pg.render.asset! }] } };
+    const { container } = show(doc, { ...runCard(doc), since } as Card);
+    expect(container.querySelector('[data-renders-done]')).toHaveTextContent(/^2 pages drawn\s*View/);
   });
 });
 
@@ -223,13 +346,25 @@ describe('a page that did not draw', () => {
     expect(line).toHaveTextContent(/Page 5 didn’t draw · rate limited/);
     expect(screen.getAllByText(/didn’t draw/)).toHaveLength(1);
     expect(container.querySelector('[data-failed]')).toBeNull();
-    // The rest of the run is still drawing: Retry waits for it (the studio draws one run at a time).
+    // The rest of the run is still drawing, and Retry works anyway: the server queues it behind the image slots.
     const retry = within(line).getByRole('button', { name: 'Retry page 5' });
-    expect(retry).toBeDisabled();
+    expect(retry).toBeEnabled();
+    expect(retry).not.toHaveAttribute('title');
     // The provider's words are under Details, not on the card.
     expect(line).not.toHaveTextContent(/Provider said/);
     fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(within(screen.getByRole('list', { name: 'Each page' })).getAllByRole('listitem')[4]).toHaveTextContent(/Provider said 429/);
+  });
+
+  it('Retry mid-run redraws the failed page at once, with its quote', () => {
+    const doc = runDoc(FAILED);
+    const { container, studio } = show(doc);
+    const line = container.querySelector('[data-renders-failed]') as HTMLElement;
+    const expected = retryAllFailed(doc, [{ target: { kind: 'page', id: 'pg_5' } }], false);
+    expect(line).toHaveTextContent(/≈ \$/);
+    fireEvent.click(within(line).getByRole('button', { name: 'Retry page 5' }));
+    expect(studio.act).toHaveBeenCalledWith(expected.actions[0]);
+    expect(expected.actions[0]).toMatchObject({ type: 'render_pages', pageIds: ['pg_5'], force: true });
   });
 
   it('Retry redraws only the failed pages, with an honest quote, once the rest have finished', () => {

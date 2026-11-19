@@ -9,18 +9,23 @@
 //
 // "Details" (collapsed by default) lists every target with its state and time; one run of one page reads "Drawing
 // page 3 · 12s" with just that page (no "1 of 1", no bar). Once nothing is queued or drawing, the card is one line:
-// "8 pages drawn · View" (no picture, no spinner, no clock), plus the failure line when something didn't draw.
+// "8 pages drawn · View" (no picture, no spinner, no clock), plus the failure line when something didn't draw. Only a
+// picture this run drew and the owner can see counts as drawn: "7 of 8 pages drawn · 1 withheld", "5 of 8 pages drawn ·
+// 3 show earlier pictures" (a stopped redraw), "3 pages not drawn" (stopped before anything landed; no View).
 //
 // Everything is read from the stored doc (renderProgress.ts), so a remount — the studio reloading the doc — shows the
 // same card; the Details choice is kept per card for the session. No shimmer anywhere (reduced motion or not): the
 // placeholders are still, and the one live pulse rides the shared tile clock (renderTile.tsx), so a run and a style
-// board drawing beside it still show one pulse between them. That clock never fetches and stops when nothing draws.
+// board drawing beside it still show one pulse between them. That clock never fetches, keeps ticking while any target
+// still draws normally, and stops when nothing does. Each render reads the time once, so the headline, the stuck line
+// and Details never disagree with the clock that decides whether to keep ticking.
 //
 // Failures read calm (reliability.md §3): one quiet line names what didn't draw and the main reason; the provider's
 // words are under Details. Its Retry covers EVERY failed kind in the card — pages, sheets, places, style options and the
 // cover (the 2026-10-22 outage left three failed style tests with no way to retry them together) — and carries its
-// honest quote (quotedUsd), so a stale card re-quotes instead of overspending; it waits while the rest of the run still
-// draws (the studio draws one run at a time). Thumbnails load the ≤ 480w variant (lazy), never the original (perf F2).
+// honest quote (quotedUsd), so a stale card re-quotes instead of overspending. It works while the rest of the run still
+// draws: the server queues the retry behind the comic's image slots. Thumbnails load the ≤ 480w variant (lazy), never
+// the original (perf F2).
 
 import React, { useId, useState } from 'react';
 import { Check, ChevronDown, CircleAlert, EyeOff, ImageIcon, ImageOff, RotateCcw } from 'lucide-react';
@@ -40,11 +45,11 @@ import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
 import {
+  capitalize,
   doneLine,
   failedNames,
   failedReason,
   headlineText,
-  idleNote,
   itemName,
   runHeadline,
   runProgress,
@@ -142,8 +147,6 @@ export const failureSummary = (failed: FailedItem[], now: number = Date.now()): 
 
 // ── The card ──────────────────────────────────────────────────────────────────
 
-const capitalize = (text: string) => (text ? text[0].toUpperCase() + text.slice(1) : text);
-
 /** Details stays as the creator left it across a remount (the studio reloading the doc): per card, this session. */
 const detailsOpen = new Map<string, boolean>();
 const DETAILS_KEPT = 200;
@@ -202,7 +205,8 @@ const ProgressThumb: React.FC<{ item: ProgressItem; src: TileSources; onOpen?: (
   const render = item.render;
   const name = capitalize(itemName(item));
   const blocked = !!render?.asset?.path && !canServeToOwner(render.asset);
-  const drawn = item.state === 'drawn' && !!render?.asset?.path;
+  // A picture is on the page: drawn by this run, an earlier one, or one the content check withheld.
+  const drawn = (item.state === 'drawn' || item.state === 'kept' || item.state === 'withheld') && !!render?.asset?.path;
   const style = { aspectRatio: item.meta.aspect };
   let body: React.ReactNode;
   if (drawn && !blocked && src.url) {
@@ -260,7 +264,7 @@ const ProgressThumb: React.FC<{ item: ProgressItem; src: TileSources; onOpen?: (
       </button>
     );
   }
-  const word = drawn ? (blocked ? 'image withheld' : src.unavailable ? 'preview unavailable here' : 'drawn') : stateWord(item.state).toLowerCase();
+  const word = drawn && !blocked && src.unavailable ? 'preview unavailable here' : stateWord(item.state).toLowerCase();
   return (
     <div role="img" aria-label={`${name}: ${word}`} data-progress-thumb="" data-state={item.state} className={frame} style={style}>
       {body}
@@ -278,7 +282,7 @@ const DetailRow: React.FC<{ item: ProgressItem; now: number; withModel: boolean 
     <li className="min-w-0 [overflow-wrap:anywhere]">
       <span className={cn('font-medium', INK)}>{name}</span>
       <span> · {stateWord(item.state)}</span>
-      {item.state === 'drawn' && item.meta.stale && <span> · out of date</span>}
+      {(item.state === 'drawn' || item.state === 'kept') && item.meta.stale && <span> · out of date</span>}
       {timeWords && <span className="tabular-nums"> · {timeWords}</span>}
       {withModel && item.meta.model && <span> · {item.meta.model}</span>}
       {facts && <span> · {failureCaption(facts.error, facts.at, now)}</span>}
@@ -297,8 +301,6 @@ interface FailureLineProps {
   p: RunProgress;
   doc: ComicDoc;
   byok: boolean;
-  /** The rest of the run still draws: Retry waits (the studio draws one run at a time). */
-  waiting: boolean;
   onRetry: (actions: SpendAction[]) => void;
   retrying: boolean;
   approx: (usd: number) => string;
@@ -307,7 +309,7 @@ interface FailureLineProps {
 }
 
 /** "Page 5 didn’t draw · rate limited      Retry ≈ $0.06": one quiet line for every failure in the run. */
-const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, waiting, onRetry, retrying, approx, details }) => {
+const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, onRetry, retrying, approx, details }) => {
   const retry = retryAllFailed(
     doc,
     p.failed.map((f): FailedItem => ({ target: f.target, render: f.render })),
@@ -324,15 +326,8 @@ const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, waiting, onRetr
       </span>
       {retry.actions.length > 0 && (
         <span className="inline-flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={waiting}
-            loading={retrying}
-            aria-label={label}
-            title={waiting ? 'Retry once the rest of this run has finished' : undefined}
-            onClick={() => onRetry(retry.actions)}
-          >
+          {/* Usable mid-run: the server draws the retry once one of the comic's image slots is free. */}
+          <Button variant="outline" size="sm" loading={retrying} aria-label={label} onClick={() => onRetry(retry.actions)}>
             <RotateCcw aria-hidden />
             Retry
           </Button>
@@ -352,11 +347,12 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
   const cost = useCostFormat(studio);
   const [open, setOpen] = useState(() => detailsOpen.get(card.id) === true);
   const detailsId = useId();
-  const p = doc ? runProgress(doc, card.targets) : null;
-  // One clock (the shared tile clock) while the run's first drawing target ticks; it stops when nothing draws.
-  const lead = p?.drawing[0];
-  const since = lead?.render?.updatedAt;
-  const ticking = !!lead && !!since && tileProgress('rendering', since, Date.now(), lead.meta.typicalSec).ticking;
+  const p = doc ? runProgress(doc, card.targets, typeof card.since === 'number' ? card.since : undefined) : null;
+  // One time per render, read everywhere below: the headline, the stuck line and Details agree with the check that keeps
+  // the clock going. The shared tile clock only schedules re-renders; it runs while ANY drawing target still ticks
+  // (a stuck lead never freezes the others' times) and stops when none does.
+  const at = Date.now();
+  const ticking = !!p && p.drawing.some((i) => tileProgress('rendering', i.render?.updatedAt, at, i.meta.typicalSec).ticking);
   const clock = useTileClockLead(ticking);
   if (!doc || !p) return null;
 
@@ -392,57 +388,63 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
 
   const isUnsignable = unsignableOf(studio);
   const sourcesOf = (item: ProgressItem) => tileSources(studio.urlFor, item.render?.asset, THUMB_SIZES, isUnsignable);
+  // The finished card's Details: every target that wasn't drawn as asked (failed, withheld, earlier picture, not drawn).
+  // Not for a run that was stopped before anything started (the line names them all), nor one target without a failure.
+  const missed = p.busy ? [] : p.items.filter((i) => i.state !== 'drawn');
+  const missedDetails = missed.length > 0 && p.idle < p.total && (p.total > 1 || p.failed.length > 0);
   const retryLine = p.failed.length > 0 && (
     <FailureLine
       p={p}
       doc={doc}
       byok={studio.byok}
-      waiting={p.busy}
       onRetry={(actions) => void run('retry-all', ...actions)}
       retrying={isPending('retry-all')}
       approx={cost.approx}
-      details={p.busy ? undefined : detailsButton}
+      details={!p.busy && missedDetails ? detailsButton : undefined}
     />
   );
 
   // ── Finished: one line, nothing moving ──
   if (!p.busy) {
-    const line = doneLine(p);
-    const idle = idleNote(p);
-    const view = viewFor(studio, p);
+    const done = doneLine(p);
+    // View only when the run left a picture to look at.
+    const view = p.drawn + p.kept + p.withheld > 0 ? viewFor(studio, p) : null;
     const all = p.drawn === p.total;
     return (
       <div data-renders-card="" className="min-w-0 space-y-1" aria-label={card.label || 'Drawing'} role="group">
-        {line && (
+        {done && (
           <div data-renders-done="" className="flex min-h-7 min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 coarse:min-h-11">
             <span aria-hidden className="grid size-3.5 shrink-0 place-items-center">
               {all ? <Check className={cn('size-3.5', TONE_TEXT.success)} strokeWidth={2.5} /> : <ImageIcon className={cn('size-3.5', MUTED)} />}
             </span>
             <span className={cn('min-w-0 flex-[1_1_10rem] text-[13px] leading-snug [overflow-wrap:anywhere]', INK)}>
-              {line}
-              {idle && <span className={MUTED}> · {idle}</span>}
+              {done.line}
+              {done.rest && <span className={MUTED}> · {done.rest}</span>}
             </span>
             {view && (
               <Button variant="ghost" size="sm" aria-label={view.label} onClick={view.run} className="-my-1">
                 View
               </Button>
             )}
+            {/* With a failure, Details sits in its line instead. */}
+            {missedDetails && !retryLine && detailsButton}
           </div>
         )}
         {retryLine}
-        {p.failed.length > 0 && detailsList(p.failed, clock.now)}
+        {missedDetails && detailsList(missed, at)}
       </div>
     );
   }
 
   // ── In flight: one compact card ──
-  const h = runHeadline(p, clock.now);
+  const h = runHeadline(p, at);
   const many = p.total > 1;
   const recheck = h.stuck ? studioRefresh() : undefined;
   const headline = (
     <div className="flex min-w-0 items-center gap-2">
-      {/* One live pulse per view: this card's dot pings only while it leads the shared clock; otherwise it is still. */}
-      {clock.lead && !h.stuck ? (
+      {/* One live pulse per view: this card's dot pings only while it leads the shared clock (something still draws
+          normally); otherwise it is still. */}
+      {clock.lead ? (
         <LiveDot className="size-1.5 shrink-0 text-[var(--ds-accent)]" />
       ) : (
         <span aria-hidden data-still-dot="" className="size-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" />
@@ -498,7 +500,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
           )}
         </div>
       )}
-      {many && detailsList(p.items, clock.now)}
+      {many && detailsList(p.items, at)}
     </section>
   );
 };

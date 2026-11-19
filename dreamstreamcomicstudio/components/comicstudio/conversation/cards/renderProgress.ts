@@ -2,18 +2,34 @@
 // pages as ONE compact progress card ("Drawing pages · 3 of 8 · page 4 · 12s", a thin bar, one strip of thumbnails),
 // a failure as one quiet line ("Page 5 didn't draw · rate limited"), and a finished run as one line ("8 pages drawn").
 // Every word comes from here, pure, so the card, its tests and a remount (the studio reloading the doc) agree.
+//
+// "Drawn" means this run drew a picture the owner can see. A take the content check blocked is stored as ready, but
+// it reads "withheld"; a ready target whose picture predates the run (the card's `since`: a stopped redraw put the
+// earlier one back, an earlier take was reused, a failed redraw kept the old one) reads "earlier picture".
 
 import { findPage, getRender, renderTargetKey, type ComicDoc, type RenderState, type RenderTarget } from '../../../../shared/comic/doc';
+import { canServeToOwner } from '../../../../shared/comic/safety';
+import { listWords } from '../../../../shared/comic/settle';
 import { failureFacts, failureKind, failureReason } from './failure';
 import { describeTarget, tileProgress, type TargetMeta } from './renderTile';
 
-/** One target's place in the run. */
-export type ProgressState = 'drawn' | 'drawing' | 'queued' | 'failed' | 'idle';
+export { listWords };
 
-export const progressState = (render?: RenderState): ProgressState => {
+/** One target's place in the run. */
+export type ProgressState = 'drawn' | 'withheld' | 'kept' | 'drawing' | 'queued' | 'failed' | 'idle';
+
+/** The run drew this target's picture: its current picture, or one in its history (since swapped), is from `since` on. */
+const drewSince = (render: RenderState, since: number): boolean =>
+  [render.asset, ...(Array.isArray(render.history) ? render.history : [])].some((v) => !!v && typeof v.at === 'number' && v.at >= since);
+
+/** `since`: when the run queued its targets (the card's own time); without it every ready target counts as drawn. */
+export const progressState = (render?: RenderState, since?: number): ProgressState => {
   switch (render?.status) {
     case 'ready':
     case 'stale':
+      // Blocked by the content check: never shown, so never "drawn".
+      if (render.asset && !canServeToOwner(render.asset)) return 'withheld';
+      if (typeof since === 'number' && render.asset && !drewSince(render, since)) return 'kept';
       return 'drawn';
     case 'rendering':
       return 'drawing';
@@ -45,6 +61,10 @@ export interface RunProgress {
   items: ProgressItem[];
   total: number;
   drawn: number;
+  /** Ready, but the content check blocked the picture. */
+  withheld: number;
+  /** Ready with a picture from before the run. */
+  kept: number;
   /** Drawing right now, in the run's order. */
   drawing: ProgressItem[];
   queued: number;
@@ -71,7 +91,7 @@ const kindOf = (items: ProgressItem[]): RunKind => {
 };
 
 /** The run's state over the current doc (targets gone from the comic are left out). */
-export const runProgress = (doc: ComicDoc, targets: unknown): RunProgress => {
+export const runProgress = (doc: ComicDoc, targets: unknown, since?: number): RunProgress => {
   const items: ProgressItem[] = [];
   for (const target of Array.isArray(targets) ? targets : []) {
     if (!isTarget(target)) continue;
@@ -79,7 +99,7 @@ export const runProgress = (doc: ComicDoc, targets: unknown): RunProgress => {
     if (!meta) continue;
     const render = getRender(doc, target);
     const n = target.kind === 'page' ? findPage(doc, target.id)?.n : undefined;
-    items.push({ key: renderTargetKey(target), target, render, meta, state: progressState(render), ...(typeof n === 'number' ? { n } : {}) });
+    items.push({ key: renderTargetKey(target), target, render, meta, state: progressState(render, since), ...(typeof n === 'number' ? { n } : {}) });
   }
   const count = (s: ProgressState) => items.filter((i) => i.state === s).length;
   const drawing = items.filter((i) => i.state === 'drawing');
@@ -88,6 +108,8 @@ export const runProgress = (doc: ComicDoc, targets: unknown): RunProgress => {
     items,
     total: items.length,
     drawn: count('drawn'),
+    withheld: count('withheld'),
+    kept: count('kept'),
     drawing,
     queued,
     failed: items.filter((i) => i.state === 'failed'),
@@ -99,11 +121,7 @@ export const runProgress = (doc: ComicDoc, targets: unknown): RunProgress => {
 
 // ── Words ─────────────────────────────────────────────────────────────────────
 
-const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-
-/** "a", "a and b", "a, b and c". */
-export const listWords = (parts: string[]): string =>
-  parts.length <= 1 ? parts[0] ?? '' : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+export const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 /** Page numbers as a reader says them: "4", "4 and 5", "4–6", "2, 4–6 and 9"; past four groups, null (say a count). */
 export const pageNumbers = (ns: number[]): string | null => {
@@ -224,24 +242,53 @@ export const runHeadline = (p: RunProgress, now: number): Headline => {
 /** The headline as one string (the card's text and its tests read the same words). */
 export const headlineText = (h: Headline): string => [h.what, h.count, h.now, h.time].filter(Boolean).join(' · ');
 
+/** The finished run: the line (ink) and what else happened (muted). */
+export interface DoneLine {
+  /** "8 pages drawn", "6 of 8 pages drawn", "Page 2 drawn", "3 pages not drawn", "Nothing drawn". */
+  line: string;
+  /** "1 withheld · 2 not drawn". */
+  rest?: string;
+}
+
+const WITHHELD_WHY = 'didn’t pass the content check';
+const earlier = (n: number) => `${n} ${n === 1 ? 'shows an earlier picture' : 'show earlier pictures'}`;
+
 /**
- * The finished run in one line: "8 pages drawn", "Page 2 drawn", "6 of 8 pages drawn". null when nothing drew and
- * something failed (the failure line says it all).
+ * The finished run in one line: "8 pages drawn", "7 of 8 pages drawn · 1 withheld", "5 of 8 pages drawn · 3 show
+ * earlier pictures", "6 of 8 pages drawn · 2 not drawn", "3 pages not drawn". null when every target failed (the
+ * failure line says it all). Failures are never counted here: the failure line names them.
  */
-export const doneLine = (p: RunProgress): string | null => {
+export const doneLine = (p: RunProgress): DoneLine | null => {
   if (!p.total) return null;
-  if (p.drawn === 0 && p.failed.length) return null;
-  if (p.total === 1) return p.drawn ? `${capitalize(itemName(p.items[0]))} drawn` : `${capitalize(itemName(p.items[0]))} wasn’t drawn`;
+  if (p.failed.length === p.total) return null;
+  if (p.total === 1) {
+    const only = p.items[0];
+    const name = capitalize(itemName(only));
+    switch (only.state) {
+      case 'drawn':
+        return { line: `${name} drawn` };
+      case 'withheld':
+        return { line: `${name} was withheld`, rest: WITHHELD_WHY };
+      case 'kept':
+        return { line: `${name} shows an earlier picture` };
+      default:
+        return { line: `${name} wasn’t drawn` };
+    }
+  }
   if (p.drawn === p.total) {
-    if (p.kind === 'pagesCover') return `${countOf(p.total - 1, 'pages')} and the cover drawn`;
-    return `${countOf(p.total, p.kind)} drawn`;
+    if (p.kind === 'pagesCover') return { line: `${countOf(p.total - 1, 'pages')} and the cover drawn` };
+    return { line: `${countOf(p.total, p.kind)} drawn` };
+  }
+  const shown = [p.withheld ? `${p.withheld} withheld` : '', p.kept ? earlier(p.kept) : ''].filter(Boolean);
+  if (p.drawn === 0) {
+    // Stopped before anything landed: say it once ("3 pages not drawn"), never "0 of 3 drawn · 3 not drawn".
+    if (p.idle === p.total) return { line: `${countOf(p.total, p.kind)} not drawn` };
+    return { line: 'Nothing drawn', ...(shown.length ? { rest: shown.join(' · ') } : {}) };
   }
   const noun = countOf(p.total, p.kind).replace(/^\d+ /, '');
-  return `${p.drawn} of ${p.total} ${noun} drawn`;
+  const rest = [...shown, p.idle ? `${p.idle} not drawn` : ''].filter(Boolean);
+  return { line: `${p.drawn} of ${p.total} ${noun} drawn`, ...(rest.length ? { rest: rest.join(' · ') } : {}) };
 };
-
-/** "2 not drawn" after a stopped run. */
-export const idleNote = (p: RunProgress): string | null => (!p.busy && p.idle > 0 && p.total > 1 ? `${p.idle} not drawn` : null);
 
 /** "Page 5", "Pages 5 and 7", "The cover", "“Retro”", "3 images": who didn't draw. */
 export const failedNames = (failed: ProgressItem[]): string => {
@@ -267,4 +314,12 @@ export const failedReason = (failed: ProgressItem[]): string | undefined => {
 
 /** What the Details row says about one target. */
 export const stateWord = (state: ProgressState): string =>
-  ({ drawn: 'Drawn', drawing: 'Drawing', queued: 'Waiting', failed: 'Didn’t draw', idle: 'Not drawn' })[state];
+  ({
+    drawn: 'Drawn',
+    withheld: `Withheld (${WITHHELD_WHY})`,
+    kept: 'Earlier picture',
+    drawing: 'Drawing',
+    queued: 'Waiting',
+    failed: 'Didn’t draw',
+    idle: 'Not drawn'
+  })[state];
