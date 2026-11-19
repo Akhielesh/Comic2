@@ -1,32 +1,61 @@
-// "renders" card: the images one job is drawing, live — queued, drawing (shimmer), ready
-// (develops in; tap a page to open it), out of date, or failed with Retry (re-runs the
-// matching spend with force).
+// "renders" card: one run of images (pages, the cover, sheets, style options) as ONE compact progress card
+// (quick2 Q-PROG). Before, a run of eight pages put eight loading tiles in the chat, each with its own shimmer, pill,
+// clock and model line: a wall of spinners as tall as a phone. Now, while the run draws:
 //
-// Failures read calm (reliability.md §3): each failed tile says when and why, and one
-// "Retry N failed" button covers EVERY failed kind in the card — pages, sheets, places, style
-// options and the cover (the 2026-10-22 outage left three failed style tests with no way to
-// retry them together). The button carries its honest quote (quotedUsd), so a stale card
-// re-quotes instead of overspending.
+//   Drawing pages · 3 of 8 · pages 4 and 5 · 12s                    Details
+//   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  (thin, determinate)
+//   [p1][p2][p3][ 4 ][ 5 ][ 6 ][ 7 ][ 8 ]   one strip of small thumbnails that fill in as pages land
+//   Page 5 didn't draw · rate limited                       Retry ≈ $0.06
 //
-// Tiles load the ≤ 480w variant (lazy), never the full original (perf F2), and a drawing tile shows its
-// time against the model's usual time and the model's name (styles M4); one stuck far past it offers a free
-// "Check again", and only the page's first drawing tile pings (one live pulse per view) — see renderTile.tsx.
+// "Details" (collapsed by default) lists every target with its state and time; one run of one page reads "Drawing
+// page 3 · 12s" with just that page (no "1 of 1", no bar). Once nothing is queued or drawing, the card is one line:
+// "8 pages drawn · View" (no picture, no spinner, no clock), plus the failure line when something didn't draw.
+//
+// Everything is read from the stored doc (renderProgress.ts), so a remount — the studio reloading the doc — shows the
+// same card; the Details choice is kept per card for the session. No shimmer anywhere (reduced motion or not): the
+// placeholders are still, and the one live pulse rides the shared tile clock (renderTile.tsx), so a run and a style
+// board drawing beside it still show one pulse between them. That clock never fetches and stops when nothing draws.
+//
+// Failures read calm (reliability.md §3): one quiet line names what didn't draw and the main reason; the provider's
+// words are under Details. Its Retry covers EVERY failed kind in the card — pages, sheets, places, style options and the
+// cover (the 2026-10-22 outage left three failed style tests with no way to retry them together) — and carries its
+// honest quote (quotedUsd), so a stale card re-quotes instead of overspending; it waits while the rest of the run still
+// draws (the studio draws one run at a time). Thumbnails load the ≤ 480w variant (lazy), never the original (perf F2).
 
-import React from 'react';
-import { ImageIcon, RotateCcw } from 'lucide-react';
-import { getRender, renderTargetKey, type Card, type ComicDoc, type RenderState, type RenderTarget } from '../../../../shared/comic/doc';
+import React, { useId, useState } from 'react';
+import { Check, ChevronDown, CircleAlert, EyeOff, ImageIcon, ImageOff, RotateCcw } from 'lucide-react';
+import type { Card, ComicDoc, RenderState, RenderTarget } from '../../../../shared/comic/doc';
 import type { SpendAction } from '../../../../shared/comic/ops';
 import { estimateDocJobs, quoteRenderPages } from '../../../../shared/comic/plan';
+import { canServeToOwner } from '../../../../shared/comic/safety';
+import { cn } from '../../../../lib/utils';
+import { FOCUS_RING, HAIRLINE, INK, MUTED, RADIUS_CONTROL, RADIUS_PANEL, SHADOW_SOFT, TONE_TEXT } from '../../../chat/studioDesign';
+import { Button } from '../../../ds/Button';
+import { Collapse } from '../../../ds/Collapse';
+import { LiveDot } from '../../../ds/LiveDot';
+import { Progress } from '../../../ds/Progress';
+import { ImageDevelop } from '../../../studio/kit/streamMotion';
+import { studioRefresh } from '../../board/ui';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
-import { CardShell, GhostButton, plural } from '../ui';
-import { failureFacts, failureReason, formatFailedAt } from './failure';
-import { RenderThumb, describeTarget, tileSources, unsignableOf } from './renderTile';
+import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
+import {
+  doneLine,
+  failedNames,
+  failedReason,
+  headlineText,
+  idleNote,
+  itemName,
+  runHeadline,
+  runProgress,
+  stateWord,
+  type ProgressItem,
+  type RunProgress
+} from './renderProgress';
+import { isFreshRender, tileProgress, tileSources, unsignableOf, useTileClockLead, type TileSources } from './renderTile';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
 type RendersCardData = Extract<Card, { type: 'renders' }>;
-
-const isBusyStatus = (s?: string) => s === 'queued' || s === 'rendering';
 
 export interface FailedItem {
   target: RenderTarget;
@@ -111,111 +140,365 @@ export const failureSummary = (failed: FailedItem[], now: number = Date.now()): 
   return `${what}${detail ? ` (${detail})` : ''}. Retry when you’re ready — only ${failed.length === 1 ? 'that one is' : 'these are'} redrawn.`;
 };
 
+// ── The card ──────────────────────────────────────────────────────────────────
+
+const capitalize = (text: string) => (text ? text[0].toUpperCase() + text.slice(1) : text);
+
+/** Details stays as the creator left it across a remount (the studio reloading the doc): per card, this session. */
+const detailsOpen = new Map<string, boolean>();
+const DETAILS_KEPT = 200;
+/** Forget every card's Details choice (tests start each case from a fresh session). */
+export const resetRendersDetails = (): void => detailsOpen.clear();
+const rememberDetails = (cardId: string, open: boolean) => {
+  detailsOpen.delete(cardId);
+  detailsOpen.set(cardId, open);
+  if (detailsOpen.size > DETAILS_KEPT) {
+    const oldest = detailsOpen.keys().next().value;
+    if (typeof oldest === 'string') detailsOpen.delete(oldest);
+  }
+};
+
+/** Where one target's picture opens (the chat's controller reveals the board on phones). */
+const openerFor = (studio: ComicStudioController, target: RenderTarget): (() => void) | undefined => {
+  switch (target.kind) {
+    case 'page':
+      return () => studio.openPage(target.id);
+    case 'sheet':
+    case 'place':
+      return () => studio.setTab('cast');
+    case 'style_option':
+      return () => studio.setTab('style');
+    case 'cover':
+      return () => studio.setTab('read');
+    default:
+      return undefined;
+  }
+};
+
+/** "View" for the whole run: the one target, or the board tab that shows the run's pictures. */
+const viewFor = (studio: ComicStudioController, p: RunProgress): { run: () => void; label: string } | null => {
+  if (p.total === 1) {
+    const open = openerFor(studio, p.items[0].target);
+    return open ? { run: open, label: `View ${itemName(p.items[0])}` } : null;
+  }
+  switch (p.kind) {
+    case 'sheets':
+    case 'places':
+    case 'cast':
+      return { run: () => studio.setTab('cast'), label: 'View the cast' };
+    case 'styles':
+      return { run: () => studio.setTab('style'), label: 'View the style options' };
+    default:
+      return { run: () => studio.setTab('pages'), label: 'View the pages' };
+  }
+};
+
+/** A thumbnail's `sizes`: it is 56 px tall in the chat, so the ≤ 480w variant is always enough. */
+const THUMB_SIZES = '64px';
+const THUMB = cn('relative h-14 min-w-11 shrink-0 overflow-hidden bg-[var(--ds-well)]', RADIUS_CONTROL, HAIRLINE);
+
+/** One target in the strip: its picture once drawn (tap to open), else a still placeholder with its page number. */
+const ProgressThumb: React.FC<{ item: ProgressItem; src: TileSources; onOpen?: () => void }> = ({ item, src, onOpen }) => {
+  const render = item.render;
+  const name = capitalize(itemName(item));
+  const blocked = !!render?.asset?.path && !canServeToOwner(render.asset);
+  const drawn = item.state === 'drawn' && !!render?.asset?.path;
+  const style = { aspectRatio: item.meta.aspect };
+  let body: React.ReactNode;
+  if (drawn && !blocked && src.url) {
+    // Keyed by the stored file, like the board's frames: a redraw landing here develops in; a re-signed URL does not.
+    body = (
+      <ImageDevelop key={render?.asset?.path} active={isFreshRender(render)} className="h-full w-full" rounded="rounded-none">
+        <img
+          src={src.url}
+          srcSet={src.srcSet}
+          sizes={src.srcSet ? THUMB_SIZES : undefined}
+          alt={name}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className="h-full w-full object-cover"
+          {...(src.heavy ? { 'data-heavy-img': '' } : {})}
+        />
+      </ImageDevelop>
+    );
+  } else if (drawn && blocked) {
+    body = <EyeOff className={cn('size-3.5', MUTED)} aria-hidden />;
+  } else if (drawn && src.unavailable) {
+    body = <ImageOff className={cn('size-3.5', MUTED)} aria-hidden />;
+  } else if (drawn) {
+    // Its small file is still being signed: a quiet, still box (never a shimmer).
+    body = null;
+  } else if (item.state === 'failed') {
+    body = <CircleAlert className={cn('size-3.5', MUTED)} aria-hidden />;
+  } else {
+    body =
+      typeof item.n === 'number' ? (
+        <span className="text-[11px] font-semibold tabular-nums">{item.n}</span>
+      ) : (
+        <ImageIcon className="size-3.5" aria-hidden />
+      );
+  }
+  const frame = cn(
+    THUMB,
+    'grid place-items-center',
+    item.state === 'drawing' ? 'border-[var(--ds-ink)] text-[var(--ds-ink)]' : MUTED,
+    (item.state === 'queued' || item.state === 'idle') && 'border-dashed'
+  );
+  if (drawn && !blocked && onOpen) {
+    return (
+      <button
+        type="button"
+        data-progress-thumb=""
+        data-state="drawn"
+        onClick={onOpen}
+        aria-label={`Open ${itemName(item)}${src.unavailable ? ' (preview unavailable here)' : ''}`}
+        className={cn(frame, 'p-0', FOCUS_RING)}
+        style={style}
+      >
+        {body}
+      </button>
+    );
+  }
+  const word = drawn ? (blocked ? 'image withheld' : src.unavailable ? 'preview unavailable here' : 'drawn') : stateWord(item.state).toLowerCase();
+  return (
+    <div role="img" aria-label={`${name}: ${word}`} data-progress-thumb="" data-state={item.state} className={frame} style={style}>
+      {body}
+    </div>
+  );
+};
+
+/** What one target says in Details: its state, its time while drawing, and a failure's when, why and provider words. */
+const DetailRow: React.FC<{ item: ProgressItem; now: number; withModel: boolean }> = ({ item, now, withModel }) => {
+  const name = capitalize(itemName(item));
+  const time = item.state === 'drawing' ? tileProgress('rendering', item.render?.updatedAt, now, item.meta.typicalSec) : null;
+  const timeWords = time ? [time.elapsed, time.hint].filter(Boolean).join(' · ') : '';
+  const facts = item.state === 'failed' ? failureFacts(item.render) : null;
+  return (
+    <li className="min-w-0 [overflow-wrap:anywhere]">
+      <span className={cn('font-medium', INK)}>{name}</span>
+      <span> · {stateWord(item.state)}</span>
+      {item.state === 'drawn' && item.meta.stale && <span> · out of date</span>}
+      {timeWords && <span className="tabular-nums"> · {timeWords}</span>}
+      {withModel && item.meta.model && <span> · {item.meta.model}</span>}
+      {facts && <span> · {failureCaption(facts.error, facts.at, now)}</span>}
+      {facts && (facts.error || facts.facts) && (
+        <span className="block">
+          {facts.error}
+          {facts.facts ? ` — ${facts.facts}` : ''}
+          {facts.attempts && facts.attempts > 1 ? ` (${facts.attempts} tries)` : ''}
+        </span>
+      )}
+    </li>
+  );
+};
+
+interface FailureLineProps {
+  p: RunProgress;
+  doc: ComicDoc;
+  byok: boolean;
+  /** The rest of the run still draws: Retry waits (the studio draws one run at a time). */
+  waiting: boolean;
+  onRetry: (actions: SpendAction[]) => void;
+  retrying: boolean;
+  approx: (usd: number) => string;
+  /** The finished card's "Details" toggle (the provider's words for what failed); the run in flight has its own. */
+  details?: React.ReactNode;
+}
+
+/** "Page 5 didn’t draw · rate limited      Retry ≈ $0.06": one quiet line for every failure in the run. */
+const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, waiting, onRetry, retrying, approx, details }) => {
+  const retry = retryAllFailed(
+    doc,
+    p.failed.map((f): FailedItem => ({ target: f.target, render: f.render })),
+    byok
+  );
+  const reason = failedReason(p.failed);
+  const label = p.failed.length === 1 ? `Retry ${itemName(p.failed[0])}` : `Retry ${p.failed.length} failed ${p.kind === 'pages' ? 'pages' : 'images'}`;
+  return (
+    <div data-renders-failed="" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-snug">
+      <CircleAlert className={cn('size-3.5 shrink-0', MUTED)} aria-hidden />
+      <span className={cn('min-w-0 flex-[1_1_10rem] [overflow-wrap:anywhere]', INK)}>
+        {failedNames(p.failed)} didn’t draw
+        {reason && <span className={MUTED}> · {reason}</span>}
+      </span>
+      {retry.actions.length > 0 && (
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={waiting}
+            loading={retrying}
+            aria-label={label}
+            title={waiting ? 'Retry once the rest of this run has finished' : undefined}
+            onClick={() => onRetry(retry.actions)}
+          >
+            <RotateCcw aria-hidden />
+            Retry
+          </Button>
+          <span className={cn('tabular-nums', MUTED)}>{approx(retry.usd)}</span>
+        </span>
+      )}
+      {details}
+    </div>
+  );
+};
+
 export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioController }> = ({ card, studio }) => {
   const doc = studio.doc;
-  // "Retry N failed" runs one spend per kind; it stops at the first one that didn't go through.
+  // Retry runs one spend per failed kind; it stops at the first one that didn't go through.
   const guard = useStudioSequenceGuard(studio);
   const { run, isPending } = useAction(studio.act, { guard });
   const cost = useCostFormat(studio);
-  if (!doc) return null;
-  const targets: RenderTarget[] = Array.isArray(card.targets) ? card.targets : [];
+  const [open, setOpen] = useState(() => detailsOpen.get(card.id) === true);
+  const detailsId = useId();
+  const p = doc ? runProgress(doc, card.targets) : null;
+  // One clock (the shared tile clock) while the run's first drawing target ticks; it stops when nothing draws.
+  const lead = p?.drawing[0];
+  const since = lead?.render?.updatedAt;
+  const ticking = !!lead && !!since && tileProgress('rendering', since, Date.now(), lead.meta.typicalSec).ticking;
+  const clock = useTileClockLead(ticking);
+  if (!doc || !p) return null;
 
-  const items = targets.map((target) => ({ target, render: getRender(doc, target), meta: describeTarget(doc, target) }));
-  const live = items.filter((i) => i.meta);
-  const ready = live.filter((i) => i.render?.status === 'ready').length;
-  const busy = live.filter((i) => isBusyStatus(i.render?.status)).length;
-  const failed = live.filter((i) => i.render?.status === 'failed');
-  const onlySheets = live.length > 0 && live.every((i) => i.target.kind === 'sheet' || i.target.kind === 'place');
-  const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
-  const isUnsignable = unsignableOf(studio);
+  if (p.total === 0) {
+    return <p className={cn('m-0 text-[13px]', MUTED)}>These images were removed from the comic.</p>;
+  }
 
-  const open = (target: RenderTarget) => {
-    switch (target.kind) {
-      case 'page':
-        return () => studio.openPage(target.id);
-      case 'sheet':
-      case 'place':
-        return () => studio.setTab('cast');
-      case 'style_option':
-        return () => studio.setTab('style');
-      case 'cover':
-        return () => studio.setTab('read');
-      default:
-        return undefined;
-    }
+  const toggle = () => {
+    setOpen((v) => {
+      rememberDetails(card.id, !v);
+      return !v;
+    });
   };
+  const detailsButton = (
+    <Button variant="ghost" size="sm" aria-expanded={open} aria-controls={detailsId} onClick={toggle} className="-my-1 shrink-0 px-2">
+      Details
+      <ChevronDown className={cn('size-3.5 transition-transform motion-reduce:transition-none', open && 'rotate-180')} aria-hidden />
+    </Button>
+  );
+  const pages = p.kind === 'pages';
+  const detailsList = (items: ProgressItem[], now: number) => (
+    <Collapse open={open} id={detailsId}>
+      <ul
+        aria-label={pages ? 'Each page' : 'Each image'}
+        className={cn('m-0 max-h-64 space-y-1 overflow-y-auto border-s border-[var(--ds-hairline)] ps-3 text-[12px] leading-5', MUTED)}
+      >
+        {items.map((item) => (
+          <DetailRow key={item.key} item={item} now={now} withModel={item === p.drawing[0]} />
+        ))}
+      </ul>
+    </Collapse>
+  );
 
-  const summary = busy
-    ? `${ready} of ${live.length} ready`
-    : failed.length
-      ? `${ready} ready · ${failed.length} failed`
-      : `${ready} of ${live.length} ready`;
+  const isUnsignable = unsignableOf(studio);
+  const sourcesOf = (item: ProgressItem) => tileSources(studio.urlFor, item.render?.asset, THUMB_SIZES, isUnsignable);
+  const retryLine = p.failed.length > 0 && (
+    <FailureLine
+      p={p}
+      doc={doc}
+      byok={studio.byok}
+      waiting={p.busy}
+      onRetry={(actions) => void run('retry-all', ...actions)}
+      retrying={isPending('retry-all')}
+      approx={cost.approx}
+      details={p.busy ? undefined : detailsButton}
+    />
+  );
+
+  // ── Finished: one line, nothing moving ──
+  if (!p.busy) {
+    const line = doneLine(p);
+    const idle = idleNote(p);
+    const view = viewFor(studio, p);
+    const all = p.drawn === p.total;
+    return (
+      <div data-renders-card="" className="min-w-0 space-y-1" aria-label={card.label || 'Drawing'} role="group">
+        {line && (
+          <div data-renders-done="" className="flex min-h-7 min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 coarse:min-h-11">
+            <span aria-hidden className="grid size-3.5 shrink-0 place-items-center">
+              {all ? <Check className={cn('size-3.5', TONE_TEXT.success)} strokeWidth={2.5} /> : <ImageIcon className={cn('size-3.5', MUTED)} />}
+            </span>
+            <span className={cn('min-w-0 flex-[1_1_10rem] text-[13px] leading-snug [overflow-wrap:anywhere]', INK)}>
+              {line}
+              {idle && <span className={MUTED}> · {idle}</span>}
+            </span>
+            {view && (
+              <Button variant="ghost" size="sm" aria-label={view.label} onClick={view.run} className="-my-1">
+                View
+              </Button>
+            )}
+          </div>
+        )}
+        {retryLine}
+        {p.failed.length > 0 && detailsList(p.failed, clock.now)}
+      </div>
+    );
+  }
+
+  // ── In flight: one compact card ──
+  const h = runHeadline(p, clock.now);
+  const many = p.total > 1;
+  const recheck = h.stuck ? studioRefresh() : undefined;
+  const headline = (
+    <div className="flex min-w-0 items-center gap-2">
+      {/* One live pulse per view: this card's dot pings only while it leads the shared clock; otherwise it is still. */}
+      {clock.lead && !h.stuck ? (
+        <LiveDot className="size-1.5 shrink-0 text-[var(--ds-accent)]" />
+      ) : (
+        <span aria-hidden data-still-dot="" className="size-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" />
+      )}
+      <p data-progress-headline="" title={headlineText(h)} className="m-0 min-w-0 flex-1 text-[13px] leading-5 [overflow-wrap:anywhere]">
+        <span className={cn('font-semibold', INK)}>{h.what}</span>
+        {h.count && <span className={cn('tabular-nums', MUTED)}> · {h.count}</span>}
+        {h.now && <span className={MUTED}> · {h.now}</span>}
+        {h.time && <span className={cn('tabular-nums', MUTED)}> · {h.time}</span>}
+      </p>
+      {many && detailsButton}
+    </div>
+  );
 
   return (
-    <CardShell title={card.label || 'Drawing'} icon={<ImageIcon className="h-4 w-4" />} right={live.length ? summary : undefined} aria-label={card.label || 'Renders'}>
-      {busy > 0 && (
-        <div
-          className="mb-3 h-1 w-full overflow-hidden rounded-full bg-[var(--ds-well-strong)]"
-          role="progressbar"
-          aria-label={`${card.label || 'Drawing'}: ${ready} of ${live.length} ready`}
-          aria-valuemin={0}
-          aria-valuemax={live.length}
-          aria-valuenow={ready}
-        >
-          <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${live.length ? Math.max(4, (ready / live.length) * 100) : 0}%` }} />
-        </div>
-      )}
-      {live.length === 0 ? (
-        <p className="text-[13px] text-[var(--ds-muted)]">These images were removed from the comic.</p>
-      ) : (
-        <div className={onlySheets ? 'grid grid-cols-2 gap-2.5' : 'grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2.5'}>
-          {live.map(({ target, render, meta }) => {
-            const key = renderTargetKey(target);
-            // A failed tile's Retry carries a quote made at click time (a stale card re-quotes on the
-            // server instead of overspending); the plain redraw action is the fallback.
-            const retryActions = (): SpendAction[] => {
-              const quoted = retryAllFailed(doc, [{ target, render }], studio.byok).actions;
-              return quoted.length ? quoted : meta!.retry ? [meta!.retry] : [];
-            };
-            const src = tileSources(studio.urlFor, render?.asset, onlySheets ? '(max-width: 640px) 50vw, 300px' : undefined, isUnsignable);
-            return (
-              <RenderThumb
-                key={key}
-                render={render}
-                label={meta!.label}
-                aspect={meta!.aspect}
-                stale={meta!.stale}
-                url={src.url}
-                srcSet={src.srcSet}
-                sizes={src.sizes}
-                heavy={src.heavy}
-                unavailable={src.unavailable}
-                model={meta!.model}
-                typicalSec={meta!.typicalSec}
-                onOpen={open(target)}
-                onRetry={meta!.retry ? () => void run(`retry:${key}`, ...retryActions()) : undefined}
-                retryBusy={isPending(`retry:${key}`) || isPending('retry-all')}
-              />
-            );
-          })}
-        </div>
-      )}
-      {failed.length > 0 && busy === 0 && (
-        <p className="mt-2.5 text-[11.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{failureSummary(failed)}</p>
-      )}
-      {retry && retry.actions.length > 0 && (
-        <div className="mt-2.5">
-          <GhostButton
-            size="sm"
-            className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
-            busy={isPending('retry-all')}
-            onClick={() => void run('retry-all', ...retry.actions)}
+    <section
+      aria-label={card.label || 'Drawing'}
+      data-renders-progress=""
+      className={cn('min-w-0 space-y-2.5 bg-[var(--ds-surface)] px-3 py-2.5', RADIUS_PANEL, HAIRLINE, SHADOW_SOFT)}
+    >
+      {many ? (
+        <>
+          {headline}
+          <Progress size="sm" value={p.drawn} max={p.total} label={h.what} valueText={`${p.drawn} of ${p.total} drawn`} />
+          {/* One row that scrolls sideways, never a grid that wraps; the padding keeps focus rings inside the scroll box. */}
+          <ul
+            role="list"
+            aria-label={pages ? 'Pages in this run' : 'Images in this run'}
+            className="-m-1 flex flex-nowrap gap-1.5 overflow-x-auto overscroll-x-contain p-1 [scrollbar-width:thin]"
           >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry {plural(retry.count, 'failed image')}
-            <span className="text-[var(--ds-muted)]">{cost.approx(retry.usd)}</span>
-          </GhostButton>
+            {p.items.map((item) => (
+              <li key={item.key} className="shrink-0">
+                <ProgressThumb item={item} src={sourcesOf(item)} onOpen={openerFor(studio, item.target)} />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        // One page: no "1 of 1" and no bar — just the page beside what it is doing.
+        <div className="flex min-w-0 items-center gap-3">
+          <ProgressThumb item={p.items[0]} src={sourcesOf(p.items[0])} onOpen={openerFor(studio, p.items[0].target)} />
+          <div className="min-w-0 flex-1">{headline}</div>
         </div>
       )}
-    </CardShell>
+      {retryLine}
+      {h.stuck && (
+        <div data-renders-stuck="" className={cn('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-snug', MUTED)}>
+          <span className="min-w-0 flex-[1_1_10rem] [overflow-wrap:anywhere]">{capitalize(itemName(h.stuck))} is taking much longer than usual</span>
+          {recheck && (
+            <Button variant="ghost" size="sm" onClick={recheck} className="-my-1">
+              Check again
+            </Button>
+          )}
+        </div>
+      )}
+      {many && detailsList(p.items, clock.now)}
+    </section>
   );
 };

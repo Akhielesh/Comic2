@@ -219,8 +219,10 @@ const tileClock = (() => {
 /**
  * The shared clock plus whether THIS tile leads it. Exactly one ticking tile on the page leads (the first one
  * that started drawing); when it finishes, the next one takes over on the next tick. Never touches the network.
+ * The renders card's progress line rides the same clock, so a run in the chat and a style board drawing beside it
+ * still show one live pulse between them.
  */
-const useTileClockLead = (active: boolean): { now: number; lead: boolean } => {
+export const useTileClockLead = (active: boolean): { now: number; lead: boolean } => {
   const [now, setNow] = useState(() => Date.now());
   const [lead, setLead] = useState(false);
   useEffect(() => {

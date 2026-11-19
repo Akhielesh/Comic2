@@ -1,5 +1,8 @@
 // PF-2 (perf F2 + styles M4): chat render tiles load small variants lazily and say how long a drawing has
 // taken against the model's usual time, with the model's name, on ONE shared clock that never fetches.
+// The tile (RenderThumb) draws the style and cast cards' pictures; a run of pages in the renders card is one compact
+// progress card since quick2 Q-PROG (RendersCard.progress.test.tsx), so the tile cases below render the tiles
+// directly, as the style board grid lays them out, and the renders-card cases check the compact card on the same clock.
 import React from 'react';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -265,12 +268,16 @@ describe('drawing tiles (styles M4)', () => {
       pages: doc.pages.map((p, i) => (i < n ? { ...p, render: { status, history: [], updatedAt: T0 } } : p))
     };
   };
-  const rendersCard = (doc: ComicDoc, n: number) => ({
-    type: 'renders' as const,
-    id: 'r1',
-    label: 'Drawing pages',
-    targets: doc.pages.slice(0, n).map((p) => ({ kind: 'page' as const, id: p.id }))
-  });
+  /** The first `n` pages as drawing tiles, side by side (a style board grid lays its tiles out the same way). */
+  const tiles = (doc: ComicDoc, n: number, urlFor: ReturnType<typeof signer> = signer()) => (
+    <div>
+      {doc.pages.slice(0, n).map((p) => {
+        const meta = describeTarget(doc, { kind: 'page', id: p.id })!;
+        const src = tileSources(urlFor, p.render.asset);
+        return <RenderThumb key={p.id} render={p.render} label={meta.label} aspect={meta.aspect} model={meta.model} typicalSec={meta.typicalSec} url={src.url} srcSet={src.srcSet} />;
+      })}
+    </div>
+  );
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
@@ -279,8 +286,7 @@ describe('drawing tiles (styles M4)', () => {
 
   it('shows the elapsed time, "usually ~20s" and the model while rendering, then "taking longer than usual"', () => {
     const doc = pageDoc('rendering');
-    const studio = makeFakeStudio({ doc, urlFor: signer() });
-    render(<CardRenderer card={rendersCard(doc, 1)} studio={studio} />);
+    render(tiles(doc, 1));
     const spec = jobModel(doc, 'page');
     const tile = screen.getByText('Page 1').closest('div')!;
     expect(spec.latencySec).toBe(20); // the default model's usual time, from the registry
@@ -303,8 +309,7 @@ describe('drawing tiles (styles M4)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const intervalSpy = vi.spyOn(globalThis, 'setInterval');
     const doc = pageDoc('rendering', 3);
-    const studio = makeFakeStudio({ doc, urlFor: signer() });
-    const { rerender } = render(<CardRenderer card={rendersCard(doc, 3)} studio={studio} />);
+    const { rerender } = render(tiles(doc, 3));
     expect(intervalSpy).toHaveBeenCalledTimes(1); // three drawing tiles, one interval
     act(() => void vi.advanceTimersByTime(5 * TILE_CLOCK_MS));
     expect(screen.getAllByText(/^5s · usually ~20s$/)).toHaveLength(3);
@@ -320,14 +325,14 @@ describe('drawing tiles (styles M4)', () => {
 
     // Everything drew: the clock is gone (nothing left scheduled).
     const done = { ...doc, pages: doc.pages.map((p) => ({ ...p, render: { status: 'ready' as const, history: [], asset: stored(p.id), updatedAt: T0 + 10_000 } })) };
-    rerender(<CardRenderer card={rendersCard(doc, 3)} studio={{ ...studio, doc: done } as ComicStudioController} />);
+    rerender(tiles(done, 3));
     expect(vi.getTimerCount()).toBe(0);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('a render far past its usual time stops the clock and says so in its pill, with no lines under the tile', () => {
     const doc = pageDoc('rendering');
-    const { container } = render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(tiles(doc, 1));
     act(() => void vi.advanceTimersByTime(201 * TILE_CLOCK_MS));
     expect(screen.getByText('Still drawing')).toBeInTheDocument();
     expect(screen.queryByText('much longer than usual')).toBeNull();
@@ -338,7 +343,7 @@ describe('drawing tiles (styles M4)', () => {
 
   it('a queued tile adds no lines under itself (no time, no model) and runs no clock', () => {
     const doc = pageDoc('queued');
-    const { container } = render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(tiles(doc, 1));
     expect(screen.getByText('Queued')).toBeInTheDocument();
     expect(container.querySelector('[data-tile-progress]')).toBeNull();
     expect(screen.queryByText(jobModel(doc, 'page').nickname)).toBeNull();
@@ -348,7 +353,7 @@ describe('drawing tiles (styles M4)', () => {
 
   it('the model is named once per view: on the live drawing tile only, never on the others (declutter C7)', () => {
     const doc = pageDoc('rendering', 3);
-    const { container } = render(<CardRenderer card={rendersCard(doc, 3)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(tiles(doc, 3));
     const nickname = jobModel(doc, 'page').nickname;
     expect(screen.getAllByText(nickname)).toHaveLength(1);
     // Every drawing tile still says how long it has taken.
@@ -368,14 +373,14 @@ describe('drawing tiles (styles M4)', () => {
   it('governed users read time and model, never dollars', () => {
     showUsagePrices();
     const doc = pageDoc('rendering', 2);
-    const { container } = render(<CardRenderer card={rendersCard(doc, 2)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(tiles(doc, 2));
     expect(screen.getAllByText(/usually ~20s/)).toHaveLength(2);
     expect(container.textContent).not.toMatch(/[$¢]/);
   });
 
   it('the live dot is the ds-live-dot (paused off screen, still under reduced motion), not a bare pulse', () => {
     const doc = pageDoc('rendering');
-    const { container } = render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(tiles(doc, 1));
     expect(container.querySelector('.ds-live-dot')).not.toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
     expect(container.querySelector('[data-progress-bar]')).toHaveClass('ds-progress-indeterminate');
@@ -466,20 +471,22 @@ describe('a stuck drawing tile (far past its usual time)', () => {
     }
   });
 
-  it('in a renders card: no shimmer, no ping, and Check again uses the card’s own refresh when given none', () => {
+  it('in a renders card: no shimmer, no ping, and Check again reaches the studio’s own refresh', () => {
     const refresh = vi.fn();
     const off = registerStudioRefresh(refresh);
     try {
       const base = makeSampleDoc();
       const doc = { ...base, pages: base.pages.map((p, i) => (i === 0 ? { ...p, render: { status: 'rendering' as const, history: [], updatedAt: T0 } } : p)) };
       const card = { type: 'renders' as const, id: 'r1', label: 'Drawing pages', targets: [{ kind: 'page' as const, id: doc.pages[0].id }] };
-      const { container } = render(<CardRenderer card={card} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+      const { container, rerender } = render(<CardRenderer card={card} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
       expect(container.querySelector('.ds-live-dot')).not.toBeNull();
       act(() => void vi.advanceTimersByTime(201 * TILE_CLOCK_MS));
+      // The card reads the clock on its next render (the stuck run stops it).
+      rerender(<CardRenderer card={card} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
       expect(container.querySelector('.ds-live-dot')).toBeNull();
       expect(container.querySelector('.studio-shimmer')).toBeNull();
-      expect(container.querySelector('[data-stuck]')).not.toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: `Check again: Page ${doc.pages[0].n}` }));
+      expect(container.querySelector('[data-renders-stuck]')).toHaveTextContent(`Page ${doc.pages[0].n} is taking much longer than usual`);
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
       expect(refresh).toHaveBeenCalledTimes(1);
     } finally {
       off();
@@ -525,10 +532,20 @@ describe('one live pulse per view (declutter C9)', () => {
     vi.setSystemTime(T0);
   });
 
+  /** The first `n` pages as tiles, side by side (as a style board grid lays them out). */
+  const tiles = (doc: ComicDoc, n: number) => (
+    <div>
+      {doc.pages.slice(0, n).map((p) => {
+        const meta = describeTarget(doc, { kind: 'page', id: p.id })!;
+        const src = tileSources(signer(), p.render.asset);
+        return <RenderThumb key={p.id} render={p.render} label={meta.label} aspect={meta.aspect} model={meta.model} typicalSec={meta.typicalSec} url={src.url} srcSet={src.srcSet} />;
+      })}
+    </div>
+  );
+
   it('three drawing tiles: one ping and one sweeping bar (the first tile’s); the others keep a still dot', () => {
     const doc = drawing(3);
-    const studio = makeFakeStudio({ doc, urlFor: signer() });
-    const { container, rerender } = render(<CardRenderer card={card(doc, 3)} studio={studio} />);
+    const { container, rerender } = render(tiles(doc, 3));
     expect(container.querySelectorAll('.ds-live-dot')).toHaveLength(1);
     expect(container.querySelectorAll('[data-progress-bar]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-still-dot]')).toHaveLength(2);
@@ -537,24 +554,27 @@ describe('one live pulse per view (declutter C9)', () => {
 
     // The first one finishes: the next drawing tile takes the pulse on the next tick, still exactly one.
     const next = drawing(3, [0]);
-    rerender(<CardRenderer card={card(next, 3)} studio={{ ...studio, doc: next } as ComicStudioController} />);
+    rerender(tiles(next, 3));
     act(() => void vi.advanceTimersByTime(TILE_CLOCK_MS));
     expect(container.querySelectorAll('.ds-live-dot')).toHaveLength(1);
     expect(container.querySelectorAll('[data-progress-bar]')).toHaveLength(1);
     expect(tileOf(container.querySelector('.ds-live-dot'))).toContain(`Page ${doc.pages[1].n}`);
   });
 
-  it('two cards drawing at once still show one ping between them', () => {
+  it('two renders cards drawing at once, and a style board drawing beside them, still show one ping between them', () => {
     const doc = drawing(3);
     const studio = makeFakeStudio({ doc, urlFor: signer() });
     const { container } = render(
       <>
         <CardRenderer card={card(doc, 2)} studio={studio} />
         <CardRenderer card={{ ...card(doc, 3), id: 'r2' }} studio={studio} />
+        <RenderThumb render={{ status: 'rendering', history: [], updatedAt: T0 }} label="Pastel" aspect="4 / 5" typicalSec={20} />
       </>
     );
     expect(container.querySelectorAll('.ds-live-dot')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-still-dot]')).toHaveLength(4);
+    // Each card is ONE progress card (no tile per page): the other card and the board keep a still dot.
+    expect(container.querySelectorAll('[data-renders-progress]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-still-dot]')).toHaveLength(2);
   });
 
   it('live={false} keeps a tile still; live forces the pulse', () => {
@@ -597,19 +617,24 @@ describe('cards load small files only (perf F2)', () => {
     }
   });
 
-  it('a renders tile whose small file the studio can’t sign reads "Preview unavailable" (with the controller’s isUnsignable)', () => {
+  it('a renders thumbnail whose small file the studio can’t sign says so (with the controller’s isUnsignable)', () => {
     const base = makeSampleDoc();
-    const doc = { ...base, pages: base.pages.map((p, i) => (i === 0 ? { ...p, render: { status: 'ready' as const, history: [], asset: stored('broken'), updatedAt: T0 } } : p)) };
-    const card = { type: 'renders' as const, id: 'r1', label: 'Pages', targets: [{ kind: 'page' as const, id: doc.pages[0].id }] };
+    // Page 1 drew (its small file is broken); page 2 is still drawing, so the run shows its strip.
+    const doc = {
+      ...base,
+      pages: base.pages.map((p, i) =>
+        i === 0 ? { ...p, render: { status: 'ready' as const, history: [], asset: stored('broken'), updatedAt: T0 } } : i === 1 ? { ...p, render: { status: 'rendering' as const, history: [], updatedAt: T0 } } : p
+      )
+    };
+    const card = { type: 'renders' as const, id: 'r1', label: 'Pages', targets: doc.pages.slice(0, 2).map((p) => ({ kind: 'page' as const, id: p.id })) };
     // useStudio's fallback: a variant it gave up on hands back the original for the width request, and nothing for the variant.
     const urlFor = (asset?: AssetRef | string | null) => (asset && typeof asset === 'object' ? `https://cdn.test/${asset.path}` : undefined);
     const studio = { ...makeFakeStudio({ doc, urlFor }), isUnsignable: (p: string) => p === 'u/x/p/broken_w480.webp' } as ComicStudioController;
     const { container } = render(<CardRenderer card={card} studio={studio} />);
-    expect(screen.getByRole('img', { name: `Page ${doc.pages[0].n}: preview unavailable here` })).toBeInTheDocument();
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('.studio-shimmer')).toBeNull();
     // Still opens on the board, where the picture lives.
-    fireEvent.click(screen.getByRole('button', { name: `Open Page ${doc.pages[0].n}` }));
+    fireEvent.click(screen.getByRole('button', { name: `Open page ${doc.pages[0].n} (preview unavailable here)` }));
     expect(studio.openPage).toHaveBeenCalledWith(doc.pages[0].id);
   });
 });

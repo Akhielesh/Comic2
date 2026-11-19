@@ -41,8 +41,8 @@ describe('a settled renders card', () => {
     const doc = docWith(card);
     const studio = makeFakeStudio({ doc });
     const { container, rerender } = render(<CardRenderer card={card} studio={studio} message={doc.conversation[0]} settle={LIVE} />);
-    // Live (control): the drawn page is a real image.
-    expect(container.querySelectorAll('img').length).toBeGreaterThan(0);
+    // Live (control): the finished run's line has its controls (View, Retry for the page that didn't draw).
+    expect(container.querySelectorAll(CONTROLS).length).toBeGreaterThan(0);
     rerender(<CardRenderer card={card} studio={studio} message={doc.conversation[0]} settle={SETTLED} />);
     expect(container.querySelectorAll('img')).toHaveLength(0);
     expect(container.querySelectorAll(CONTROLS)).toHaveLength(0);
