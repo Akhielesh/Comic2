@@ -378,6 +378,8 @@ export type StudioReducerAction =
       doc?: ComicDoc | null;
       urls?: Record<string, UrlEntry>;
       pendingMessage?: PendingUserMessage | null;
+      /** What the work hit while no studio watched (shown only when this state has no error of its own). */
+      error?: { message: string; code?: string } | null;
       now: number;
     };
 
@@ -894,15 +896,34 @@ const mergeUrlEntries = (current: Record<string, UrlEntry>, incoming: Record<str
   return next ?? current;
 };
 
+/**
+ * A newer copy of the same comic (a GET) holds a director reply that the streams' copy has not delivered yet: a NEW
+ * assistant message with text, the same test applyOpsEvent uses for `replied`. The stream will deliver that batch
+ * later with a revision the studio already has, so it would be skipped as applied and never mark the turn replied.
+ */
+export const replyLandedBeyond = (server: ComicDoc | null | undefined, streamsDoc: ComicDoc | null | undefined): boolean => {
+  if (!server || !streamsDoc || server.id !== streamsDoc.id || server.rev <= streamsDoc.rev) return false;
+  const known = new Set(streamsDoc.conversation.map((m) => m.id));
+  return server.conversation.some((m) => m.role === 'assistant' && !known.has(m.id) && !!landedText(m));
+};
+
+/** Every message stream still waiting for its reply is answered (one director turn runs at a time; see applyOpsEvent). */
+export const markRepliesLanded = (state: StudioState): StudioState =>
+  Object.values(state.streams).some((s) => s.kind === 'message' && !s.replied)
+    ? { ...state, streams: Object.fromEntries(Object.entries(state.streams).map(([id, s]) => [id, s.kind === 'message' && !s.replied ? { ...s, replied: true } : s])) }
+    : state;
+
 const adoptStreams = (state: StudioState, action: Extract<StudioReducerAction, { type: 'streams_adopt' }>): StudioState => {
-  const streams = { ...state.streams };
-  for (const s of action.streams || []) {
-    if (s && typeof s.id === 'string' && s.id && !streams[s.id]) streams[s.id] = { ...s };
-  }
   const current = state.base;
   const doc = action.doc;
   // The streams' copy wins only when it is newer than what the GET returned (never a regression, never another comic).
   const base = doc && current && doc.id === current.id && doc.rev > current.rev ? doc : current;
+  // The GET kept is ahead of the streams and already holds the reply: the adopted turn is answered.
+  const answered = base === current && replyLandedBeyond(current, doc);
+  const streams = { ...state.streams };
+  for (const s of action.streams || []) {
+    if (s && typeof s.id === 'string' && s.id && !streams[s.id]) streams[s.id] = answered && s.kind === 'message' ? { ...s, replied: true } : { ...s };
+  }
   const drafts = { ...state.drafts };
   for (const [msgId, text] of Object.entries(action.drafts || {})) {
     if (typeof text !== 'string' || !text) continue;
@@ -914,6 +935,7 @@ const adoptStreams = (state: StudioState, action: Extract<StudioReducerAction, {
   const presenceKnown = new Set((state.presence ?? []).map((p) => p.activityId));
   const adoptedPresence = (action.presence || []).filter((p) => !!p && !presenceKnown.has(p.activityId));
   const presence = adoptedPresence.length ? [...(state.presence ?? []), ...adoptedPresence].slice(-MAX_PRESENCE) : state.presence;
+  const missed = !state.error && action.error && typeof action.error.message === 'string' && action.error.message ? action.error : null;
   return withView({
     ...state,
     base,
@@ -923,6 +945,7 @@ const adoptStreams = (state: StudioState, action: Extract<StudioReducerAction, {
     urls: mergeUrlEntries(state.urls, action.urls),
     ...(presence !== state.presence ? { presence } : {}),
     pendingMessage: state.pendingMessage ?? action.pendingMessage ?? null,
+    ...(missed ? { error: missed.message, errorCode: missed.code ?? null } : {}),
     behindRev: base ? Math.max(state.behindRev, base.rev) : state.behindRev
   });
 };

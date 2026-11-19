@@ -130,7 +130,8 @@ class ScriptedServer {
     signStudioUrls: async (_id: string, paths: string[]) => this.sign(paths),
     cancelStudio: async () => {
       this.dispose();
-      this.stream?.emit({ type: 'error', code: 'CANCELLED', message: 'Stopped.' });
+      // As the server does: a stopped turn ends with an ordinary `done`, never an error.
+      this.stream?.emit({ type: 'done', rev: this.doc.rev, spentUsd: 0 });
       this.stream?.end();
       this.stream = null;
       this.setPhase('done');

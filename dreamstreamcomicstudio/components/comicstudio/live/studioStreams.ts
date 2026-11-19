@@ -12,20 +12,26 @@
 //     mirror and the studio can never read an event differently: the doc as the server committed it, the reply so far
 //     (≤ LIVE_LIMITS.draftChars per message, tail kept), the step list (≤ LIVE_LIMITS.activity, live steps kept), the
 //     streams with their `replied` flags, the pending bubble, presence and signed URLs. It is dropped when the comic's
-//     last stream ends and no view is opening it.
+//     last stream ends and no view is opening it. What the creator must still see is kept as a small LEFTOVER instead
+//     when that end comes while nobody watches: the "not sent" bubble with their words, the notes a BUSY answer put back
+//     in Up next, the error the work hit. The next studio for the comic gets it once.
 //   - Events reach the reducer of the view that owns the stream (its "sink"). When the studio unmounts it `detach`es:
 //     the streams keep reading, owned by nobody, and only the mirror hears them. A studio that mounts for the same comic
 //     `claim`s it and, once its doc has loaded, `subscribe`s: it gets the mirror as a snapshot to adopt
 //     (studioReducer `streams_adopt`) and owns the streams from then on, so everything after reaches it exactly once.
-//   - At most LIVE_LIMITS.detachedComics comics are held with nobody watching; leaving a fourth aborts the oldest
-//     comic's streams (the server keeps working; LT-3 re-attaches on return). Patch streams are never held.
+//   - At most LIVE_LIMITS.detachedComics comics are held with nobody watching (live streams or a leftover); one more
+//     drops the oldest: its streams are aborted (the server keeps working; LT-3 re-attaches on return) and settle as
+//     `lost`, as a dropped connection does. Patch streams are never held. A studio that has unmounted starts no new
+//     message or action stream (useStudio runStream), so a card's second step never runs after the person left.
 //   - Accounts: entries are keyed `${accountId}:${projectId}`. A claim under another account, a sign-out or another
 //     account signing in on this tab (`noteStudioAccount`) aborts and drops every entry of the old account, so a
 //     shared device never keeps or announces the previous person's comic.
 //   - MOMENTS (the NOTIFY §7 contract; services/alerts subscribes, nothing here imports it): `subscribeStudioMoments`
 //     hears `replied` once per message stream (the turn's first new assistant message: "the Director replied") and
 //     `settled` once per message or action stream at its end ("the work settled": `outcome` says done / failed /
-//     stopped / lost / busy, `error` carries the stream's own words and code). Each moment carries the doc at the
+//     stopped / lost / busy, `error` carries the stream's own words and code). The server ends a stopped stream with
+//     `done` like any other, so "stopped" comes from the studio's Stop (`noteStop`), not from the stream; a stopped
+//     turn's "Stopped." line is not "the Director replied". Each moment carries the doc at the
 //     stream's start (`before`) and now (`after`), so the listener reads "needs you" (an open gate, a question, a plan
 //     waiting for its OK) from `after` itself. The payload is the same whether a studio was mounted or not; a listener
 //     that wants quiet while the comic is on screen decides that itself.
@@ -37,8 +43,11 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioEvent } from '../../../shared/comic/events';
 import type { QueuedNote } from '../messageQueue';
 import type { ActivityItem } from '../types';
+import { requeue } from '../messageQueue';
 import {
   initialStudioState,
+  markRepliesLanded,
+  replyLandedBeyond,
   studioReducer,
   type PendingUserMessage,
   type PresenceEntry,
@@ -135,6 +144,8 @@ export interface StreamsAdoptSnapshot {
   pendingMessage: PendingUserMessage | null;
   /** Notes a BUSY answer put back while nobody watched (offered as held, never auto-sent). */
   notes: QueuedNote[];
+  /** What the work hit while nobody watched (a studio that showed it already never gets it again). */
+  error: { message: string; code?: string } | null;
   /** The adopted message stream whose reply has not landed (the composer waits for it), or null. */
   awaitingReply: string | null;
 }
@@ -148,6 +159,15 @@ interface StreamRec {
   sink: StudioSink | null;
   turnId?: string;
   repliedSaid: boolean;
+  /** The studio's Stop reached this stream (its end without an error is `stopped`, not `done`). */
+  stopping: boolean;
+}
+
+/** What the creator must still see after a comic's last stream ended while nobody watched (handed over once). */
+interface Leftover {
+  pendingMessage: PendingUserMessage | null;
+  notes: QueuedNote[];
+  error: { message: string; code?: string } | null;
 }
 
 interface Entry {
@@ -156,6 +176,8 @@ interface Entry {
   projectId: string;
   streams: Map<string, StreamRec>;
   mirror: StudioState | null;
+  /** Kept once the streams are gone and nobody watches; counted toward LIVE_LIMITS.detachedComics. */
+  leftover: Leftover | null;
   /** The studio showing this comic (new streams default to it), or null. */
   sink: StudioSink | null;
   /** Studios mounted for this comic (claims minus detaches). */
@@ -238,13 +260,14 @@ const momentOf = (entry: Entry, rec: StreamRec, phase: StudioMomentPhase, extra:
   ...extra
 });
 
-const outcomeOf = (input: StreamEndInput, errored: { message: string; code?: string } | undefined): StudioMomentOutcome => {
+const outcomeOf = (input: StreamEndInput, errored: { message: string; code?: string } | undefined, stopping: boolean): StudioMomentOutcome => {
   if (input.aborted) return 'stopped';
   const code = input.code ?? errored?.code;
-  if (code === 'CANCELLED') return 'stopped';
   if (code === 'BUSY') return 'busy';
   if (input.lost || code === 'connection_lost') return 'lost';
-  return input.error || errored ? 'failed' : 'done';
+  if (input.error || errored) return 'failed';
+  // The server answers a Stop with an ordinary `done` (it never sends an error for it): the studio said Stop.
+  return stopping ? 'stopped' : 'done';
 };
 
 // ── The mirror ───────────────────────────────────────────────────────────────
@@ -299,29 +322,52 @@ const freshMirror = (before: ComicDoc | null): StudioState => ({
 });
 
 /** The doc the mirror folds onto follows the newest server-confirmed copy a studio had (fills a gap, never regresses). */
-const withNewerBase = (mirror: StudioState, base: ComicDoc | null | undefined): StudioState =>
-  base && (!mirror.base || (mirror.base.id === base.id && base.rev > mirror.base.rev))
-    ? fold(mirror, { type: 'refresh_success', doc: base, now: now() })
-    : mirror;
+const withNewerBase = (mirror: StudioState, base: ComicDoc | null | undefined): StudioState => {
+  if (!base || (mirror.base && (mirror.base.id !== base.id || base.rev <= mirror.base.rev))) return mirror;
+  const next = fold(mirror, { type: 'refresh_success', doc: base, now: now() });
+  // That copy already holds the reply the streams have not delivered: they will deliver it as an applied revision, so
+  // the turn is answered now (the studio's adopt reads the same, studioReducer streams_adopt).
+  return replyLandedBeyond(base, mirror.base) ? markRepliesLanded(next) : next;
+};
 
 const ensure = (key: string): Entry => {
   let entry = entries.get(key);
   if (!entry) {
     const { accountId, projectId } = splitKey(key);
-    entry = { key, accountId, projectId, streams: new Map(), mirror: null, sink: null, views: 0, detachedSeq: 0 };
+    entry = { key, accountId, projectId, streams: new Map(), mirror: null, leftover: null, sink: null, views: 0, detachedSeq: 0 };
     entries.set(key, entry);
   }
   return entry;
 };
 
-/** Forget an entry with no work: kept only while a studio holds the comic (and, while it loads, its last mirror). */
+/** The creator's words and what went wrong, from the mirror and an earlier leftover (null when there is nothing). */
+const leftoverOf = (entry: Entry): Leftover | null => {
+  const m = entry.mirror;
+  const prev = entry.leftover;
+  const pendingMessage = m?.pendingMessage?.status === 'failed' ? m.pendingMessage : prev?.pendingMessage ?? null;
+  const notes = requeue(prev?.notes ?? [], m?.queue?.notes ?? [], 'tail');
+  const error = m?.error ? { message: m.error, ...(m.errorCode ? { code: m.errorCode } : {}) } : prev?.error ?? null;
+  return pendingMessage || notes.length || error ? { pendingMessage, notes, error } : null;
+};
+
+/**
+ * An entry with no work: kept while a studio holds the comic (and, while it loads, its last mirror), or, with nobody
+ * watching, only as the leftover the creator must still see.
+ */
 const settleEntry = (entry: Entry): void => {
   if (entry.streams.size) return;
-  entry.detachedSeq = 0;
   if (entry.views <= 0) {
-    entries.delete(entry.key);
+    entry.leftover = leftoverOf(entry);
+    entry.mirror = null;
+    entry.sink = null;
+    if (!entry.leftover) {
+      entries.delete(entry.key);
+      return;
+    }
+    if (!entry.detachedSeq) entry.detachedSeq = ++detachSeq;
     return;
   }
+  entry.detachedSeq = 0;
   // A studio shows it: the studio has all of it, the mirror goes. A studio still loading keeps the mirror's doc for
   // its adopt (its GET may have been answered before the last commit landed).
   if (entry.sink) entry.mirror = null;
@@ -346,9 +392,38 @@ const abortEntry = (entry: Entry): void => {
   entry.mirror = null;
 };
 
+/** Comics held with nobody watching: live streams, or a leftover. */
+const isHeld = (e: Entry): boolean => e.views <= 0 && (e.streams.size > 0 || !!e.leftover);
+
+/** One comic more than LIVE_LIMITS.detachedComics held: the oldest goes. Its streams settle as `lost` (the server may finish). */
 const enforceDetachedCap = (): void => {
-  const held = [...entries.values()].filter((e) => e.views <= 0 && e.streams.size > 0).sort((a, b) => a.detachedSeq - b.detachedSeq);
-  while (held.length > LIVE_LIMITS.detachedComics) abortEntry(held.shift()!);
+  const held = [...entries.values()].filter(isHeld).sort((a, b) => a.detachedSeq - b.detachedSeq);
+  while (held.length > LIVE_LIMITS.detachedComics) {
+    const oldest = held.shift()!;
+    for (const rec of oldest.streams.values()) say(momentOf(oldest, rec, 'settled', { outcome: 'lost' }));
+    abortEntry(oldest);
+  }
+};
+
+/** "The Director replied", once per message stream, when the mirror marks it answered (never for a stopped turn). */
+const sayReplies = (entry: Entry): void => {
+  const streams = entry.mirror?.streams;
+  if (!streams) return;
+  for (const r of entry.streams.values()) {
+    if (r.kind !== 'message' || r.repliedSaid || !streams[r.id]?.replied) continue;
+    r.repliedSaid = true;
+    if (!r.stopping) say(momentOf(entry, r, 'replied'));
+  }
+};
+
+/**
+ * A studio was handed this stream's event or end: what it showed is its own now, so the mirror forgets it (a studio
+ * opening the comic later never shows that error, bubble or those notes again).
+ */
+const forgetSeen = (entry: Entry): void => {
+  const m = entry.mirror;
+  if (!m || (!m.error && !m.queue?.notes.length && m.pendingMessage?.status !== 'failed')) return;
+  entry.mirror = { ...m, error: null, errorCode: null, queue: undefined, ...(m.pendingMessage?.status === 'failed' ? { pendingMessage: null } : {}) };
 };
 
 // ── Streams ──────────────────────────────────────────────────────────────────
@@ -364,13 +439,20 @@ export const begin = (key: string, input: BeginInput): void => {
     ctrl: input.ctrl,
     before: input.before ?? null,
     sink: input.sink ?? entry.sink,
-    repliedSaid: false
+    repliedSaid: false,
+    stopping: false
   };
   entry.streams.set(rec.id, rec);
   let mirror = entry.mirror ? withNewerBase(entry.mirror, input.before) : freshMirror(input.before ?? null);
   mirror = fold(mirror, { type: 'stream_start', streamId: rec.id, kind: rec.kind, ...(rec.actionType ? { actionType: rec.actionType } : {}), now: now() });
   if (rec.kind === 'message' && input.pending && input.pending.streamId === rec.id) mirror = fold(mirror, { type: 'message_pending', message: input.pending });
   entry.mirror = mirror;
+  sayReplies(entry);
+  // Started while no studio holds the comic: it is held with nobody watching, and counts toward the cap.
+  if (entry.views <= 0) {
+    if (!entry.detachedSeq) entry.detachedSeq = ++detachSeq;
+    enforceDetachedCap();
+  }
   refreshWorking();
 };
 
@@ -382,19 +464,16 @@ export const event = (key: string, streamId: string, e: StudioEvent): void => {
   if (e.type === 'hello' && typeof e.turnId === 'string' && e.turnId) rec.turnId = e.turnId.slice(0, 120);
   const at = now();
   if (entry.mirror) entry.mirror = fold(entry.mirror, { type: 'stream_event', streamId, event: e, now: at });
-  try {
-    rec.sink?.({ type: 'stream_event', streamId, event: e, now: at });
-  } catch {
-    /* a view bug never stops the stream */
+  if (rec.sink) {
+    try {
+      rec.sink({ type: 'stream_event', streamId, event: e, now: at });
+    } catch {
+      /* a view bug never stops the stream */
+    }
+    forgetSeen(entry);
   }
   // "The Director replied": the reducer marks every message stream still waiting once a new reply lands.
-  const streams = entry.mirror?.streams;
-  if (!streams) return;
-  for (const r of entry.streams.values()) {
-    if (r.kind !== 'message' || r.repliedSaid || !streams[r.id]?.replied) continue;
-    r.repliedSaid = true;
-    say(momentOf(entry, r, 'replied'));
-  }
+  sayReplies(entry);
 };
 
 /** A registered stream ended (its `finally`): the studio that owns it hears `stream_end`, listeners hear `settled`. */
@@ -414,15 +493,31 @@ export const end = (key: string, streamId: string, input: StreamEndInput = {}): 
   };
   if (entry.mirror) entry.mirror = fold(entry.mirror, action);
   entry.streams.delete(streamId);
-  try {
-    rec.sink?.(action);
-  } catch {
-    /* the view is gone */
+  if (rec.sink) {
+    try {
+      rec.sink(action);
+    } catch {
+      /* the view is gone */
+    }
+    forgetSeen(entry);
   }
   const error = input.error ? { message: input.error, ...(input.code ? { code: input.code } : {}) } : errored;
-  say(momentOf(entry, rec, 'settled', { outcome: outcomeOf(input, errored), ...(error && !input.aborted ? { error } : {}) }));
+  say(momentOf(entry, rec, 'settled', { outcome: outcomeOf(input, errored, rec.stopping), ...(error && !input.aborted ? { error } : {}) }));
   settleEntry(entry);
   refreshWorking();
+};
+
+/**
+ * The studio showing this comic pressed Stop. The server decides what that stops the same way the studio does
+ * (routes/comic.ts stopSessionWork): with a director turn waiting for its reply, that turn (`turn`); otherwise every
+ * stream's queued drawing (`drawing`). Those streams then end with an ordinary `done`, which settles as `stopped`.
+ */
+export const noteStop = (key: string, scope: 'turn' | 'drawing'): void => {
+  const entry = entries.get(key);
+  if (!entry) return;
+  for (const rec of entry.streams.values()) {
+    if (scope === 'drawing' || (rec.kind === 'message' && !entry.mirror?.streams[rec.id]?.replied)) rec.stopping = true;
+  }
 };
 
 // ── Studios mounting and leaving ─────────────────────────────────────────────
@@ -453,30 +548,35 @@ export const subscribe = (key: string, sink: StudioSink): StreamsAdoptSnapshot |
   const entry = ensure(key);
   entry.sink = sink;
   const mirror = entry.mirror;
+  const leftover = entry.leftover;
+  entry.leftover = null;
   const taken: StreamRec[] = [];
   for (const rec of entry.streams.values()) {
     if (rec.sink) continue;
     rec.sink = sink;
     taken.push(rec);
   }
-  if (!mirror) return null;
+  if (!mirror && !leftover) return null;
   const ids = new Set(taken.map((r) => r.id));
-  const streams = taken.map((r) => mirror.streams[r.id]).filter((s): s is StreamInfo => !!s);
-  const pending = mirror.pendingMessage;
+  const streams = mirror ? taken.map((r) => mirror.streams[r.id]).filter((s): s is StreamInfo => !!s) : [];
+  const pending = mirror?.pendingMessage ?? null;
+  const ownPending = pending && (!pending.streamId || ids.has(pending.streamId) || pending.status === 'failed') ? pending : null;
   const snapshot: StreamsAdoptSnapshot = {
     streams,
     controllers: taken.map((r) => ({ id: r.id, kind: r.kind, ctrl: r.ctrl })),
-    drafts: { ...mirror.drafts },
-    activity: mirror.activity.slice(),
-    presence: (mirror.presence ?? []).filter((p) => p.streamIds.some((id) => ids.has(id))),
-    doc: mirror.base,
-    urls: mirror.urls,
-    pendingMessage: pending && (!pending.streamId || ids.has(pending.streamId) || pending.status === 'failed') ? pending : null,
-    notes: mirror.queue?.notes ? mirror.queue.notes.slice() : [],
+    drafts: mirror ? { ...mirror.drafts } : {},
+    activity: mirror ? mirror.activity.slice() : [],
+    presence: (mirror?.presence ?? []).filter((p) => p.streamIds.some((id) => ids.has(id))),
+    doc: mirror?.base ?? null,
+    urls: mirror?.urls ?? {},
+    pendingMessage: ownPending ?? leftover?.pendingMessage ?? null,
+    notes: requeue(leftover?.notes ?? [], mirror?.queue?.notes ?? [], 'tail'),
+    error: mirror?.error ? { message: mirror.error, ...(mirror.errorCode ? { code: mirror.errorCode } : {}) } : leftover?.error ?? null,
     awaitingReply: streams.find((s) => s.kind === 'message' && !s.replied)?.id ?? null
   };
-  // Handed over once: the mirror keeps folding for the moments, but its notes and bubble now live in the studio.
-  if (snapshot.notes.length || snapshot.pendingMessage) entry.mirror = { ...mirror, queue: undefined, pendingMessage: null };
+  // Handed over once: the mirror keeps folding for the moments, but the notes, the failed bubble and the error now
+  // live in the studio. A bubble still sending stays in the mirror too, for a studio that opens the comic after this one.
+  forgetSeen(entry);
   settleEntry(entry);
   return snapshot;
 };
@@ -491,15 +591,18 @@ export const detach = (key: string, sink?: StudioSink): void => {
   entry.views = Math.max(0, entry.views - 1);
   if (!sink || entry.sink === sink) entry.sink = null;
   for (const rec of entry.streams.values()) if (!sink || rec.sink === sink) rec.sink = null;
-  if (!entry.streams.size) {
-    settleEntry(entry);
+  if (entry.views > 0) {
+    if (!entry.streams.size) settleEntry(entry);
     return;
   }
-  if (entry.views <= 0) {
-    entry.detachedSeq = ++detachSeq;
-    enforceDetachedCap();
-    refreshWorking();
+  entry.detachedSeq = ++detachSeq;
+  if (!entry.streams.size) {
+    settleEntry(entry);
+    if (entries.get(entry.key) === entry) enforceDetachedCap();
+    return;
   }
+  enforceDetachedCap();
+  refreshWorking();
 };
 
 /** Keep the mirror's doc no older than the studio's own server-confirmed copy (a refetch filled a gap). */
@@ -507,6 +610,7 @@ export const syncMirror = (key: string, base: ComicDoc | null | undefined): void
   const entry = entries.get(key);
   if (!entry?.mirror || !entry.streams.size || !base) return;
   entry.mirror = withNewerBase(entry.mirror, base);
+  sayReplies(entry);
 };
 
 // ── Accounts ─────────────────────────────────────────────────────────────────
@@ -539,16 +643,18 @@ export const noteStudioAccount = (accountId: string | null | undefined): void =>
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 /** Test-only: how much is held. */
-export const __studioStreamsStatsForTests = (): { entries: number; streams: number; mirrors: number; detached: number } => {
+export const __studioStreamsStatsForTests = (): { entries: number; streams: number; mirrors: number; detached: number; leftovers: number } => {
   let streams = 0;
   let mirrors = 0;
   let detached = 0;
+  let leftovers = 0;
   for (const e of entries.values()) {
     streams += e.streams.size;
     if (e.mirror) mirrors += 1;
     if (e.views <= 0 && e.streams.size) detached += 1;
+    if (e.leftover) leftovers += 1;
   }
-  return { entries: entries.size, streams, mirrors, detached };
+  return { entries: entries.size, streams, mirrors, detached, leftovers };
 };
 
 /** Test-only: forget everything (module state outlives a test's renders; tests/setup.ts calls it after each test). */

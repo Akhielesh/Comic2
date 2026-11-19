@@ -52,6 +52,7 @@ vi.mock('../../services/supabase', async (importOriginal) => {
 
 import { StudioApiError } from './studioApi';
 import { useStudio, type ComicStudioController } from './useStudio';
+import { useAction } from './conversation/cards/useAction';
 import { __resetStudioStreamsForTests, subscribeStudioMoments, type StudioMoment } from './live/studioStreams';
 
 interface FakeStream {
@@ -120,6 +121,9 @@ const startTurn = (result: { current: ComicStudioController }, projectId = 'proj
 
 beforeEach(() => {
   __resetStudioStreamsForTests();
+  // Up next is saved per comic in this tab: one test's held notes must not come back in the next.
+  window.sessionStorage.clear();
+  window.localStorage.clear();
   streams = [];
   server.clear();
   auth.user = { id: 'acc-a' };
@@ -234,10 +238,90 @@ describe('useStudio — leaving a comic mid-turn and coming back', () => {
     await act(async () => back.result.current.cancel());
     expect(api.cancelStudio).toHaveBeenCalledWith('proj_1');
     expect(back.result.current.cancelling).toBe(true);
-    emit(s, { type: 'error', code: 'CANCELLED', message: 'Stopped.' });
-    await act(async () => s.resolve());
+    // The server ends a stopped turn as it ends any other: `done`, never an error.
+    await close(s);
     expect(back.result.current.cancelling).toBe(false);
     expect(back.result.current.messageBusy).toBe(false);
+    expect(moments.filter((m) => m.phase === 'settled').map((m) => m.outcome)).toEqual(['stopped']);
+  });
+
+  it('a reply the GET already holds, but the stream has not delivered yet, does not keep the composer locked', async () => {
+    const first = await mount();
+    const s = startTurn(first.result);
+    first.unmount();
+    // The server commits the reply; the GET for the comic opening again sees it before the stream delivers it.
+    const doc = docFor('proj_1');
+    const ops: DocOp[] = [{ op: 'message', msg: { id: 'a1', role: 'assistant', text: 'Here is the plan: six pages.', at: 2 } }];
+    server.set('proj_1', { ...applyOps(doc, ops, doc.rev + 1), rev: doc.rev + 1 });
+    const back = await mount();
+    expect(back.result.current.doc?.conversation.map((m) => m.id)).toEqual(['u1', 'a1']);
+    expect(back.result.current.messageBusy).toBe(false);
+    expect(back.result.current.busy).toBe(true);
+    emit(s, { type: 'ops', rev: doc.rev + 1, ops });
+    expect(back.result.current.messageBusy).toBe(false);
+    // The composer is free: a new message goes now.
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await back.result.current.send('Now draw it');
+    });
+    expect(outcome).toBe('sent');
+    await close(s);
+    // The alert still hears "the Director replied", once.
+    expect(moments.filter((m) => m.phase === 'replied').map((m) => m.projectId)).toEqual(['proj_1']);
+  });
+
+  it('a failure while away comes back: the bubble with the creator’s words and Try again', async () => {
+    const first = await mount('proj_1', QUEUE_ON);
+    act(() => void first.result.current.send('Plan a rooftop chase'));
+    const s = streams[streams.length - 1];
+    first.unmount();
+    emit(s, { type: 'error', code: 'COOLDOWN', message: 'Wait a moment before sending again.' });
+    await close(s);
+    const back = await mount('proj_1', QUEUE_ON);
+    await waitFor(() => expect(back.result.current.pendingMessage).not.toBeNull());
+    expect(back.result.current.pendingMessage).toMatchObject({ text: 'Plan a rooftop chase', status: 'failed', code: 'COOLDOWN' });
+    expect(back.result.current.messageBusy).toBe(false);
+  });
+
+  it('notes another device’s BUSY put back while away wait in Up next, held', async () => {
+    const first = await mount('proj_1', QUEUE_ON);
+    act(() => void first.result.current.send('Plan a rooftop chase'));
+    const s = streams[streams.length - 1];
+    first.unmount();
+    emit(s, { type: 'error', code: 'BUSY', message: 'Another tab is working on this comic.' });
+    await close(s);
+    const back = await mount('proj_1', QUEUE_ON);
+    await waitFor(() => expect(back.result.current.queue?.map((n) => n.text)).toEqual(['Plan a rooftop chase']));
+    expect(back.result.current.pendingMessage).toBeNull();
+    expect(api.streamStudio).toHaveBeenCalledTimes(1);
+  });
+
+  it('a card’s next step never starts once the comic was left (approve, then draw)', async () => {
+    api.loadStudioProject.mockImplementation(async (id: string) => ({ doc: docFor(id), urls: {} }));
+    const hook = renderHook(() => {
+      const studio = useStudio('proj_1');
+      return { studio, action: useAction(studio.act) };
+    });
+    await waitFor(() => expect(hook.result.current.studio.doc).not.toBeNull());
+    let ran: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      ran = hook.result.current.action.run('approve', { type: 'approve_plan' }, { type: 'render_pages', quotedUsd: 0.4 });
+    });
+    const approve = streams[streams.length - 1];
+    expect(approve.req).toMatchObject({ kind: 'action', action: { type: 'approve_plan' } });
+    hook.unmount();
+    expect(approve.signal?.aborted).toBe(false);
+    await close(approve);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const opened = streams.map((s) => (s.req.kind === 'action' ? s.req.action.type : s.req.kind));
+    // Close anything a wrong build opened, so the sequence can finish and the assertion below reports it.
+    for (const s of streams.slice(1)) await close(s);
+    await act(async () => {
+      await ran;
+    });
+    expect(opened).toEqual(['approve_plan']);
   });
 
   it('a note typed while the adopted turn runs waits in Up next as turn-locked, never as another device', async () => {
@@ -316,6 +400,8 @@ describe('useStudio — several comics', () => {
       hook.unmount();
     }
     expect(started.map((s) => s.signal?.aborted)).toEqual([true, false, false, false]);
+    // Nobody follows p1 any more: it settles as a lost connection would (no alert; the server may finish it).
+    expect(moments.filter((m) => m.phase === 'settled').map((m) => [m.projectId, m.outcome])).toEqual([['p1', 'lost']]);
   });
 
   it('signing out aborts the turns left running', async () => {

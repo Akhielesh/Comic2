@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
-import type { StudioReducerAction } from '../studioReducer';
+import type { PendingUserMessage, StudioReducerAction } from '../studioReducer';
 import {
   LIVE_LIMITS,
   __resetStudioStreamsForTests,
@@ -13,6 +13,7 @@ import {
   detach,
   end,
   event,
+  noteStop,
   noteStudioAccount,
   studioStreamKey,
   subscribe,
@@ -176,9 +177,45 @@ describe('studioStreams — moments (NOTIFY §7)', () => {
       phase: 'settled', streamKind: 'action', actionType: 'render_pages', outcome: 'failed', error: { message: 'The model is busy.', code: 'PROVIDER_ERROR' }
     });
     expect(outcomeOf((k) => end(k, 's', { aborted: true }))?.outcome).toBe('stopped');
-    expect(outcomeOf((k) => { event(k, 's', { type: 'error', message: 'Stopped.', code: 'CANCELLED' }); end(k, 's', {}); })?.outcome).toBe('stopped');
+    // The server never sends an error for a Stop: the stream ends with `done`, as any other. The studio said Stop.
+    expect(outcomeOf((k) => { noteStop(k, 'drawing'); event(k, 's', { type: 'done', rev: 5, spentUsd: 0 }); end(k, 's', {}); })?.outcome).toBe('stopped');
     expect(outcomeOf((k) => end(k, 's', { error: 'Connection lost.', lost: true }))?.outcome).toBe('lost');
     expect(outcomeOf((k) => end(k, 's', { error: 'Busy.', code: 'BUSY' }))?.outcome).toBe('busy');
+  });
+
+  it('Stop of the director marks only the turn still waiting for its reply; Stop of drawing marks every stream', () => {
+    const doc = makeSampleDoc();
+    begin(KEY_A, { streamId: 'turn', kind: 'message', ctrl: new AbortController(), before: doc });
+    begin(KEY_A, { streamId: 'earlier', kind: 'action', actionType: 'render_pages', ctrl: new AbortController(), before: doc });
+    noteStop(KEY_A, 'turn');
+    event(KEY_A, 'turn', userMsg(6));
+    // A turn that commits its "Stopped." line is not "the Director replied".
+    event(KEY_A, 'turn', replyMsg(7, 'a1', 'Stopped.'));
+    end(KEY_A, 'turn', {});
+    end(KEY_A, 'earlier', {});
+    expect(moments.map((m) => [m.streamId, m.phase, m.outcome])).toEqual([
+      ['turn', 'settled', 'stopped'],
+      ['earlier', 'settled', 'done']
+    ]);
+
+    moments.length = 0;
+    const key = studioStreamKey('acc-a', 'proj_2');
+    begin(key, { streamId: 'replied', kind: 'message', ctrl: new AbortController(), before: doc });
+    event(key, 'replied', userMsg(6));
+    event(key, 'replied', replyMsg(7));
+    begin(key, { streamId: 'render', kind: 'action', actionType: 'render_pages', ctrl: new AbortController(), before: doc });
+    noteStop(key, 'drawing');
+    end(key, 'replied', {});
+    end(key, 'render', {});
+    expect(moments.map((m) => [m.streamId, m.phase, m.outcome])).toEqual([
+      ['replied', 'replied', undefined],
+      ['replied', 'settled', 'stopped'],
+      ['render', 'settled', 'stopped']
+    ]);
+    // A real error after a Stop is still a failure, and a stream begun after the Stop is not stopped.
+    begin(key, { streamId: 'late', kind: 'action', ctrl: new AbortController(), before: doc });
+    end(key, 'late', {});
+    expect(moments.at(-1)).toMatchObject({ streamId: 'late', outcome: 'done' });
   });
 
   it('a moment listener that throws never breaks the stream', () => {
@@ -203,10 +240,10 @@ describe('studioStreams — lifetime', () => {
     expect(workingKeys().has(KEY_A)).toBe(true);
     event(KEY_A, 's1', userMsg(6));
     detach(KEY_A, view.sink);
-    expect(__studioStreamsStatsForTests()).toEqual({ entries: 1, streams: 1, mirrors: 1, detached: 1 });
+    expect(__studioStreamsStatsForTests()).toEqual({ entries: 1, streams: 1, mirrors: 1, detached: 1, leftovers: 0 });
     event(KEY_A, 's1', replyMsg(7));
     end(KEY_A, 's1', {});
-    expect(__studioStreamsStatsForTests()).toEqual({ entries: 0, streams: 0, mirrors: 0, detached: 0 });
+    expect(__studioStreamsStatsForTests()).toEqual({ entries: 0, streams: 0, mirrors: 0, detached: 0, leftovers: 0 });
     expect(workingKeys().size).toBe(0);
     // Late events for a released stream change nothing.
     event(KEY_A, 's1', replyMsg(8));
@@ -219,7 +256,7 @@ describe('studioStreams — lifetime', () => {
     subscribe(KEY_A, view.sink);
     startMessage(KEY_A, 's1', makeSampleDoc(), view.sink);
     end(KEY_A, 's1', {});
-    expect(__studioStreamsStatsForTests()).toEqual({ entries: 1, streams: 0, mirrors: 0, detached: 0 });
+    expect(__studioStreamsStatsForTests()).toEqual({ entries: 1, streams: 0, mirrors: 0, detached: 0, leftovers: 0 });
     detach(KEY_A, view.sink);
     expect(__studioStreamsStatsForTests().entries).toBe(0);
   });
@@ -247,6 +284,14 @@ describe('studioStreams — lifetime', () => {
     });
     expect(ctrls.map((c) => c.signal.aborted)).toEqual([true, false, false, false]);
     expect(workingKeys()).toEqual(new Set(['p2', 'p3', 'p4'].map((p) => studioStreamKey('acc-a', p))));
+    // The work nobody follows any more still settles, as a lost connection does (the server may finish it).
+    expect(moments.map((m) => [m.projectId, m.streamId, m.phase, m.outcome])).toEqual([['p1', 's_p1', 'settled', 'lost']]);
+  });
+
+  it('a stream begun while no view holds the comic counts toward the cap', () => {
+    const ctrls = ['p1', 'p2', 'p3', 'p4'].map((p) => startMessage(studioStreamKey('acc-a', p), `s_${p}`));
+    expect(ctrls.map((c) => c.signal.aborted)).toEqual([true, false, false, false]);
+    expect(__studioStreamsStatsForTests().detached).toBe(3);
   });
 
   it('a comic that is open again is not counted as detached', () => {
@@ -318,6 +363,158 @@ describe('studioStreams — lifetime', () => {
     subscribe(KEY_A, recorder().sink);
     end(KEY_A, 's1', {});
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('studioStreams — what a turn leaves when it ends with nobody watching', () => {
+  const note = (id: string, text: string) => ({ id, text, at: 1 });
+  /** A view sends a message, leaves, and the stream ends while no view holds the comic. */
+  const sendAndLeave = (pending: PendingUserMessage, ending: (key: string) => void, key = KEY_A) => {
+    const view = recorder();
+    claim(key);
+    subscribe(key, view.sink);
+    begin(key, { streamId: 's1', kind: 'message', ctrl: new AbortController(), before: makeSampleDoc(), sink: view.sink, pending });
+    detach(key, view.sink);
+    ending(key);
+  };
+  const bubble = (over: Partial<PendingUserMessage> = {}): PendingUserMessage => ({
+    id: 'pending_1',
+    text: 'Plan a rooftop chase',
+    attachments: [],
+    at: 1,
+    status: 'sending',
+    streamId: 's1',
+    ...over
+  });
+
+  it('keeps the failed bubble with the creator’s words for the next view, once', () => {
+    sendAndLeave(bubble(), (k) => {
+      event(k, 's1', { type: 'error', message: 'Wait a moment before sending again.', code: 'COOLDOWN' });
+      event(k, 's1', { type: 'done', rev: 5, spentUsd: 0 });
+      end(k, 's1', {});
+    });
+    expect(workingKeys().size).toBe(0);
+    expect(__studioStreamsStatsForTests()).toMatchObject({ entries: 1, streams: 0, mirrors: 0, leftovers: 1 });
+    claim(KEY_A);
+    const snap = subscribe(KEY_A, recorder().sink);
+    expect(snap?.pendingMessage).toMatchObject({ text: 'Plan a rooftop chase', status: 'failed', code: 'COOLDOWN' });
+    expect(snap?.streams).toEqual([]);
+    // Handed over once: the view that shows it owns it now.
+    detach(KEY_A);
+    expect(__studioStreamsStatsForTests().entries).toBe(0);
+    claim(KEY_A);
+    expect(subscribe(KEY_A, recorder().sink)).toBeNull();
+  });
+
+  it('keeps the notes a BUSY answer put back, never a failed bubble', () => {
+    const notes = [note('n1', 'Make it rain'), note('n2', 'And a cat')];
+    sendAndLeave(bubble({ requeue: { notes, at: 'head' } }), (k) => {
+      event(k, 's1', { type: 'error', message: 'Another tab is working on this comic.', code: 'BUSY' });
+      end(k, 's1', {});
+    });
+    expect(moments.at(-1)?.outcome).toBe('busy');
+    claim(KEY_A);
+    const snap = subscribe(KEY_A, recorder().sink);
+    expect(snap?.notes.map((n) => n.text)).toEqual(['Make it rain', 'And a cat']);
+    expect(snap?.pendingMessage).toBeNull();
+    detach(KEY_A);
+    claim(KEY_A);
+    const again = subscribe(KEY_A, recorder().sink);
+    expect(again?.notes ?? []).toEqual([]);
+    expect(again?.pendingMessage ?? null).toBeNull();
+  });
+
+  it('hands the notes, the failed bubble and the error over once, also while other work keeps running', () => {
+    const notes = [note('n1', 'Make it rain')];
+    sendAndLeave(bubble({ requeue: { notes, at: 'tail' } }), (k) => {
+      begin(k, { streamId: 'r1', kind: 'action', actionType: 'render_pages', ctrl: new AbortController(), before: makeSampleDoc() });
+      event(k, 's1', { type: 'error', message: 'Another tab is working on this comic.', code: 'BUSY' });
+      end(k, 's1', {});
+      event(k, 'r1', { type: 'error', message: 'The image model is busy.', code: 'PROVIDER_ERROR' });
+    });
+    const second = studioStreamKey('acc-a', 'proj_2');
+    sendAndLeave(bubble(), (k) => {
+      begin(k, { streamId: 'r2', kind: 'action', ctrl: new AbortController(), before: makeSampleDoc() });
+      event(k, 's1', { type: 'error', message: 'Wait a moment.', code: 'COOLDOWN' });
+      end(k, 's1', {});
+    }, second);
+    claim(KEY_A);
+    const first = subscribe(KEY_A, recorder().sink);
+    expect(first?.notes.map((n) => n.id)).toEqual(['n1']);
+    expect(first?.error?.code).toBe('PROVIDER_ERROR');
+    expect(first?.streams.map((s) => s.id)).toEqual(['r1']);
+    claim(second);
+    expect(subscribe(second, recorder().sink)?.pendingMessage?.status).toBe('failed');
+    // Leave both again (their drawings still run) and come back: nothing is offered twice.
+    detach(KEY_A);
+    detach(second);
+    claim(KEY_A);
+    const again = subscribe(KEY_A, recorder().sink);
+    expect(again?.streams.map((s) => s.id)).toEqual(['r1']);
+    expect(again?.notes).toEqual([]);
+    expect(again?.error).toBeNull();
+    claim(second);
+    expect(subscribe(second, recorder().sink)?.pendingMessage).toBeNull();
+  });
+
+  it('keeps the error a drawing hit while nobody watched', () => {
+    claim(KEY_A);
+    const view = recorder();
+    subscribe(KEY_A, view.sink);
+    begin(KEY_A, { streamId: 'r1', kind: 'action', actionType: 'render_pages', ctrl: new AbortController(), before: makeSampleDoc(), sink: view.sink });
+    detach(KEY_A, view.sink);
+    event(KEY_A, 'r1', { type: 'error', message: 'The image model is busy.', code: 'PROVIDER_ERROR' });
+    end(KEY_A, 'r1', {});
+    claim(KEY_A);
+    expect(subscribe(KEY_A, recorder().sink)?.error).toEqual({ message: 'The image model is busy.', code: 'PROVIDER_ERROR' });
+  });
+
+  it('an error the view already showed is not shown again by the next one', () => {
+    const view = recorder();
+    claim(KEY_A);
+    subscribe(KEY_A, view.sink);
+    begin(KEY_A, { streamId: 'r1', kind: 'action', ctrl: new AbortController(), before: makeSampleDoc(), sink: view.sink });
+    begin(KEY_A, { streamId: 'r2', kind: 'action', ctrl: new AbortController(), before: makeSampleDoc(), sink: view.sink });
+    // An error event the view was handed (its stream still open)…
+    event(KEY_A, 'r1', { type: 'error', message: 'The image model is busy.', code: 'PROVIDER_ERROR' });
+    expect(view.actions.some((a) => a.type === 'stream_event' && a.event.type === 'error')).toBe(true);
+    detach(KEY_A, view.sink);
+    const next = recorder();
+    claim(KEY_A);
+    expect(subscribe(KEY_A, next.sink)?.error ?? null).toBeNull();
+    // …and a stream that ended with an error while a view held it.
+    end(KEY_A, 'r1', { error: 'The connection dropped.', code: 'connection_lost', lost: true });
+    expect(next.actions.at(-1)).toMatchObject({ type: 'stream_end', streamId: 'r1', error: 'The connection dropped.' });
+    detach(KEY_A, next.sink);
+    claim(KEY_A);
+    expect(subscribe(KEY_A, recorder().sink)?.error ?? null).toBeNull();
+  });
+
+  it('a successful turn leaves nothing behind', () => {
+    sendAndLeave(bubble(), (k) => {
+      event(k, 's1', userMsg(6));
+      event(k, 's1', replyMsg(7));
+      end(k, 's1', {});
+    });
+    expect(__studioStreamsStatsForTests().entries).toBe(0);
+  });
+
+  it('what is left counts toward the three comics held, and goes with the account', () => {
+    for (const p of ['p1', 'p2', 'p3']) {
+      sendAndLeave(bubble(), (k) => {
+        event(k, 's1', { type: 'error', message: 'Wait a moment.', code: 'COOLDOWN' });
+        end(k, 's1', {});
+      }, studioStreamKey('acc-a', p));
+    }
+    expect(__studioStreamsStatsForTests().leftovers).toBe(3);
+    const live = startMessage(studioStreamKey('acc-a', 'p4'), 's4');
+    expect(live.signal.aborted).toBe(false);
+    expect(__studioStreamsStatsForTests().leftovers).toBe(2);
+    claim(studioStreamKey('acc-a', 'p1'));
+    expect(subscribe(studioStreamKey('acc-a', 'p1'), recorder().sink)).toBeNull();
+    noteStudioAccount('acc-a');
+    noteStudioAccount('acc-b');
+    expect(__studioStreamsStatsForTests()).toMatchObject({ entries: 0, leftovers: 0 });
   });
 });
 

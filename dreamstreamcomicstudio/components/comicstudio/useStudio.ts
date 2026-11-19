@@ -48,8 +48,10 @@
 // comics, Chat, another comic) detaches them instead of aborting them: they keep reading, and the studio that mounts for
 // the same comic later adopts the reply so far, the steps and the busy state (`streams_adopt`, right after its load) and
 // hears the rest, once. Stop, the queue and steering work on adopted streams as on its own. Patch streams still flush
-// on unmount. The registry tells alerts when a reply lands or work settles, mounted or not (subscribeStudioMoments),
-// and a sign-out aborts what was left running. The account comes from useAuth (read, never changed).
+// on unmount. A studio that has unmounted opens no new message or action stream: a card's sequence ("approve, then
+// draw") stops at the step that was running when the person left, as it did when leaving aborted that step. The
+// registry tells alerts when a reply lands or work settles, mounted or not (subscribeStudioMoments), and a sign-out
+// aborts what was left running. The account comes from useAuth (read, never changed).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -108,6 +110,7 @@ import {
   presenceOf,
   queueOf,
   renderingCount,
+  replyLandedBeyond,
   studioReducer,
   tabForOps,
   urlIsFresh,
@@ -149,6 +152,7 @@ import {
   detach as liveDetach,
   end as liveEnd,
   event as liveEvent,
+  noteStop as liveNoteStop,
   noteStudioAccount,
   studioStreamKey,
   subscribe as liveSubscribe,
@@ -559,14 +563,16 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
    * no studio showed it, and adopt what they did meanwhile (in the same tick as the subscribe, so no event falls
    * between). Once per load; a later refresh after a failed load does it then.
    */
-  const adoptLive = useCallback((generation: number, loadedCaps: StudioCaps | null | undefined) => {
+  const adoptLive = useCallback((generation: number, loadedCaps: StudioCaps | null | undefined, loadedDoc: ComicDoc | null | undefined) => {
     const sink = liveSinkRef.current;
     if (!sink || !mountedRef.current || generation !== generationRef.current || liveAdoptedRef.current === generation) return;
     liveAdoptedRef.current = generation;
     const snap = liveSubscribe(liveKeyRef.current, sink);
     if (!snap) return;
     for (const c of snap.controllers) controllersRef.current.set(c.id, { ctrl: c.ctrl, kind: c.kind });
-    if (snap.awaitingReply) messageInFlightRef.current = snap.awaitingReply;
+    // The composer waits for the adopted turn's reply, unless the GET already holds it (the stream will deliver that
+    // batch as already applied; studioReducer streams_adopt marks the turn answered the same way).
+    if (snap.awaitingReply && !replyLandedBeyond(loadedDoc, snap.doc)) messageInFlightRef.current = snap.awaitingReply;
     dispatch({
       type: 'streams_adopt',
       streams: snap.streams,
@@ -576,6 +582,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       doc: snap.doc,
       urls: snap.urls,
       pendingMessage: snap.pendingMessage,
+      error: snap.error,
       now: Date.now()
     });
     // Notes a BUSY answer put back while the comic was closed: shown held, never sent on their own.
@@ -628,7 +635,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           setCapsFromServer(true);
         }
         d({ type: 'load_success', doc, urls, now: Date.now() });
-        adoptLive(generation, loadedCaps);
+        adoptLive(generation, loadedCaps, doc);
         // Live queue: notes this tab saved before a reload come back held ("2 notes were waiting"), never auto-sent.
         if (mountedRef.current && generation === generationRef.current) {
           if (liveQueueOn(loadedCaps ?? null)) {
@@ -685,7 +692,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         }
         d({ type: 'refresh_success', doc, urls, now: Date.now() });
         // The first load failed and this is the doc arriving: take over the comic's running streams now.
-        adoptLive(generation, loadedCaps);
+        adoptLive(generation, loadedCaps, doc);
       })
       .catch((err) => {
         const e = toStudioApiError(err, 'project');
@@ -706,6 +713,10 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       request: StreamRequest,
       opts: { streamId?: string; actionType?: string; onEvent?: (event: StudioEvent) => void; pending?: PendingUserMessage } = {}
     ): Promise<StreamOutcome> => {
+      // Live turns: a studio that has unmounted starts no Director turn and no action. Its running streams were handed
+      // to the registry; a card's next step ("approve, then draw") must not start a paid step after the person left
+      // (it would belong to nobody). The sequence stops here, as it did when leaving aborted the step before.
+      if (kind !== 'patch' && !mountedRef.current) return { ok: false, aborted: true, retryable: false };
       const generation = generationRef.current;
       const d = guarded(generation);
       const streamId = opts.streamId || localId('stream');
@@ -723,7 +734,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           ...(opts.actionType ? { actionType: opts.actionType } : {}),
           ctrl,
           before: stateRef.current.base,
-          sink: liveSinkRef.current ?? d,
+          // This load's sink; between loads, whichever studio holds the comic (or nobody, and the next one adopts it).
+          ...(liveSinkRef.current ? { sink: liveSinkRef.current } : {}),
           ...(opts.pending ? { pending: opts.pending } : {})
         });
       }
@@ -1206,6 +1218,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     // started keep drawing) — or, with no turn in flight, every queued render. Images already
     // drawing finish (they are paid) and the streams close once they land.
     cancelScopeRef.current = isMessageBusy(stateRef.current) ? 'turn' : 'drawing';
+    // The server ends what it stops with an ordinary `done`: the registry settles those streams as stopped.
+    liveNoteStop(liveKeyRef.current, cancelScopeRef.current);
     cancelTimerRef.current = setTimeout(() => d({ type: 'cancel_end' }), CANCEL_SAFETY_MS);
     try {
       await transportOf(depsRef.current).cancelStudio(projectRef.current);
