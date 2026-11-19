@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { recordServerError } from '../services/telemetryStore.js';
 import { loggablePath } from '../../../shared/capabilityPath.js';
+import { redactJsonStrings, redactSecrets } from '../lib/redact.js';
 
 type ErrorLike = {
   code?: string;
@@ -85,8 +86,9 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
     stack: err?.stack
   };
 
-  // Keep complete error detail only in logs.
-  console.error(JSON.stringify(logEvent));
+  // Keep complete error detail only in logs, with key-shaped text as "[key]" (message, details and
+  // stack): a vendor that echoes a refused key must not put it in the log store.
+  console.error(JSON.stringify(logEvent, redactJsonStrings));
 
   // Persist genuine server failures (5xx) to the telemetry store so "every failed
   // request" lands alongside client-reported failures for triage. Fire-and-forget:
@@ -100,7 +102,7 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
       method: req.method,
       status,
       code,
-      message: err?.message,
+      message: typeof err?.message === 'string' ? redactSecrets(err.message) : err?.message,
       userId: req.user?.id ?? null,
       ip: req.ip
     });
@@ -113,7 +115,7 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
     details?: unknown;
     internalCode?: string;
   } = {
-    message: getClientMessage(status, err),
+    message: redactSecrets(getClientMessage(status, err)),
     code,
     requestId: req.requestId
   };

@@ -7,6 +7,7 @@ vi.mock('../services/telemetryStore.js', () => ({ recordServerError: vi.fn() }))
 import { recordServerError } from '../services/telemetryStore.js';
 import { errorHandler } from './errors.js';
 import { modelTimeoutError } from '../ai/providers/errors.js';
+import { createOpenAICompatibleProvider } from '../ai/providers/openaiCompatible.js';
 
 const mockRes = () => {
   const res: { status: ReturnType<typeof vi.fn>; json: ReturnType<typeof vi.fn>; body?: unknown; code?: number } = {} as never;
@@ -64,6 +65,50 @@ describe('errorHandler', () => {
       for (const secret of ['tok_abc123XYZ', 'Ab3dEf6hIj9kLm2nP', 'NEWSLETTERTOKEN']) expect(line).not.toContain(secret);
       expect(vi.mocked(recordServerError).mock.calls[0][0].path).toBe(masked);
     }
+    error.mockRestore();
+  });
+
+  it("answers a vendor's refusal of an own key with our 502, never a 401 the app reads as an expired session", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } }), {
+          status: 401,
+          statusText: 'Unauthorized'
+        })
+      )
+    );
+    try {
+      const provider = createOpenAICompatibleProvider({ id: 'openai', label: 'OpenAI', baseUrl: 'https://example.invalid/v1', timeoutMs: 1000, modelsPath: '/models' });
+      const err = await provider.generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], retries: 1 }, { apiKey: 'k', byok: true }).catch((e) => e);
+      const res = mockRes();
+      errorHandler(err, mockReq(), res as never, (() => {}) as never);
+      expect(res.code).toBe(502);
+      const body = res.body as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('PROVIDER_KEY_REJECTED');
+      expect(body.error.message).toBe('Your OpenAI key was refused. Check it in Settings → API keys.');
+      // A vendor failure is recorded with the server errors again.
+      expect(recordServerError).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      error.mockRestore();
+    }
+  });
+
+  it('logs and records key-shaped text as [key] (message, details and stack)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const key = `sk-proj-${'test0000'.repeat(6)}`;
+    const err = Object.assign(new Error(`upstream said Incorrect API key provided: ${key}`), { details: { echoed: key } });
+    errorHandler(err, mockReq(), mockRes() as never, (() => {}) as never);
+    const line = String(error.mock.calls[0][0]);
+    expect(line).not.toContain('sk-proj');
+    const parsed = JSON.parse(line);
+    expect(parsed.message).toBe('upstream said Incorrect API key provided: [key]');
+    expect(parsed.details).toEqual({ echoed: '[key]' });
+    expect(parsed.stack).not.toContain('sk-proj');
+    const recorded = vi.mocked(recordServerError).mock.calls[0][0] as { message?: string };
+    expect(recorded.message).toBe('upstream said Incorrect API key provided: [key]');
     error.mockRestore();
   });
 });
