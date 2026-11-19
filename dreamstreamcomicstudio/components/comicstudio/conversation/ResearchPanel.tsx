@@ -3,7 +3,7 @@ import { ExternalLink, ImageOff, ImagePlus, Images, Search } from 'lucide-react'
 import { isAttachable, normalizeComicResearch, type ComicResearchResult, type ComicResearchResults } from '../../../shared/comic/research';
 import { languageSpec } from '../../../shared/comic/languages';
 import { post } from '../../../services/apiClient';
-import { DENSITY, FIELD, MUTED, RADIUS_CONTROL } from '../../chat/studioDesign';
+import { DENSITY, FIELD, MUTED, RADIUS_CONTROL, WRAP_TEXT } from '../../chat/studioDesign';
 import { Button } from '../../ds/Button';
 import { cn } from '../../../lib/utils';
 
@@ -130,7 +130,7 @@ export function ResearchPanel({ projectId, onAdd, suppliedResults, kidsSafe = tr
         <input id={queryId} value={query} onChange={(event) => setQuery(event.target.value)} className={cn(FIELD, DENSITY.coarse, 'min-w-0 flex-1 px-2')} maxLength={120} placeholder="Place, event, or topic" />
         <Button type="submit" size="sm" variant="outline" disabled={busy || query.trim().length < 2}><Search aria-hidden className="size-3.5" /> Search</Button>
       </form>}
-      {status && <p role={status.alert ? 'alert' : 'status'} className={cn(!status.alert && results && !busy && MUTED)}>{status.text}</p>}
+      {status && <p role={status.alert ? 'alert' : 'status'} className={cn(WRAP_TEXT, !status.alert && results && !busy && MUTED)}>{status.text}</p>}
       {results && (results.articles.length > 0 || results.images.length > 0) && (
         <div className="grid max-h-[min(22rem,48dvh)] min-w-0 gap-3 overflow-y-auto overscroll-contain">
           {results.articles.length > 0 && (

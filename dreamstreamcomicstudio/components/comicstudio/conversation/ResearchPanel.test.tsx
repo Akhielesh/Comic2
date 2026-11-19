@@ -190,6 +190,11 @@ describe('one status line', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/unavailable/);
   });
 
+  it('wraps inside the panel instead of running past a narrow screen (the layout overflow probe)', () => {
+    render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={{ articles: [], images: [], incomplete: true }} />);
+    expect(screen.getByRole('status')).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
+  });
+
   it('a failed attach replaces the partial-results line instead of adding a second one', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { headers: { 'content-type': 'text/html' } })));
     render(<ResearchPanel projectId="comic_1" onAdd={vi.fn()} suppliedResults={results({ incomplete: true })} kidsSafe={false} />);
