@@ -228,7 +228,7 @@ describe('style tools', () => {
 
   it('propose_styles starts the render job (tracked) and returns the outcome', async () => {
     const out = await call('propose_styles', { directions: [{ name: 'A', spec: 'a spec' }, { name: 'B', spec: 'b spec' }] });
-    expect(out).toMatch(/^Started drawing 2 style options/);
+    expect(out).toMatch(/^Started drawing 2 looks: A and B/);
     await ctx.settled();
     expect(ctx.session.doc.style.options.map((o) => o.render.status)).toEqual(['ready', 'ready']);
   });

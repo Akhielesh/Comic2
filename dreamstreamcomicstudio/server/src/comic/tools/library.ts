@@ -3,8 +3,9 @@
 //   suggest_presets {presetIds? (1–6), note?}  FREE — posts a `style_presets` card: the best-fitting
 //                                             curated looks (rankPresets, deterministic) shown with
 //                                             the platform library's preview art (procedural art
-//                                             when none is published). Replaces paid style options
-//                                             as the first comparison (assets.md §7 "credits saved").
+//                                             when none is published). For "which look fits?"; an
+//                                             ask to SEE drawn looks (styleAsk.ts) is refused toward
+//                                             propose_styles (stylepick SC-0).
 //   use_preset {presetId, withBoard?}         FREE — the use_preset action (software only).
 //
 // Phase gate: the style is empty or drafted. Neither tool ever generates an image: library
@@ -14,6 +15,7 @@ import { newId, type Card, type ComicDoc } from '../../../../shared/comic/doc.js
 import { STYLE_PRESETS, getStylePreset, rankPresets } from '../../../../shared/comic/stylePresets.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import type { DirectorTurn } from '../tools.js';
+import { styleLooksAsk } from '../styleAsk.js';
 import type { StudioContext } from '../types.js';
 import { FREE_NOTE, runUsePreset } from '../actions/library.js';
 
@@ -55,7 +57,7 @@ function suggestPresetsTool(ctx: StudioContext, turn: DirectorTurn): DirectorToo
   return defineTool(
     'suggest_presets',
     'free',
-    'Show curated art styles as a visual card the user can tap (no images are drawn, nothing is spent). Omit presetIds to show the best fits for this story. Use it before offering paid style options.',
+    'Show curated art styles as a visual card the user can tap (no images are drawn, nothing is spent). Omit presetIds to show the best fits for this story. For WHICH look fits; an ask to see drawn looks is propose_styles.',
     {
       type: 'object',
       additionalProperties: false,
@@ -71,6 +73,14 @@ function suggestPresetsTool(ctx: StudioContext, turn: DirectorTurn): DirectorToo
       }
     },
     (args) => {
+      // An ask to SEE drawn looks is not answered with clip art (stylepick SC-0): a deterministic redirect, no model
+      // judgement. The free card stays for "which look fits?".
+      const ask = styleLooksAsk(turn.userText);
+      if (ask) {
+        throw toolArgError(
+          `The user asked to see drawn looks. Call propose_styles with count ${ask.count} (and presetIds or directions only for looks they named). It shows the price and waits for their Approve.`
+        );
+      }
       const doc = ctx.session.doc;
       const ids = parsePresetIds(doc, args.presetIds);
       const note = cleanNote(args.note);
@@ -120,7 +130,7 @@ export const libraryToolGroup: ToolGroup = {
   tools: (ctx, turn) => [suggestPresetsTool(ctx, turn), usePresetTool(ctx, turn)],
   promptRules: (doc) =>
     styleOpen(doc)
-      ? 'STYLE PRESETS: to help the user choose a look, call suggest_presets (free; a visual card of the best-fitting curated styles) before offering paid style options. When the user names or taps a preset, call use_preset (free). Paid style renders are for custom looks the presets do not cover; say their price first.'
+      ? 'STYLE PRESETS: when the user asks which look fits, call suggest_presets (free; a visual card of curated looks). When the user asks to see, draw or generate looks or style options, call propose_styles instead (it waits for their Approve). When the user names or taps a preset, call use_preset (free).'
       : undefined,
   summaryLines: (doc) => {
     if (!styleOpen(doc)) return [];

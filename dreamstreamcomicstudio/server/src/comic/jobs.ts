@@ -160,6 +160,7 @@ import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlocked
 import { recordImageCall } from './billing.js';
 import { planCheckGate, sanitizeDrawOverfull, type HeldBackPage, type PlanGateResult } from './planCheckGate.js';
 import { identityNoticesEnabled, qcNoticeFor } from './qcNotice.js';
+import { joinList } from './replies.js';
 import { LAYOUT_REFERENCE_PATH, layoutGuideEnabled, renderLayoutGuide, tryRenderPageLayoutGuide, type LayoutGuideImage } from './panelize/wireframe.js';
 // --- Ship 2 (pro plan §5.3, §10 K2b): seams into the packages that own each step (stubs until they land) ---
 import { compileFixPanel, finishFixPanel, fixPanelJobs, fixPanelMeta, fixPanelProblem } from './actions/panelFix.js';
@@ -228,7 +229,9 @@ const REQUEUE_MAX_MS = 120_000;
  * of jitter, so parallel jobs that failed together do not all come back in the same second.
  */
 const RATE_LIMIT_BACKOFF_FACTOR = 5;
-const MAX_STYLE_DIRECTIONS = 4;
+/** Looks one style run may draw (stylepick: the writer takes 1–6; the tool and the matcher clamp to 2–6). */
+const MAX_STYLE_DIRECTIONS = 6;
+const MIN_STYLE_COUNT = 2;
 const DEFAULT_STYLE_DIRECTIONS = 3;
 const MAX_PATCH_OPS = 200;
 /**
@@ -895,11 +898,16 @@ export const sheetTargets = (
 /** Whether a render_pages `includeCover` draws the cover now (forced: any idle cover; else undrawn or out of date). */
 const coverWanted = (doc: ComicDoc, force?: boolean): boolean => (force ? !isBusy(doc.cover.render) : coverNeedsDraw(doc));
 
-// Count what the runner will actually draw: sanitized directions (invalid ones are dropped),
-// else the default proposal count. Mirrors RenderRun.styleOptions.
-const styleDirections = (action: Extract<SpendAction, { type: 'render_style_options' }>) => sanitizeDirections(action.directions);
+// Count what the runner will actually draw: the named looks (presets first, then sanitized directions; invalid ones
+// are dropped), else the asked count (2–6), else 3. Mirrors RenderRun.styleOptions.
+const styleDirections = (action: Extract<SpendAction, { type: 'render_style_options' }>) => resolveStyleDirections(action);
+/** The looks the writer is asked for when none are named. */
+const styleProposalCount = (action: Extract<SpendAction, { type: 'render_style_options' }>): number =>
+  typeof action.count === 'number' && Number.isFinite(action.count)
+    ? Math.min(MAX_STYLE_DIRECTIONS, Math.max(MIN_STYLE_COUNT, Math.round(action.count)))
+    : DEFAULT_STYLE_DIRECTIONS;
 const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_options' }>) =>
-  styleDirections(action).length || DEFAULT_STYLE_DIRECTIONS;
+  styleDirections(action).length || styleProposalCount(action);
 
 /** The page re-check's display name (a vision text call, not an image model). */
 export const RECHECK_MODEL_LABEL = 'Page check';
@@ -1449,8 +1457,12 @@ const describeSpend = (doc: ComicDoc, action: GatedSpend): SpendPlan => {
       return { what: `more detail for ${which} (directions, continuity and scenes; your story text stays as it is)`, title: `Add detail to ${which}?`, kind: 'page' };
     }
     case 'render_style_options': {
+      // Named looks say their names; a count alone is the writer's picks for this story (stylepick SC-0).
+      const named = styleDirections(action);
       const n = styleDirectionCount(action);
-      return { what: plural(n, 'style option'), title: `Draw ${plural(n, 'style option')}?`, kind: 'style_option' };
+      return named.length
+        ? { what: `${plural(n, 'look')}: ${joinList(named.map((d) => d.name))}`, title: `Draw ${plural(n, 'look')} of your comic?`, kind: 'style_option' }
+        : { what: `${plural(n, 'look')} picked for your story`, title: `Draw ${plural(n, 'look')} picked for your story?`, kind: 'style_option' };
     }
     case 'render_sheets': {
       const { characters, places } = sheetTargets(doc, action);
@@ -2585,19 +2597,21 @@ class RenderRun {
     const end = activity(this.ctx, 'Finding style directions', 'text');
     let directions: { name: string; spec: string }[];
     try {
-      directions = sanitizeDirections(action.directions);
+      directions = resolveStyleDirections(action);
       if (!directions.length) {
         // The writer call is awaited before the progress card exists: too late to ride the reply.
         this.hostable = false;
         const tracker = newTextSpendTracker();
+        const count = styleProposalCount(action);
         try {
           const proposed = await proposeStyleDirections({
             doc: this.session.doc,
             llm: billedLlm(this.ctx, { stage: 'style', operation: 'comic.text.writer', tracker }),
-            count: DEFAULT_STYLE_DIRECTIONS,
+            count,
             signal: this.signal
           });
-          directions = sanitizeDirections(proposed.options);
+          // Never more looks than were quoted and approved.
+          directions = sanitizeDirections(proposed.options).slice(0, count);
         } finally {
           recordTextSpend(this.ctx, tracker, 'style', 'Style directions');
         }
@@ -4558,6 +4572,23 @@ const sanitizeDirections = (raw: unknown): { name: string; spec: string }[] =>
     .map((d) => ({ name: clean(d.name, 60), spec: clean(d.spec, 1500) }))
     .filter((d) => d.name && d.spec)
     .slice(0, MAX_STYLE_DIRECTIONS);
+
+/** Known preset ids (deduped) as looks drawn from the preset's own name and spec (server text: never screened). */
+const presetDirections = (raw: unknown): { name: string; spec: string }[] => {
+  const seen = new Set<string>();
+  const out: { name: string; spec: string }[] = [];
+  for (const id of Array.isArray(raw) ? raw : []) {
+    const preset = typeof id === 'string' ? getStylePreset(id.trim()) : undefined;
+    if (!preset || seen.has(preset.id)) continue;
+    seen.add(preset.id);
+    out.push({ name: preset.name, spec: preset.spec });
+  }
+  return out;
+};
+
+/** The looks a style run names: presets first, then directions, at most MAX_STYLE_DIRECTIONS in all. */
+const resolveStyleDirections = (action: Extract<SpendAction, { type: 'render_style_options' }>): { name: string; spec: string }[] =>
+  [...presetDirections(action.presetIds), ...sanitizeDirections(action.directions)].slice(0, MAX_STYLE_DIRECTIONS);
 
 const sanitizeBox = (raw: unknown): Box | undefined => {
   if (!isObject(raw)) return undefined;

@@ -72,6 +72,40 @@ describe('library tool group', () => {
   });
 });
 
+describe('suggest_presets on an ask to see drawn looks (stylepick SC-0)', () => {
+  const asking = (userText: string) => {
+    const session = newSession(kidsDoc());
+    const ctx = testContext(session);
+    const turn = createDirectorTurn({ userText });
+    const tools = Object.fromEntries(libraryToolGroup.tools(ctx, turn).map((t) => [t.spec.function.name, t]));
+    return { ctx, turn, tools };
+  };
+
+  it('"generate 3 style options" is refused toward propose_styles with the count; no card, nothing drawn', async () => {
+    const { ctx, turn, tools } = asking('generate 3 style options');
+    const out = await tools.suggest_presets.execute({});
+    expect(out).toBe(
+      'Error: The user asked to see drawn looks. Call propose_styles with count 3 (and presetIds or directions only for looks they named). It shows the price and waits for their Approve.'
+    );
+    expect(turn.cards).toEqual([]);
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(await asking('show me 5 looks').tools.suggest_presets.execute({})).toMatch(/count 5 /);
+  });
+
+  it('"which style fits this?" still gets the free style_presets card', async () => {
+    const { turn, tools } = asking('which style fits this?');
+    expect(await tools.suggest_presets.execute({})).toMatch(/^Showing 4 styles/);
+    expect(turn.cards.map((c) => c.type)).toEqual(['style_presets']);
+  });
+
+  it('the group rule sends a see/draw ask to propose_styles and a which ask to suggest_presets', () => {
+    const rule = libraryToolGroup.promptRules!(kidsDoc())!;
+    expect(rule).toMatch(/asks which look fits, call suggest_presets/);
+    expect(rule).toMatch(/see, draw or generate looks or style options, call propose_styles instead/);
+    expect(rule).not.toMatch(/before offering paid style options/);
+  });
+});
+
 describe('use_preset action', () => {
   it('is registered as a non-spend action', () => {
     expect(ACTION_HANDLERS.use_preset?.spend).toBe(false);

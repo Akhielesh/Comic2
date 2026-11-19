@@ -69,6 +69,7 @@ import { OFF_PANEL_SHOTS, PANEL_LIMITS, panelCountNote } from '../../../shared/c
 import { coverNeedsDraw, pageTargets as drawablePages } from '../../../shared/comic/plan.js';
 import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
+import { LIBRARY_IP_BLOCKLIST } from '../../../shared/comic/library.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
 import { costFormatterFor, governDollars } from './costText.js';
@@ -109,7 +110,8 @@ import { recentCommitsOf } from './session.js';
 import { LINE_TARGET_SCHEMA, balloonAtPosition, blockedLineIds, commitGuarded, lineIdsOfOp, sanitizeLetteringOps, styleArgsToPatch } from './tools/lettering.js';
 import { MODEL_ASK_RE } from './tools/models.js';
 import { LANGUAGE_HINT_RE } from './tools/languageAsk.js';
-import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
+import { SKIP_REVIEW_RE, detectNamedIp, joinList, nothingNextSteps } from './replies.js';
+import { DEFAULT_LOOKS, MAX_LOOKS, MIN_LOOKS, styleLooksAsk } from './styleAsk.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
 
@@ -516,14 +518,18 @@ const neverDrawn = (doc: ComicDoc) => doc.pages.every((p) => p.render.status !==
  * Why a director-initiated spend must wait for the user's tap even below the 'big' threshold
  * (contract §12.3 gates): a redraw, an unreviewed plan, the first render, or no draw intent.
  * Never when the user turned confirmations off — except a redraw, which always asks.
+ * Style tests always wait (stylepick SC-0): 'policy' when the user asked for looks (a draw or redraw ask, or an ask
+ * to see looks the draw words miss: "show me 6 looks", "egernate 3 styles"), else 'no_intent' — a new comic's empty
+ * style included. Only "never ask" starts them at once (the daily house runner relies on it).
  */
 export function forcedGateReason(doc: ComicDoc, turn: DirectorTurn, kind: SpendKind, opts: { redraw?: boolean } = {}): Gate['reason'] | undefined {
   if (opts.redraw) return 'redraw';
   if (doc.settings.confirm === 'never') return undefined;
+  if (kind === 'style') return turn.drawIntent !== 'none' || styleLooksAsk(turn.userText) ? 'policy' : 'no_intent';
   const skip = SKIP_REVIEW_RE.test(turn.userText);
   if (kind === 'pages' && doc.planStatus === 'draft' && !skip) return 'plan_review';
   if (kind === 'pages' && doc.settings.reviewFirstRender !== false && neverDrawn(doc) && !skip) return 'first_render';
-  if (turn.drawIntent === 'none' && !(kind === 'style' && doc.style.status === 'empty')) return 'no_intent';
+  if (turn.drawIntent === 'none') return 'no_intent';
   return undefined;
 }
 
@@ -1229,20 +1235,55 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'propose_styles',
       'paid',
-      'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock.',
+      // Kept short: core tools sit in every director prompt (golden/scenarios.test.ts caps the median).
+      `Draw N looks of THIS comic (default ${DEFAULT_LOOKS}, max ${MAX_LOOKS}); waits for Approve. count alone = your picks; directions/presetIds only for looks the user named.`,
       schema({
-        directions: A(
-          { type: 'object', properties: { name: S('2–4 words.'), spec: S('Concrete art direction, 35–80 words.') }, required: ['name', 'spec'] },
-          'Optional; omit and the art director proposes them.'
-        )
+        count: I(`${MIN_LOOKS}–${MAX_LOOKS}`),
+        directions: { type: 'array', items: { type: 'object', properties: { name: S('2–4 words.'), spec: S('Technique, 35–80 words.') }, required: ['name', 'spec'] } },
+        presetIds: { type: 'array', items: { type: 'string' } }
       }),
       (args) => {
+        const d = doc();
+        const presetIds: string[] = [];
+        const unknown: string[] = [];
+        for (const raw of strList(args.presetIds, 12, 60)) {
+          if (!getStylePreset(raw)) unknown.push(raw.slice(0, 40));
+          else if (!presetIds.includes(raw)) presetIds.push(raw);
+        }
+        if (unknown.length) throw argError(`Unknown preset${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Use ids from: ${STYLE_PRESETS.map((p) => p.id).join(', ')}.`);
         const directions = (Array.isArray(args.directions) ? args.directions : [])
           .filter(isObject)
-          .map((d) => ({ name: text(d.name, 60), spec: text(d.spec, 1500) }))
-          .filter((d) => d.name && d.spec)
-          .slice(0, 4);
-        return spend(ctx, state, { type: 'render_style_options', ...(directions.length ? { directions } : {}) }, forcedGateReason(doc(), state, 'style'));
+          .map((x) => ({ name: text(x.name, 60), spec: text(x.spec, 1500) }))
+          .filter((x) => x.name && x.spec);
+        // An artist, studio or brand is never sent to the image model (assets.md §13; decisions-final #5): the
+        // Director's own words reach no screening, so they are checked here before anything is quoted.
+        if (directions.some((x) => LIBRARY_IP_BLOCKLIST.test(`${x.name} ${x.spec}`) || detectNamedIp(`${x.name}. ${x.spec}`).length)) {
+          throw argError('Describe the technique, not the artist, studio or brand (for example "soft watercolour washes, loose ink lines") and call propose_styles again.');
+        }
+        const names = [...presetIds.map((id) => getStylePreset(id)!.name), ...directions.map((x) => x.name)].map((n) => n.trim().toLowerCase());
+        if (new Set(names).size !== names.length) throw argError('Give each look its own name (two looks share one) and call propose_styles again.');
+        const named = presetIds.length + directions.length;
+        const notes: string[] = [];
+        if (named > MAX_LOOKS) notes.push(`${MAX_LOOKS} looks is the most in one go; drawing the first ${MAX_LOOKS}.`);
+        const asked = int(args.count);
+        let count: number | undefined;
+        if (!named) {
+          count = Math.min(MAX_LOOKS, Math.max(MIN_LOOKS, asked ?? DEFAULT_LOOKS));
+          if (asked !== undefined && asked > MAX_LOOKS) notes.push(`${MAX_LOOKS} looks is the most in one go (asked for ${asked}).`);
+          else if (asked !== undefined && asked < MIN_LOOKS) notes.push(`A set is at least ${MIN_LOOKS} looks.`);
+        } else if (asked !== undefined && asked !== Math.min(named, MAX_LOOKS)) {
+          const n = Math.min(named, MAX_LOOKS);
+          notes.push(`count ignored: it draws the ${n} look${n === 1 ? '' : 's'} named.`);
+        }
+        const kept = presetIds.slice(0, MAX_LOOKS);
+        const keptDirections = directions.slice(0, Math.max(0, MAX_LOOKS - kept.length));
+        const action: SpendAction = {
+          type: 'render_style_options',
+          ...(kept.length ? { presetIds: kept } : {}),
+          ...(keptDirections.length ? { directions: keptDirections } : {}),
+          ...(count !== undefined ? { count } : {})
+        };
+        return spend(ctx, state, action, forcedGateReason(d, state, 'style')).then((out) => (notes.length ? `${out} ${notes.join(' ')}` : out));
       }
     ),
 
