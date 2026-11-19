@@ -764,9 +764,11 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     }
     const usd = round4(results.reduce((s, r) => s + r.usd, 0));
     logger.info('comic_translate_done', { projectId: ctx.projectId, langs: codes, usd, translated: results.reduce((n, r) => n + r.translated, 0), free: freeCount + results.reduce((n, r) => n + r.free, 0) });
-    // Counts and milliseconds only (no words, no user): tells whether 6 lanes meet rate limits on own keys.
+    // Counts and milliseconds only (no words, no user): tells whether 6 lanes meet rate limits on own keys
+    // (`byok`: the translator ran on the person's own key, where the lane count should come down first).
     logger.info('comic_translate_timing', {
       projectId: ctx.projectId,
+      byok: textRoleIsByok('translator', ctx.keys),
       langs: codes.length,
       lanes,
       ms: Date.now() - runStarted,

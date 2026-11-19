@@ -364,7 +364,8 @@ describe('the allowance says no: every lane stops', () => {
     const started = await run.start();
     await drain(run, started.done);
     const line = timingLine();
-    expect(Object.keys(line).sort()).toEqual(['failedLines', 'lanes', 'langs', 'ms', 'perLangMs', 'projectId', 'retries', 'stoppedBy'].sort());
+    expect(Object.keys(line).sort()).toEqual(['byok', 'failedLines', 'lanes', 'langs', 'ms', 'perLangMs', 'projectId', 'retries', 'stoppedBy'].sort());
+    expect(line.byok).toBe(false);
     expect(typeof line.ms).toBe('number');
     expect(Object.keys(line.perLangMs as object).sort()).toEqual(['hi', 'te']);
     for (const v of Object.values(line.perLangMs as Record<string, unknown>)) expect(typeof v).toBe('number');
