@@ -8,8 +8,8 @@ import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../
 export const CONTINUE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
- * The help line under Start (Home's composer reads it from here, so a change to what Start does is one edit). It says
- * the same as the idea form's line today.
+ * The help line under Start. The idea form (ComicCreationWorkspace) and Home's composer both read it from here, so a
+ * change to what Start does is one edit.
  */
 export const HOME_START_HELP = 'Start prepares the conversation. Send submits your idea.';
 
