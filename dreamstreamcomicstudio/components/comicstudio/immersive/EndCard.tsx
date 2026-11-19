@@ -1,19 +1,49 @@
-// The End card (reader.md §6.3): the last page of the book. "The End", the title, the creator's credits
-// line (or the public author name — never an email), who starred, and what to do next: read again,
-// share, another language, download, make your own. Focus lands on the heading when
-// the reader arrives here. The End card is a page: its focus ring is the paper's (--ds-reader-focus, ≥ 4.5:1
-// on the paper in both themes), never the app accent (white on the paper in the dark theme).
+// The End card (reader.md §6.3; sharepage SPEC §5.0.5): the last page of the book. "The End" in the display
+// face, the title, the creator's credits line (or the public author name — never an email), who starred, and
+// what to do next. Exactly one filled button, in this order of preference: the next issue of a series, Up next
+// (a comic to read next, with its cover), Browse the Library; Read again only when the host gives none of them.
+// Beside it, an outlined "Make comics like this" (register interest; the host leaves it out for the owner and in
+// embeds). Everything else (Read again, Share, another language, Download) is a ghost row. Focus lands on the
+// heading when the reader arrives here. The End card is a page: its focus ring is the paper's
+// (--ds-reader-focus, ≥ 4.5:1 on the paper in both themes), never the app accent, and it takes no colour.
+//
+// The Up next / next-issue card is drawn here, not with components/ds/ComicCard (variant "end"), on purpose:
+// that card is app chrome (--ds-surface / --ds-ink / --ds-muted, which turn dark in the dark theme, on a card
+// that sits on the always-light paper; the app's --ds-focus outline; LIFT; a tinted CoverImage box), its title is
+// a second link to the same comic beside the filled one, and it has no logline. It keeps ComicCard's tap rule:
+// the whole card hands a tap to the one filled link (a copy of it, out of the tab order and hidden from screen
+// readers, which meet the comic once, on the filled link: title and logline are its description). That copy is
+// also what keeps a tap on the cover from turning the page: the stages let a tap on a link through.
 
 import React from 'react';
-import { Download, Languages, RotateCcw, Share2, Sparkles } from 'lucide-react';
+import { ArrowRight, Download, Languages, LibraryBig, RotateCcw, Share2 } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { readerOf } from '../../../shared/comic/doc';
+import { FONT_DISPLAY, RADIUS_PANEL, RADIUS_ROUND } from '../../chat/studioDesign';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
-import type { ImmersiveReaderEndCard } from './ImmersiveReader';
+
+/**
+ * What the host offers after the last page (ImmersiveReaderEndCard is this type). Every address is optional:
+ * an absent one hides its action, and only a same-origin path or an http(s) address is ever rendered.
+ */
+export interface EndCardActions {
+  /** The public author name: "Created by {name}" when the comic carries no credits line. */
+  authorName?: string;
+  /** The link Share passes on (the reader's own share: Web Share, else the clipboard). */
+  shareUrl?: string;
+  /** The next issue of a series (the studio program's series): the filled "Next: {label}". */
+  nextIssue?: { href: string; label: string; title: string; coverUrl?: string };
+  /** A comic to read next on this device (the w480 cover): the filled "Read next". */
+  upNext?: { href: string; title: string; logline?: string; coverUrl?: string };
+  /** The public Library: the filled button when there is nothing to read next. */
+  browseLibraryHref?: string;
+  /** Register interest on the comics landing: the outlined "Make comics like this". */
+  makeLikeThisHref?: string;
+}
 
 export interface EndCardProps {
   doc: ComicDoc;
-  endCard?: ImmersiveReaderEndCard;
+  endCard?: EndCardActions;
   active: boolean;
   chapters: { n: number; title: string }[];
   language?: ReaderLanguageSlot;
@@ -25,34 +55,110 @@ export interface EndCardProps {
   dense: boolean;
 }
 
-const btn =
-  'press inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
+/** The card's words in one place (the reader's chrome copy moves to i18n/readerStrings with the title page). */
+const COPY = {
+  theEnd: 'The End',
+  createdBy: (name: string) => `Created by ${name}`,
+  starring: (names: string) => `Starring ${names}`,
+  upNext: 'Up next',
+  readNext: 'Read next',
+  nextIssue: (label: string) => `Next: ${label}`,
+  browseLibrary: 'Browse the Library',
+  makeComicsLikeThis: 'Make comics like this',
+  readAgain: 'Read again',
+  share: 'Share',
+  readIn: (name: string) => `Read in ${name}`,
+  download: 'Download',
+  preparing: 'Preparing…',
+  madeWith: 'Made with DreamStream'
+};
+
+/** Resolves a path to check it stays on the page's own origin (any fixed origin does: only "same or not" matters). */
+const PATH_BASE = 'https://end-card.invalid';
+
+/**
+ * A same-origin path or an http(s) address; anything else (javascript:, data:, a protocol-relative //host) is
+ * dropped. Control characters and backslashes are refused outright: the URL parser drops tab, CR and LF anywhere
+ * and reads "\" as "/", so "/\t/host" or "/\host" would become //host (services/safeNext.ts has the same rule). A
+ * path must then resolve to the same origin, and an address must parse as http(s).
+ */
+const safeHref = (href: string | undefined): string | undefined => {
+  const h = href?.trim();
+  if (!h || /[\u0000-\u001f\u007f\\]/.test(h)) return undefined;
+  try {
+    if (h.startsWith('/')) return !h.startsWith('//') && new URL(h, PATH_BASE).origin === PATH_BASE ? h : undefined;
+    return /^https?:\/\//i.test(h) && /^https?:$/.test(new URL(h).protocol) ? h : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+type Primary =
+  | { kind: 'nextIssue'; href: string; label: string; title: string; coverUrl?: string }
+  | { kind: 'upNext'; href: string; label: string; title: string; logline?: string; coverUrl?: string }
+  | { kind: 'library'; href: string; label: string }
+  | { kind: 'readAgain' };
+
+/** The one filled action (SPEC §5.0.5): next issue > Up next > Browse the Library > Read again. */
+const primaryOf = (a: EndCardActions | undefined): Primary => {
+  const next = a?.nextIssue && safeHref(a.nextIssue.href);
+  if (next && a?.nextIssue) return { kind: 'nextIssue', href: next, label: COPY.nextIssue(a.nextIssue.label), title: a.nextIssue.title, coverUrl: safeHref(a.nextIssue.coverUrl) };
+  const up = a?.upNext && safeHref(a.upNext.href);
+  if (up && a?.upNext) return { kind: 'upNext', href: up, label: COPY.readNext, title: a.upNext.title, logline: a.upNext.logline, coverUrl: safeHref(a.upNext.coverUrl) };
+  const library = safeHref(a?.browseLibraryHref);
+  if (library) return { kind: 'library', href: library, label: COPY.browseLibrary };
+  return { kind: 'readAgain' };
+};
+
+/** The paper's focus ring (offset on the paper, so it reads on any page colour), never the app ring. */
+const PAPER_FOCUS = 'outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
+/** Every action: a 44 px pill with the paper's focus ring. */
+const BTN = `press inline-flex min-h-11 max-w-full items-center justify-center gap-2 ${RADIUS_ROUND} font-medium transition-colors ${PAPER_FOCUS}`;
+/** The Up next card: the wash, the panel radius, at least a 44 px target. */
+const NEXT_CARD = `mt-2 flex min-h-11 w-full max-w-[22rem] items-center gap-3 ${RADIUS_PANEL} bg-[var(--ds-reader-wash)] p-2 text-start transition-colors hover:bg-[var(--ds-reader-wash-strong)] ${PAPER_FOCUS}`;
+/** The one filled action: ink on the paper. */
+const FILLED = `${BTN} px-5 text-[14px] bg-[var(--ds-reader-ink)] text-[var(--ds-reader-paper-back)] hover:opacity-90`;
+/** The outlined action beside it: an ink hairline, no fill. */
+const OUTLINED = `${BTN} px-5 text-[14px] border border-[var(--ds-reader-ink)] bg-transparent text-[var(--ds-reader-ink)] hover:bg-[var(--ds-reader-wash)]`;
+/** The ghost row: words and an icon, a wash only on hover. */
+const GHOST = `${BTN} px-4 text-[13px] bg-transparent text-[var(--ds-reader-ink)] hover:bg-[var(--ds-reader-wash)]`;
 
 export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters, language, onReadAgain, onShare, onDownload, downloadBusy, dense }) => {
   const heading = React.useRef<HTMLHeadingElement>(null);
+  const nextTitleId = React.useId();
+  const nextLoglineId = React.useId();
   React.useEffect(() => {
     if (active) heading.current?.focus({ preventScroll: true });
   }, [active]);
   const reader = readerOf(doc);
-  const credits = reader.credits || (endCard?.authorName ? `Created by ${endCard.authorName}` : undefined);
+  const credits = reader.credits || (endCard?.authorName ? COPY.createdBy(endCard.authorName) : undefined);
   const stars = doc.cast.filter((c) => c.tier === 'lead' || c.tier === 'support').map((c) => c.name).filter(Boolean);
   const title = doc.cover.title || doc.brief.title;
   // An edition without a status is a published one (the slot only marks 'ready' explicitly when it can).
   const otherLang = language && language.options.find((o) => o.code !== language.current && (o.status === undefined || o.status === 'ready'));
+  const primary = primaryOf(endCard);
+  const makeHref = safeHref(endCard?.makeLikeThisHref);
+  const next = primary.kind === 'nextIssue' || primary.kind === 'upNext' ? primary : null;
+  const nextLogline = next?.kind === 'upNext' ? next.logline : undefined;
+  const readAgain = (
+    <button type="button" onClick={onReadAgain} className={primary.kind === 'readAgain' ? FILLED : GHOST} data-primary={primary.kind === 'readAgain' ? '' : undefined}>
+      <RotateCcw className="h-4 w-4" aria-hidden /> {COPY.readAgain}
+    </button>
+  );
   return (
     <div className="absolute inset-0 overflow-y-auto overscroll-contain text-[var(--ds-reader-ink)]" style={{ containerType: 'inline-size' }} data-testid="end-card">
       <div className={`flex min-h-full flex-col items-center justify-center ${dense ? 'gap-2' : 'gap-3'} px-[8%] py-[8%] text-center`}>
         <h2
           ref={heading}
           tabIndex={-1}
-          className="outline-none"
-          style={{ fontFamily: 'Bangers, ui-sans-serif, system-ui', fontSize: dense ? 'clamp(28px, 9cqw, 44px)' : 'clamp(36px, 10cqw, 64px)', letterSpacing: '0.04em', lineHeight: 1 }}
+          className={`${FONT_DISPLAY} font-semibold tracking-[-0.02em] outline-none`}
+          style={{ fontSize: dense ? 'clamp(28px, 9cqw, 44px)' : 'clamp(36px, 10cqw, 64px)', lineHeight: 1 }}
         >
-          The End
+          {COPY.theEnd}
         </h2>
         {title && <p className="max-w-full text-[15px] font-semibold [overflow-wrap:anywhere]">{title}</p>}
         {credits && <p className="max-w-full text-[13px] text-[var(--ds-reader-ink-soft)] [overflow-wrap:anywhere]">{credits}</p>}
-        {stars.length > 0 && <p className="max-w-full text-[12px] text-[var(--ds-reader-ink-soft)] [overflow-wrap:anywhere]">Starring {stars.slice(0, 6).join(', ')}</p>}
+        {stars.length > 0 && <p className="max-w-full text-[12px] text-[var(--ds-reader-ink-soft)] [overflow-wrap:anywhere]">{COPY.starring(stars.slice(0, 6).join(', '))}</p>}
         {chapters.length > 1 && !dense && (
           <ol className="max-w-full text-[12px] text-[var(--ds-reader-ink-soft)]">
             {chapters.slice(0, 8).map((c) => (
@@ -62,32 +168,74 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
             ))}
           </ol>
         )}
+        {next && (
+          // A copy of the filled link (see the header): a tap anywhere on the card opens it, with no second tab stop.
+          <a
+            href={next.href}
+            tabIndex={-1}
+            aria-hidden="true"
+            data-part="up-next"
+            className={NEXT_CARD}
+          >
+            {next.coverUrl && (
+              <img
+                src={next.coverUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                className={`${dense ? 'w-10' : 'w-14'} aspect-[2/3] shrink-0 rounded-[var(--ds-radius-sm)] bg-[var(--ds-reader-wash-strong)] object-cover`}
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-medium text-[var(--ds-reader-ink-soft)]">{COPY.upNext}</p>
+              <p id={nextTitleId} dir="auto" className="line-clamp-2 text-[14px] font-semibold [overflow-wrap:anywhere]">
+                {next.title}
+              </p>
+              {nextLogline && (
+                <p id={nextLoglineId} dir="auto" className="truncate text-[12px] text-[var(--ds-reader-ink-soft)]">
+                  {nextLogline}
+                </p>
+              )}
+            </div>
+          </a>
+        )}
         <div className="mt-2 flex max-w-full flex-wrap justify-center gap-2">
-          <button type="button" onClick={onReadAgain} className={`${btn} bg-[var(--ds-reader-ink)] text-[var(--ds-reader-paper-back)] hover:opacity-90`}>
-            <RotateCcw className="h-4 w-4" aria-hidden /> Read again
-          </button>
-          {onShare && (
-            <button type="button" onClick={onShare} className={`${btn} bg-[var(--ds-reader-wash)] hover:bg-[var(--ds-reader-wash-strong)]`}>
-              <Share2 className="h-4 w-4" aria-hidden /> Share
-            </button>
+          {primary.kind === 'readAgain' ? (
+            readAgain
+          ) : (
+            <a href={primary.href} className={FILLED} data-primary="" aria-describedby={next ? (nextLogline ? `${nextTitleId} ${nextLoglineId}` : nextTitleId) : undefined}>
+              {primary.kind === 'library' ? <LibraryBig className="h-4 w-4" aria-hidden /> : null}
+              {primary.label}
+              {next ? <ArrowRight className="h-4 w-4" aria-hidden /> : null}
+            </a>
           )}
-          {otherLang && (
-            <button type="button" onClick={() => language!.onChange(otherLang.code)} className={`${btn} bg-[var(--ds-reader-wash)] hover:bg-[var(--ds-reader-wash-strong)]`}>
-              <Languages className="h-4 w-4" aria-hidden /> Read in {otherLang.native || otherLang.label}
-            </button>
-          )}
-          {onDownload && (
-            <button type="button" onClick={onDownload} disabled={downloadBusy} className={`${btn} bg-[var(--ds-reader-wash)] hover:bg-[var(--ds-reader-wash-strong)] disabled:opacity-50`}>
-              <Download className="h-4 w-4" aria-hidden /> {downloadBusy ? 'Preparing…' : 'Download'}
-            </button>
-          )}
-          {endCard?.onMakeYourOwn && (
-            <button type="button" onClick={endCard.onMakeYourOwn} className={`${btn} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`}>
-              <Sparkles className="h-4 w-4" aria-hidden /> Make your own comic
-            </button>
+          {makeHref && (
+            <a href={makeHref} className={OUTLINED}>
+              {COPY.makeComicsLikeThis}
+            </a>
           )}
         </div>
-        <p className="mt-2 text-[11px] tracking-wide text-[var(--ds-reader-ink-faint)]">Made with DreamStream</p>
+        {(primary.kind !== 'readAgain' || onShare || otherLang || onDownload) && (
+          <div className="flex max-w-full flex-wrap justify-center gap-1">
+            {primary.kind !== 'readAgain' && readAgain}
+            {onShare && (
+              <button type="button" onClick={onShare} className={GHOST}>
+                <Share2 className="h-4 w-4" aria-hidden /> {COPY.share}
+              </button>
+            )}
+            {otherLang && (
+              <button type="button" onClick={() => language!.onChange(otherLang.code)} className={GHOST}>
+                <Languages className="h-4 w-4" aria-hidden /> {COPY.readIn(otherLang.native || otherLang.label)}
+              </button>
+            )}
+            {onDownload && (
+              <button type="button" onClick={onDownload} disabled={downloadBusy} className={`${GHOST} disabled:opacity-50`}>
+                <Download className="h-4 w-4" aria-hidden /> {downloadBusy ? COPY.preparing : COPY.download}
+              </button>
+            )}
+          </div>
+        )}
+        <p className="mt-2 text-[11px] tracking-wide text-[var(--ds-reader-ink-faint)]">{COPY.madeWith}</p>
       </div>
     </div>
   );

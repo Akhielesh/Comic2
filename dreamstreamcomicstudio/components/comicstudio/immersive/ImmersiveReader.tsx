@@ -29,7 +29,7 @@ import { chapterOf, chapterStarts, readerItems, resolvePageN, type ReaderItem } 
 import { averagePalette, roomBackground, themeColorFor, type Palette } from './ambient';
 import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
-import { EndCard } from './EndCard';
+import { EndCard, type EndCardActions } from './EndCard';
 import { cacheLimitsFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
 import { pageTranscript } from './pageTranscript';
 import { closePaperSound, primePaperSound } from './paperSound';
@@ -61,11 +61,7 @@ import { IOS_FULLSCREEN_NOTE, markIosFullscreenNoteSeen, shouldShowIosFullscreen
 import { useLowPower } from './useLowPower';
 import { WebtoonStage, type WebtoonStageHandle } from './WebtoonStage';
 
-export interface ImmersiveReaderEndCard {
-  authorName?: string;
-  onMakeYourOwn?(): void;
-  shareUrl?: string;
-}
+export type ImmersiveReaderEndCard = EndCardActions;
 
 export interface ImmersiveReaderProps {
   doc: ComicDoc;

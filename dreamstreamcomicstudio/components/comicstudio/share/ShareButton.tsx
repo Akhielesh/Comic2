@@ -1,16 +1,20 @@
 // Share button (contract §13.3): the studio header's Share slot (opens the Share sheet; a status
 // dot shows green = Library + link, blue = Link only, amber = changes since publishing), and the reader's
-// share action when given a `target` (Web Share, else a small popover with Copy + intents).
+// share action when given a `target`: that is ReaderShare (Web Share, else a small menu with Copy link,
+// the channel intents and LinkedIn), which carries none of the Share sheet's code. ReaderShare and the ds Menu
+// under it load on demand, so the studio, which imports this button for its header, never downloads them;
+// until they arrive the same button stands in, and a tap on it opens the menu once they have. A load that
+// fails never reaches the page: the stand-in stays and the next tap tries again.
 // Icon + label from 768 px, icon-only when compact; 44 px targets. The sheet can also be opened
 // from anywhere with `openShareSheet()` (a window event the mounted button listens for).
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Share2 } from 'lucide-react';
 import type { StudioController } from '../types';
 import { cx } from '../conversation/ui';
+import type { ReaderShareProps } from './ReaderShare';
+import { readerShareTriggerClass } from './readerShareTrigger';
 import { ShareSheet } from './ShareSheet';
-import { CHANNEL_LABEL, INTENT_CHANNELS, intentUrl } from './shareModel';
-import { useShareCapabilities } from './useShareCapabilities';
 
 import { FOCUS_RING, STATUS_DOT, TONE_FILL } from '../../chat/studioDesign';
 export interface ShareTarget {
@@ -39,60 +43,59 @@ const buttonCls = (compact?: boolean) =>
     compact ? 'w-11' : 'px-3'
   );
 
-const TargetShare: React.FC<{ target: ShareTarget; compact?: boolean }> = ({ target, compact }) => {
-  const caps = useShareCapabilities();
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+type ReaderShareView = React.ComponentType<ReaderShareProps>;
+let readerShareView: ReaderShareView | null = null;
+let readerShareLoad: Promise<ReaderShareView> | null = null;
+
+/**
+ * ReaderShare's chunk, fetched once. Not React.lazy: a failed fetch (offline, or a deploy that replaced the chunk; the
+ * boot's preload handler may reload the page first) would throw into the app's error boundary and take the reader
+ * with it. Here it only clears the cache, so the next tap fetches again.
+ */
+const loadReaderShare = (): Promise<ReaderShareView> =>
+  (readerShareLoad ??= import('./ReaderShare')
+    .then((m) => {
+      if (!m?.ReaderShare) throw new Error('ReaderShare did not load');
+      return (readerShareView = m.ReaderShare);
+    })
+    .catch((err: unknown) => {
+      readerShareLoad = null;
+      throw err;
+    }));
+
+/** The reader's Share: ReaderShare, with the same button standing in until it has loaded (a tap there is remembered). */
+const ReaderShareTarget: React.FC<{ target: ShareTarget; compact?: boolean }> = ({ target, compact }) => {
+  const [View, setView] = useState<ReaderShareView | null>(() => readerShareView);
+  const [tapped, setTapped] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    if (View) return;
+    let live = true;
+    loadReaderShare().then(
+      (loaded) => live && setView(() => loaded),
+      () => undefined // the stand-in stays; a tap tries again
+    );
     return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      live = false;
     };
-  }, [open]);
-  const click = async () => {
-    const result = await caps.share({ title: target.title, text: target.text, url: target.url });
-    if (result === 'fallback') setOpen(true);
-  };
+  }, [View, attempt]);
+  if (View) return <View url={target.url} title={target.title} text={target.text} compact={compact} defaultOpen={tapped} />;
   return (
-    <div ref={ref} className="relative">
-      <button type="button" onClick={click} aria-haspopup="menu" aria-expanded={open} className={buttonCls(compact)} aria-label={compact ? 'Share' : undefined}>
-        <Share2 className="h-[18px] w-[18px]" aria-hidden />
-        {!compact && <span>Share</span>}
-      </button>
-      {open && (
-        <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-[min(260px,calc(100vw-24px))] rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.2)]">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={async () => setCopied(await caps.copy(target.url))}
-            className="flex min-h-[44px] w-full items-center rounded-xl px-3 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
-          >
-            {copied ? 'Link copied' : 'Copy link'}
-          </button>
-          {INTENT_CHANNELS.map((ch) => (
-            <a
-              key={ch}
-              role="menuitem"
-              href={intentUrl(ch, target.url, target.title)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex min-h-[44px] items-center rounded-xl px-3 text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
-            >
-              {CHANNEL_LABEL[ch]}
-            </a>
-          ))}
-          <span className="sr-only" aria-live="polite">
-            {copied ? 'Link copied' : ''}
-          </span>
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      data-loading=""
+      aria-label={compact ? 'Share' : undefined}
+      aria-haspopup="menu"
+      aria-expanded={false}
+      className={readerShareTriggerClass(compact)}
+      onClick={() => {
+        setTapped(true);
+        setAttempt((n) => n + 1);
+      }}
+    >
+      <Share2 className="size-[18px]" aria-hidden />
+      {!compact && <span className="truncate">Share</span>}
+    </button>
   );
 };
 
@@ -106,7 +109,7 @@ export const ShareButton: React.FC<ShareButtonProps> = ({ studio, target, compac
     return () => window.removeEventListener(OPEN_SHARE_EVENT, onOpen);
   }, [studio]);
 
-  if (!studio && target) return <TargetShare target={target} compact={compact} />;
+  if (!studio && target) return <ReaderShareTarget target={target} compact={compact} />;
   if (!studio || !studio.doc) return null;
   const m = studio.doc.publication;
   const behind = !!studio.publication?.behind;
