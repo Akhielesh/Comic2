@@ -206,11 +206,10 @@ export const SystemErrorScreen: React.FC<{ message: string; onRetry: () => void;
   </div>
 );
 
-// Views still painted with the legacy kit that lean on the root for their light page: they keep that
-// light page in both themes (the legacy-kit pages keep their light surfaces in dark, atlas-skin.md D5)
-// until their package moves them onto tokens (the dashboard DS-R4, Learn DS-4, the classic editor D4).
-// Every other view sits on the canvas token, light or dark.
-export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['dashboard', 'learn', 'editor', 'fontlab']);
+// Views that still lean on the root for a light page in both themes (atlas-skin.md D5). Only the dev-only
+// font lab is left: the dashboard, Learn and the classic editor paint their own canvas since the app-wide
+// restyle, so they sit on the canvas token like every other view and show no light gutter in dark.
+export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['fontlab']);
 /** The root's page under the views: the canvas token, or the legacy light page for the views above. */
 export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-neutral-50' : CANVAS_BG);
 /**

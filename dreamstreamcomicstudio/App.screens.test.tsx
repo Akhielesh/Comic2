@@ -81,10 +81,11 @@ describe('SystemErrorScreen', () => {
 
 describe('the root page under the views', () => {
   it('is the canvas token, except for the legacy views that still need their light page', () => {
-    for (const view of ['home', 'chat', 'auth', 'auth-callback', 'gallery', 'settings', 'comicstudio', 'publiccomic', 'shared']) {
+    for (const view of ['home', 'chat', 'auth', 'auth-callback', 'gallery', 'settings', 'comicstudio', 'publiccomic', 'shared', 'dashboard', 'learn', 'editor']) {
       expect(appRootSurface(view), view).toBe(CANVAS_BG);
     }
-    expect([...LEGACY_PAPER_VIEWS].sort()).toEqual(['dashboard', 'editor', 'fontlab', 'learn']);
+    // The dashboard, Learn and the classic editor paint their own canvas since the restyle: only the dev font lab is left.
+    expect([...LEGACY_PAPER_VIEWS].sort()).toEqual(['fontlab']);
     for (const view of LEGACY_PAPER_VIEWS) expect(appRootSurface(view), view).not.toBe(CANVAS_BG);
   });
 });
@@ -94,8 +95,9 @@ describe('the root div', () => {
 
   it('is the positioned full-height page on the canvas, or the legacy light page for a legacy view', () => {
     expect(classes('home', false)).toEqual(expect.arrayContaining(['relative', 'min-h-screen', 'font-sans', ...CANVAS_BG.split(/\s+/)]));
-    expect(classes('dashboard', false)).toContain('bg-neutral-50');
-    expect(classes('dashboard', false)).not.toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
+    expect(classes('dashboard', false)).toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
+    expect(classes('fontlab', false)).toContain('bg-neutral-50');
+    expect(classes('fontlab', false)).not.toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
   });
 
   it('a gated view sits on the canvas: the product gate is on the DS, even over a legacy-paper view', () => {

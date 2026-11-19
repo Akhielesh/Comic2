@@ -544,7 +544,9 @@ CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3
 
 - DS-2 (S2): index.html's body and #app-splash read --ds-canvas/--ds-ink with the skin values as fallbacks (appShell.test.ts
   pins them); the body text stays the light ink for the legacy pages. The site header is AppHeader. The App root reads the
-  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab).
+  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab). Since the app-wide restyle the dashboard, Learn
+  and the classic editor paint their own canvas, so the list is the dev-only font lab alone and those three views sit
+  on the canvas token in both themes (no light gutter in dark).
 - Lead decision D8: the browser chrome colour (both `theme-color` metas and `public/app.webmanifest` theme_color) is the
   Atlas paper, #ffffff light and #0a0a0a dark, pinned to the `[data-ds-skin="atlas"]` --ds-canvas by appShell.test.ts. The
   default skin's #FAF9F5 / #262624 read as a warm band above the dark Atlas page. Not changed: the manifests'

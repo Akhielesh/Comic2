@@ -2,7 +2,7 @@
   "guard": "overflow",
   "test": "tests/config/overflowGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/overflowGuard.test.ts lowers it (see README.md).",
-  "totals": { "breakWords": 66, "maxHNoOverflow": 22, "nowrapNoClip": 38, "rawErrorSink": 44, "rawErrorText": 115 },
+  "totals": { "breakWords": 66, "maxHNoOverflow": 22, "nowrapNoClip": 38, "rawErrorSink": 42, "rawErrorText": 113 },
   "files": {
     "App.tsx": { "rawErrorText": 5 },
     "components/AccountSettings.tsx": { "rawErrorText": 10 },
@@ -16,7 +16,7 @@
     "components/RedeemInvite.tsx": { "rawErrorSink": 1, "rawErrorText": 1 },
     "components/UniversalAssistant.tsx": { "rawErrorText": 1 },
     "components/VerificationCenter.tsx": { "rawErrorSink": 6 },
-    "components/WaitlistForm.tsx": { "rawErrorSink": 4, "rawErrorText": 4 },
+    "components/WaitlistForm.tsx": { "rawErrorSink": 2, "rawErrorText": 2 },
     "components/admin/AdminConsole.tsx": { "nowrapNoClip": 1 },
     "components/admin/ContactMessages.tsx": { "breakWords": 1 },
     "components/admin/EmailConsole.tsx": { "nowrapNoClip": 1 },
