@@ -175,7 +175,9 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
   it('keeps the frame’s New comic as the only fill on All comics', () => {
     const { container } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
-    const FILLS = '.comics-primary-action, [data-variant="create"]';
+    // The frame's own fills come from comicCreationWorkspace.css: New comic is filled unless its view is open
+    // (aria-current), and Start is always filled. The rest of the app marks a fill with the class or the variant.
+    const FILLS = '.comics-primary-action, [data-variant="create"], .comic-project-nav .comic-project-new:not([aria-current="page"]), .comic-idea-start';
     const fills = container.querySelectorAll(FILLS);
     expect(fills).toHaveLength(1);
     expect(fills[0]).toHaveAccessibleName('New comic');
