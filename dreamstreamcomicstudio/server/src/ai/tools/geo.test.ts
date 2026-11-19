@@ -1,13 +1,52 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   flagEmoji,
   countryToMetrics,
+  countryInfoTool,
+  ipLookupTool,
   weekdayUtc,
   holidaysToTable,
   sunTimesToMetrics,
   zipPlacesToTable,
   universitiesToTable
 } from './geo.js';
+import { __resetProviderUsage } from '../../lib/providerUsage.js';
+import { __resetCountryCache } from './wikipedia.js';
+import { entitiesReply, FRANCE, FRANCE_LABELS, MISSING_REPLY, RETIRED_API_REPLY, searchReply } from './__fixtures__/wikidata.js';
+
+/** Stub fetch with a router over the parsed URL; returns the list of requested URLs. */
+const stubFetch = (route: (url: URL) => unknown): string[] => {
+  const urls: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: unknown) => {
+      const raw = String(input);
+      urls.push(raw);
+      const body = route(new URL(raw));
+      if (body instanceof Response) return body;
+      if (body instanceof Error) throw body;
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    })
+  );
+  return urls;
+};
+
+/** No key, token or address may ever travel over plain HTTP. */
+const expectNoSecretOverHttp = (urls: string[]): void => {
+  for (const url of urls.filter((u) => u.startsWith('http://'))) {
+    expect(url, url).not.toMatch(/access_key=|token=|key=/i);
+    expect(url, url).not.toMatch(/\b\d{1,3}(?:\.\d{1,3}){3}\b|[0-9a-f]*::[0-9a-f]*/i);
+  }
+};
+
+beforeEach(() => {
+  __resetProviderUsage();
+  __resetCountryCache();
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('flagEmoji', () => {
   it('converts ISO alpha-2 codes to regional-indicator flags', () => {
@@ -23,47 +62,125 @@ describe('flagEmoji', () => {
 
 describe('countryToMetrics', () => {
   const japan = {
-    name: { common: 'Japan', official: 'Japan' },
-    capital: ['Tokyo'],
-    population: 125_700_000,
-    region: 'Asia',
-    subregion: 'Eastern Asia',
-    languages: { jpn: 'Japanese' },
-    currencies: { JPY: { name: 'Japanese yen', symbol: '¥' } },
-    area: 377_930,
-    timezones: ['UTC+09:00'],
-    cca2: 'JP'
+    id: 'Q17',
+    name: 'Japan',
+    alpha2: 'JP',
+    capitals: ['Tokyo'],
+    population: 124_000_000,
+    populationYear: 2024,
+    areaKm2: 377_975,
+    currencies: ['Japanese yen'],
+    languages: ['Japanese'],
+    continents: ['Asia'],
+    url: 'https://www.wikidata.org/wiki/Q17'
   };
 
   it('puts the flag emoji in the title and core facts in tiles', () => {
     const board = countryToMetrics(japan);
     expect(board.title).toBe('🇯🇵 Japan');
     const byLabel = Object.fromEntries(board.tiles.map((t) => [t.label, t]));
-    expect(byLabel['Population'].value).toBe(125_700_000);
-    expect(byLabel['Area']).toMatchObject({ value: 377_930, unit: 'km²' });
+    expect(byLabel['Population'].value).toBe(124_000_000);
+    expect(byLabel['Area']).toMatchObject({ value: 377_975, unit: 'km²' });
     expect(byLabel['Capital'].value).toBe('Tokyo');
-    expect(byLabel['Region'].value).toBe('Eastern Asia');
-    expect(byLabel['Currency']).toMatchObject({ value: 'JPY', unit: '¥' });
+    expect(byLabel['Continent'].value).toBe('Asia');
+    expect(byLabel['Currency'].value).toBe('Japanese yen');
     expect(byLabel['Languages'].value).toBe('Japanese');
-    expect(byLabel['Timezone'].value).toBe('UTC+09:00');
   });
 
-  it('summarizes many languages/timezones as glanceable counts', () => {
+  it('summarizes many languages and currencies as glanceable values', () => {
     const board = countryToMetrics({
-      name: { common: 'South Africa' },
-      languages: { afr: 'Afrikaans', eng: 'English', zul: 'Zulu', xho: 'Xhosa' },
-      timezones: ['UTC+02:00', 'UTC+03:00'],
-      cca2: 'ZA'
+      ...japan,
+      name: 'South Africa',
+      alpha2: 'ZA',
+      languages: ['Afrikaans', 'English', 'Zulu', 'Xhosa'],
+      currencies: ['South African rand', 'euro']
     });
     const byLabel = Object.fromEntries(board.tiles.map((t) => [t.label, t]));
     expect(byLabel['Languages']).toMatchObject({ value: 4, unit: 'incl. Afrikaans' });
-    expect(byLabel['Timezones']).toMatchObject({ value: 2, unit: 'zones' });
+    expect(byLabel['Currencies'].value).toBe('South African rand, euro');
   });
 
   it('survives a sparse record without throwing', () => {
-    const board = countryToMetrics({ name: { common: 'Atlantis' } });
+    const board = countryToMetrics({ id: 'Q1', name: 'Atlantis', capitals: [], currencies: [], languages: [], continents: [], url: 'https://www.wikidata.org/wiki/Q1' });
     expect(board.title).toBe('Atlantis');
     expect(board.tiles.length).toBeGreaterThan(0);
+  });
+});
+
+describe('country_info', () => {
+  it('answers from Wikidata with the fact board, the flag and a source link', async () => {
+    const urls = stubFetch((u) => (u.searchParams.get('ids') ? FRANCE_LABELS : entitiesReply(FRANCE)));
+    const out = await countryInfoTool.execute({ country: 'France' });
+    expect(urls.every((u) => u.startsWith('https://www.wikidata.org/w/api.php?'))).toBe(true);
+    expect(urls.some((u) => u.includes('restcountries'))).toBe(false);
+    expect(out.content).toContain('France');
+    expect(out.content).toContain('Capital: Paris');
+    expect(out.content).toContain('Population: 68,000,000 (2024)');
+    expect(out.content).toContain('Currency: euro');
+    expect(out.images).toEqual([{ url: 'https://flagcdn.com/w320/fr.png', title: 'Flag of France', source: 'flagcdn.com' }]);
+    expect(out.citations).toEqual([{ url: 'https://www.wikidata.org/wiki/Q142', title: 'France — Wikidata' }]);
+    expect(out.artifacts?.[0]).toMatchObject({ type: 'metric_board', data: { title: '🇫🇷 France' } });
+  });
+
+  it('says the source is offline, never "not found", when the reply is not a country answer', async () => {
+    stubFetch(() => RETIRED_API_REPLY);
+    const out = await countryInfoTool.execute({ country: 'France' });
+    expect(out.content).toContain('The country facts source is offline right now');
+    expect(out.content).not.toMatch(/not found|no country found/i);
+    expect(out.artifacts).toBeUndefined();
+  });
+
+  it('says the source is offline on a network failure too', async () => {
+    stubFetch(() => new Error('getaddrinfo ENOTFOUND'));
+    const out = await countryInfoTool.execute({ country: 'France' });
+    expect(out.content).toContain('The country facts source is offline right now');
+    expect(out.content).not.toMatch(/not found/i);
+  });
+
+  it('says the source is busy, sending nothing, when the Wikidata budget is spent', async () => {
+    vi.stubEnv('PROVIDER_BUDGETS', JSON.stringify({ wikidata: { perMin: 0, perDay: 0 } }));
+    __resetProviderUsage();
+    const urls = stubFetch(() => entitiesReply(FRANCE));
+    const out = await countryInfoTool.execute({ country: 'France' });
+    expect(urls).toEqual([]);
+    expect(out.content).toContain('The country facts source is busy right now');
+    expect(out.content).not.toMatch(/not found/i);
+  });
+
+  it('says "not found" only when the source answered and nothing matched', async () => {
+    stubFetch((u) => (u.searchParams.get('list') === 'search' ? searchReply() : MISSING_REPLY));
+    const out = await countryInfoTool.execute({ country: 'Atlantis' });
+    expect(out.content).toBe('No country found matching "Atlantis".');
+  });
+});
+
+describe('ip_lookup', () => {
+  it('without IPINFO_TOKEN says it needs a data source and sends nothing', async () => {
+    vi.stubEnv('IPINFO_TOKEN', '');
+    const urls = stubFetch(() => ({ status: 'success', city: 'Somewhere' }));
+    const out = await ipLookupTool.execute({ ip: '203.0.113.7' });
+    expect(out.content).toContain('IP lookup needs a configured data source');
+    expect(urls).toEqual([]);
+  });
+
+  it('with a token asks IPinfo over HTTPS only, and a failure falls back to nothing', async () => {
+    vi.stubEnv('IPINFO_TOKEN', 'test-token');
+    const urls = stubFetch(() => new Response('nope', { status: 503 }));
+    const out = await ipLookupTool.execute({ ip: '203.0.113.7' });
+    expect(out.content).toMatch(/^IP lookup failed/);
+    expect(urls).toHaveLength(1);
+    expect(urls[0].startsWith('https://api.ipinfo.io/lite/203.0.113.7?token=')).toBe(true);
+    expect(urls.some((u) => u.includes('ip-api'))).toBe(false);
+    expectNoSecretOverHttp(urls);
+  });
+
+  it('with a token answers country and network from IPinfo', async () => {
+    vi.stubEnv('IPINFO_TOKEN', 'test-token');
+    stubFetch(() => ({ ip: '203.0.113.7', country: 'Exampleland', country_code: 'EX', continent: 'Nowhere', asn: 'AS64500', as_name: 'Example Net' }));
+    const out = await ipLookupTool.execute({ ip: '203.0.113.7' });
+    expect(out.content).toContain('Country: Exampleland (EX)');
+    expect(out.content).toContain('Network: AS64500 — Example Net');
+    expect(out.notice).toBeUndefined();
   });
 });
 

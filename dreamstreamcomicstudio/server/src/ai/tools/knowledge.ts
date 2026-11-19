@@ -8,18 +8,11 @@
 import type { ChatTool } from './types.js';
 import type { DocumentArtifact, NewsItem, NewsResultsArtifact } from '../../../../apiTypes.js';
 import { fetchJson, fetchText } from './http.js';
+import { wikiSearch, wikiSummary } from './wikipedia.js';
 
 // --- Wikipedia: search → summary (extract + thumbnail + canonical URL) ----------
-interface WikiSearch {
-  pages?: { key: string; title: string; description?: string; excerpt?: string }[];
-}
-interface WikiSummary {
-  title?: string;
-  description?: string;
-  extract?: string;
-  content_urls?: { desktop?: { page?: string } };
-  thumbnail?: { source?: string };
-}
+// Both calls go through the shared helper (tools/wikipedia.ts), which comic research uses too.
+const WIKI_HOST = 'en.wikipedia.org';
 
 /** Map a Wikipedia summary to a document card — image, extract, source link. Pure. */
 export const wikiToDocument = (w: {
@@ -49,20 +42,13 @@ export const wikiLookupTool: ChatTool = {
     const query = String(args?.query || '').trim();
     if (!query) return { content: 'No topic was provided to look up.' };
     try {
-      const search = await fetchJson<WikiSearch>(
-        `https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(query)}&limit=1`,
-        { signal }
-      );
-      const top = search.pages?.[0];
+      const [top] = await wikiSearch(WIKI_HOST, query, 1, { signal });
       if (!top) return { content: `No Wikipedia article found for "${query}".` };
-      const summary = await fetchJson<WikiSummary>(
-        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(top.key)}`,
-        { signal }
-      );
-      const url = summary.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(top.key)}`;
+      const summary = await wikiSummary(WIKI_HOST, top.key, { signal });
+      const url = summary.url;
       const extract = summary.extract || top.excerpt?.replace(/<[^>]+>/g, '') || top.description || '';
       const content = `Wikipedia — ${summary.title || top.title}${summary.description ? ` (${summary.description})` : ''}:\n${extract}\nSource: ${url}\n(A document card with this summary is shown to the user — don't repeat the extract.)`;
-      const thumb = summary.thumbnail?.source;
+      const thumb = summary.thumbnail;
       const doc = wikiToDocument({
         title: summary.title || top.title,
         description: summary.description,
@@ -337,14 +323,15 @@ export const searchPapersTool: ChatTool = {
     if (!query) return { content: 'No research query was provided.' };
     try {
       const xml = await fetchText(
-        `http://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=5&sortBy=relevance`,
+        `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=5&sortBy=relevance`,
         { signal, accept: 'application/atom+xml, application/xml, text/xml' }
       );
       const entries = xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || [];
       if (!entries.length) return { content: `No arXiv papers found for "${query}".` };
       const papers: ArxivPaper[] = entries.slice(0, 5).map((block) => {
         const title = atomTag(block, 'title') || 'Untitled';
-        const id = atomTag(block, 'id') || '';
+        // arXiv's Atom ids are http:// links; the abstract pages are served over HTTPS.
+        const id = (atomTag(block, 'id') || '').replace(/^http:\/\/arxiv\.org\//, 'https://arxiv.org/');
         const summary = (atomTag(block, 'summary') || '').slice(0, 320);
         const authors = (block.match(/<name>([\s\S]*?)<\/name>/gi) || [])
           .map((a) => a.replace(/<\/?name>/gi, '').trim())

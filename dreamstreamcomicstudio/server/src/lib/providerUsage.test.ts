@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   providerForUrl,
+  getConfiguredProviderBudget,
   assertProviderBudget,
   noteProviderCall,
   releaseProviderReservation,
@@ -21,7 +22,24 @@ describe('providerForUrl', () => {
     expect(providerForUrl('https://api.coingecko.com/api/v3/simple/price?x=1')).toBe('coingecko');
     expect(providerForUrl('https://api.met.no/weatherapi/locationforecast/2.0/complete')).toBe('metno');
     expect(providerForUrl('https://query1.finance.yahoo.com/v8/finance/chart/AAPL')).toBe('yahoo');
-    expect(providerForUrl('http://ip-api.com/json/8.8.8.8')).toBe('ip-api');
+    expect(providerForUrl('https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q142')).toBe('wikidata');
+    expect(providerForUrl('https://wikidata.org/w/api.php')).toBe('wikidata');
+  });
+  it('meters Wikidata in its own budget, never the Wikipedia one, and only its API host', () => {
+    expect(getConfiguredProviderBudget('wikidata')).toEqual({ perMin: 30, perDay: 1000 });
+    expect(providerForUrl('https://en.wikipedia.org/w/api.php?search=wikidata.org')).toBe('wikipedia');
+    expect(providerForUrl('https://evil.test/www.wikidata.org/w/api.php')).toBe('evil.test');
+    expect(providerForUrl('https://www.wikidata.org.evil.test/w/api.php')).toBe('www.wikidata.org.evil.test');
+  });
+  it('ip_lookup no longer calls ip-api.com, so it has no named budget', () => {
+    expect(providerForUrl('http://ip-api.com/json/x')).toBe('ip-api.com');
+    expect(getConfiguredProviderBudget('ip-api')).toBeNull();
+  });
+  it('meters aviationstack in a small budget of its own, not the generic fallback', () => {
+    expect(providerForUrl('https://api.aviationstack.com/v1/flights?access_key=k&flight_iata=UA2402')).toBe('aviationstack');
+    expect(getConfiguredProviderBudget('aviationstack')).toEqual({ perMin: 5, perDay: 30 });
+    expect(providerForUrl('https://evil.test/api.aviationstack.com/v1/flights')).toBe('evil.test');
+    expect(providerForUrl('https://aviationstack.com.evil.test/v1/flights')).toBe('aviationstack.com.evil.test');
   });
   it('maps the configured SearXNG instance', () => {
     process.env.SEARXNG_URL = 'https://searxng-production-e7df.up.railway.app';
@@ -43,20 +61,20 @@ describe('providerForUrl', () => {
 });
 
 describe('budget enforcement', () => {
-  const url = 'http://ip-api.com/json/1.1.1.1'; // budget: 40/min, 1500/day
+  const url = 'https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q142'; // budget: 30/min, 1000/day
 
   it('blocks once the per-minute budget is reached', () => {
-    for (let i = 0; i < 40; i++) assertProviderBudget(url, T0 + i * 100);
+    for (let i = 0; i < 30; i++) assertProviderBudget(url, T0 + i * 100);
     expect(() => assertProviderBudget(url, T0 + 5000)).toThrow(ProviderBudgetError);
   });
 
   it('frees the minute window as time passes', () => {
-    for (let i = 0; i < 40; i++) assertProviderBudget(url, T0);
+    for (let i = 0; i < 30; i++) assertProviderBudget(url, T0);
     expect(() => assertProviderBudget(url, T0 + 61_000)).not.toThrow();
   });
 
   it('blocks at the daily cap and resets on a new UTC day', () => {
-    process.env.PROVIDER_BUDGETS = JSON.stringify({ 'ip-api': { perMin: 10_000, perDay: 3 } });
+    process.env.PROVIDER_BUDGETS = JSON.stringify({ wikidata: { perMin: 10_000, perDay: 3 } });
     for (let i = 0; i < 3; i++) assertProviderBudget(url, T0 + i * 120_000);
     expect(() => assertProviderBudget(url, T0 + 600_000)).toThrow(ProviderBudgetError);
     // Next UTC day → fresh budget.
@@ -71,7 +89,7 @@ describe('budget enforcement', () => {
   });
 
   it('reserves at check time: calls still in flight count, so parallel checks cannot all pass', () => {
-    // 50 checks at the same instant, none of them settled yet: only the 40 the minute allows pass.
+    // 50 checks at the same instant, none of them settled yet: only the 30 the minute allows pass.
     let passed = 0;
     for (let i = 0; i < 50; i++) {
       try {
@@ -81,20 +99,20 @@ describe('budget enforcement', () => {
         expect(err).toBeInstanceOf(ProviderBudgetError);
       }
     }
-    expect(passed).toBe(40);
+    expect(passed).toBe(30);
   });
 
   it('recording the outcome does not count the call twice; a release gives the slot back', () => {
-    process.env.PROVIDER_BUDGETS = JSON.stringify({ 'ip-api': { perMin: 2, perDay: 100 } });
+    process.env.PROVIDER_BUDGETS = JSON.stringify({ wikidata: { perMin: 2, perDay: 100 } });
     assertProviderBudget(url, T0);
     noteProviderCall(url, true, T0 + 10);
     assertProviderBudget(url, T0 + 20);
     noteProviderCall(url, false, T0 + 30);
-    expect(getProviderUsageSnapshot(T0 + 40).find((r) => r.provider === 'ip-api')).toMatchObject({ todayCalls: 2, todayErrors: 1 });
+    expect(getProviderUsageSnapshot(T0 + 40).find((r) => r.provider === 'wikidata')).toMatchObject({ todayCalls: 2, todayErrors: 1 });
     expect(() => assertProviderBudget(url, T0 + 50)).toThrow(ProviderBudgetError);
     releaseProviderReservation(url, T0 + 60);
     expect(() => assertProviderBudget(url, T0 + 70)).not.toThrow();
-    expect(getProviderUsageSnapshot(T0 + 80).find((r) => r.provider === 'ip-api')?.todayCalls).toBe(2);
+    expect(getProviderUsageSnapshot(T0 + 80).find((r) => r.provider === 'wikidata')?.todayCalls).toBe(2);
   });
 });
 

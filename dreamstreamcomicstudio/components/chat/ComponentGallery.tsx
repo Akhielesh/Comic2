@@ -1200,6 +1200,9 @@ const flightDemo: FlightStatusArtifact = {
   asOf: '2026-06-10T14:30:00Z'
 };
 
+// No live flight data source: the flight number and a web link, never times.
+const flightUnavailableDemo: FlightStatusArtifact = { airline: 'United', flightNumber: 'UA2402', live: false, unavailable: true };
+
 const flightResultsDemo: FlightResultsArtifact = {
   origin: 'IAD',
   destination: 'BLR',
@@ -1532,6 +1535,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'National debt clock (live odometer · $/second drift)', type: 'debt_clock', category: 'Finance', node: <DebtClock data={debtDemo} /> },
   { title: 'Calendar heatmap (daily P&L · win rate · best/worst)', type: 'pnl_calendar', category: 'Data & charts', node: <PnlCalendar data={pnlDemo} /> },
   { title: 'Flight tracker (route arc · live progress · delays)', type: 'flight_status', category: 'Travel & life', node: <FlightStatus data={flightDemo} /> },
+  { title: 'Flight tracker (no live data source)', type: 'flight_status', category: 'Travel & life', node: <FlightStatus data={flightUnavailableDemo} /> },
   { title: 'Flight deals (real fares · cheapest/fastest badges · layovers · Google Flights link)', type: 'flight_results', category: 'Travel & life', node: <FlightResults data={flightResultsDemo} /> },
   { title: 'Trip budget burn (fuel gauge · pace verdict · categories)', type: 'trip_budget', category: 'Travel & life', node: <TripBudget data={tripBudgetDemo} /> },
   { title: 'Destination cheat-sheet (emergency · plugs · phrases · scams)', type: 'local_cheatsheet', category: 'Travel & life', node: <LocalCheatsheet data={cheatsheetDemo} /> },
