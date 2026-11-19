@@ -25,6 +25,7 @@ import {
   qaPublicationView,
   withPaperBoatScript,
   withQaConflict,
+  withQaLooks,
   withoutVariants,
   withQaPublication,
   type QaFixtureName
@@ -40,8 +41,10 @@ export type QaSurface = (typeof QA_SURFACES)[number];
  * `queued` (agent-editor plan §3 A1): the director is working and Up next holds QA_QUEUE_NOTES, with every queue member
  * live (edit, move, remove, Send now), so the harness can screenshot Up next, its chip and its sheet.
  * `conflict` (§3 A3): the last reply carries a two-item conflict card (qaConflictCard) with the conflict guard on.
+ * `looks` (stylepick SC-1): the last reply carries a "Styles that fit" card and an open question with preset pictures
+ * (withQaLooks), so every chat surface that paints a look can be measured.
  */
-export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy', 'queued', 'conflict'] as const;
+export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy', 'queued', 'conflict', 'looks'] as const;
 export type QaState = (typeof QA_STATES)[number];
 
 export type QaImageMode = 'png' | 'svg';
@@ -288,6 +291,7 @@ export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
   let doc = p.state === 'loading' || p.state === 'load-error' ? null : qaDocFromParams(p);
   if (doc && p.live) doc = withQaPublication(doc, p.live);
   if (doc && p.state === 'conflict') doc = withQaConflict(doc);
+  if (doc && p.state === 'looks') doc = withQaLooks(doc);
   const pageId = p.page && doc ? doc.pages.find((pg) => pg.n === p.page)?.id ?? null : null;
   // `history=1` turns Comic History on; `state=conflict` turns the conflict guard on (the card's buttons, not its
   // "switched off" note). Absent both, the scene names no caps: DEFAULT_CAPS, as before.

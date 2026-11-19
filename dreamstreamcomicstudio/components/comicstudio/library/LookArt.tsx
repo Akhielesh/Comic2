@@ -10,12 +10,14 @@
 //   3. when a picture fails to load: the look's swatch, a plain gradient tile with a hairline (no figure, no text).
 // Phrasing content only (img and span; the interim thumb keeps its own root until SC-5 removes it), so it sits in a
 // button or the ds/MediaTile and PresetTile art slot. It fills the caller's box (give it `absolute inset-0` or a
-// sized parent); the picture covers the box unless the caller passes its own object-fit.
+// sized parent); the picture covers the box unless the caller passes its own object-fit. The img states its file's
+// own pixel size (lookSources), so a caller with an auto height reserves the file's real aspect, and it sits on the
+// look's swatch until the file decodes: the box shows the look's colours from the first frame, never a grey well.
 
 import React, { useState } from 'react';
 import { getStylePreset } from '../../../shared/comic/stylePresets';
 import { cn } from '../../../lib/utils';
-import { lookPictureOf, lookSourcesOf, type LookArtSize } from './lookSources';
+import { lookFileOf, lookSourcesOf, type LookArtSize } from './lookSources';
 import { PresetThumb } from './procedural/PresetThumb';
 
 export type { LookArtSize } from './lookSources';
@@ -29,17 +31,12 @@ export interface LookArtProps {
   className?: string;
 }
 
-/** The box the picture reserves before CSS sizes it: a 4:5 look tile at the size's width. */
-const BOX: Record<LookArtSize, { width: number; height: number }> = {
-  tile: { width: 320, height: 400 },
-  large: { width: 640, height: 800 }
-};
-
 const FILL = 'block h-full w-full';
 
 export const LookArt: React.FC<LookArtProps> = ({ presetId, size, alt, className }) => {
   const preset = getStylePreset(presetId);
-  const src = lookPictureOf(lookSourcesOf(presetId), size);
+  const file = lookFileOf(lookSourcesOf(presetId), size);
+  const src = file?.src;
   // The file that failed: a different look (a new src) tries its own picture again.
   const [failed, setFailed] = useState<string | null>(null);
   const label = alt ?? (preset ? `${preset.name} sample` : '');
@@ -51,14 +48,15 @@ export const LookArt: React.FC<LookArtProps> = ({ presetId, size, alt, className
         key={src}
         src={src}
         alt={label}
-        width={BOX[size].width}
-        height={BOX[size].height}
+        width={file?.size?.width}
+        height={file?.size?.height}
         loading="lazy"
         decoding="async"
         draggable={false}
         data-look-art="art"
         data-look={presetId}
         className={cn(FILL, !/\bobject-/.test(className || '') && 'object-cover', className)}
+        style={preset ? { background: preset.swatch } : undefined}
         onError={() => setFailed(src)}
       />
     );

@@ -8,7 +8,12 @@
  *  - nothing on the comics host (components/comicshost/**) reaches the library index (`useComicLibrary`);
  *  - `stylePreviewId(` (the library id of a look's preview) is spelled only in LookArt, lookSources, the admin
  *    console and the library's own code, so no style surface goes back to the index for a look's picture;
- *  - LookArt and lookSources never import the index or LibraryImage (which reads it).
+ *  - LookArt and lookSources never import the index or LibraryImage (which reads it);
+ *  - every file that paints a look through LookArt (the Style tab, "Styles that fit", the composer Style panel, a
+ *    question's options, the admin console, and any later one) imports neither LibraryImage, the index hook nor the
+ *    library barrel (which re-exports both), so a style surface cannot go back to the index beside LookArt;
+ *  - no client file outside the list above builds a look's library id another way (a `style.${…}` template or a
+ *    'style.' + … concatenation), so the stylePreviewId( rule cannot be stepped around.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -29,10 +34,29 @@ const PREVIEW_ID_ALLOWED = [
   `${LIB}/lookSources.ts`,
   `${LIB}/admin/LibraryConsole.tsx`,
   `${LIB}/LibraryImage.tsx`,
-  `${LIB}/sampleArt.ts`,
   `${LIB}/index.ts`,
   `${LIB}/useComicLibrary.ts`
 ];
+
+/** The style surfaces SC-1 moved onto LookArt: each must still import it (the rule below never goes vacuous). */
+const STYLE_SURFACES = [
+  'components/comicstudio/board/StyleTab.tsx',
+  `${LIB}/StylePresetsCard.tsx`,
+  'components/comicstudio/conversation/panels/StylePanel.tsx',
+  'components/comicstudio/conversation/cards/OptionsCard.tsx',
+  `${LIB}/admin/LibraryConsole.tsx`
+];
+
+/** What a file imports (static and dynamic), relative specifiers resolved against the file: "components/…/LookArt". */
+const importsOf = (rel: string, text: string): string[] =>
+  [...code(text).matchAll(/\b(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)].map((m) =>
+    m[1].startsWith('.') ? path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])).replace(/\.(?:tsx?|jsx?)$/, '').replace(/\/$/, '') : m[1]
+  );
+const isLookArt = (target: string) => target === `${LIB}/LookArt`;
+/** The library index hook, the image that reads it, or the library folder's barrel (which re-exports both). */
+const isIndexReader = (target: string) => [`${LIB}/useComicLibrary`, `${LIB}/LibraryImage`, LIB, `${LIB}/index`].includes(target);
+/** A look's library id spelled without stylePreviewId: `style.${…}` or 'style.' + … */
+const SPELLED_PREVIEW_ID = /`style\.\$\{|['"]style\.['"]\s*\+/;
 
 describe('style art guard', () => {
   it('the unused stock photos are gone: public/assets/home/ does not exist', () => {
@@ -68,6 +92,51 @@ describe('style art guard', () => {
       // The index hook, the image that reads it, or this folder's barrel (which re-exports both).
       expect(imports.filter((spec) => /useComicLibrary|LibraryImage|^\.\/?$|^\.\/index$/.test(spec)), rel).toEqual([]);
     }
+  });
+
+  it(
+    'every file that paints looks through LookArt imports neither LibraryImage, the index hook nor the library barrel',
+    () => {
+      const files = listScannedFiles({ roots: CLIENT_ROOTS });
+      const painters = files.filter((rel) => importsOf(rel, read(rel)).some(isLookArt));
+      expect(painters).toEqual(expect.arrayContaining(STYLE_SURFACES));
+      const offenders = painters.filter((rel) => importsOf(rel, read(rel)).some(isIndexReader));
+      expect(offenders).toEqual([]);
+    },
+    REAL_TREE_TIMEOUT
+  );
+
+  it(
+    "no client file outside the list builds a look's library id by hand (a style.${…} template or 'style.' + …)",
+    () => {
+      const files = listScannedFiles({ roots: CLIENT_ROOTS });
+      const users = files.filter((rel) => SPELLED_PREVIEW_ID.test(code(read(rel))));
+      expect(users.filter((rel) => !PREVIEW_ID_ALLOWED.includes(rel))).toEqual([]);
+    },
+    REAL_TREE_TIMEOUT
+  );
+
+  it('the new rules see a use: a surface going back to the index beside LookArt would be caught', () => {
+    const board = [
+      "import { LookArt } from '../library/LookArt';",
+      "import { LibraryImage } from '../library/LibraryImage';",
+      "import { useComicLibrary } from '../library/useComicLibrary';",
+      "import { LibraryImage as L } from '../library';",
+      "const Lazy = React.lazy(() => import('../library/index'));",
+      "import { PresetThumb } from '../library/procedural/PresetThumb';",
+      "// import { LibraryImage } from '../library/LibraryImage';"
+    ].join('\n');
+    const targets = importsOf('components/comicstudio/board/StyleTab.tsx', board);
+    expect(targets.filter(isLookArt)).toEqual([`${LIB}/LookArt`]);
+    expect(targets.filter(isIndexReader)).toEqual([`${LIB}/LibraryImage`, `${LIB}/useComicLibrary`, LIB, `${LIB}/index`]);
+    // Inside the library folder, the barrel is './index' or './'.
+    expect(importsOf(`${LIB}/StylePresetsCard.tsx`, "import { LibraryImage } from './';\nimport x from './index';").filter(isIndexReader)).toEqual([LIB, `${LIB}/index`]);
+    expect(importsOf(`${LIB}/StylePresetsCard.tsx`, "import { LookArt } from './LookArt';").filter(isIndexReader)).toEqual([]);
+    expect(SPELLED_PREVIEW_ID.test(code('<LibraryImage id={`style.${p.id}`} fallback={x} />'))).toBe(true);
+    expect(SPELLED_PREVIEW_ID.test(code("const id = 'style.' + preset.id;"))).toBe(true);
+    expect(SPELLED_PREVIEW_ID.test(code('const id = "style." +preset.id;'))).toBe(true);
+    expect(SPELLED_PREVIEW_ID.test(code('// `style.${p.id}` in a comment'))).toBe(false);
+    expect(SPELLED_PREVIEW_ID.test(code("const cls = 'style.css';"))).toBe(false);
   });
 
   it('the guard sees a use: a surface that names stylePreviewId( would be caught', () => {

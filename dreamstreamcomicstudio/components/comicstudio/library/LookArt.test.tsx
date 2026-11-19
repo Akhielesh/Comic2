@@ -3,12 +3,28 @@
 // a placeholder first. Looks without a picture yet keep the interim drawn thumbnail (removed with SC-5); a picture
 // that fails to load becomes the look's swatch. lookSourcesOf is the one place a look's files are named.
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets';
 import { LookArt } from './LookArt';
-import { lookPictureOf, lookSourcesOf } from './lookSources';
+import { lookFileOf, lookIdOfPreview, lookPictureOf, lookSourcesOf } from './lookSources';
 import { SAMPLE_LOOKS } from './sampleArt';
+
+/** A file's pixel size, read from its webp header in public/ (VP8X, VP8 and VP8L). */
+const webpSize = (src: string): { width: number; height: number } => {
+  const b = readFileSync(path.join(__dirname, '../../../public', src));
+  expect(b.toString('ascii', 0, 4) + b.toString('ascii', 8, 12), src).toBe('RIFFWEBP');
+  const chunk = b.toString('ascii', 12, 16);
+  if (chunk === 'VP8X') return { width: 1 + b.readUIntLE(24, 3), height: 1 + b.readUIntLE(27, 3) };
+  if (chunk === 'VP8 ') return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff };
+  if (chunk === 'VP8L') {
+    const bits = b.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  throw new Error(`${src}: unknown webp chunk ${chunk}`);
+};
 
 const presetOf = (id: string): StylePreset => {
   const p = getStylePreset(id);
@@ -36,9 +52,34 @@ describe('lookSourcesOf', () => {
   it('names the bundled thumb as the scene and the two sample pages for each Paper Boat look', () => {
     for (const look of SAMPLE_LOOKS) {
       const s = lookSourcesOf(look);
-      expect(s.scene, look).toEqual({ w320: `/assets/comic-sample/${look}-thumb.webp`, w640: `/assets/comic-sample/${look}-thumb.webp` });
+      expect(s.scene, look).toEqual({ w320: `/assets/comic-sample/${look}-thumb.webp`, w640: `/assets/comic-sample/${look}-thumb.webp`, size: { width: 480, height: 240 } });
       expect(s.pages, look).toEqual([`/assets/comic-sample/${look}-1.webp`, `/assets/comic-sample/${look}-2.webp`]);
       expect(s.cast, look).toBeUndefined();
+    }
+  });
+
+  it('every file carries its own pixel size, as its webp header says (the img reserves the real aspect)', () => {
+    for (const look of SAMPLE_LOOKS) {
+      for (const size of ['tile', 'large'] as const) {
+        const file = lookFileOf(lookSourcesOf(look), size)!;
+        expect(file.size, `${look} ${size}`).toEqual(webpSize(file.src));
+      }
+      const s = lookSourcesOf(look);
+      for (const page of s.pages) expect(s.pageSize, page).toEqual(webpSize(page));
+    }
+  });
+
+  it('a source that names no size gives the file alone (no made-up box)', () => {
+    expect(lookFileOf({ scene: { w320: '/a.webp', w640: '/a.webp' }, pages: [] }, 'tile')).toEqual({ src: '/a.webp' });
+    expect(lookFileOf({ pages: ['/p1.webp'] }, 'large')).toEqual({ src: '/p1.webp' });
+    expect(lookFileOf({ pages: ['/p1.webp'], pageSize: { width: 10, height: 8 } }, 'large')).toEqual({ src: '/p1.webp', size: { width: 10, height: 8 } });
+  });
+
+  it('a look preview id names its look; a cast bust, an anchor or a malformed id names none', () => {
+    expect(lookIdOfPreview('style.noir-ink')).toBe('noir-ink');
+    expect(lookIdOfPreview('style.cartoon-strip')).toBe('cartoon-strip');
+    for (const id of ['style.noir-ink.cast', 'anchor.noir-ink', 'empty.studio-hero', 'style.', 'style.__proto__', 'style.Noir', 'noir-ink', '']) {
+      expect(lookIdOfPreview(id), id).toBeUndefined();
     }
   });
 
@@ -68,8 +109,9 @@ describe('LookArt', () => {
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute('loading', 'lazy');
     expect(img).toHaveAttribute('decoding', 'async');
-    expect(img).toHaveAttribute('width');
-    expect(img).toHaveAttribute('height');
+    // The file's own size (480x240), not a made-up 4:5 box.
+    expect(img).toHaveAttribute('width', '480');
+    expect(img).toHaveAttribute('height', '240');
     expect(img!.className).toMatch(/\bobject-cover\b/);
     expect(container.querySelector('[data-preset-thumb]')).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -85,6 +127,26 @@ describe('LookArt', () => {
       large.unmount();
     }
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('the img states its file\'s real size at tile and large, so an auto-height caller never jumps', () => {
+    for (const look of SAMPLE_LOOKS) {
+      for (const size of ['tile', 'large'] as const) {
+        const { container, unmount } = render(<LookArt presetId={look} size={size} />);
+        const img = container.querySelector('img')!;
+        const real = webpSize(img.getAttribute('src')!);
+        expect([img.getAttribute('width'), img.getAttribute('height')], `${look} ${size}`).toEqual([String(real.width), String(real.height)]);
+        unmount();
+      }
+    }
+  });
+
+  it('the picture sits on the look\'s swatch until the file decodes (the look\'s colours, never a grey box)', () => {
+    for (const look of SAMPLE_LOOKS) {
+      const { container, unmount } = render(<LookArt presetId={look} size="tile" />);
+      expect(container.querySelector<HTMLImageElement>('img')!.style.background, look).toBe(swatchCss(presetOf(look)));
+      unmount();
+    }
   });
 
   it('a look without art yet renders the interim drawn thumbnail', () => {
