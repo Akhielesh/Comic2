@@ -1,11 +1,12 @@
 import React, { useId, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Plus, Settings, X } from 'lucide-react';
+import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Plus, X } from 'lucide-react';
 import type { Project } from '../../types';
 import { useFormFactor } from './mobile/useFormFactor';
 import { useFocusTrap } from './board/ui';
 import { useDialogA11y } from '../studio/kit/useDialogA11y';
 import { ModalPortal } from '../modals/ModalPortal';
-import { AppearanceButton } from '../account/AppearanceControl';
+import { AccountMenu } from '../account/AccountMenu';
+import { IconButton } from '../ds/IconButton';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
 import { HOME_START_HELP } from './home/homeModel';
@@ -48,8 +49,10 @@ export const WORKSPACE_NAV_DRAWER_BELOW = 900;
 const NAV_KEY = 'comicstudio.creation.navigation';
 const readNav = () => { try { return localStorage.getItem(NAV_KEY) !== 'closed'; } catch { return true; } };
 
-export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAccount }: {
-  children: React.ReactNode; title: string; navigation: ComicProjectNavigationProps; onHome(): void; onAccount(): void;
+export function ComicWorkspaceFrame({ children, title, navigation, onHome }: {
+  children: React.ReactNode; title: string; navigation: ComicProjectNavigationProps; onHome(): void;
+  /** Unused: the header's account menu opens Settings (navtheme NT-2a). Kept so callers compile. */
+  onAccount?(): void;
 }) {
   const ff = useFormFactor();
   const narrow = ff.width < WORKSPACE_NAV_DRAWER_BELOW;
@@ -74,10 +77,10 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
     {!narrow && wideOpen && <aside id={navId} className="comic-workspace-sidebar">{brand}<ComicProjectNavigation {...links} /></aside>}
     <div className="comic-workspace-body" inert={modalOpen || undefined}>
       <header className="comic-workspace-header">
-        <button type="button" className="comic-workspace-icon" onClick={toggle} aria-expanded={narrow ? drawerOpen : wideOpen} aria-controls={navId} aria-label={narrow ? 'Open comic navigation' : wideOpen ? 'Collapse comic navigation' : 'Expand comic navigation'}><Menu aria-hidden /></button>
+        <IconButton className="comic-workspace-icon" title={null} onClick={toggle} aria-expanded={narrow ? drawerOpen : wideOpen} aria-controls={navId} label={narrow ? 'Open comic navigation' : wideOpen ? 'Collapse comic navigation' : 'Expand comic navigation'}><Menu /></IconButton>
         <span className="comic-workspace-title">{title}</span>
-        <AppearanceButton paper className="comic-workspace-icon" />
-        <button type="button" className="comic-workspace-icon" onClick={onAccount} aria-label="Open account settings"><Settings aria-hidden /></button>
+        {/* The account menu at the right end, the same as the comics header's; Back from Settings returns to New comic. */}
+        <AccountMenu paper resume={navigation.activeView === 'new' ? 'new-comic' : undefined} />
       </header>
       <main className="comic-workspace-content">{children}</main>
     </div>

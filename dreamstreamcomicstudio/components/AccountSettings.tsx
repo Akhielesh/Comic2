@@ -63,6 +63,9 @@ import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 import { StudiosAccess } from './account/StudiosAccess';
+import { AppearanceSegmented } from './account/AppearanceControl';
+import { rememberProfileRow } from './account/AccountContext';
+import { isComicsHost } from '../services/productHost';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 
 /** Security and session buttons sit in narrow cards: their labels wrap onto a second line instead of being cut. */
@@ -372,6 +375,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
             setUsername(publicProfile?.username || '');
             setAvatarUrl(normalizeText(publicProfile?.avatar_url));
+            // The account menu shows the handle and photo it remembered; this read is the fresher one.
+            if (publicProfile) rememberProfileRow(user.id, publicProfile);
 
             // First + last for now; the account's one name (what every studio shows) replaces it below.
             const localName = resolveName({ first: privateData?.first_name, last: privateData?.last_name }) || '';
@@ -460,6 +465,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 username: normalizedUsername,
                 avatar_url: normalizedAvatar
             });
+            // Saved: the account menu shows the new handle and photo at once, not after a reload.
+            rememberProfileRow(user.id, { username: normalizedUsername, avatar_url: normalizedAvatar });
             // The name is saved separately below (it lives in more than one place).
             await upsertPrivateProfile(user.id, {
                 phone_number: normalizedPhone || null,
@@ -782,6 +789,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
     const renderPreferences = () => (
         <div className={cn('max-w-2xl space-y-6', FADE_IN)}>
+            {/* The same choice as the account menu's (navtheme NT-2c); it applies at once, with no Save. */}
+            <div className={CARD}>
+                <h3 className={CARD_HEADING}>Appearance</h3>
+                <p className={cn('text-[length:var(--ds-text-base)]', MUTED)}>
+                    {isComicsHost() ? 'Light, Dark, Paper or System (follows your device), for Comic Studio in this browser.' : 'Light, Dark or System (follows your device), in this browser.'}
+                </p>
+                <AppearanceSegmented paper={isComicsHost()} />
+            </div>
             {privateProfileWarning && (
                 <div className={cn(NOTE, 'font-medium', STATUS_SURFACE.attention, TONE_TEXT.warning)}>
                     <AlertTriangle size={16} className="mt-0.5 shrink-0" /> {privateProfileWarning}
@@ -796,8 +811,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <p className={cn('text-[length:var(--ds-text-base)]', MUTED)}>
                     When Free-Only mode is on, generation will never silently fall back to a paid model. If no genuinely-free
                     model can serve a step, that step is blocked with a clear message — your provider key is never charged
-                    behind your back. <strong>Note:</strong> "$0 per image" models that bill per token (like Gemini "Nano
-                    Banana") are NOT considered free.
+                    behind your back. <strong>Note:</strong> image models listed as free per image that bill per token (like
+                    Gemini "Nano Banana") are NOT considered free.
                 </p>
                 <Checkbox
                     checked={freeOnly}
@@ -1115,7 +1130,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const tabMeta: Record<SettingsTab, { title: string; description: string }> = {
         profile: { title: 'Profile', description: 'Your public identity and personal details.' },
         security: { title: 'Security', description: 'Verification, password, and signed-in devices.' },
-        preferences: { title: 'Preferences', description: 'Generation cost policy and email preferences.' },
+        preferences: { title: 'Preferences', description: 'Appearance, generation cost policy and email.' },
         settings: { title: 'API & Models', description: 'Bring-your-own keys, allowed sources, MCP servers, and default models.' },
         contact: { title: 'Contact', description: 'Reach the DreamStream team.' },
         legal: { title: 'Legal', description: 'Privacy policy and terms of service.' },

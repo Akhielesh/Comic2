@@ -45,6 +45,11 @@ export interface ComicsChrome {
   header: boolean;
   /** The floating widgets (Feedback pill, assistant launcher) may show; never over the comics host's own views. */
   widgets: boolean;
+  /**
+   * App may draw the main site's suite header (StaticSiteHeader) above this view. Never on the comics host's own views,
+   * nor over Settings there: Settings keeps Comic Studio's look, with its own sticky header and Back (navtheme NT-2a).
+   */
+  suiteHeader: boolean;
   /** What ComicsHeader is drawn over, when App renders it. */
   current: ComicsHeaderCurrent;
 }
@@ -52,8 +57,8 @@ export interface ComicsChrome {
 /**
  * The comics host's chrome for one view, as App.tsx renders it. The landing is always the comics host's own; the
  * sign-in, Privacy, Terms and Library views are too, so the journey from the landing stays in one product even
- * after sign-in. Account settings remain reachable from ComicsHeader. Other app views keep their existing header,
- * and off the comics host nothing changes. Pure, so every rule is unit-tested without rendering App.
+ * after sign-in. Settings is reached from the account menu (components/account) and draws no suite header on the
+ * comics host. Other app views keep their existing header, and off the comics host nothing changes. Pure, so every rule is unit-tested without rendering App.
  */
 export const comicsChromeFor = (view: string, { active }: { active: boolean; signedIn: boolean }): ComicsChrome => {
   const owns = active && COMICS_CHROME_VIEWS.has(view);
@@ -61,6 +66,7 @@ export const comicsChromeFor = (view: string, { active }: { active: boolean; sig
     owns,
     header: owns && view !== 'home',
     widgets: !owns,
+    suiteHeader: !(owns || (active && view === 'settings')),
     current: view === 'auth' ? 'auth' : view === 'gallery' ? 'gallery' : 'other'
   };
 };

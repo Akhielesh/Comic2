@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { clearReaderUrlParams, readerDeepLinkId, setReaderUrlParams } from './services/readerUrl';
 import { assistantChrome } from './services/assistantChrome';
 import { HomePage } from './components/HomePage';
@@ -37,6 +37,8 @@ import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { useIsAdmin } from './hooks/useIsAdmin';
 import { useAdminAccess } from './components/account/useAdminAccess';
+import { AccountProvider, accountPersonOf, type AccountContextValue } from './components/account/AccountContext';
+import { settingsBackTarget, useAccountSettingsListener, type AccountResume } from './components/account/accountNav';
 import { useProductAccess, PRODUCT_LABELS, type ProductId } from './services/productAccess';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
@@ -232,7 +234,8 @@ const App: React.FC = () => {
   const isAdmin = useIsAdmin();
   // Diagnostics are admin-only: gated on the server's answer for THIS account (bound to the
   // user id, so an account switch never runs the check on the previous account's answer).
-  const diagnosticsAdmin = useAdminAccess(user?.id).isAdmin;
+  const adminAccess = useAdminAccess(user?.id);
+  const diagnosticsAdmin = adminAccess.isAdmin;
   // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
   const allowedProducts = useProductAccess();
   const streamOnlyRedirectedRef = useRef(false);
@@ -247,7 +250,10 @@ const App: React.FC = () => {
   // "navigate to Profile again" while the user sits on a different inner tab).
   const [settingsTabRequestId, setSettingsTabRequestId] = useState(0);
   const [returnView, setReturnView] = useState<AppView>('dashboard');
-  const [settingsReturnView, setSettingsReturnView] = useState<AppView>('home');
+  // null: Settings was reached by its address (a deep link, a reload), not from a view (accountNav settingsBackTarget).
+  const [settingsReturnView, setSettingsReturnView] = useState<AppView | null>(null);
+  // Where Back resumes inside the view it returns to (the New comic form), from the account menu's request.
+  const [settingsResume, setSettingsResume] = useState<AccountResume | null>(null);
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
@@ -425,14 +431,18 @@ const App: React.FC = () => {
   // Single entry point for opening Settings on a specific tab. Writes the tab into the
   // continuity layers FIRST so an explicit intent ("open Security") always beats the
   // remembered last-visited tab when AccountSettings mounts.
-  const openSettings = (tab?: SettingsTab, returnTo: AppView = currentView) => {
+  // A request made inside Settings keeps the Back it had: the view and resume point it was opened from, or null when
+  // it was reached by its address (accountNav settingsBackTarget), so Back never leads to Settings itself.
+  const openSettings = (tab?: SettingsTab, returnTo: AppView | null = currentView, resume: AccountResume | null = null) => {
+    const fromInside = returnTo === 'settings';
+    setSettingsResume(fromInside ? settingsResume : resume);
     if (tab) {
       setSettingsTab(tab);
       setSettingsTabRequestId((n) => n + 1);
       persistUiState('settings.tab', 'tab', tab);
       if (tab !== 'security') setOpenSecurityPasswordReset(false);
     }
-    setSettingsReturnView(returnTo);
+    setSettingsReturnView(fromInside ? settingsReturnView : returnTo);
     setCurrentView('settings');
   };
 
@@ -1064,6 +1074,19 @@ const App: React.FC = () => {
     clearReaderUrlParams();
   };
 
+  // The account menu (components/account): every settings link asks here, so Settings opens inside the app with this
+  // view as Back's destination (openSettings keeps the Back Settings had when a request comes from inside it).
+  useAccountSettingsListener((tab, opts) => openSettings(tab, currentView, opts.resume ?? null));
+  // Who the account menu shows (session data only), whether it lists the Admin console (display only: the server
+  // enforces every admin route), and the same signed-out handler Settings calls.
+  const signedOutRef = useRef(handleSignedOut);
+  signedOutRef.current = handleSignedOut;
+  const staff = adminAccess.isAdmin || adminAccess.isModerator;
+  const account = useMemo<AccountContextValue>(
+    () => ({ person: accountPersonOf(user), staff, onSignedOut: () => signedOutRef.current() }),
+    [user, staff]
+  );
+
   if (systemError) {
     return <SystemErrorScreen message={systemError} onRetry={() => window.location.reload()} onDismiss={() => setSystemError(null)} />;
   }
@@ -1101,7 +1124,7 @@ const App: React.FC = () => {
   const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });
   const comicsChrome = chrome.owns;
   const comicsDashboard = comicsHost.active && effectiveView === 'dashboard';
-  const showSharedHeader = !comicsChrome && !comicsDashboard && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
+  const showSharedHeader = chrome.suiteHeader && !comicsDashboard && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
   const showSharedLegalLinks = !comicsDashboard && effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
@@ -1131,6 +1154,7 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <AccountProvider value={account}>
       {/* The comics host's own views sit on the skin's paper and own their ink (appRootClass), as the landing does. */}
       <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome || comicsDashboard)}>
         {/* The app's one toast slot: every app toast renders here (portalled to <body>, above the tab bar). */}
@@ -1177,7 +1201,6 @@ const App: React.FC = () => {
             onSignIn={() => goToAuth('signin')}
             onRequestAccess={() => goToAuth('request-access')}
             onOpenComics={() => handleNavigate('dashboard')}
-            onOpenAccount={() => openSettings('profile')}
             onBrowseGallery={handleBrowseComicsLibrary}
           />
         )}
@@ -1198,7 +1221,6 @@ const App: React.FC = () => {
               onRequestAccess={() => goToAuth('request-access')}
               onOpenComics={() => handleNavigate('dashboard')}
               onStartCreating={handleStartCreating}
-              onOpenAccount={() => openSettings('profile')}
               onBrowseGallery={handleBrowseComicsLibrary}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
@@ -1363,11 +1385,11 @@ const App: React.FC = () => {
               // Keyed by account: settings held from mount are never saved into another account.
               key={user?.id ?? 'signed-out'}
               onClose={() => {
-                if (settingsReturnView === 'reader' && !activeProjectId) {
-                  setCurrentView('dashboard');
-                  return;
-                }
-                setCurrentView(settingsReturnView);
+                // Back returns to the place the person left: the view, the New comic form, My comics for an address.
+                const back = settingsBackTarget({ returnView: settingsReturnView, resume: settingsResume, hasActiveProject: !!activeProjectId, comicsHost: comicsHost.active, signedIn: !!user });
+                setSettingsResume(null);
+                if (back.newComic) setNewComicRequested(true);
+                setCurrentView(back.view);
               }}
               initialTab={settingsTab}
               initialTabRequestId={settingsTabRequestId}
@@ -1450,6 +1472,7 @@ const App: React.FC = () => {
 
         <AppStatusBar />
       </div>
+      </AccountProvider>
     </ErrorBoundary>
   );
 };

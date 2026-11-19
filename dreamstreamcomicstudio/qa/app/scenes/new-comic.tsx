@@ -16,6 +16,8 @@ import { useComicTheme } from '../../../components/comicstudio/useComicTheme';
 import { cn } from '../../../lib/utils';
 import { HEADING, MUTED, RADIUS_PANEL, TEXT_3XL } from '../../../components/chat/studioDesign';
 import type { ComicState, Project } from '../../../types';
+import { AccountProvider, type AccountContextValue } from '../../../components/account/AccountContext';
+import { useAccountSettingsListener } from '../../../components/account/accountNav';
 import type { QaAppScene } from '../index';
 
 const noop = () => undefined;
@@ -47,6 +49,9 @@ const PROJECTS: Project[] = ['The Lantern Ferry', 'Salt Road', 'Midnight Orchard
   state: state()
 }));
 
+/** The header's account menu shows this person, as App fills it (invented). */
+const ACCOUNT: AccountContextValue = { person: { id: 'qa-person', name: 'Rowan Vale', initial: 'R', username: 'rowan_draws', avatarUrl: null }, staff: false, onSignedOut: noop };
+
 const param = (key: string): string | null => (typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get(key));
 
 /** All comics as the dashboard titles it (HEADING + TEXT_3XL); the cards are plain stand-ins with no actions. */
@@ -77,6 +82,8 @@ function NewComicScene() {
   const { theme } = useComicTheme();
   const material = param('material') === 'paper' ? 'paper' : theme;
   const error = param('state') === 'error' ? 'The comic could not be created. Try again in a moment.' : null;
+  // The account menu's rows are answered here, so nothing navigates away from the scene.
+  useAccountSettingsListener(noop);
 
   useEffect(() => {
     if (param('drawer') !== '1') return;
@@ -93,13 +100,15 @@ function NewComicScene() {
   };
 
   return (
+    <AccountProvider value={ACCOUNT}>
     <div data-comic-theme={material} data-qa-new-comic={view} className="min-h-[100dvh] bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
-      <ComicWorkspaceFrame title={view === 'new' ? 'New comic' : 'All comics'} navigation={navigation} onHome={noop} onAccount={noop}>
+      <ComicWorkspaceFrame title={view === 'new' ? 'New comic' : 'All comics'} navigation={navigation} onHome={noop}>
         {view === 'new'
           ? <ComicIdeaForm name={name} idea={idea} pending={false} error={error} onName={setName} onIdea={setIdea} onStart={noop} onStartBlank={noop} onClassic={noop} onLibrary={noop} />
           : <AllComicsStandIn />}
       </ComicWorkspaceFrame>
     </div>
+    </AccountProvider>
   );
 }
 

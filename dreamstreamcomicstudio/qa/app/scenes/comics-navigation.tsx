@@ -3,12 +3,20 @@ import React, { useState } from 'react';
 import { ComicsHeader } from '../../../components/comicshost/ComicsHeader';
 import { useComicTheme } from '../../../components/comicstudio/useComicTheme';
 import { Button } from '../../../components/ds/Button';
+import { AccountProvider, type AccountContextValue } from '../../../components/account/AccountContext';
+import { useAccountSettingsListener } from '../../../components/account/accountNav';
 import type { QaAppScene } from '../index';
+
+/** The account menu's person, as App fills it (invented). */
+const ACCOUNT: AccountContextValue = { person: { id: 'qa-person', name: 'Rowan Vale', initial: 'R', username: 'rowan_draws', avatarUrl: null }, staff: false, onSignedOut: () => undefined };
 
 function ComicsNavigationScene() {
   const [view, setView] = useState<'Library' | 'Home' | 'My comics' | 'Account settings'>('Library');
   const { theme } = useComicTheme();
+  // The account menu's rows open Settings here (in the app, the same request goes to App).
+  useAccountSettingsListener(() => setView('Account settings'));
   return (
+    <AccountProvider value={ACCOUNT}>
     <div data-comic-theme={theme} className="flex min-h-screen flex-col bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
       <ComicsHeader
         signedIn
@@ -17,7 +25,6 @@ function ComicsNavigationScene() {
         onGoHome={() => setView('Home')}
         onBrowseGallery={() => setView('Library')}
         onOpenComics={() => setView('My comics')}
-        onOpenAccount={() => setView('Account settings')}
         onSignIn={() => undefined}
         onRequestAccess={() => undefined}
       />
@@ -29,6 +36,7 @@ function ComicsNavigationScene() {
         </Button>
       </main>
     </div>
+    </AccountProvider>
   );
 }
 

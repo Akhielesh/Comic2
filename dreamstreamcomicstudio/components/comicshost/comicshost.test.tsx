@@ -58,11 +58,11 @@ describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the float
   const on = (signedIn: boolean) => ({ active: true, signedIn });
 
   it('signed out, the landing, sign-in, Privacy, Terms and the Library are comics chrome: ComicsHeader (but the landing draws its own), no widgets', () => {
-    expect(comicsChromeFor('home', on(false))).toEqual({ owns: true, header: false, widgets: false, current: 'other' });
-    expect(comicsChromeFor('auth', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'auth' });
-    expect(comicsChromeFor('privacy', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'other' });
-    expect(comicsChromeFor('terms', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'other' });
-    expect(comicsChromeFor('gallery', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'gallery' });
+    expect(comicsChromeFor('home', on(false))).toEqual({ owns: true, header: false, widgets: false, suiteHeader: false, current: 'other' });
+    expect(comicsChromeFor('auth', on(false))).toEqual({ owns: true, header: true, widgets: false, suiteHeader: false, current: 'auth' });
+    expect(comicsChromeFor('privacy', on(false))).toEqual({ owns: true, header: true, widgets: false, suiteHeader: false, current: 'other' });
+    expect(comicsChromeFor('terms', on(false))).toEqual({ owns: true, header: true, widgets: false, suiteHeader: false, current: 'other' });
+    expect(comicsChromeFor('gallery', on(false))).toEqual({ owns: true, header: true, widgets: false, suiteHeader: false, current: 'gallery' });
   });
 
   it('signed in, the public journey stays in Comic Studio; working views retain their app chrome', () => {
@@ -73,6 +73,16 @@ describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the float
     for (const view of ['dashboard', 'comicstudio', 'reader', 'settings']) {
       expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: false, header: false, widgets: true });
     }
+  });
+
+  it('Settings on the comics host draws no suite header (its own sticky header with Back is the page’s), signed in or out; off the comics host it keeps it', () => {
+    for (const signedIn of [false, true]) {
+      expect(comicsChromeFor('settings', on(signedIn)), `settings ${signedIn}`).toEqual({ owns: false, header: false, widgets: true, suiteHeader: false, current: 'other' });
+      expect(comicsChromeFor('settings', { active: false, signedIn }), `main site ${signedIn}`).toMatchObject({ suiteHeader: true });
+    }
+    // The comics host's own views never had the suite header; the main site's views all keep theirs.
+    for (const view of ['home', 'auth', 'privacy', 'terms', 'gallery']) expect(comicsChromeFor(view, on(true)).suiteHeader, view).toBe(false);
+    for (const view of ['home', 'auth', 'gallery', 'dashboard', 'chat']) expect(comicsChromeFor(view, { active: false, signedIn: true }).suiteHeader, view).toBe(true);
   });
 
   it('the studio and the dashboard are never comics chrome, signed in or out', () => {
