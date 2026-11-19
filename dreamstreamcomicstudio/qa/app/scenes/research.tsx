@@ -7,8 +7,9 @@
 //
 // Four articles carry extracts (two lines, then More); six pictures cover CC0, CC0 1.0, public domain (Add image),
 // CC BY and CC BY-SA (Reference only). The thumbnails are Commons-shaped URLs, the only ones the shared normalizer
-// accepts: the offline harness blocks them, so each tile shows its empty well. Nothing spends; the cards run over the
-// browser-safe QA controller, and Add context only raises the composer event (nobody listens here).
+// accepts; the harness answers them with fixture pictures (tests/e2e/helpers/harness.ts), so the tiles are measured
+// loaded, and one file named `Missing_…` with a 404, so the empty well stays covered. Nothing spends; the cards run over
+// the browser-safe QA controller, and Add context only raises the composer event (nobody listens here).
 
 import React, { useState } from 'react';
 import { cn } from '../../../lib/utils';
@@ -59,7 +60,8 @@ export const researchResults = (): ComicResearchResults => ({
     { title: 'Market lanterns', ...commons('Market_lanterns.jpg'), license: 'CC BY 4.0', credit: 'A fixture photographer with a credit far too long for one line' },
     { title: 'Ferry deck', ...commons('Ferry_deck.jpg'), license: 'CC BY-SA 4.0', credit: 'Fixture photo club' },
     { title: 'Old quarter steps', ...commons('Old_quarter_steps.jpg'), license: 'CC0 1.0' },
-    { title: 'Kites over the river', ...commons('Kites_over_the_river.jpg'), license: 'CC BY-SA 3.0', credit: 'Fixture camera group' }
+    // The one picture Commons cannot serve (the harness gives `Missing_…` files a 404): the calm empty well.
+    { title: 'Kites over the river', ...commons('Missing_kites_over_the_river.jpg'), license: 'CC BY-SA 3.0', credit: 'Fixture camera group' }
   ],
   incomplete: false
 });

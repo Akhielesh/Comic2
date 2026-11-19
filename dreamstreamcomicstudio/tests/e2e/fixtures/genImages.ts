@@ -87,6 +87,25 @@ export const qaImageBytes = (urlOrFile: string): Promise<Buffer> | null => {
   return p;
 };
 
+/** The only host research pictures come from (shared/comic/research.ts commonsThumbnail), answered by the harness. */
+export const COMMONS_UPLOAD_ORIGIN = 'https://upload.wikimedia.org';
+const COMMONS_THUMB_PATH = /^\/wikipedia\/commons\/thumb\/(?:[^/]+\/)+(\d{2,4})px-([^/]+)$/;
+
+/**
+ * The fixture image that stands in for a Commons thumbnail (`/wikipedia/commons/thumb/…/<w>px-<file>`): its width at
+ * 3:2, a seed from the file name. null for a file named `Missing_…` (a picture Commons cannot serve, so a scene keeps
+ * its failure state covered) and for any other path.
+ */
+export const commonsThumbFixture = (pathname: string): string | null => {
+  const m = COMMONS_THUMB_PATH.exec(pathname);
+  if (!m) return null;
+  const [, ws, file] = m;
+  if (/^missing_/i.test(file)) return null;
+  const w = Math.min(MAX_SIDE, Math.max(16, Number(ws)));
+  const seed = `commons-${file.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`.slice(0, 61);
+  return `${seed}-${w}x${Math.max(16, Math.round((w * 2) / 3))}.png`;
+};
+
 /** The golden set: the 1856×2304 original and the server's 480w / 1080w variants. */
 export const GOLDEN_IMAGES: Array<[string, number, number]> = [
   ['golden', 1856, 2304],
