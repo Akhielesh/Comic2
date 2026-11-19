@@ -20,7 +20,7 @@ Before this, every card in every old Director message stayed live: option chips,
 
 - **A settled card has NO controls and NO "Show details".** It collapses to one line of words:
   - "You picked Noir ink";
-  - "Not answered — you moved on";
+  - a question nobody answered shows nothing at all (Q-SETTLE, §9);
   - "Approved · ≈2% of your usage · 6 images";
   - "Closed — a newer plan replaced it", and so on (§3).
 - **A settled renders or media card** shows that line plus one plain link to where the pictures live: the board, a
@@ -31,16 +31,18 @@ Before this, every card in every old Director message stayed live: option chips,
 
 ## 2. When a card settles (§5.1, §5.2)
 
-- **passed(card):** a committed user message comes after the card's message, or this tab's message is sending.
+- **passed(card):** the conversation moved on past the card's message (Q-SETTLE, §9): a committed user message comes
+  after it, this tab's message is sending, or a later assistant message starts a new turn (`movesOn`).
   - A steered note (`Msg.steered`) is a user message, so it passes the cards before it.
   - A message that failed before the server took it passes nothing.
+  - An info-only notice message (only `notice` cards without fixes, no next steps) passes nothing.
 - **Exception, picked by sending:** if the sending message is this card's own answer, the card settles as `picked`
   (`pending: true`), not `skipped`. The answer is either:
   - the card the client named (`pending.card`), when the answer fits it;
   - or text that `matchChoices` finds on the most recent unanswered, not-passed options card.
   This mirrors what the server records.
 - **A committed message never picks by text.** Only the server's `answered` does. Production's 10 unanswered cards
-  stay "Not answered — you moved on", even where the next message happened to equal a choice.
+  stay unanswered (and, since Q-SETTLE, show nothing), even where the next message happened to equal a choice.
 - **Live views settle on "newer" too.** No later card may have the same kind key (`kindKeyOf`):
   - `plan` and a `breakdown` without `gateId` share `book`;
   - `style_choice`, `cast`, `recap`, `style_presets`, `share` and `renders` key by type;
@@ -283,7 +285,7 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
   `useSyncExternalStore`) and whether the director is working. Each reply gets the index; each card its settle.
 - **Picked at once:** tapping an option sends the answer with the card's ref; the pending message is "sending", so the
   card reads "You picked Noir ink" in the same tick, before the server has the message, and its chips are gone. Any
-  other message the creator sends passes the card: "Not answered — you moved on".
+  other message the creator sends passes the card, and with nothing chosen it disappears (Q-SETTLE).
 - **Compact log:** consecutive settled rows in one reply stack 4 px apart (`data-settled-slot`), not the reply's
   12 px; live cards keep 12 px.
 - **Assign:** the user bubble's "Unassigned · Assign" and the per-photo assign button show on the latest committed
@@ -361,7 +363,7 @@ the question above first". On a reply nobody answered or passed it is exactly A1
   and its 44 px coarse target (row and link), only a notice clamped, and the focus hand-off (to the summary,
   `preventScroll`, with a focus-visible ring; never stolen).
 - `conversation/cards/OptionsCard.settle.test.tsx`: a tap reads "You picked …" before the server answers; multi-select
-  and typed answers; any other message reads "Not answered — you moved on"; with the flag off, today's locked chips.
+  and typed answers; any other message takes the question away (Q-SETTLE); with the flag off, today's locked chips.
 - `conversation/cards/GateCard.stamp.test.tsx`: the stamp's past tense; a studio close never says "Not now".
 - `conversation/MessageItem.entrance.test.tsx`: 20 stored messages give 0 animated nodes and a new one gives 1; a
   fresh row keeps its class when it re-renders mid-animation; the server clock decides; no replay on remount; the
@@ -383,3 +385,43 @@ the question above first". On a reply nobody answered or passed it is exactly A1
   `[data-card-slot]` instead of `[data-role="assistant"] .studio-reveal`, because MO-2 removes the replaying
   `studio-reveal` class from card slots. One selector, no assertion changed; no other S2a or S2b package touches the
   file. Recorded for the S2b integration.
+
+## 9. Q-SETTLE: the options vanish once the creator has answered
+
+The owner asked, many times, that the agent's options disappear once the creator replies or picks one. The rule now
+holds everywhere: **options are live only while they are the newest ask and nobody has answered them.** Settled state is
+still derived from the stored conversation (and this tab's message on its way), so a reload and another device agree.
+The full inventory of cards and chip rows, with where each settled before and after, is in the wave notes.
+
+- **A later assistant turn moves the conversation on** (`settle.ts` `movesOn`). Actions and jobs answer with assistant
+  messages: the progress message a tap posts, a job's outcome, "Locked …" after a style pick. Before, only a user
+  message passed a card, so the question above a tap's result stayed open. Now any later user message, and any later
+  assistant message that offers next steps or carries a card other than an info-only notice, passes every card before
+  it. An info-only notice (a history budget notice, an archive eviction) is not an ask and passes nothing, so it never
+  closes a question the creator is about to answer; the queue still holds on that question (`isOpenQuestion`).
+- **The server's answer rule is unchanged** (`isPassed`, user messages only): a typed answer that matches a choice of
+  the newest unanswered question since the creator's last message still records on it, and the card then reads
+  "You picked …". The director's context says "no option picked" for a question a later turn moved past.
+- **Nothing chosen, nothing left** (`isHiddenSettle`): a question the chat moved past with nothing chosen, and suggested
+  looks nobody picked, render nothing at all (no "Not answered" line). A reply that was only that question, with no
+  words of its own, leaves no row. A choice keeps its line ("You picked Noir ink").
+- **Next-step chips** (`ConversationPane`, `NextStepChips`):
+  - they show under the newest reply only while nothing has been sent: the live queue no longer keeps them while the
+    director works on the creator's message (they went to Up next before);
+  - a tap on a chip that sends words or runs an action collapses the row at once to "You chose: Make the cover" (a
+    spinner while it runs, no price on the line); the message it posts then takes the row away; a refused tap brings
+    the chips back; navigation chips (Read it, See the pages) never collapse it;
+  - a text chip already waiting in Up next keeps the row at "You chose: … · Up next";
+  - a free edit chip whose edit is already in the comic is not offered again, read from the live doc
+    (`cards/patchState.ts`, shared with the notice), so a reload agrees.
+- **Notice fixes are alternatives** (`NoticeCard`): once one is taken (tapped and running, a free fix in the comic, a
+  paid one drawing), the other fixes for the same page are not offered any more; a fix for another page stays.
+- **Unchanged on purpose:** an open gate stays the one live approval after a typed reply or a later turn (no text path
+  approves a spend, and on a phone the chat card is the approval in view); a stale gate is settled and its Approve is
+  never mounted. A running render, a running publish and a waiting "wait and retry" stay live as before.
+- **The guard:** `CARD_SETTLE_RULES` (`settle.ts`) names the rule of every card type and is typed by `Card['type']`.
+  `shared/comic/settle.turns.test.ts` compares it with the Card union in `doc.ts` and drives every type through a tap,
+  a typed reply, a later turn and a reload; `conversation/settleRules.guard.test.ts` fails when a feature registers a
+  card type without a rule.
+- **QA scene:** `?surface=app&scene=chat-moved-on`.
+

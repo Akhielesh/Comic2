@@ -8,8 +8,9 @@
 // pinned conversation stays pinned when the keyboard opens or closes.
 //
 // Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): "Up next" sits under the activity
-// line, and the latest reply keeps its chips while the director works on the next message — text chips go to Up
-// next, action chips wait (NextStepChips).
+// line. Q-SETTLE: the latest reply's chips are live only while it is the newest ask and unanswered, so they go the
+// moment the creator sends anything (a typed message, a tapped text chip, a question's answer) — with or without the
+// queue. While a run holds the turn with nothing sent (plan_pages), a text chip queues into Up next (NextStepChips).
 //
 // Settled cards (PROGRAM3 SETTLE-UI; this file is granted for the settle index and prop wiring only): while
 // SETTLED_CARDS is on for this viewer (shared/comic/settle.ts settledCardsOn: admins first), the pane builds one settle
@@ -143,14 +144,6 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
 
   const lastEntry = entries[entries.length - 1];
   const lastAssistantId = [...entries].reverse().find((e) => e.msg.role === 'assistant')?.msg.id;
-  // Live queue: while the director works on the creator's next message, the latest committed reply keeps its chips
-  // (only the creator's messages follow it) so a text chip can still be tapped into Up next.
-  const queueMode = Array.isArray(studio.queue);
-  const lastReplyIndex = docEntries.map((e) => e.msg.role).lastIndexOf('assistant');
-  const chipsWhileWorkingId =
-    queueMode && (messageBusy || !!pendingMessage || !!studio.turnLocked) && lastReplyIndex >= 0 && docEntries.slice(lastReplyIndex + 1).every((e) => e.msg.role === 'user')
-      ? docEntries[lastReplyIndex].msg.id
-      : undefined;
   const streamingSomething = Object.keys(drafts).length > 0;
   const showThinking = messageBusy && !streamingSomething && (!lastEntry || lastEntry.msg.role === 'user' || !!pendingMessage);
 
@@ -256,7 +249,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                         msg={msg}
                         draft={draft}
                         streaming={!!draft && messageBusy}
-                        showSuggestions={(msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage) || msg.id === chipsWhileWorkingId}
+                        showSuggestions={msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage}
                         studio={rowStudio}
                         settles={settles}
                         docKey={docKey}

@@ -199,9 +199,10 @@ describe('settled gate, options and the rest', () => {
     const { container, rerender } = render(<CardRenderer card={q} studio={studio} settle={{ state: 'open' }} />);
     expect(container.querySelectorAll(CONTROLS).length).toBeGreaterThan(2);
     rerender(<CardRenderer card={q} studio={studio} settle={{ state: 'settled', outcome: 'skipped' }} />);
-    expect(container.textContent).toBe('Not answered — you moved on');
+    // Q-SETTLE: nothing was chosen, so nothing is left: no line, no control.
+    expect(container.textContent).toBe('');
     expect(container.querySelectorAll(CONTROLS)).toHaveLength(0);
-    expect(container.querySelector('[data-settle-tone="quiet"]')).not.toBeNull();
+    expect(container.querySelector('[data-settled]')).toBeNull();
   });
 
   it('a gate’s own breakdown folds into the gate’s line: nothing renders', () => {

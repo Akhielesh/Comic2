@@ -2,17 +2,22 @@
 //
 // What an old chat card turns into once the conversation has moved on. Pure: a function of the stored doc, plus this
 // tab's message on its way, so a reload, a second tab and another device all agree, and legacy docs need no migration
-// (production's unanswered option cards read "Not answered — you moved on").
+// (an unanswered option card the chat moved past simply disappears).
 //
 // D3 (the owner: users "should not be able to view/edit those options once the chat has moved forward"): a settled card
 // has NO controls and NO "Show details". It collapses to one line of words (summaryOf). A settled renders or media card
 // adds one plain link to where the pictures live (the board or Assets) and mounts no image. There is no details model.
 //
 // Card states (§5.1): open = a question or approval the user can answer now; live = a current view that may carry
-// actions; settled = the one summary line. A card settles once it is PASSED (a committed user message comes after its
-// message, or this tab's message is sending), except an open gate, a running render (on the latest renders card that
-// includes it), a running publish and a waiting "wait and retry", which stay live however old they are. Live views (plan, cast, renders, …) also settle when a newer card of the same
-// kind arrives (kindKeyOf).
+// actions; settled = the one summary line. A card settles once the conversation has MOVED ON past it (Q-SETTLE): a
+// committed user message comes after its message, this tab's message is sending, or a later assistant message starts a
+// new turn (an action's result, a job's outcome, the progress message a tap posts; movesOn). Options are live only while
+// they are the newest ask and unanswered. An info-only notice message (a history budget notice, an archive eviction)
+// is not an ask and moves nothing on. Exceptions: an open gate, a running render (on the latest renders card that
+// includes it), a running publish and a waiting "wait and retry" stay live however old they are. Live views (plan,
+// cast, renders, …) also settle when a newer card of the same kind arrives (kindKeyOf). A question nobody answered
+// (and suggested looks nobody picked) settles to nothing at all: it disappears (isHiddenSettle). CARD_SETTLE_RULES
+// names the rule of every card type; settle.turns.test.ts fails when a card type has none.
 //
 // Two facts the live doc forgets are stamped on the card by the server with `message_patch` (≤ about 120 bytes each):
 // a gate's outcome (`closed`, jobs.ts commitGate and session.ts's expiry, through gateStampOps) and a book card's counts
@@ -118,9 +123,40 @@ const sending = (opts: SettleOptions | undefined): SettlePending | null =>
 /** A committed user message comes after message `msgIndex` (the server's view: the message being routed is not in yet). */
 const passedCommitted = (conv: readonly Msg[], msgIndex: number): boolean => msgIndex < lastUserIndex(conv);
 
-/** passed(card) (§5.1): a committed user message comes after the card's message, or this tab's message is sending. */
+/**
+ * The server's answer rule (§5.1, director.ts answerByRef / recordOptionAnswer): a committed user message comes after
+ * the card's message, or this tab's message is sending. A typed answer still records on a question a later assistant
+ * turn moved past (it is the most recent unanswered question since the creator's last message), so this stays keyed on
+ * user messages; what the chat SHOWS follows movesOn (settleWith).
+ */
 export const isPassed = (doc: ComicDoc | null | undefined, msgIndex: number, opts: SettleOptions = {}): boolean =>
   passedCommitted(conversationOf(doc), msgIndex) || !!sending(opts);
+
+const hasFixes = (c: Card): boolean => c.type === 'notice' && Array.isArray(c.fixes) && c.fixes.length > 0;
+
+/**
+ * Whether a message moves the conversation on past the cards before it (Q-SETTLE): any user message, and any assistant
+ * message that is a new turn — it offers next steps, or carries a card other than an info-only notice, or says
+ * something with no card at all. An info-only notice message (only `notice` cards without fixes, no next steps: a
+ * history budget notice, an archive eviction, a refused stub's note) is not an ask and moves nothing on, so it never
+ * closes a question the creator is about to answer. An empty message moves nothing on.
+ */
+export const movesOn = (m: Msg | null | undefined): boolean => {
+  if (!isObject(m)) return false;
+  if (m.role === 'user') return true;
+  if (m.role !== 'assistant') return false;
+  if (Array.isArray(m.nextSteps) && m.nextSteps.length > 0) return true;
+  if (Array.isArray(m.suggestions) && m.suggestions.length > 0) return true;
+  const cards = cardsOf(m).filter(isCard);
+  if (!cards.length) return !!str(m.text).trim();
+  return cards.some((c) => c.type !== 'notice' || hasFixes(c));
+};
+
+/** Index of the last message that moves the conversation on, or -1. */
+const lastMoveIndex = (conv: readonly Msg[]): number => {
+  for (let i = conv.length - 1; i >= 0; i -= 1) if (movesOn(conv[i])) return i;
+  return -1;
+};
 
 const ownerKey = (owner: unknown): string => {
   if (!isObject(owner)) return '?';
@@ -157,6 +193,48 @@ export const kindKeyOf = (card: Card | null | undefined): string | null => {
     default:
       return null;
   }
+};
+
+/** What a card offers: a question to answer, an approval that spends, a live view of the comic, or a status line. */
+export type SettleRuleKind = 'question' | 'approval' | 'view' | 'status';
+
+export interface CardSettleRule {
+  kind: SettleRuleKind;
+  /** When it settles, in words (the rule settleWith applies). */
+  settles: string;
+  /** When it stays live although the conversation moved past it, and why (absent: never). */
+  staysLive?: string;
+}
+
+/**
+ * The settle rule of every card type the doc can store (Q-SETTLE). Typed by `Card['type']`, so a new card type does not
+ * compile without one, and settle.turns.test.ts compares it with the Card union in doc.ts and runs every type through
+ * the tap / typed reply / later turn / reload sequences.
+ */
+export const CARD_SETTLE_RULES: Readonly<Record<Card['type'], CardSettleRule>> = {
+  options: { kind: 'question', settles: 'answered (a tap or a matching typed answer), or moved past; nothing chosen hides it' },
+  conflict: { kind: 'question', settles: 'every item resolved, or moved past (the creator’s version stands)' },
+  style_presets: { kind: 'question', settles: 'a look picked (stamped), a newer suggestion, or moved past; nothing picked hides it' },
+  gate: {
+    kind: 'approval',
+    settles: 'its gate closes, is replaced, superseded or expires (stamped); a stale Approve is never mounted',
+    staysLive: 'while doc.gate is this open gate: the one live approval, and no typed reply approves a spend'
+  },
+  publish: { kind: 'approval', settles: 'published, declined or failed, or moved past while pending', staysLive: 'while the publish runs' },
+  breakdown: { kind: 'view', settles: 'a newer plan view, or moved past; a gate’s own breakdown folds into the gate', staysLive: 'a gate’s own breakdown, while its gate is open' },
+  plan: { kind: 'view', settles: 'a newer plan view, or moved past (approving posts the drawing’s message)' },
+  style_choice: { kind: 'view', settles: 'a newer style card, or moved past (a pick posts “Locked …”)' },
+  cast: { kind: 'view', settles: 'a newer cast card, or moved past (drawing sheets posts its progress)' },
+  recap: { kind: 'view', settles: 'a newer recap, or moved past (a change is sent as a message)' },
+  renders: { kind: 'view', settles: 'a newer card for the same pictures, or moved past once nothing it shows is drawing', staysLive: 'the latest card that includes a picture still drawing' },
+  versions: { kind: 'view', settles: 'a newer card for the same picture, or moved past' },
+  refs: { kind: 'view', settles: 'a newer card for the same owner, or moved past' },
+  translation: { kind: 'view', settles: 'a newer card for the same languages, or moved past', staysLive: 'the latest card for its languages while the director writes an edition' },
+  history: { kind: 'view', settles: 'a newer card of the same view, or moved past' },
+  share: { kind: 'view', settles: 'a newer share card, or moved past' },
+  research: { kind: 'status', settles: 'moved past' },
+  notice: { kind: 'status', settles: 'moved past; a taken fix retires its alternatives (NoticeCard)' },
+  model_outage: { kind: 'status', settles: 'moved past', staysLive: 'while its “wait and retry” is waiting in this tab' }
 };
 
 // ── Matching an answer to a card's choices (moved from director.ts normalizeAnswer / pickedChoices) ─────────────
@@ -213,6 +291,8 @@ interface SettleContext {
   doc: ComicDoc;
   conv: Msg[];
   lastUser: number;
+  /** The last message that moved the conversation on (movesOn): a card before it has been moved past. */
+  lastMove: number;
   pending: SettlePending | null;
   /** The option card this tab's sending message answers, as the server would record it. */
   answer: PendingAnswer | null;
@@ -280,7 +360,7 @@ const contextOf = (doc: ComicDoc, opts: SettleOptions = {}): SettleContext => {
     }
   }));
   const retrying = opts.retrying instanceof Set ? opts.retrying : new Set(Array.isArray(opts.retrying) ? opts.retrying : []);
-  return { doc, conv, lastUser, pending, answer: pendingAnswerOf(conv, lastUser, pending), last, lastRender, retrying, working: opts.working === true };
+  return { doc, conv, lastUser, lastMove: lastMoveIndex(conv), pending, answer: pendingAnswerOf(conv, lastUser, pending), last, lastRender, retrying, working: opts.working === true };
 };
 
 const isBusy = (doc: ComicDoc, target: RenderTarget): boolean => {
@@ -308,8 +388,9 @@ const gateOpen = (doc: ComicDoc, gateId: unknown): boolean => !!doc.gate && doc.
 
 function settleWith(ctx: SettleContext, msgIndex: number, cardIndex: number, card: Card): CardSettle {
   const { doc } = ctx;
-  const committed = msgIndex < ctx.lastUser;
-  const passed = committed || !!ctx.pending;
+  // Moved past by the stored conversation: a later user message or a later assistant turn (movesOn).
+  const movedOn = msgIndex < ctx.lastMove;
+  const passed = movedOn || !!ctx.pending;
   const key = kindKeyOf(card);
   const at = key ? ctx.last.get(key) : undefined;
   const latest = !at || (at[0] === msgIndex && at[1] === cardIndex);
@@ -321,19 +402,18 @@ function settleWith(ctx: SettleContext, msgIndex: number, cardIndex: number, car
         const ids = new Set((card.choices || []).filter(isObject).map((c) => c.id));
         return settled(answered.every((a) => ids.has(a)) ? 'picked' : 'answered', { picked: answered });
       }
-      if (committed) return settled('skipped');
-      if (ctx.pending) {
-        const a = ctx.answer;
-        return a && a.msgIndex === msgIndex && a.cardId === card.id
-          ? settled(a.custom ? 'answered' : 'picked', { pending: true, picked: a.ids })
-          : settled('skipped', { pending: true });
-      }
+      // This tab's message on its way answers this card (the server records it the same way): picked, even when a
+      // later assistant turn had already moved past the question.
+      const a = ctx.pending ? ctx.answer : null;
+      if (a && a.msgIndex === msgIndex && a.cardId === card.id) return settled(a.custom ? 'answered' : 'picked', { pending: true, picked: a.ids });
+      if (movedOn) return settled('skipped');
+      if (ctx.pending) return settled('skipped', { pending: true });
       return OPEN;
     }
     case 'conflict': {
       const items = Array.isArray((card as ConflictCard).items) ? (card as ConflictCard).items.filter(isObject) : [];
       if (items.every((item) => item.resolved === 'mine' || item.resolved === 'theirs')) return settled('resolved');
-      return passed ? settled('left', committed ? {} : { pending: true }) : OPEN;
+      return passed ? settled('left', movedOn ? {} : { pending: true }) : OPEN;
     }
     case 'gate':
       // An open gate never settles on passed: it is the one live approval (the redesign's Approval bar mirrors it).
@@ -425,12 +505,15 @@ export const settleOf = (index: SettleIndex, msg: Pick<Msg, 'id'>, card: Pick<Ca
 /**
  * The last reply asks something the creator has not answered and has not moved past: an open options card (with
  * choices) or a conflict card with an item not yet resolved. A1's queue holds on it (messageQueue.ts openQuestion);
- * a card the creator moved past — their message committed, or this tab's message sending — is not open.
+ * a card the conversation moved past — their message committed, this tab's message sending, or a later assistant turn —
+ * is not open. Info-only notice messages after the reply do not count as a later reply.
  */
 export function isOpenQuestion(doc: ComicDoc | null | undefined, pending?: SettlePending | null): boolean {
   if (!doc) return false;
   const conv = conversationOf(doc);
   let i = conv.length - 1;
+  // An info-only notice after the question (a history budget notice) is not a newer ask: the question is still the last.
+  while (i >= 0 && conv[i]?.role === 'assistant' && !movesOn(conv[i])) i -= 1;
   while (i >= 0 && conv[i]?.role !== 'assistant') i -= 1;
   if (i < 0) return false;
   const cards = conv[i]?.cards;
@@ -579,6 +662,23 @@ export interface SettledSummary {
   /** A gate's own breakdown: folded into the gate's line, nothing renders. */
   folded?: true;
 }
+
+/** A settled card that shows nothing: a gate's own breakdown, a question nobody answered, looks nobody picked. */
+const HIDDEN: SettledSummary = Object.freeze({ text: '', tone: 'quiet', folded: true }) as SettledSummary;
+
+/**
+ * Whether a settled card renders nothing at all (Q-SETTLE): a gate's own breakdown (folded into the gate's line), a
+ * question the conversation moved past with nothing chosen, and suggested looks nobody picked. Everything else that
+ * settles keeps its one line. MessageItem skips the card's slot entirely.
+ */
+export const isHiddenSettle = (card: Card | null | undefined, settle: CardSettle | null | undefined): boolean => {
+  if (!settle || settle.state !== 'settled') return false;
+  if (settle.outcome === 'folded') return true;
+  if (!isCard(card)) return false;
+  if (card.type === 'options') return settle.outcome === 'skipped';
+  if (card.type === 'style_presets') return settle.outcome !== 'picked';
+  return false;
+};
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 /** At most `max` characters, cut at a word when one ends near the limit ("…asleep…", not "…asleep b…"). */
@@ -747,7 +847,8 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
   if (!isCard(card) || !doc) return { text: 'Earlier card', tone: 'quiet' };
   switch (card.type) {
     case 'options': {
-      if (settle.outcome === 'skipped') return { text: 'Not answered — you moved on', tone: 'quiet' };
+      // Nothing was chosen: the question disappears entirely (Q-SETTLE), no line at all.
+      if (settle.outcome === 'skipped') return HIDDEN;
       const picked = settle.picked ?? answeredOf(card);
       if (settle.outcome === 'answered') return { text: `You answered “${clip(picked.join(' '), 60)}”`, tone: 'done' };
       return { text: `You picked ${listWords(picked.map((id) => choiceLabel(card, id)))}`, tone: 'done' };
@@ -784,8 +885,8 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
     case 'style_presets': {
       const presetName = (id: unknown) => (typeof id === 'string' ? getStylePreset(id)?.name : undefined);
       if (settle.outcome === 'picked') return { text: `You picked the ${presetName(card.picked) ?? 'suggested'} style`, tone: 'done' };
-      const list = (Array.isArray(card.presetIds) ? card.presetIds : []).map(presetName).filter((n): n is string => !!n);
-      return { text: list.length ? `Styles suggested: ${names(list, 3)}` : 'Styles suggested', tone: 'plain' };
+      // Looks nobody picked disappear, like an unanswered question.
+      return HIDDEN;
     }
     case 'cast': {
       const ids = Array.isArray(card.characterIds) ? card.characterIds : [];

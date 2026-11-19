@@ -1,9 +1,10 @@
 // A settled card (PROGRAM3 SETTLE-UI; settle.md §5.3; lead decision D3, CHANGED): what an old chat card turns into
 // once the conversation has moved past it. The owner: users "should not be able to view/edit those options once the
 // chat has moved forward". So the row has NO controls and NO "Show details": one line of words from
-// shared/comic/settle.ts summaryOf ("You picked Noir ink", "Not answered — you moved on", "Approved · ≈2% of your
-// usage · 6 images"), and for a renders or picture card one plain navigation link to where the pictures live (the
-// board, a page, the cast, the style or Assets). It mounts no image, makes no fetch and starts no spend.
+// shared/comic/settle.ts summaryOf ("You picked Noir ink", "Approved · ≈2% of your usage · 6 images"), and for a
+// renders or picture card one plain navigation link to where the pictures live (the board, a page, the cast, the
+// style or Assets). It mounts no image, makes no fetch and starts no spend. A question nobody answered renders nothing
+// at all (Q-SETTLE: summaryOf folds it).
 //
 // The row: 28 px (44 px on coarse pointers), no CardShell frame, sitting at the card's place in the column; a 14 px
 // leading mark — a ✓ in TONE_TEXT.success for picked, approved or published, a dot for skipped, declined or closed,

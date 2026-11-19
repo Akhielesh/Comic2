@@ -12,8 +12,9 @@
 //   - Settled cards (lead decision D3, CHANGED): with a settle index from the pane (SETTLED_CARDS on for this viewer),
 //     a card the chat has moved past is its one-line SettledCard (CardRenderer), and consecutive settled rows stack
 //     4 px apart instead of the reply's 12 px, so a long history reads like a compact log. A gate's own breakdown
-//     folds into the gate's line and takes no room. The user bubble's Assign is offered on the latest message only;
-//     an older unfiled photo reads "Not filed yet".
+//     folds into the gate's line and takes no room; so does a question the chat moved past with nothing chosen, and
+//     looks nobody picked (Q-SETTLE, settle.ts isHiddenSettle) — a reply that was only that question leaves nothing.
+//     The user bubble's Assign is offered on the latest message only; an older unfiled photo reads "Not filed yet".
 //   - Fresh-only entrance (MO-2; styles.md M3 with C17, the server-clock rule): a message rises in only when its
 //     server `at` is newer than the newest `at` present when the pane first rendered this doc (a module-level map),
 //     or when it streams in now; the first 12 blocks of a fresh reply stagger. Stored messages render static, and a
@@ -25,7 +26,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Feather, FileText, Pencil, RotateCcw, UserRound, X } from 'lucide-react';
 import { newId, refInboxOf, resolveCharacter, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset, type RefOwner } from '../../../shared/comic/doc';
-import { settleOf, type CardSettle, type SettleIndex } from '../../../shared/comic/settle';
+import { isHiddenSettle, settleOf, type CardSettle, type SettleIndex } from '../../../shared/comic/settle';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { findRefOwners } from '../../../shared/comic/refs';
@@ -438,8 +439,6 @@ export const StreamingCaret: React.FC = () => (
   <span aria-hidden className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[var(--ds-accent)] align-baseline motion-reduce:animate-none" />
 );
 
-/** A gate's own breakdown, folded into the gate's settled line: it takes no room at all. */
-const isFolded = (settle: CardSettle | undefined): boolean => settle?.state === 'settled' && settle.outcome === 'folded';
 
 export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio, settles, fresh }) => {
   const text = stripMarkdownImages(draft ?? msg.text ?? '');
@@ -448,9 +447,15 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
   // a free client-side step ("See the pages" / "Read it") so the conversation never dead-ends.
   const chips = showSuggestions ? chipsFor(msg, studio.doc, { fallback: true }) : [];
   const settleFor = (card: Card): CardSettle | undefined => (settles && card && typeof card.id === 'string' ? settleOf(settles, msg, card) : undefined);
+  // Q-SETTLE: a settled card that shows nothing takes no room at all — a gate's own breakdown (folded into the gate's
+  // line), a question the chat moved past with nothing chosen, looks nobody picked.
+  const hidden = (card: Card): boolean => isHiddenSettle(card, settleFor(card));
+  const known = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)));
+  const shown = known.filter((c) => !hidden(c));
+  // A reply that only asked something the chat has moved past, with no words of its own, leaves nothing behind.
+  if (!text && !streaming && known.length > 0 && shown.length === 0 && chips.length === 0) return null;
   // Never silent: a committed reply with no words and nothing this client can show (no cards, or
   // only card types it doesn't know yet) still says something.
-  const shown = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)) && !isFolded(settleFor(c)));
   const silent = !text && !streaming && shown.length === 0;
   return (
     <div className="flex min-w-0 gap-3 pr-2" data-role="assistant">
@@ -467,7 +472,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
         {cards.map((card) => {
           if (!card) return null;
           const settle = settleFor(card);
-          if (isFolded(settle)) return null;
+          if (isHiddenSettle(card, settle)) return null;
           const settled = settle?.state === 'settled';
           return (
             <div key={card.id} className="min-w-0" data-card-slot={card.id} {...(settled ? { 'data-settled-slot': '' } : {})}>
@@ -475,7 +480,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
             </div>
           );
         })}
-        <NextStepChips chips={chips} studio={studio} />
+        {chips.length > 0 && <NextStepChips chips={chips} studio={studio} />}
       </div>
     </div>
   );

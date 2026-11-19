@@ -95,13 +95,13 @@ describe('OptionsCard settles at once', () => {
     expect(slot(r2.container, 'q_look').querySelectorAll(CONTROLS)).toHaveLength(0);
   });
 
-  it('any other message the creator sends moves past the question: it reads "Not answered — you moved on"', () => {
+  it('any other message the creator sends moves past the question: with nothing chosen it disappears (Q-SETTLE)', () => {
     const sent: Array<{ text: string }> = [];
     const { container } = render(<Harness card={look()} sent={sent} />);
     fireEvent.change(screen.getByLabelText('Message the Comic Director'), { target: { value: 'Actually, make it a western' } });
     fireEvent.keyDown(screen.getByLabelText('Message the Comic Director'), { key: 'Enter' });
     expect(sent.map((s) => s.text)).toEqual(['Actually, make it a western']);
-    expect(slot(container, 'q_look').textContent).toBe('Not answered — you moved on');
+    expect(container.querySelector('[data-card-slot="q_look"]')).toBeNull();
   });
 
   it('a non-admin’s tap settles the card the same way (R00 SF-1, settled cards for everyone)', () => {

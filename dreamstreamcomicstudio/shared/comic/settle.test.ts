@@ -89,9 +89,9 @@ describe('flags', () => {
 describe('the heist-12p conversation (the QA studio scene)', () => {
   const doc = makeQaDoc('heist-12p');
 
-  it('o1 settles as skipped: "Noir ink, please" matches no choice, and the chat moved on', () => {
+  it('o1 settles as skipped: "Noir ink, please" matches no choice, and the chat moved on; nothing chosen, so it shows nothing', () => {
     expect(settleById(doc, 'o1')).toEqual({ state: 'settled', outcome: 'skipped' });
-    expect(summaryById(doc, 'o1')).toEqual({ text: 'Not answered — you moved on', tone: 'quiet' });
+    expect(summaryById(doc, 'o1')).toEqual({ text: '', tone: 'quiet', folded: true });
     // The same answer with the courtesy match (D7, off by default) would have picked Noir ink.
     const o1 = find(doc, 'o1').card as OptionsCard;
     expect(matchChoices(o1, 'Noir ink, please')).toEqual([]);
@@ -137,8 +137,11 @@ describe('the heist-12p conversation (the QA studio scene)', () => {
     // A gate's own breakdown is not a book view: it never replaces the plan card, and folds into the gate line.
     const gateBreakdown: Card = { type: 'breakdown', id: 'bd_gate', pageIds: [], view: 'cost', gateId: 'gate_qa' };
     expect(kindKeyOf(gateBreakdown)).toBeNull();
+    const same = withConv([reply('a0', [{ type: 'plan', id: 'p1' }, gateBreakdown])]);
+    expect(settleById(same, 'p1')).toEqual({ state: 'live' });
+    // A later gate message is a new turn: the plan view above it is moved past (not replaced).
     const only = withConv([reply('a0', [{ type: 'plan', id: 'p1' }]), reply('a1', [gateBreakdown])]);
-    expect(settleById(only, 'p1')).toEqual({ state: 'live' });
+    expect(settleById(only, 'p1')).toEqual({ state: 'settled', outcome: 'passed' });
   });
 
   it('latest-of-kind within one message: the first of two book cards is replaced by the second', () => {
@@ -179,7 +182,7 @@ describe('option cards', () => {
     const index = buildSettleIndex(doc);
     for (let k = 0; k < 10; k += 1) {
       expect(index.get(settleKey(`a${k}`, `o${k}`))).toEqual({ state: 'settled', outcome: 'skipped' });
-      expect(summaryById(doc, `o${k}`)?.text).toBe('Not answered — you moved on');
+      expect(summaryById(doc, `o${k}`)).toEqual({ text: '', tone: 'quiet', folded: true });
     }
   });
 

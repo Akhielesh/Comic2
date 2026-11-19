@@ -9,7 +9,7 @@
 //
 // The default page is the reply column itself (the pane's rows, `AssistantMessage` / `UserBubble`, fed the same
 // settle index the pane builds), so the smoke measures the settled rows at 320 to 1440 px, light and dark, without
-// the composer and the live cards, which the studio scenes measure. Lines it shows: "Not answered — you moved on",
+// the composer and the live cards, which the studio scenes measure (a question nobody answered shows nothing). Lines:
 // "Closed — a newer plan replaced it", "Approved · ≈ $0.42 · 6 images", "Kept yours (1) · used the director's (1)",
 // "Drew 9 pages, the cover, … · Open the pages", a notice's words, "Setup confirmed · …", "You picked …".
 //
