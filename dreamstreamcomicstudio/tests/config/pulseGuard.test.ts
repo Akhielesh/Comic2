@@ -159,10 +159,11 @@ describe('pulse guard — the detector', () => {
     expect(tokensOf(plant('md:motion-safe:animate-ping'))).toEqual(['animate-ping']);
     expect(tokensOf(plant('animate-pulse motion-reduce:animate-none'))).toEqual(['animate-pulse']);
     expect(tokensOf(plant('animate-pulse motion-reduce:!animate-none'))).toEqual(['animate-pulse']);
-    // The board chip's shape: the pulse is a conditional part of cx(…), the stop sits in another part of the same call.
+    // A conditional pulse (the shape the board chip had before DX-5): the pulse is a conditional part of cx(…), the
+    // stop sits in another part of the same call.
     expect(tokensOf(`const D = () => <span className={cx('h-1.5 rounded-full motion-reduce:animate-none', on && 'animate-pulse')} />;`)).toEqual(['animate-pulse']);
     expect(tokensOf(`const D = () => <span className={cn(\`h-2 \${on ? 'animate-ping' : ''} motion-reduce:animate-none\`)} />;`)).toEqual(['animate-ping']);
-    // Today's board/ui.tsx: nothing in the list stops it.
+    // board/ui.tsx's status dot before DX-5 made it static: nothing in the list stops it.
     expect(tokensOf(`const D = () => <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse')} aria-hidden />;`)).toEqual([
       'animate-pulse',
       'unguarded'

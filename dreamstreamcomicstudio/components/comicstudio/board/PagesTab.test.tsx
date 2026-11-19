@@ -2,7 +2,8 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import type { Gate } from '../../../shared/comic/doc';
+import type { ComicDoc, Gate } from '../../../shared/comic/doc';
+import { ACCENT_FILL } from '../../chat/studioDesign';
 import { formatUsd } from '../../../shared/comic/models';
 import { quoteRenderPages } from '../../../shared/comic/plan';
 import { PagesTab, DENSITY_KEY } from './PagesTab';
@@ -30,6 +31,15 @@ const gatedDoc = (gate: Gate) => makeSampleDoc((d) => (d.gate = gate));
 /** The Pages header: the plan line, the draw-all and its price, the cover option, the selection bar. */
 const header = () => document.querySelector('[data-pages-header]') as HTMLElement;
 const DRAW_ALL = /^(Approve & render all|Render (all|remaining))/;
+type RenderPagesAction = Extract<Gate['action'], { type: 'render_pages' }>;
+/** What an open page-render approval draws, by the run's own rule (the quote's targets). */
+const gateDraws = (doc: ComicDoc, a: RenderPagesAction) =>
+  quoteRenderPages(doc, { pageIds: a.pageIds, force: a.force, includeCover: a.includeCover, byok: true, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
+/** Every price a card prints next to its own draw button (`price-<page id>`, `price-cover`), in grid order. */
+const cardPrices = () => Array.from(document.querySelectorAll('[data-pages-grid] [id^="price-"]')).map((el) => el.id);
+const WAITING = 'Waiting for your OK above';
+/** A primary (accent-filled) button: while an approval is open its Approve is the screen's only one. */
+const isPrimary = (el: Element) => el.className.split(/\s+/).includes(ACCENT_FILL);
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -206,6 +216,92 @@ describe('PagesTab', () => {
     }
   });
 
+  it('while a page-render approval is open, the cards it draws print no price and no draw button of their own; cards outside it keep theirs', () => {
+    const action: RenderPagesAction = { type: 'render_pages' };
+    for (const make of [dollarStudio, governedStudio]) {
+      const studio = make(gatedDoc(gateFor(action)));
+      const doc = studio.doc!;
+      const { unmount } = render(<PagesTab studio={studio} doc={doc} />);
+      const inGate = gateDraws(doc, action).pageIds;
+      // Render all draws the planned, out-of-date and failed pages (not the drawn page 1, not the two busy ones).
+      expect(inGate).toEqual(['pg_2', 'pg_5', 'pg_6']);
+      for (const id of inGate) {
+        const c = card(doc.pages.find((p) => p.id === id)!.n);
+        expect(within(c).getByText(WAITING).className).toContain('text-[var(--ds-muted)]');
+        expect(within(c).queryByRole('button', { name: /^(Render|Retry|Re-render)/ })).toBeNull();
+        expect(c.textContent).not.toMatch(/\$|¢|usage/);
+      }
+      // One price per spend: only the spends outside the approval keep their own price (page 1's re-render, the cover).
+      expect(cardPrices()).toEqual(['price-cover', 'price-pg_1']);
+      expect(within(card(1)).getByRole('button', { name: /^Re-render/ })).toBeInTheDocument();
+      for (const n of [1, 3, 4]) expect(within(card(n)).queryByText(WAITING)).toBeNull();
+      unmount();
+    }
+  });
+
+  it('an approval that also draws the cover: the cover card waits too, without its price', () => {
+    const studio = dollarStudio(gatedDoc(gateFor({ type: 'render_pages', includeCover: true })));
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    expect(gateDraws(studio.doc!, { type: 'render_pages', includeCover: true }).cover).toBe(true);
+    const cover = screen.getByTestId('cover-card');
+    expect(within(cover).getByText(WAITING)).toBeInTheDocument();
+    expect(within(cover).queryByRole('button', { name: /Design cover|Redesign/ })).toBeNull();
+    expect(cardPrices()).toEqual(['price-pg_1']);
+  });
+
+  it('an approval for chosen pages: only those wait; the others keep their price, and no card button is primary beside Approve', () => {
+    const action: RenderPagesAction = { type: 'render_pages', pageIds: ['pg_6'], force: true };
+    const studio = dollarStudio(gatedDoc(gateFor(action)));
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    expect(gateDraws(studio.doc!, action).pageIds).toEqual(['pg_6']);
+    expect(within(card(6)).getByText(WAITING)).toBeInTheDocument();
+    expect(within(card(6)).queryByRole('button', { name: /^Retry/ })).toBeNull();
+    expect(cardPrices()).toEqual(['price-cover', 'price-pg_1', 'price-pg_2', 'price-pg_5']);
+    // The out-of-date page 5 is its own spend (its price stays), but it steps back while the approval is open.
+    const rerender = within(card(5)).getByRole('button', { name: /^Re-render/ });
+    expect(document.getElementById(rerender.getAttribute('aria-describedby')!)).toHaveTextContent(/≈ \$\d/);
+    expect(isPrimary(rerender)).toBe(false);
+  });
+
+  it('with no approval open the failed and out-of-date cards keep their primary Retry / Re-render', () => {
+    const studio = dollarStudio();
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    expect(isPrimary(within(card(6)).getByRole('button', { name: /^Retry/ }))).toBe(true);
+    expect(isPrimary(within(card(5)).getByRole('button', { name: /^Re-render/ }))).toBe(true);
+    expect(cardPrices()).toEqual(['price-cover', 'price-pg_1', 'price-pg_2', 'price-pg_5', 'price-pg_6']);
+  });
+
+  it('while a page-render approval is open, a selection cannot start a second priced render: the bar waits too', () => {
+    for (const make of [dollarStudio, governedStudio]) {
+      const studio = make(gatedDoc(gateFor({ type: 'render_pages' })));
+      const { unmount } = render(<PagesTab studio={studio} doc={studio.doc!} />);
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Select page 2' }));
+      const region = screen.getByRole('region', { name: 'Selected pages' });
+      expect(region).toHaveTextContent('1 page selected');
+      expect(within(region).getByText(WAITING).className).toContain('text-[var(--ds-muted)]');
+      expect(within(region).queryByRole('button', { name: /Render selected/ })).toBeNull();
+      expect(document.getElementById('pages-selected-price')).toBeNull();
+      // No price and no primary button anywhere in the header: the banner's Approve is the one.
+      expect(header().textContent).not.toMatch(/\$|¢|usage/);
+      expect(Array.from(header().querySelectorAll('button')).filter(isPrimary)).toEqual([]);
+      fireEvent.click(within(region).getByRole('button', { name: 'Clear' }));
+      expect(screen.queryByRole('region', { name: 'Selected pages' })).toBeNull();
+      unmount();
+    }
+  });
+
+  it('while another approval is open (character sheets), Render selected keeps its price but steps back from primary', () => {
+    const studio = dollarStudio(gatedDoc(gateFor({ type: 'render_sheets' })));
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select page 2' }));
+    const region = screen.getByRole('region', { name: 'Selected pages' });
+    const button = within(region).getByRole('button', { name: /Render selected/ });
+    expect(isPrimary(button)).toBe(false);
+    expect(document.getElementById(button.getAttribute('aria-describedby')!)).toHaveTextContent(/≈ \$\d/);
+    expect(within(region).queryByText(WAITING)).toBeNull();
+    expect(cardPrices()).toEqual(['price-cover', 'price-pg_1', 'price-pg_2', 'price-pg_5', 'price-pg_6']);
+  });
+
   it('an open approval for something else (character sheets) keeps the Draw-all and its price', () => {
     const studio = dollarStudio(gatedDoc(gateFor({ type: 'render_sheets' })));
     render(<PagesTab studio={studio} doc={studio.doc!} />);
@@ -222,6 +318,9 @@ describe('PagesTab', () => {
     expect(document.getElementById(button.getAttribute('aria-describedby')!)).toHaveTextContent(/≈ \$\d/);
     expect(screen.getByRole('checkbox', { name: /Include the cover/ })).toBeInTheDocument();
     expect(screen.queryByText('Waiting for your OK above')).toBeNull();
+    // The cards are as without one too: every card that can draw prints its own price, and Retry is primary again.
+    expect(cardPrices()).toEqual(['price-cover', 'price-pg_1', 'price-pg_2', 'price-pg_5', 'price-pg_6']);
+    expect(isPrimary(within(card(6)).getByRole('button', { name: /^Retry/ }))).toBe(true);
   });
 
   it('with no approval open the header has no waiting line', () => {
