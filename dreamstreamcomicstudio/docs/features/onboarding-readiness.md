@@ -17,7 +17,16 @@ to the right place.
 
 ## Behavior
 
-- Rendered at the top of the dashboard (`ProjectDashboard`).
+- Rendered at the top of the main dashboard (`ProjectDashboard`). Not in Comic Studio's My comics
+  (`comicWorkspace`): members there draw on the platform allowance, so under the "My comics" heading
+  (the page's h1) it shows the comic to continue (`components/comicstudio/home/ContinueCard.tsx`) and,
+  only when the member's own key is over its monthly limit, one quiet line with Manage keys
+  (`OwnKeyLimitLine.tsx`), both above the filters and the grid.
+- The Continue comic is chosen once per list load (and again if it is deleted), from `updatedAt`.
+  Every change to a comic stamps `updatedAt`, a rename or the Featured star included, so choosing on
+  every change would move an old comic into the card on that click. Known limit until status rows
+  (STU-O3) replace `updatedAt`: after the next load, a comic that was only renamed or starred counts as
+  the most recently edited.
 - **Hides itself when everything is ready** (no clutter), and can be dismissed for the session.
 - Re-evaluates on window focus, so it updates after you add a key / pick a model and return.
 

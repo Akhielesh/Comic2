@@ -8,6 +8,7 @@ import { ModalPortal } from '../modals/ModalPortal';
 import { AppearanceButton } from '../account/AppearanceControl';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
+import { HOME_START_HELP } from './home/homeModel';
 import '../comicshost/comicsShell.css';
 import './comicCreationWorkspace.css';
 
@@ -113,7 +114,7 @@ export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onSt
         <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
       </div>
       {error && <p className="comic-idea-error" role="alert">{error}</p>}
-      <p id={`${id}-help`} className="comic-idea-help">Start prepares the conversation. Send submits your idea.</p>
+      <p id={`${id}-help`} className="comic-idea-help">{HOME_START_HELP}</p>
       <div className="comic-idea-alternatives"><button type="button" onClick={onStartBlank} disabled={pending}>Start blank</button><button type="button" onClick={onClassic} disabled={pending}>Use the classic editor</button></div>
     </form>
   </section>;
