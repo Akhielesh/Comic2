@@ -14,7 +14,7 @@ import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabili
 import type { Card, Msg } from '../../../../shared/comic/doc.js';
 import { costViewFor } from '../costText.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
-import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
+import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, TRANSLATE_CONCURRENCY, translationRunning } from './index.js';
 import { applyReview } from './linguist.js';
 import { linguistSystemPrompt } from './prompts.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
@@ -167,7 +167,7 @@ describe('software first: caching and misses', () => {
     expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
   });
 
-  it('several languages run with concurrency ≤ 3; one chunk per ≤ 40 lines', async () => {
+  it('several languages run with concurrency ≤ TRANSLATE_CONCURRENCY; one chunk per ≤ 40 lines', async () => {
     const doc = sixPageKidsDoc();
     let inflight = 0;
     let peak = 0;
@@ -180,7 +180,7 @@ describe('software first: caching and misses', () => {
       return tr.step(req);
     };
     const { session, ctx } = await run(doc, { translator: times(12, slow), linguist: times(6, fakeLinguist()) }, T({ languages: ['te', 'hi', 'ta', 'ja'] }));
-    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeLessThanOrEqual(TRANSLATE_CONCURRENCY);
     expect(peak).toBeGreaterThan(1);
     expect(roles(ctx, 'translator')).toHaveLength(8); // 2 chunks × 4 languages
     for (const lang of ['te', 'hi', 'ta', 'ja']) expect(editionReadiness(session.doc, lang).publishable).toBe(true);

@@ -6,6 +6,9 @@ import { canFastPath, normalizeIntentText, parseIntent, routeIntent } from './in
 import { drawIntentOf } from './replies.js';
 import { costFormatter, costViewFor } from './costText.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
+import { lineSourceHash } from '../../../shared/comic/i18n.js';
+
+const T_PUB = 1_700_000_000_000;
 
 /** Six pages drawn, page 2 with an earlier version in history. */
 const sixWithHistory = (): ComicDoc => {
@@ -173,6 +176,115 @@ describe('parseIntent phrase table (COMIC_FAST_INTENTS)', () => {
     expect(canFastPath(parsed, { enabled: true, attachments: 1, gateOpen: false })).toBe(false);
     expect(canFastPath(parsed, { enabled: true, attachments: 0, gateOpen: true })).toBe(false);
     expect(canFastPath(null, { enabled: true, attachments: 0, gateOpen: false })).toBe(false);
+  });
+});
+
+// ── PUB-5: "publish it" / "share it" show the card for free ──────────────────
+
+describe('publish_card: the common publish and share phrases show the card with no model turn', () => {
+  const CARD_REPLY = "Here's your Publish card. Nothing is published until you tap Publish. Readers can read and download, never edit.";
+  const PHRASES = [
+    'publish',
+    'publish it',
+    'publish this',
+    'publish my comic',
+    'publish the comic',
+    'publish the book',
+    'share',
+    'share it',
+    'share my comic',
+    'share the comic',
+    'Publish it!',
+    'can you publish it please?',
+    'Share it now 🙏'
+  ];
+  it.each(PHRASES)('routes: %s', (text) => {
+    const r = routeIntent(lakeDrawnDoc(), text);
+    expect(r).toMatchObject({ kind: 'publish_card', reply: CARD_REPLY, nextSteps: [] });
+    // A pending Publish card, Link only; the comic has no editions, so the request is the plain one.
+    expect(r!.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted' } })]);
+  });
+
+  const OTHERS = [
+    'publish it in hindi',
+    'can you share the comic with my friend',
+    'I want to share my screen',
+    'share this with my mom',
+    'how do I share it',
+    "don't publish it yet",
+    'publish it on instagram',
+    'share it later',
+    'publish the pages',
+    'republish'
+  ];
+  it.each(OTHERS)('goes to the director: %s', (text) => {
+    expect(routeIntent(lakeDrawnDoc(), text)).toBeNull();
+  });
+
+  it('paused by moderation → null; nothing drawn → null; live → the Share card', () => {
+    const live = lakeDrawnDoc();
+    live.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: T_PUB, languages: ['en'] };
+    const shared = routeIntent(live, 'share it')!;
+    expect(shared).toMatchObject({ kind: 'publish_card', reply: "Here's your link.", cards: [{ type: 'share', id: expect.any(String) }], nextSteps: [] });
+    // "publish it" on a live link: the Share card, and the reply says edits since publishing are not live yet.
+    expect(routeIntent(live, 'publish it')).toMatchObject({
+      kind: 'publish_card',
+      reply: "Here's your link. Any edits since you published stay private until you tap Update in the Share sheet.",
+      cards: [{ type: 'share' }]
+    });
+    expect(routeIntent(live, 'publish')!.reply).toMatch(/stay private until you tap Update/);
+    expect(routeIntent(live, 'share the comic')!.reply).toBe("Here's your link.");
+
+    const paused = lakeDrawnDoc();
+    paused.publication = { ...live.publication, status: 'suspended' };
+    expect(routeIntent(paused, 'publish it')).toBeNull();
+    expect(routeIntent(paused, 'share it')).toBeNull();
+
+    expect(routeIntent(lakePlannedDoc(), 'publish it')).toBeNull();
+    const failed = lakeDrawnDoc();
+    failed.pages[0].render = { ...emptyRender(), status: 'failed', error: 'boom' };
+    expect(routeIntent(failed, 'share it')).toBeNull();
+  });
+
+  it('the card request has only ready languages, and the reply names the ones it left out', () => {
+    const doc = lakeDrawnDoc();
+    doc.format = { ...doc.format, lettering: 'overlay' };
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const edition = (lang: string, status: 'reviewed' | 'machine') => ({
+      lang,
+      lines: Object.fromEntries(lines.map((l) => [l.id, { text: `${lang}: ${l.text}`, status, sourceHash: lineSourceHash(l), at: 1 }])),
+      balloons: {},
+      register: 'everyday' as const
+    });
+    doc.i18n = { editions: { hi: edition('hi', 'reviewed'), te: edition('te', 'machine') }, glossary: [] };
+    const r = routeIntent(doc, 'publish it')!;
+    expect(r.cards).toEqual([expect.objectContaining({ type: 'publish', request: { visibility: 'unlisted', languages: [doc.format.language, 'hi'] } })]);
+    expect(r.reply).toBe(`${CARD_REPLY} Telugu isn't reviewed yet, so the card leaves it out. Add it from the Share sheet once it's ready.`);
+  });
+
+  it('a page still drawing is said up front (publishing waits for it)', () => {
+    const doc = sixPageDrawnDoc();
+    doc.pages[1].render = { ...doc.pages[1].render, status: 'rendering' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Page 2 is still drawing; tap Publish once it's done.`);
+    doc.pages[2].render = { ...doc.pages[2].render, status: 'queued' };
+    doc.cover.render = { ...doc.cover.render, status: 'rendering' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Pages 2, 3 and the cover are still drawing; tap Publish once they're done.`);
+    doc.cover.render = { ...doc.cover.render, status: 'ready' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Pages 2 and 3 are still drawing; tap Publish once they're done.`);
+    doc.pages[2].render = { ...doc.pages[2].render, status: 'ready' };
+    doc.cover.render = { ...doc.cover.render, status: 'queued' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} Page 2 and the cover are still drawing; tap Publish once they're done.`);
+    doc.pages[1].render = { ...doc.pages[1].render, status: 'ready' };
+    expect(routeIntent(doc, 'publish it')!.reply).toBe(`${CARD_REPLY} The cover is still drawing; tap Publish once it's done.`);
+  });
+
+  it('a governed user sees no $ (nothing here mentions money)', () => {
+    const cost = costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 90, exhausted: false, pctPerStandardPage: 1.2 } }));
+    for (const text of ['publish it', 'share it']) {
+      const r = routeIntent(lakeDrawnDoc(), text, { cost })!;
+      expect(r.kind).toBe('publish_card');
+      expect(r.reply).not.toMatch(/\$|cents?\b/);
+    }
   });
 });
 
