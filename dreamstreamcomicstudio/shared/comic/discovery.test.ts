@@ -7,25 +7,40 @@ import {
   DISCOVER_KINDS,
   DISCOVER_LIMIT_MAX,
   DISCOVER_RATINGS,
+  DISCOVER_RELATED_PATH,
+  DISCOVER_RELATED_SIZE,
+  DISCOVER_SHELF_IDS,
+  DISCOVER_SHELF_MIN,
   DISCOVER_SHELF_SIZE,
+  DISCOVER_SLUGS_MAX,
+  DISCOVER_THIN_SHELVES,
+  DISCOVER_TOP10_SIZE,
   decodeDiscoverCursor,
   decodeDiscoverPage,
+  decodeDiscoverRelated,
   decodeDiscoverShelves,
   discoverListRpcArgs,
   discoverListUrl,
   discoverPageFromRpc,
+  discoverRelatedFromRpc,
+  discoverRelatedRpcArgs,
+  discoverRelatedSearch,
+  discoverRelatedUrl,
   discoverSearch,
   discoverShelvesFromRpc,
   discoverShelvesRpcArgs,
   discoverShelvesUrl,
+  discoverSlugsUrl,
   encodeDiscoverCursor,
   isPublicAvatarUrl,
   isPublicCoverUrl,
   parseDiscoverQuery,
+  parseDiscoverRelatedQuery,
   parseDiscoverShelvesQuery,
   type DiscoverItem,
   type DiscoverPage,
-  type DiscoverQuery
+  type DiscoverQuery,
+  type DiscoverRelated
 } from './discovery';
 import { CONTENT_RATINGS } from './safety';
 
@@ -337,6 +352,263 @@ describe('shelves', () => {
     expect(decodeDiscoverShelves(tampered)).toEqual(out);
     expect(discoverShelvesFromRpc(null, opts)).toEqual({ shelves: {} });
     expect(discoverShelvesFromRpc('x', opts)).toBeNull();
+  });
+});
+
+describe('Top 10 and Trending shelves (DISC-0)', () => {
+  const items = (n: number, prefix = 'Tt3dEf6hIj9kLm') => Array.from({ length: n }, (_, i) => rpcItem({ slug: `${prefix}${String(i).padStart(3, '0')}` }));
+
+  it('top10 is a shelf, after trending; trending is now a thin shelf; the minimum stays 4', () => {
+    expect([...DISCOVER_SHELF_IDS]).toEqual(['featured', 'trending', 'top10', 'new', 'kids', 'lang', 'webtoon', 'manga']);
+    expect(DISCOVER_THIN_SHELVES).toContain('trending');
+    expect(DISCOVER_SHELF_MIN).toBe(4);
+    expect(DISCOVER_TOP10_SIZE).toBe(10);
+  });
+
+  it('a Top 10 shows only with all ten comics, and never more than ten', () => {
+    const full = discoverShelvesFromRpc({ top10: items(12) }, opts)!;
+    expect(full.shelves.top10).toHaveLength(DISCOVER_TOP10_SIZE);
+    expect(full.shelves.top10!.map((i) => i.slug)).toEqual(items(10).map((i) => i.slug));
+    expect(discoverShelvesFromRpc({ top10: items(10) }, opts)!.shelves.top10).toHaveLength(10);
+    expect(discoverShelvesFromRpc({ top10: items(9) }, opts)!.shelves).toEqual({});
+    // One malformed entry leaves nine: no "Top 10" with nine comics.
+    expect(discoverShelvesFromRpc({ top10: [...items(9), rpcItem({ slug: 'short' })] }, opts)!.shelves).toEqual({});
+  });
+
+  it('Trending shows only with 4 or more comics', () => {
+    expect(discoverShelvesFromRpc({ trending: items(3) }, opts)!.shelves).toEqual({});
+    expect(discoverShelvesFromRpc({ trending: items(4) }, opts)!.shelves.trending).toHaveLength(4);
+  });
+
+  it('decodes the same way on the UI side, in home order', () => {
+    const out = discoverShelvesFromRpc({ new: items(2, 'Nn3dEf6hIj9kLm'), top10: items(10), trending: items(5, 'Tr3dEf6hIj9kLm') }, opts)!;
+    expect(Object.keys(out.shelves)).toEqual(['trending', 'top10', 'new']);
+    expect(decodeDiscoverShelves(JSON.parse(JSON.stringify(out)))).toEqual(out);
+    const cut = JSON.parse(JSON.stringify(out));
+    cut.shelves.top10.pop();
+    expect(decodeDiscoverShelves(cut)!.shelves).not.toHaveProperty('top10');
+  });
+});
+
+describe('slugs= on the list route (Continue reading)', () => {
+  const S = (i: number) => `Sl3dEf6hIj9kLm${String(i).padStart(3, '0')}`;
+
+  it('reads 1..20 slugs, keeps their order, drops repeats', () => {
+    expect(parseDiscoverQuery(`slugs=${S(2)},${S(1)},${S(3)}`)).toEqual({ ok: true, value: { sort: 'trending', limit: 24, slugs: [S(2), S(1), S(3)] } });
+    expect(parseDiscoverQuery(`slugs=${S(2)},${S(1)},${S(2)}`)).toEqual({ ok: true, value: { sort: 'trending', limit: 24, slugs: [S(2), S(1)] } });
+    const twenty = Array.from({ length: DISCOVER_SLUGS_MAX }, (_, i) => S(i));
+    expect(parseDiscoverQuery(`slugs=${twenty.join(',')}`)).toEqual({ ok: true, value: { sort: 'trending', limit: 24, slugs: twenty } });
+    expect(parseDiscoverQuery(`slugs=${encodeURIComponent(`${S(1)},${S(2)}`)}`)).toEqual({ ok: true, value: { sort: 'trending', limit: 24, slugs: [S(1), S(2)] } });
+  });
+
+  it.each([
+    ['no slug', 'slugs='],
+    ['21 slugs', `slugs=${Array.from({ length: DISCOVER_SLUGS_MAX + 1 }, (_, i) => S(i)).join(',')}`],
+    ['a malformed slug', `slugs=${S(1)},short`],
+    ['an empty entry', `slugs=${S(1)},,${S(2)}`],
+    ['a trailing comma', `slugs=${S(1)},`],
+    ['a space', `slugs=${S(1)},%20${S(2)}`],
+    ['slugs twice', `slugs=${S(1)}&slugs=${S(2)}`],
+    ['a malformed filter beside it', `slugs=${S(1)}&rating=kidz`]
+  ])('rejects %s', (_label, search) => {
+    const parsed = parseDiscoverQuery(search);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('ignores every other filter: one canonical cache key for the same slugs', () => {
+    const plain = parseDiscoverQuery(`slugs=${S(1)},${S(2)}`);
+    const noisy = parseDiscoverQuery(`sort=new&q=moon&rating=kids&lang=hi&kind=manga&length=long&week=1&limit=3&slugs=${S(1)},${S(2)},${S(1)}`);
+    expect(plain.ok && noisy.ok).toBe(true);
+    if (plain.ok && noisy.ok) {
+      expect(noisy.value).toEqual(plain.value);
+      expect(discoverSearch(noisy.value)).toBe(`slugs=${S(1)},${S(2)}`);
+      expect(discoverSearch(plain.value)).toBe(discoverSearch(noisy.value));
+    }
+    // A different order is a different answer (the comics come back in the order asked).
+    const swapped = parseDiscoverQuery(`slugs=${S(2)},${S(1)}`);
+    if (swapped.ok && plain.ok) expect(discoverSearch(swapped.value)).not.toBe(discoverSearch(plain.value));
+  });
+
+  it('round-trips and builds the UI URL', () => {
+    const q: DiscoverQuery = { sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: [S(5), S(4)] };
+    expect(parseDiscoverQuery(discoverSearch(q))).toEqual({ ok: true, value: q });
+    expect(discoverListUrl({ slugs: [S(5), S(4)] })).toBe(`/api/comic/public/discover?slugs=${S(5)},${S(4)}`);
+    expect(discoverListUrl({ slugs: [S(5), S(4)], sort: 'new', kind: 'manga' })).toBe(`/api/comic/public/discover?slugs=${S(5)},${S(4)}`);
+  });
+
+  it('sends p_slugs (and the defaults for everything else) only for a slugs query', () => {
+    expect(discoverListRpcArgs({ sort: 'new', limit: 3, kind: 'manga', slugs: [S(1), S(2)] })).toEqual({
+      p_sort: 'trending', p_q: null, p_rating: null, p_lang: null, p_kind: null, p_length: null, p_week: false, p_limit: DISCOVER_LIMIT_MAX, p_after_slug: null, p_slugs: [S(1), S(2)]
+    });
+    expect(discoverListRpcArgs({ sort: 'trending', limit: DISCOVER_LIMIT_MAX })).not.toHaveProperty('p_slugs');
+  });
+
+  it('an empty slugs query is never the full listing: no RPC call, and a URL the edge refuses', () => {
+    expect(() => discoverListRpcArgs({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: [] })).toThrow(/slug/);
+    expect(() => discoverListRpcArgs({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: ['short', 'x&sort=new'] })).toThrow(/slug/);
+    for (const slugs of [[], ['a b', 'x&sort=new']]) {
+      const url = discoverListUrl({ slugs });
+      expect(url).toBe('/api/comic/public/discover?slugs=');
+      expect(parseDiscoverQuery(url.slice(url.indexOf('?') + 1)).ok).toBe(false); // 400, not Trending
+    }
+  });
+
+  it('discoverSlugsUrl: slug-shaped, each once, at most 20, in order; null when none is left (skip the fetch)', () => {
+    expect(discoverSlugsUrl([S(2), 'x&sort=new', S(1), 'a b', S(2), '', 7 as never])).toBe(`/api/comic/public/discover?slugs=${S(2)},${S(1)}`);
+    for (const none of [[], ['x&sort=new'], ['a b', ''], [`${S(1)}x`]]) expect(discoverSlugsUrl(none)).toBeNull();
+    const many = Array.from({ length: 30 }, (_, i) => S(i));
+    const url = discoverSlugsUrl(many)!;
+    expect(url).toBe(`/api/comic/public/discover?slugs=${many.slice(0, DISCOVER_SLUGS_MAX).join(',')}`);
+    const parsed = parseDiscoverQuery(url.slice(url.indexOf('?') + 1));
+    expect(parsed).toEqual({ ok: true, value: { sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: many.slice(0, DISCOVER_SLUGS_MAX) } });
+    // The list URL cleans the same way, so a corrupt mirror key never becomes a raw parameter.
+    expect(discoverListUrl({ slugs: [S(3), 'x&sort=new', S(3)] })).toBe(`/api/comic/public/discover?slugs=${S(3)}`);
+  });
+});
+
+describe('related: GET /discover/related?slug=&lang= (the share page’s More like this and Up next)', () => {
+  const OTHER = 'Zz3dEf6hIj9kLm2nP';
+
+  it('the path', () => {
+    expect(DISCOVER_RELATED_PATH).toBe('/api/comic/public/discover/related');
+    expect(DISCOVER_RELATED_SIZE).toBe(12);
+  });
+
+  it('the query is strict: slug required and slug-shaped, lang optional', () => {
+    expect(parseDiscoverRelatedQuery(`slug=${SLUG}`)).toEqual({ ok: true, value: { slug: SLUG } });
+    expect(parseDiscoverRelatedQuery(`lang=pt-BR&slug=${SLUG}`)).toEqual({ ok: true, value: { slug: SLUG, lang: 'pt-br' } });
+    expect(parseDiscoverRelatedQuery(new URLSearchParams({ slug: SLUG, lang: 'HI' }))).toEqual({ ok: true, value: { slug: SLUG, lang: 'hi' } });
+    for (const [search, reason] of [
+      ['', /slug/],
+      ['lang=hi', /slug/],
+      ['slug=', /slug/],
+      ['slug=short', /slug/],
+      [`slug=${SLUG}x`, /slug/],
+      [`slug=${SLUG}&slug=${OTHER}`, /once/],
+      [`slug=${SLUG}&lang=english!`, /language code/],
+      [`slug=${SLUG}&sort=new`, /Unknown parameter "sort"/],
+      [`slug=${SLUG}&limit=5`, /Unknown parameter/]
+    ] as const) {
+      const parsed = parseDiscoverRelatedQuery(search);
+      expect(parsed.ok, search).toBe(false);
+      if (parsed.ok === false) expect(parsed.reason).toMatch(reason);
+    }
+  });
+
+  it('the canonical search (cache key) is slug then lang, whatever the order or case given', () => {
+    const a = parseDiscoverRelatedQuery(`lang=HI&slug=${SLUG}`);
+    const b = parseDiscoverRelatedQuery(`slug=${SLUG}&lang=hi`);
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok) {
+      expect(discoverRelatedSearch(a.value)).toBe(`slug=${SLUG}&lang=hi`);
+      expect(discoverRelatedSearch(b.value)).toBe(discoverRelatedSearch(a.value));
+    }
+    expect(discoverRelatedUrl({ slug: SLUG })).toBe(`/api/comic/public/discover/related?slug=${SLUG}`);
+    expect(discoverRelatedUrl({ slug: SLUG, lang: 'te' })).toBe(`/api/comic/public/discover/related?slug=${SLUG}&lang=te`);
+    expect(discoverRelatedRpcArgs({ slug: SLUG })).toEqual({ p_slug: SLUG, p_lang: null });
+    expect(discoverRelatedRpcArgs({ slug: SLUG, lang: 'te' })).toEqual({ p_slug: SLUG, p_lang: 'te' });
+    for (const q of [{ slug: SLUG }, { slug: SLUG, lang: 'zh-hans' }]) expect(parseDiscoverRelatedQuery(discoverRelatedSearch(q))).toEqual({ ok: true, value: q });
+  });
+
+  const many = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => rpcItem({ slug: `${prefix}${String(i).padStart(3, '0')}` }));
+
+  it('RPC → wire: the item allow-list, at most 12 each, basis passed through', () => {
+    const out = discoverRelatedFromRpc({ creator: many(14, 'Cr3dEf6hIj9kLm'), similar: [rpcItem({ ...INTERNALS, slug: OTHER })], basis: 'library', debug: 1 }, opts)!;
+    expect(Object.keys(out)).toEqual(['creator', 'similar', 'basis']);
+    expect(out.creator).toHaveLength(DISCOVER_RELATED_SIZE);
+    expect(out.similar.map((i) => i.slug)).toEqual([OTHER]);
+    expect(Object.keys(out.similar[0]).every((k) => ALLOWED.includes(k))).toBe(true);
+    expect(out.basis).toBe('library');
+    const text = JSON.stringify(out);
+    for (const leak of [INTERNALS.userId, 'snapshot', 'safety', 'assetKey', 'alice@example.com']) expect(text).not.toContain(leak);
+    expect(discoverRelatedFromRpc({ similar: many(30, 'Si3dEf6hIj9kLm'), basis: 'similar' }, opts)!.similar).toHaveLength(DISCOVER_RELATED_SIZE);
+  });
+
+  it('creator is left out when absent or empty; similar is always a list', () => {
+    expect(discoverRelatedFromRpc({ similar: [], basis: 'library' }, opts)).toEqual({ similar: [], basis: 'library' });
+    expect(discoverRelatedFromRpc({ creator: [], similar: null, basis: 'library' }, opts)).toEqual({ similar: [], basis: 'library' });
+    expect(discoverRelatedFromRpc({ creator: [rpcItem({ slug: 'short' })], similar: [rpcItem()], basis: 'similar' }, opts)).toEqual({
+      similar: discoverRelatedFromRpc({ similar: [rpcItem()], basis: 'similar' }, opts)!.similar,
+      basis: 'similar'
+    });
+  });
+
+  describe('the edge rebuild holds the related rules itself (the last allow-list)', () => {
+    const both = (raw: unknown) => [discoverRelatedFromRpc(raw, opts), decodeDiscoverRelated(JSON.parse(JSON.stringify(discoverRelatedFromRpc(raw, opts))))];
+    const C = (i: number) => `Cr3dEf6hIj9kLm${String(i).padStart(3, '0')}`;
+
+    it('a creator item without a byline is dropped (a hidden name is never tied to a named comic)', () => {
+      const anon = rpcItem({ slug: C(2), creator: undefined });
+      for (const out of both({ creator: [rpcItem({ slug: C(1) }), anon], similar: [], basis: 'library' })) {
+        expect(out!.creator!.map((i) => i.slug)).toEqual([C(1)]);
+      }
+      for (const out of both({ creator: [anon], similar: [], basis: 'library' })) expect(out).toEqual({ similar: [], basis: 'library' });
+    });
+
+    it('creator items must all share one username, or there is no creator list', () => {
+      const mixed = { creator: [rpcItem({ slug: C(1) }), rpcItem({ slug: C(2), creator: { username: 'beta' } })], similar: [], basis: 'library' };
+      for (const out of both(mixed)) expect(out).toEqual({ similar: [], basis: 'library' });
+      const same = { creator: [rpcItem({ slug: C(1) }), rpcItem({ slug: C(2) })], similar: [], basis: 'library' };
+      for (const out of both(same)) expect(out!.creator!.map((i) => i.creator!.username)).toEqual(['alice', 'alice']);
+    });
+
+    it('a comic is never in both lists: similar drops what creator holds', () => {
+      const raw = { creator: [rpcItem({ slug: C(1) })], similar: [rpcItem({ slug: C(1) }), rpcItem({ slug: OTHER })], basis: 'library' };
+      for (const out of both(raw)) {
+        expect(out!.creator!.map((i) => i.slug)).toEqual([C(1)]);
+        expect(out!.similar.map((i) => i.slug)).toEqual([OTHER]);
+      }
+      // When creator is dropped (mixed usernames), similar keeps its own items.
+      const mixed = { creator: [rpcItem({ slug: C(1) }), rpcItem({ slug: C(2), creator: { username: 'beta' } })], similar: [rpcItem({ slug: C(1) })], basis: 'library' };
+      for (const out of both(mixed)) expect(out!.similar.map((i) => i.slug)).toEqual([C(1)]);
+    });
+
+    it('unrated items are dropped from both lists (a rating outside G, PG, PG-13 counts as none)', () => {
+      const raw = {
+        creator: [rpcItem({ slug: C(1), rating: undefined }), rpcItem({ slug: C(2), rating: 'R' }), rpcItem({ slug: C(3) })],
+        similar: [rpcItem({ slug: OTHER, rating: null }), rpcItem({ slug: C(4), rating: 'NC-17' }), rpcItem({ slug: C(5), rating: 'PG-13' })],
+        basis: 'library'
+      };
+      for (const out of both(raw)) {
+        expect(out!.creator!.map((i) => i.slug)).toEqual([C(3)]);
+        expect(out!.similar.map((i) => i.slug)).toEqual([C(5)]);
+      }
+    });
+
+    it('the cap of 12 counts kept items only; the comic itself is never listed when its slug is given', () => {
+      const raw = { similar: [...Array.from({ length: 5 }, (_, i) => rpcItem({ slug: C(i), rating: undefined })), ...many(14, 'Si3dEf6hIj9kLm')], basis: 'similar' };
+      expect(discoverRelatedFromRpc(raw, opts)!.similar.map((i) => i.slug)).toEqual(many(12, 'Si3dEf6hIj9kLm').map((i) => i.slug));
+      const self = { creator: [rpcItem({ slug: SLUG }), rpcItem({ slug: C(1) })], similar: [rpcItem({ slug: SLUG }), rpcItem({ slug: OTHER })], basis: 'library' };
+      const out = discoverRelatedFromRpc(self, opts, SLUG)!;
+      expect(out.creator!.map((i) => i.slug)).toEqual([C(1)]);
+      expect(out.similar.map((i) => i.slug)).toEqual([OTHER]);
+      const wire = JSON.parse(JSON.stringify(discoverRelatedFromRpc(self, opts)));
+      expect(wire.creator.map((i: DiscoverItem) => i.slug)).toEqual([SLUG, C(1)]);
+      expect(decodeDiscoverRelated(wire, SLUG)).toEqual(out);
+    });
+  });
+
+  it('basis is required on both sides: without a known basis it is not an answer (503 / hidden)', () => {
+    for (const raw of [{ similar: [rpcItem()] }, { similar: [rpcItem()], basis: 'because' }, { similar: [rpcItem()], basis: null }, null, undefined, 'x', []]) {
+      expect(discoverRelatedFromRpc(raw, opts), JSON.stringify(raw)).toBeNull();
+      expect(decodeDiscoverRelated(raw), JSON.stringify(raw)).toBeNull();
+    }
+  });
+
+  it('round-trips through the UI decode and drops anything else again', () => {
+    const wire: DiscoverRelated = discoverRelatedFromRpc({ creator: many(2, 'Cr3dEf6hIj9kLm'), similar: many(3, 'Si3dEf6hIj9kLm'), basis: 'library' }, opts)!;
+    expect(decodeDiscoverRelated(JSON.parse(JSON.stringify(wire)))).toEqual(wire);
+    const tampered = JSON.parse(JSON.stringify(wire));
+    Object.assign(tampered.similar[0], INTERNALS);
+    tampered.creator[0].cover.original = 'x';
+    tampered.score = 4;
+    tampered.next = 't.x';
+    expect(decodeDiscoverRelated(tampered)).toEqual(wire);
+    // A cover that is not a pub/ copy in our storage is dropped on the UI side too.
+    const page = JSON.parse(JSON.stringify(wire));
+    page.similar[0].cover.w480 = `${SUPA}/storage/v1/object/public/comic-assets/u/1/p/2/img/draft.webp`;
+    expect(decodeDiscoverRelated(page)!.similar[0].cover).toBeUndefined();
+    expect(decodeDiscoverRelated({ similar: 'x', basis: 'library' })).toEqual({ similar: [], basis: 'library' });
   });
 });
 
