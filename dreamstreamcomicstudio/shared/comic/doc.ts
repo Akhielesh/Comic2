@@ -1236,6 +1236,12 @@ export interface Msg {
   nextSteps?: NextStep[];
   /** A user note sent while the director was working ("Added while the director was working"; agent-editor plan §3 A2). */
   steered?: true;
+  /**
+   * Posted by background work (a render run, a translation, a publish, the request's closing notice), which started at
+   * this time. Such a message does not move the chat past a card posted after the work started unless it asks something
+   * itself (shared/comic/settle.ts movesOn): a render that finishes never closes a question asked while it drew.
+   */
+  runAt?: number;
 }
 
 export interface ComicDoc {

@@ -365,14 +365,16 @@ const OUTCOME_CARDS: ReadonlySet<Card['type']> = new Set<Card['type']>(['options
 /**
  * One message as words for the model. With `outcomes` (and a doc), an options, gate or conflict card reads its settled
  * outcome, judged on `conversation` with this message at `index` (the doc's own conversation may still hold the message
- * being answered, which never counts).
+ * being answered, which never counts). Judged by the server's answer rule (passedBy 'user', like recordOptionAnswer): a
+ * question only assistant messages followed is still the one the creator's next words may answer, so it reads as asked,
+ * never "no option picked", even where the chat already hides it.
  */
 const messageText = (m: Msg, doc?: ComicDoc, index = -1, conversation?: Msg[], outcomes = false): string => {
   const parts = [clip(m.text, 3000)];
   if (m.attachments?.length) parts.push(`[${m.attachments.length} image(s) attached]`);
   const settleDoc = outcomes && doc && conversation && index >= 0 ? { ...doc, conversation } : undefined;
   for (const card of m.cards || []) {
-    const outcome = settleDoc && OUTCOME_CARDS.has(card.type) ? outcomeForModel(card, settleDoc, cardSettle(settleDoc, index, card)) : undefined;
+    const outcome = settleDoc && OUTCOME_CARDS.has(card.type) ? outcomeForModel(card, settleDoc, cardSettle(settleDoc, index, card, { passedBy: 'user' })) : undefined;
     parts.push(cardText(card, doc, outcome));
   }
   return parts.filter(Boolean).join(' ');

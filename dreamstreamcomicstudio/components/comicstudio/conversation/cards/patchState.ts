@@ -1,6 +1,7 @@
 // Whether a free `patch` a chip offers is already in the comic (Q-SETTLE). Shared by the notice's fix chips and the
 // next-step chips, so a fix the creator already applied is never offered again, after a reload too: it is read from the
-// live doc, not remembered by the chip. Moved here from NoticeCard.tsx unchanged (opCheck, patchIsIn, same).
+// live doc, not remembered by the chip. Moved here from NoticeCard.tsx (opCheck, patchIsIn, same); it also reads the
+// comic-wide `settings` and `format` switches a chip can offer.
 
 import type { ComicDoc } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
@@ -29,6 +30,11 @@ export const opCheck = (doc: ComicDoc, op: DocOp): { pageId?: string; noop?: boo
       if (op.patch === null) return { pageId: page.id, noop: !line };
       return line ? { pageId: page.id, noop: patchIsIn(line, op.patch) } : null;
     }
+    // Comic-wide switches a chip offers ("Switch to Standard quality"): the doc always has them, so never 'gone'.
+    case 'settings':
+      return { noop: !!op.patch && !!doc.settings && patchIsIn(doc.settings, op.patch) };
+    case 'format':
+      return { noop: !!op.patch && !!doc.format && patchIsIn(doc.format, op.patch) };
     default:
       return { noop: false };
   }

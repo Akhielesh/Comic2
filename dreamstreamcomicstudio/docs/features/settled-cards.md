@@ -399,9 +399,20 @@ The full inventory of cards and chip rows, with where each settled before and af
   assistant message that offers next steps or carries a card other than an info-only notice, passes every card before
   it. An info-only notice (a history budget notice, an archive eviction) is not an ask and passes nothing, so it never
   closes a question the creator is about to answer; the queue still holds on that question (`isOpenQuestion`).
+- **Background work moves nothing past what was asked while it ran.** A message that background work posts on its own
+  carries `runAt`, when that work started (`Msg.runAt`): every message of a render run (`jobs.ts` `RenderRun.message`:
+  its progress, its late progress message, its outcome), a translation run's start and result (`i18n/index.ts`), a
+  publish result (`actions/publish.ts`) and the request's closing allowance notice (`routes/comic.ts`). Such a message
+  passes a card only when the work started at or after the card's message, or when it asks something itself (a question
+  with choices, a conflict, an approval, suggested looks; `carriesAsk`). So a render the director started in the same
+  turn, or one already running, never closes the question the director asked meanwhile, nor its suggested looks, a
+  conflict, a pending publish or an outage card; the progress and the result of a tap made after the card still do.
+  Messages without `runAt` (older docs, a tap's direct answer) move on as before.
 - **The server's answer rule is unchanged** (`isPassed`, user messages only): a typed answer that matches a choice of
   the newest unanswered question since the creator's last message still records on it, and the card then reads
-  "You picked …". The director's context says "no option picked" for a question a later turn moved past.
+  "You picked …". The director's history reads outcomes by that same rule (`cardSettle(..., { passedBy: 'user' })`):
+  "no option picked" only once a user message followed the question, so a question the chat already hides is still
+  shown to the model as asked while the creator's next words may answer it.
 - **Nothing chosen, nothing left** (`isHiddenSettle`): a question the chat moved past with nothing chosen, and suggested
   looks nobody picked, render nothing at all (no "Not answered" line). A reply that was only that question, with no
   words of its own, leaves no row. A choice keeps its line ("You picked Noir ink").
@@ -412,16 +423,28 @@ The full inventory of cards and chip rows, with where each settled before and af
     spinner while it runs, no price on the line); the message it posts then takes the row away; a refused tap brings
     the chips back; navigation chips (Read it, See the pages) never collapse it;
   - a text chip already waiting in Up next keeps the row at "You chose: … · Up next";
-  - a free edit chip whose edit is already in the comic is not offered again, read from the live doc
-    (`cards/patchState.ts`, shared with the notice), so a reload agrees.
+  - a free edit chip (`patch`: "Use the layout that fits page 3", "Switch to Standard quality") posts no message, so the
+    doc remembers the choice: once its edit is in the comic the whole row reads "You chose: …", its alternatives
+    gone, read from the live doc (`cards/patchState.ts`, shared with the notice; it also reads `settings` and `format`
+    switches), so a reload agrees. A free edit whose page is gone is not offered;
+  - chip keys come from the offered row, so a chip retired by a doc update never shifts the key of the one running.
 - **Notice fixes are alternatives** (`NoticeCard`): once one is taken (tapped and running, a free fix in the comic, a
   paid one drawing), the other fixes for the same page are not offered any more; a fix for another page stays.
-- **Unchanged on purpose:** an open gate stays the one live approval after a typed reply or a later turn (no text path
-  approves a spend, and on a phone the chat card is the approval in view); a stale gate is settled and its Approve is
-  never mounted. A running render, a running publish and a waiting "wait and retry" stay live as before.
-- **The guard:** `CARD_SETTLE_RULES` (`settle.ts`) names the rule of every card type and is typed by `Card['type']`.
-  `shared/comic/settle.turns.test.ts` compares it with the Card union in `doc.ts` and drives every type through a tap,
-  a typed reply, a later turn and a reload; `conversation/settleRules.guard.test.ts` fails when a feature registers a
-  card type without a rule.
+- **Unchanged on purpose (open for a decision):** an open gate stays the one live approval after a typed reply or a
+  later turn (no text path approves a spend, and on a phone the chat card is the approval in view; the board's
+  `GateBanner` mirrors it only where the board shows); a stale gate is settled and its Approve is never mounted.
+  Settling an open gate once moved past, or closing it on the server when the creator writes, changes how a paid step
+  waits for Approve, so it waits for the owner. A running render, a running publish and a waiting "wait and retry" stay
+  live as before.
+- **A reply that renders nothing takes no slot** (`MessageItem` `assistantRowEmpty`): the pane leaves it out entirely,
+  so an old one never leaves an empty offscreen wrapper holding room in the log.
+- **The main chat is not this rule.** The Chat studio's clarify card (`components/chat/artifacts/ClarifyCard.tsx`)
+  follows the chat's own settle model (CHAT-0) and still reads "Not answered — you moved on"; changing it is a separate
+  decision for that surface.
+- **The guard:** `CARD_SETTLE_RULES` (`settle.ts`) names the rule of every card type and is typed by `Card['type']`,
+  and `settleWith`'s switch ends in a `never` check, so a new card type does not compile without a rule in both.
+  `shared/comic/settle.turns.test.ts` drives every type through a tap, a typed reply, a later turn and a reload, and
+  checks that exactly the types whose rule declares `staysLive` stay live under their condition (and settle without
+  it); `conversation/settleRules.guard.test.ts` fails when a feature registers a card type without a rule.
 - **QA scene:** `?surface=app&scene=chat-moved-on`.
 

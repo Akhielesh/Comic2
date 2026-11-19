@@ -29,7 +29,7 @@ import { ActivityLine } from './ActivityLine';
 import { QueuedMessages } from './QueuedMessages';
 import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
-import { AssistantMessageRow, DirectorMark, PendingMessageRow, UserMessageRow, seedEntrances, useRowStudio } from './MessageItem';
+import { AssistantMessageRow, DirectorMark, assistantRowEmpty, PendingMessageRow, UserMessageRow, seedEntrances, useRowStudio } from './MessageItem';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
 import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
@@ -241,6 +241,11 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
             ) : (
               <>
                 {docEntries.map(({ msg, draft }, i) => {
+                  const streaming = !!draft && messageBusy;
+                  const showSuggestions = msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage;
+                  // Q-SETTLE: a reply that renders nothing (only a question the chat moved past) takes no slot at all — no
+                  // gap, and no offscreen wrapper holding room for it.
+                  if (msg.role === 'assistant' && assistantRowEmpty(msg, { draft, streaming, settles, showSuggestions, doc })) return null;
                   const item =
                     msg.role === 'user' ? (
                       <UserMessageRow msg={msg} studio={rowStudio} docKey={docKey} latest={settleOn ? msg.id === latestUserId : undefined} />
@@ -248,8 +253,8 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                       <AssistantMessageRow
                         msg={msg}
                         draft={draft}
-                        streaming={!!draft && messageBusy}
-                        showSuggestions={msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage}
+                        streaming={streaming}
+                        showSuggestions={showSuggestions}
                         studio={rowStudio}
                         settles={settles}
                         docKey={docKey}

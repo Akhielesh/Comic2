@@ -3,8 +3,6 @@
 // message instead, (c) the turn moves on (a later assistant message: an action's result, a job's outcome), (d) the
 // page reloads (the same stored doc, read again from JSON). Plus the guard that ties every card type to a rule.
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, type Card, type ComicDoc, type Msg } from './doc';
 import { makeSampleDoc } from '../../components/comicstudio/conversation/testing/fixtures';
@@ -14,6 +12,7 @@ import {
   buildSettleIndex,
   cardSettle,
   gateClosedFor,
+  carriesAsk,
   isHiddenSettle,
   isOpenQuestion,
   movesOn,
@@ -221,6 +220,111 @@ describe('options the turn moved past', () => {
   });
 });
 
+/**
+ * What background work posts on its own (Msg.runAt: when the work started): a render's outcome or late progress
+ * message, a translation's result. jobs.ts RenderRun.message, i18n runTranslation, publish say().
+ */
+const jobMsg = (id: string, runAt: number, at: number, extra: Partial<Msg> = {}): Msg => ({
+  id,
+  role: 'assistant',
+  text: '8 pages drawn.',
+  at,
+  runAt,
+  cards: [{ type: 'notice', id: `${id}_n`, tone: 'success', text: '8 pages drawn.' }],
+  nextSteps: [{ label: 'Read it', client: { type: 'open_reader' }, usd: 0 }],
+  ...extra
+});
+const progressMsg = (id: string, at: number, extra: Partial<Msg> = {}): Msg => ({
+  id,
+  role: 'assistant',
+  text: 'Drawing 8 pages (≈$0.40).',
+  at,
+  runAt: at,
+  cards: [{ type: 'renders', id: `${id}_r`, targets: [{ kind: 'page', id: p1.id }], label: 'Drawing 8 pages' }],
+  ...extra
+});
+
+describe('background work never moves the chat past a question asked while it ran (Q-SETTLE)', () => {
+  it('a render started before the question finishes after it: the question stays open, the queue holds, a reload agrees', () => {
+    // A UI run started at 1; the creator wrote at 2; the director asked at 3; the run's outcome lands at 4.
+    const conv = [progressMsg('a_p', 1), user('u1', 'make the hero taller', 2), reply('a_q', [look], 3), jobMsg('a_done', 1, 4)];
+    const doc = { ...base, conversation: conv };
+    expect(settleIn(doc, 'k_q')).toEqual({ state: 'open' });
+    expect(isHiddenSettle(look, settleIn(doc, 'k_q'))).toBe(false);
+    expect(isOpenQuestion(doc)).toBe(true);
+    expect(settleIn(reload(doc), 'k_q')).toEqual({ state: 'open' });
+    expect(buildSettleIndex(reload(doc)).get(settleKey('a_q', 'k_q'))).toEqual({ state: 'open' });
+  });
+
+  it("the director's own run (hosted in the reply that asks): its outcome leaves the question open", () => {
+    // The run starts during the turn (2), the reply is committed when the turn ends (3), the outcome after it (4).
+    const r: Card = { type: 'renders', id: 'k_r', targets: [{ kind: 'page', id: p1.id }], label: 'Drawing page 1' };
+    const doc = { ...base, conversation: [user('u0', 'draw page 1', 1), reply('a_q', [r, look], 3), jobMsg('a_done', 2, 4)] };
+    expect(settleIn(doc, 'k_q')).toEqual({ state: 'open' });
+    expect(isOpenQuestion(doc)).toBe(true);
+  });
+
+  it('suggested looks, a conflict, a pending publish and an outage card stay as they were under such an outcome', () => {
+    const sp: Card = { type: 'style_presets', id: 'k_sp', presetIds: ['noir-ink', 'watercolor'] };
+    const conflict: Card = { type: 'conflict', id: 'k_conf', items: [{ id: 'i1', where: { pageId: p1.id, label: 'page 1 · panel 1' }, mine: 'A', theirs: 'B', proposed: [] }] };
+    const pub: Card = { type: 'publish', id: 'k_pub', mode: 'publish', status: 'pending' };
+    const out: Card = { type: 'model_outage', id: 'k_out', modelId: 'nano-banana', options: [{ kind: 'wait_and_retry' }] as never };
+    // The late progress message of a run the turn started (jobs.ts startProgress, not hostable) lands below the reply.
+    const late = { ...progressMsg('a_late', 4), runAt: 2 };
+    for (const [card, state] of [[sp, 'live'], [conflict, 'open'], [pub, 'live'], [out, 'live']] as const) {
+      const doc = { ...base, conversation: [user('u0', 'go', 1), reply('a1', [card], 3), late] };
+      expect(settleIn(doc, card.id), card.type).toEqual({ state });
+      expect(isHiddenSettle(card, settleIn(doc, card.id)), card.type).toBe(false);
+    }
+  });
+
+  it("the creator's own tap after the question still moves past it: its progress, and its result rewritten in place", () => {
+    const asked = [user('u0', 'Start', 1), reply('a_q', [look], 3)];
+    const progress = { ...base, conversation: [...asked, progressMsg('a_p', 5)] };
+    expect(settleIn(progress, 'k_q')).toEqual({ state: 'settled', outcome: 'skipped' });
+    expect(isOpenQuestion(progress)).toBe(false);
+    const result = { ...base, conversation: [...asked, jobMsg('a_p', 5, 5)] };
+    expect(settleIn(result, 'k_q')).toEqual({ state: 'settled', outcome: 'skipped' });
+    expect(settleIn(reload(result), 'k_q')).toEqual(settleIn(result, 'k_q'));
+  });
+
+  it('background work that asks something new moves the chat on like any turn', () => {
+    const ask: Card = { type: 'options', id: 'k_q2', question: 'Redraw page 3?', choices: [{ id: 'y', label: 'Yes' }] };
+    const doc = { ...base, conversation: [user('u0', 'go', 1), reply('a_q', [look], 3), jobMsg('a_done', 2, 4, { cards: [ask] })] };
+    expect(settleIn(doc, 'k_q')).toEqual({ state: 'settled', outcome: 'skipped' });
+    expect(settleIn(doc, 'k_q2')).toEqual({ state: 'open' });
+    expect(isOpenQuestion(doc)).toBe(true);
+  });
+
+  it('a later user message still settles the question, outcome or not', () => {
+    const doc = { ...base, conversation: [user('u0', 'go', 1), reply('a_q', [look], 3), jobMsg('a_done', 2, 4), user('u1', 'never mind', 5)] };
+    expect(settleIn(doc, 'k_q')).toEqual({ state: 'settled', outcome: 'skipped' });
+  });
+
+  it('movesOn weighs a background message against the card it would pass', () => {
+    const done = jobMsg('a_done', 2, 4);
+    expect(movesOn(done)).toBe(true);
+    expect(movesOn(done, { at: 3 })).toBe(false);
+    expect(movesOn(done, { at: 2 })).toBe(true);
+    expect(movesOn(done, { at: 1 })).toBe(true);
+    expect(movesOn(laterTurn(), { at: 99 })).toBe(true);
+    expect(carriesAsk(done)).toBe(false);
+    expect(carriesAsk(reply('a', [look]))).toBe(true);
+    expect(carriesAsk(reply('a', [{ type: 'options', id: 'o', question: 'Say more?', choices: [] }]))).toBe(false);
+  });
+});
+
+describe("the server's answer rule (passedBy 'user': the director's history)", () => {
+  it('a question only assistant turns followed is still open there; a user message passes it', () => {
+    const conv = [user('u0', 'Start', 1), reply('a_q', [look], 3), laterTurn()];
+    const doc = { ...base, conversation: conv };
+    expect(cardSettle(doc, 1, look)).toEqual({ state: 'settled', outcome: 'skipped' });
+    expect(cardSettle(doc, 1, look, { passedBy: 'user' })).toEqual({ state: 'open' });
+    const typed = { ...base, conversation: [...conv, user('u1', 'never mind', 40)] };
+    expect(cardSettle(typed, 1, look, { passedBy: 'user' })).toEqual({ state: 'settled', outcome: 'skipped' });
+  });
+});
+
 describe('movesOn', () => {
   it('a user message and a new assistant turn move on; an info-only notice and an empty message do not', () => {
     expect(movesOn(user('u', 'hi'))).toBe(true);
@@ -242,24 +346,34 @@ describe('the queue holds on the newest question', () => {
 });
 
 describe('guard: every card type has a settle rule', () => {
-  it('the Card union in doc.ts and CARD_SETTLE_RULES name the same types', () => {
-    const src = readFileSync(resolve(process.cwd(), 'shared/comic/doc.ts'), 'utf8');
-    const union = src.slice(src.indexOf('export type Card ='), src.indexOf(';', src.indexOf('| ConflictCard')));
-    const inline = [...union.matchAll(/type:\s*'([a-z_]+)'/g)].map((m) => m[1]);
-    // Cards declared as interfaces are named in the union by interface (ConflictCard here, HistoryCard in history/types.ts).
-    const files = [src, readFileSync(resolve(process.cwd(), 'shared/comic/history/types.ts'), 'utf8')];
-    const iface = (name: string) => {
-      for (const file of files) {
-        const at = file.indexOf(`export interface ${name}`);
-        if (at >= 0) return /type:\s*'([a-z_]+)'/.exec(file.slice(at, at + 400))?.[1];
+  // CARD_SETTLE_RULES is a Record over Card['type'] and settleWith's switch ends in a `never` check, so a new card type
+  // does not compile without a rule in both; the KINDS table above must then run it through (a)-(d).
+
+  /** Each card that declares `staysLive`, in the state that keeps it live, after a typed reply and a later turn. */
+  const STAYS_LIVE: Record<string, { card: Card; doc?: Partial<ComicDoc>; opts?: Parameters<typeof cardSettle>[3]; plain?: Card }> = {
+    gate: { card: { type: 'gate', id: 'k_gate', gateId: 'g1' }, doc: { gate: openGate } },
+    publish: { card: { type: 'publish', id: 'k_pub', mode: 'publish', status: 'running' }, plain: { type: 'publish', id: 'k_pub', mode: 'publish', status: 'pending' } },
+    breakdown: { card: { type: 'breakdown', id: 'k_bd', view: 'plan', gateId: 'g1' } as Card, doc: { gate: openGate } },
+    renders: {
+      card: { type: 'renders', id: 'k_r', targets: [{ kind: 'page', id: p1.id }], label: 'Drawing page 1' },
+      doc: { pages: base.pages.map((p, i) => (i === 0 ? { ...p, render: { ...p.render, status: 'rendering' as const } } : p)) }
+    },
+    translation: { card: { type: 'translation', id: 'k_tr', languages: ['te'] }, opts: { working: true } },
+    model_outage: { card: { type: 'model_outage', id: 'k_out', modelId: 'nano-banana', options: [{ kind: 'wait_and_retry' }] as never }, opts: { retrying: ['k_out'] } }
+  };
+
+  it('every rule that says it stays live does, and only those', () => {
+    const declared = Object.entries(CARD_SETTLE_RULES).filter(([, r]) => r.staysLive !== undefined).map(([t]) => t).sort();
+    expect(Object.keys(STAYS_LIVE).sort()).toEqual(declared);
+    for (const [type, c] of Object.entries(STAYS_LIVE)) {
+      for (const after of [user('u1', 'make it rain'), laterTurn()]) {
+        const doc = { ...base, ...(c.doc || {}), conversation: [reply('a1', [c.card]), after] };
+        expect(['open', 'live'], `${type} after ${after.role}`).toContain(cardSettle(doc, 0, c.card, c.opts).state);
+        // Without the condition that keeps it, it settles like any card the chat moved past.
+        const plain = c.plain ?? c.card;
+        expect(cardSettle({ ...base, conversation: [reply('a1', [plain]), after] }, 0, plain).state, `${type} plain`).toBe('settled');
       }
-      return undefined;
-    };
-    const names = [...union.matchAll(/\|\s*([A-Z][A-Za-z]+Card)\b/g)].map((m) => m[1]);
-    expect(names.sort()).toEqual(['ConflictCard', 'HistoryCard']);
-    const named = names.map(iface).filter((t): t is string => !!t);
-    expect(named).toHaveLength(names.length);
-    expect([...new Set([...inline, ...named])].sort()).toEqual(Object.keys(CARD_SETTLE_RULES).sort());
+    }
   });
 
   it('every rule says what the card offers and, where it stays live, why', () => {

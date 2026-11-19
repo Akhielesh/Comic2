@@ -130,3 +130,35 @@ describe('the options vanish once the conversation has moved on', () => {
     expect(screen.queryByText(/the board shows the latest/)).toBeNull();
   });
 });
+
+describe('background work and the newest ask (Q-SETTLE)', () => {
+  it("a render's outcome landing after the question the director asked meanwhile leaves the question live", () => {
+    // A run the creator started (1); they wrote (2); the director asked (3); the run's outcome lands (4), from a run
+    // that started at 1 (Msg.runAt).
+    const conv: Msg[] = [
+      { ...progress, id: 'a0', at: 1, runAt: 1 },
+      { id: 'u1', role: 'user', text: 'make the hero taller', at: 2 },
+      { id: 'a1', role: 'assistant', text: 'Sure. One question first:', at: 3, cards: [look] },
+      { id: 'a2', role: 'assistant', text: '8 pages drawn.', at: 4, runAt: 1, nextSteps: [{ label: 'Read it', client: { type: 'open_reader' }, usd: 0 }] }
+    ];
+    for (const d of [makeSampleDoc({ conversation: conv }), reload(makeSampleDoc({ conversation: conv }))]) {
+      const { container, unmount } = render(<ConversationPane studio={makeFakeStudio({ doc: d, caps: DEFAULT_CAPS })} />);
+      expect(within(slot(container, 'q_look')!).getByRole('button', { name: /Noir ink/ })).toBeEnabled();
+      unmount();
+    }
+  });
+
+  it('a reply that renders nothing takes no slot in the log, offscreen wrapper included', () => {
+    // Twelve older exchanges, then the wordless question the chat moved past, then six more messages: the question's
+    // reply is old enough to sit in a content-visibility wrapper, which must not be there at all.
+    const filler: Msg[] = Array.from({ length: 12 }, (_, i) => ({ id: `f${i}`, role: i % 2 ? 'assistant' : 'user', text: `m${i}`, at: 10 + i }) as Msg);
+    const wordless: Msg = { id: 'a_q', role: 'assistant', text: '', at: 30, cards: [look] };
+    const tail: Msg[] = Array.from({ length: 8 }, (_, i) => ({ id: `t${i}`, role: i % 2 ? 'assistant' : 'user', text: `n${i}`, at: 40 + i }) as Msg);
+    const { container } = render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation: [...filler, wordless, ...tail] }), caps: DEFAULT_CAPS })} />);
+    const log = screen.getByRole('log');
+    const wrappers = [...log.querySelectorAll(':scope > .cv-auto')];
+    expect(wrappers.length).toBeGreaterThan(0);
+    expect(wrappers.filter((w) => !w.firstElementChild)).toHaveLength(0);
+    expect(slot(container, 'q_look')).toBeNull();
+  });
+});

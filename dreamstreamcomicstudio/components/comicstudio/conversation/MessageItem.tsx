@@ -440,6 +440,27 @@ export const StreamingCaret: React.FC = () => (
 );
 
 
+/** The cards of a reply this client can render (known types, or a registered feature card). */
+const knownCards = (msg: Msg): Card[] =>
+  (Array.isArray(msg.cards) ? msg.cards : []).filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)));
+
+/**
+ * A reply that renders nothing at all (Q-SETTLE): no words, not streaming, no chips, and every card it has is a settled
+ * card that shows nothing (a question the chat moved past with nothing chosen, looks nobody picked, a gate's own
+ * breakdown). Pure, so the pane can leave the row out entirely (no empty offscreen wrapper holding room) and the row
+ * agrees with it.
+ */
+export const assistantRowEmpty = (
+  msg: Msg,
+  opts: { draft?: string; streaming?: boolean; settles?: SettleIndex; showSuggestions?: boolean; doc?: ComicDoc | null }
+): boolean => {
+  if (msg.role !== 'assistant' || opts.streaming || !opts.settles) return false;
+  if (stripMarkdownImages(opts.draft ?? msg.text ?? '')) return false;
+  const known = knownCards(msg);
+  if (!known.length || !known.every((c) => typeof c.id === 'string' && isHiddenSettle(c, settleOf(opts.settles!, msg, c)))) return false;
+  return !(opts.showSuggestions && chipsFor(msg, opts.doc ?? null, { fallback: true }).length > 0);
+};
+
 export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio, settles, fresh }) => {
   const text = stripMarkdownImages(draft ?? msg.text ?? '');
   const cards = Array.isArray(msg.cards) ? msg.cards : [];
@@ -450,10 +471,9 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
   // Q-SETTLE: a settled card that shows nothing takes no room at all — a gate's own breakdown (folded into the gate's
   // line), a question the chat moved past with nothing chosen, looks nobody picked.
   const hidden = (card: Card): boolean => isHiddenSettle(card, settleFor(card));
-  const known = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)));
-  const shown = known.filter((c) => !hidden(c));
+  const shown = knownCards(msg).filter((c) => !hidden(c));
   // A reply that only asked something the chat has moved past, with no words of its own, leaves nothing behind.
-  if (!text && !streaming && known.length > 0 && shown.length === 0 && chips.length === 0) return null;
+  if (assistantRowEmpty(msg, { draft, streaming, settles, showSuggestions, doc: studio.doc })) return null;
   // Never silent: a committed reply with no words and nothing this client can show (no cards, or
   // only card types it doesn't know yet) still says something.
   const silent = !text && !streaming && shown.length === 0;
