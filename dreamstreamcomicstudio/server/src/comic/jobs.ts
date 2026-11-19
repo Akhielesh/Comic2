@@ -172,7 +172,7 @@ import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
 import { panelizeAfterLetter } from './panelize/server.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout, PANEL_EDIT_REFERENCE_PATH } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
-import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
+import { checkRenderSafety, mergeRenderVerdicts, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
 import { breakdownCardFor } from './tools/breakdown.js';
 import {
@@ -3815,10 +3815,16 @@ class RenderRun {
     const held: Card[] = [];
     const work = (async () => {
       if (job.qcPageId) {
-        const lettered = await letterPage(ctx, job.qcPageId, dataUrl, this.signal, (card) => held.push(card));
-        verdict = lettered.safety;
+        // The image-only check (S14) runs beside the page check rather than only when QC gave no verdict: the page is
+        // then stored by:'check' and publishing spends nothing on it (PUB-1). It reads the preview cached at save.
+        const [lettered, checked] = await Promise.all([
+          letterPage(ctx, job.qcPageId, dataUrl, this.signal, (card) => held.push(card)),
+          checkRenderSafety(ctx, job.target, asset).catch(() => undefined)
+        ]);
+        verdict = mergeRenderVerdicts(lettered.safety, checked);
+      } else {
+        verdict = await checkRenderSafety(ctx, job.target, asset).catch(() => undefined);
       }
-      if (!verdict) verdict = await checkRenderSafety(ctx, job.target, asset).catch(() => undefined);
       await onRenderVerdict(ctx, job.target, asset, verdict);
     })();
     const timer = delay(JOB_TIMINGS.safetyFailOpenMs);

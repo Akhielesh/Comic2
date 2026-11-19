@@ -5,7 +5,7 @@
 //   L2 input   prefilterText ($0, lexicon + obscenity) → classifier only for ambiguous text,
 //              long pastes, scripts and long non-Latin text → upload/attachment image checks
 //   L3 output  rating rules in the director/writer/compilers (contentPolicyBlock here)
-//   L4 renders QC verdict (verdictFromVision) or a standalone check → onRenderVerdict
+//   L4 renders QC verdict (verdictFromVision) and/or a standalone image check → mergeRenderVerdicts → onRenderVerdict
 //   L5 publish runPublishGate (both visibilities, published translations included)
 //   L6 UX      deterministic warm redirects (respondBlocked), adapt notes, IP steering
 //
@@ -504,7 +504,10 @@ export async function screenUploadPreview(
   return { decision: 'allow', verdict, ...(check.describe ? { describe: check.describe } : {}) };
 }
 
-/** Standalone render check on the platform key (when QC did not fold one in). undefined = unchecked. */
+/**
+ * Standalone image-only render check on the platform key: the only check for covers and sheets, and beside the page
+ * check for every new page (mergeRenderVerdicts). undefined = unchecked.
+ */
 export async function checkRenderSafety(ctx: StudioContext, target: RenderTarget, asset: AssetRef): Promise<SafetyVerdict | undefined> {
   const deps = safetyDeps();
   if (!deps.enabled()) return undefined;
@@ -539,6 +542,28 @@ export async function checkRenderSafety(ctx: StudioContext, target: RenderTarget
     operation: 'comic.safety.render'
   });
   return check.verdict;
+}
+
+/**
+ * One stored verdict from the two checks a new page gets side by side (jobs.ts afterSave): the page check (QC, which
+ * also read the author's script) and the image-only check above. Both answered → the stricter of the two (higher
+ * rating; X or a quarantine wins; categories merged; notes and model from the stricter, the image check's on a tie),
+ * stored as by:'check' so the publish gate reuses it at $0 (S14: an image-only check has rated it). Only one answered →
+ * that one exactly as it is, so a lone QC pass stays by:'qc' and the gate still re-rates it. Neither → undefined. An
+ * answer with no rating (and no quarantine) counts as no answer.
+ */
+export function mergeRenderVerdicts(qc?: SafetyVerdict, check?: SafetyVerdict): SafetyVerdict | undefined {
+  const answered = (v?: SafetyVerdict): v is SafetyVerdict => !!v && (!!v.assessed || !!v.quarantined);
+  if (!answered(qc) || !answered(check)) return answered(qc) ? qc : answered(check) ? check : (qc ?? check);
+  const rank = (v: SafetyVerdict) => (v.quarantined ? ratingRank('X') : ratingRank(v.assessed!));
+  const top = rank(qc) > rank(check) ? qc : check;
+  const categories = [...new Set([...(qc.categories || []), ...(check.categories || [])])];
+  const out: SafetyVerdict = { ...top, by: 'check' };
+  delete out.pending;
+  delete out.categories;
+  if (categories.length) out.categories = categories;
+  if (qc.quarantined || check.quarantined) out.quarantined = true;
+  return out;
 }
 
 /** vision.ts QC folds the safety block into its JSON; missing ⇒ undefined (unchecked, never pass). */
