@@ -103,6 +103,32 @@ export const shouldGatePage = (pathname: string): boolean => !isAgentOpenPath(pa
 export const isLegacyReaderLink = (url: URL): boolean =>
   url.pathname === '/' && url.searchParams.get('view') === 'read' && url.searchParams.has('id');
 
+// ── The Library ───────────────────────────────────────────────────────────────────────
+
+/** Where the app draws the Library: `/?view=gallery` (App.tsx restores the view from the query;
+ *  the share sheet's "See it in the Library" link is the same URL). The SPA has no `/library`
+ *  route, so that short address is a redirect here, never a page of its own. */
+export const LIBRARY_VIEW = 'gallery';
+
+/** `/library` (with or without the trailing slash): the short link a post can carry. Static files
+ *  under `/library/<pack>/…` (sticker packs) are not it. */
+export const isLibraryShortLink = (pathname: string): boolean => pathname === '/library' || pathname === '/library/';
+
+/** The Library itself: `/?view=gallery`, with or without other params (a bundled sample opens as
+ *  `&sample=…` inside it). */
+export const isLibraryView = (url: URL): boolean => url.pathname === '/' && url.searchParams.get('view') === LIBRARY_VIEW;
+
+/** The Library's address on the public host, carrying the short link's other params (utm tags and the
+ *  like) behind `view=gallery`. Rebuilt with URLSearchParams, so nothing is echoed unencoded. */
+export const libraryLocation = (url: URL, cfg: EdgeConfig): string => {
+  const target = new URL('/', `https://${cfg.publicHost}`);
+  target.searchParams.set('view', LIBRARY_VIEW);
+  url.searchParams.forEach((value, key) => {
+    if (key !== 'view') target.searchParams.append(key, value);
+  });
+  return target.toString();
+};
+
 /** HTML the edge rebrands as Comic Studio (everything but share pages and legacy reader heads). */
 export const shouldBrandHtml = (url: URL): boolean => !isSharePath(url.pathname) && !isLegacyReaderLink(url);
 
