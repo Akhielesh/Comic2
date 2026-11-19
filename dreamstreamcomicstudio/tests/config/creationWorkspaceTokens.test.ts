@@ -8,16 +8,18 @@
  *    so it fell back to Inter), no face but the display token, no `--ds-*` token with a spelled fallback.
  * 2. The studio's frame: the header is `--header-h` tall (56, 48 under 600) on the canvas with the soft hairline, as
  *    ComicStudio's StudioHeader; the left column is the rail's 14rem on `--ds-surface-soft` with the rail's hairline;
- *    hover rows `--ds-hover`, the current row `--ds-active`; the FOCUS_RING outline and the FIELD ring; FIELD edges
- *    and the canvas on the fields; the z-ladder and the overlay shadow on the phone drawer; transitions only when
- *    motion is welcome.
+ *    hover and current rows in the studio rail's own tints (WorkspaceNavigation, which this nav sits under as the
+ *    rail's footer); the FOCUS_RING outline and the FIELD ring, with FIELD's transparent outline so forced colours
+ *    still paints focus; FIELD edges and the canvas on the fields; the z-ladder and the overlay shadow on the phone
+ *    drawer; transitions only when motion is welcome.
  * 3. One fill per view, and no cobalt on work surfaces: New comic is an outline while the New comic view shows Start
  *    (the view's one fill), and neither carries `.comics-primary-action` (whose Paper block is the public chrome's
  *    cobalt, decision Q5).
- * 4. comicsShell.css: the Atlas values of `.comics-primary-action` are the skin's tokens, and they resolve to the same
- *    pixels the literals painted, in light and dark.
+ * 4. comicsShell.css: the Atlas values of `.comics-primary-action` are the skin's tokens, and under Atlas they resolve
+ *    to the same pixels the literals painted, in light and dark. Outside a skin they take the root accent; that is
+ *    accepted because the class renders only on the comics host, which always boots Atlas.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -26,6 +28,7 @@ import { APP_ROOT, indexCss, norm, parseRules, resolveColor, rgbaString, stripCo
 import { ComicIdeaForm, ComicProjectNavigation } from '../../components/comicstudio/ComicCreationWorkspace';
 import { PHONE_HEADER_PX, phoneChromeVars } from '../../components/comicstudio/mobile/shell/phoneChrome';
 import { COMPACT_HEIGHT, SPLIT_MIN_WIDTH } from '../../components/comicstudio/mobile/formFactor';
+import { COMICS_HOST, comicsSkin } from '../../services/productHost';
 
 const read = (rel: string) => readFileSync(path.join(APP_ROOT, rel), 'utf8');
 const CSS = 'components/comicstudio/comicCreationWorkspace.css';
@@ -129,11 +132,20 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     expect(column.get('border-right')).toBe('1px solid var(--ds-hairline)');
   });
 
-  it('rows hover in --ds-hover and the current row is --ds-active (no menu-row tint on the rail)', () => {
+  it('rows hover and the current row take the studio rail’s own tints (one “current” tint in the rail)', () => {
+    // ComicProjectNavigation is also the studio rail's footer (App.tsx navigationFooter → WorkspaceNavigation), right
+    // under the stage tabs, so its rows read the tints WorkspaceNavigation gives its tabs.
+    const rail = read('components/comicstudio/mobile/shell/WorkspaceNavigation.tsx');
+    const tabs = /selected \? '([^']*)' : '([^']*)'/.exec(rail);
+    expect(tabs, 'WorkspaceNavigation stage tab classes').not.toBeNull();
+    const selectedTint = /(?:^|\s)bg-\[(var\(--ds-[\w-]+\))\]/.exec(tabs![1])?.[1];
+    const hoverTint = /(?:^|\s)hover:bg-\[(var\(--ds-[\w-]+\))\]/.exec(tabs![2])?.[1];
+    expect(selectedTint).toMatch(/^var\(--ds-/);
+    expect(hoverTint).toMatch(/^var\(--ds-/);
     expect(source).not.toContain('--ds-overlay-hover');
-    expect(baseDecls('.comic-project-nav button:hover:not(:disabled)').get('background')).toBe('var(--ds-hover)');
-    expect(baseDecls('.comic-workspace-icon:hover').get('background')).toBe('var(--ds-hover)');
-    expect(baseDecls('.comic-project-nav button[aria-current=page]:not(.comic-project-new)').get('background')).toBe('var(--ds-active)');
+    expect(baseDecls('.comic-project-nav button:hover:not(:disabled)').get('background')).toBe(hoverTint);
+    expect(baseDecls('.comic-workspace-icon:hover').get('background')).toBe(hoverTint);
+    expect(baseDecls('.comic-project-nav button[aria-current=page]:not(.comic-project-new)').get('background')).toBe(selectedTint);
   });
 
   it('every control shows the FOCUS_RING outline, the fields the FIELD ring', () => {
@@ -143,13 +155,17 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     for (const sel of ['.comic-creation-workspace button:focus-visible', '.comic-workspace-drawer button:focus-visible']) {
       expect(baseDecls(sel).get('outline-offset'), sel).toBe('2px');
     }
-    const field = baseDecls('.comic-idea-form input:focus-visible');
-    expect(field.get('outline')).toBe('none');
-    expect(field.get('border-color')).toBe('var(--ds-focus)');
-    expect(field.get('box-shadow')).toBe('0 0 0 2px var(--ds-canvas), 0 0 0 4px var(--ds-focus)');
-    const compose = baseDecls('.comic-idea-compose:focus-within');
-    expect(compose.get('border-color')).toBe('var(--ds-focus)');
-    expect(compose.get('box-shadow')).toBe('0 0 0 2px var(--ds-canvas), 0 0 0 4px var(--ds-focus)');
+    for (const sel of ['.comic-idea-form input:focus-visible', '.comic-idea-compose:focus-within']) {
+      const field = baseDecls(sel);
+      expect(field.get('border-color'), sel).toBe('var(--ds-focus)');
+      expect(field.get('box-shadow'), sel).toBe('0 0 0 2px var(--ds-canvas), 0 0 0 4px var(--ds-focus)');
+      // Forced colours drops box-shadow and recolours borders, so focus needs an outline there. FIELD's
+      // `focus-visible:outline-none` compiles (Tailwind 3) to a 2 px transparent outline 2 px off, which forced colours
+      // paints in a system colour; `outline: none` would leave the field with no focus at all.
+      expect(field.get('outline'), sel).toBe('2px solid transparent');
+      expect(field.get('outline-offset'), sel).toBe('2px');
+    }
+    expect(read('components/chat/studioDesign.ts')).toMatch(/export const FIELD = `[^`]*\bfocus-visible:outline-none\b/);
     // Under "increase contrast" the outline is 3 px, as FOCUS_RING's contrast-more step.
     const more = rules.filter((r) => r.parents.join(' ').includes('prefers-contrast: more') && /:focus-visible/.test(r.selector));
     expect(more.map((r) => declsOf(r).get('outline-width'))).toContain('3px');
@@ -248,7 +264,23 @@ describe('comicsShell.css: the Atlas primary is the skin’s ink, as tokens', ()
     for (const r of atlasRules) expect(r.body, r.selector).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
   });
 
-  it('paints the same pixels the literals did, in light and dark', () => {
+  it('outside a skin it takes the root accent, accepted because it renders only on the comics host, which boots Atlas', () => {
+    // The Atlas values are inherited tokens, not literals: with no Atlas ancestor (the QA harness at skin=none) the
+    // fill is the root accent. Production never gets there: the class is used only by the comics host's own chrome,
+    // and that host always runs under Atlas.
+    const light = tokensOf(shellRules, (s) => s === '.comics-primary-action');
+    const lookRoot = cascade(light, ROOT_TOKENS);
+    expect(rgbaString(resolveColor('var(--ds-accent-fill)', lookRoot))).toBe(rgbaString(resolveColor('var(--ds-accent)', cascade(ROOT_TOKENS))));
+    expect(comicsSkin(COMICS_HOST)).toBe('atlas');
+    const users = (dir: string): string[] => readdirSync(path.join(APP_ROOT, dir), { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name))
+      .map((e) => path.relative(APP_ROOT, path.join(e.parentPath, e.name)).split(path.sep).join('/'))
+      .filter((rel) => read(rel).includes('comics-primary-action'));
+    expect(users('components').sort()).toEqual(['components/comicshost/ComicsHeader.tsx', 'components/comicshost/ComicsLanding.tsx']);
+    expect(read('App.tsx')).not.toContain('comics-primary-action');
+  });
+
+  it('paints the same pixels the literals did under Atlas, in light and dark', () => {
     const light = tokensOf(shellRules, (s) => s === '.comics-primary-action');
     const dark = tokensOf(shellRules, (s) => s === '.comics-primary-action' || s === '.dark .comics-primary-action');
     const lookLight = cascade(light, ATLAS_LIGHT, ROOT_TOKENS);
