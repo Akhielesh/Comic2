@@ -3,7 +3,7 @@
 // outlined "Make comics like this" link beside it, a ghost row for everything else, the display face for
 // "The End" (no Bangers), 44 px targets, and the paper's focus ring on every control.
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { FONT_DISPLAY } from '../../chat/studioDesign';
@@ -77,7 +77,7 @@ describe('EndCard: one filled button, in order of preference', () => {
     const primary = screen.getByRole('link', { name: 'Read next' });
     expect(primary).toHaveAttribute('data-primary');
     expect(primary).toHaveAttribute('href', UP_NEXT.href);
-    expect(primary).toHaveAccessibleDescription(UP_NEXT.title);
+    expect(primary).toHaveAccessibleDescription(`${UP_NEXT.title} ${UP_NEXT.logline}`);
     expect(filled()).toEqual([primary]);
     const upNext = card().querySelector('[data-part="up-next"]') as HTMLElement;
     expect(upNext).toBeTruthy();
@@ -136,6 +136,54 @@ describe('EndCard: one filled button, in order of preference', () => {
     expect(primaries()).toHaveLength(1);
     expect(screen.getByRole('button', { name: /Read again/ })).toHaveAttribute('data-primary');
     expect(card().querySelectorAll('a')).toHaveLength(0);
+  });
+
+  // The URL parser drops tab, CR and LF anywhere and reads "\" as "/", so each of these becomes //host.
+  it.each(['/\t/elsewhere.example/', '/\n/elsewhere.example/', '/\r\\elsewhere.example/', '/\\elsewhere.example/', '\t//elsewhere.example/'])(
+    'a path the browser would read as another host (%j) is never rendered, as a link or as a cover',
+    (bad) => {
+      renderCard({
+        nextIssue: { ...NEXT_ISSUE, href: bad },
+        upNext: { ...UP_NEXT, href: bad },
+        browseLibraryHref: bad,
+        makeLikeThisHref: bad
+      });
+      expect(card().querySelectorAll('a')).toHaveLength(0);
+      expect(screen.getByRole('button', { name: /Read again/ })).toHaveAttribute('data-primary');
+      cleanup();
+      renderCard({ upNext: { ...UP_NEXT, coverUrl: bad } });
+      expect(card().querySelector('img')).toBeNull();
+    }
+  );
+
+  it('plain paths and http(s) addresses still render as typed', () => {
+    renderCard({ upNext: UP_NEXT, makeLikeThisHref: '/#register' });
+    expect(screen.getByRole('link', { name: 'Read next' })).toHaveAttribute('href', UP_NEXT.href);
+    expect(screen.getByRole('link', { name: 'Make comics like this' })).toHaveAttribute('href', '/#register');
+    expect(card().querySelector('img')).toHaveAttribute('src', UP_NEXT.coverUrl);
+  });
+});
+
+describe('EndCard: the Up next card hands a tap to its one link', () => {
+  // The card sits inside the reader's tap-to-turn zones (BookStage, WebtoonStage and the inline reader let a tap
+  // on a link through): a tap on the cover must open the comic, never turn the page back.
+  it.each([
+    ['Up next', { upNext: UP_NEXT }, 'Read next', UP_NEXT],
+    ['the next issue', { nextIssue: NEXT_ISSUE }, 'Next: Issue 2', NEXT_ISSUE]
+  ] as const)('%s: every part of the card is inside a hidden copy of the filled link (no second tab stop)', (_label, actions, name, next) => {
+    renderCard(actions);
+    const primary = screen.getByRole('link', { name });
+    const part = card().querySelector<HTMLElement>('[data-part="up-next"]')!;
+    expect(part.tagName).toBe('A');
+    expect(part).toHaveAttribute('href', primary.getAttribute('href'));
+    expect(part).toHaveAttribute('tabindex', '-1');
+    expect(part).toHaveAttribute('aria-hidden', 'true');
+    for (const el of [part, ...Array.from(part.querySelectorAll<HTMLElement>('*'))]) expect(el.closest('a')).toBe(part);
+    expect(part.querySelector('img')).toBeTruthy();
+    expect(within(part).getByText(next.title).closest('a')).toBe(part);
+    // Screen readers meet the comic once, on the filled link: its title (and logline) are the link's description.
+    expect(screen.getAllByRole('link').filter((a) => a.getAttribute('href') === next.href)).toEqual([primary]);
+    expect(primary).toHaveAccessibleDescription('logline' in next ? `${next.title} ${next.logline}` : next.title);
   });
 });
 

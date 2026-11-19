@@ -641,3 +641,42 @@ describe('PublicComicReader — project link and owner preview', () => {
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
   });
 });
+
+// The host decides which End card actions a reader gets (sharepage SPEC §5.0.5): a visitor gets Browse the Library
+// (the one filled link when there is nothing to read next) and "Make comics like this" (register interest) beside
+// it; the owner never gets register interest; an embed gets neither, so Read again stays the filled button.
+describe('PublicComicReader — the End card the host gives', () => {
+  const endCardOf = async (props: Partial<React.ComponentProps<typeof PublicComicReader>> = {}, embed = false) => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG, embed }} start={{ page: 1 }} {...props} />);
+    fireEvent.keyDown(await screen.findByTestId('comic-reader'), { key: 'End' });
+    return screen.findByTestId('end-card');
+  };
+
+  it('a visitor: the filled "Browse the Library" and the outlined "Make comics like this" to register interest', async () => {
+    const card = await endCardOf();
+    const library = within(card).getByRole('link', { name: 'Browse the Library' });
+    expect(library).toHaveAttribute('data-primary');
+    expect(library).toHaveAttribute('href', '/?view=gallery');
+    const make = within(card).getByRole('link', { name: 'Make comics like this' });
+    expect(make).not.toHaveAttribute('data-primary');
+    expect(make.getAttribute('href')).toMatch(/\/#register$/);
+    expect(make.className.split(/\s+/)).toContain('border');
+    expect(card.querySelectorAll('[data-primary]')).toHaveLength(1);
+  });
+
+  it('the owner reading their own link: the Library, but never "Make comics like this"', async () => {
+    const card = await endCardOf({ isOwner: true });
+    expect(within(card).getByRole('link', { name: 'Browse the Library' })).toHaveAttribute('data-primary');
+    expect(within(card).queryByRole('link', { name: 'Make comics like this' })).toBeNull();
+  });
+
+  it('an embed (/c/<slug>/embed): neither link, and Read again is the one filled button', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}/embed`);
+    const card = await endCardOf({}, true);
+    expect(within(card).queryByRole('link', { name: 'Browse the Library' })).toBeNull();
+    expect(within(card).queryByRole('link', { name: 'Make comics like this' })).toBeNull();
+    expect(within(card).getByRole('button', { name: /Read again/ })).toHaveAttribute('data-primary');
+    expect(card.querySelectorAll('[data-primary]')).toHaveLength(1);
+  });
+});

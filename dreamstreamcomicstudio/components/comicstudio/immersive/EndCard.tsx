@@ -6,6 +6,14 @@
 // embeds). Everything else (Read again, Share, another language, Download) is a ghost row. Focus lands on the
 // heading when the reader arrives here. The End card is a page: its focus ring is the paper's
 // (--ds-reader-focus, ≥ 4.5:1 on the paper in both themes), never the app accent, and it takes no colour.
+//
+// The Up next / next-issue card is drawn here, not with components/ds/ComicCard (variant "end"), on purpose:
+// that card is app chrome (--ds-surface / --ds-ink / --ds-muted, which turn dark in the dark theme, on a card
+// that sits on the always-light paper; the app's --ds-focus outline; LIFT; a tinted CoverImage box), its title is
+// a second link to the same comic beside the filled one, and it has no logline. It keeps ComicCard's tap rule:
+// the whole card hands a tap to the one filled link (a copy of it, out of the tab order and hidden from screen
+// readers, which meet the comic once, on the filled link: title and logline are its description). That copy is
+// also what keeps a tap on the cover from turning the page: the stages let a tap on a link through.
 
 import React from 'react';
 import { ArrowRight, Download, Languages, LibraryBig, RotateCcw, Share2 } from 'lucide-react';
@@ -65,11 +73,24 @@ const COPY = {
   madeWith: 'Made with DreamStream'
 };
 
-/** A same-origin path or an http(s) address; anything else (javascript:, data:, a protocol-relative //host) is dropped. */
+/** Resolves a path to check it stays on the page's own origin (any fixed origin does: only "same or not" matters). */
+const PATH_BASE = 'https://end-card.invalid';
+
+/**
+ * A same-origin path or an http(s) address; anything else (javascript:, data:, a protocol-relative //host) is
+ * dropped. Control characters and backslashes are refused outright: the URL parser drops tab, CR and LF anywhere
+ * and reads "\" as "/", so "/\t/host" or "/\host" would become //host (services/safeNext.ts has the same rule). A
+ * path must then resolve to the same origin, and an address must parse as http(s).
+ */
 const safeHref = (href: string | undefined): string | undefined => {
   const h = href?.trim();
-  if (!h) return undefined;
-  return /^\/(?![/\\])/.test(h) || /^https?:\/\//i.test(h) ? h : undefined;
+  if (!h || /[\u0000-\u001f\u007f\\]/.test(h)) return undefined;
+  try {
+    if (h.startsWith('/')) return !h.startsWith('//') && new URL(h, PATH_BASE).origin === PATH_BASE ? h : undefined;
+    return /^https?:\/\//i.test(h) && /^https?:$/.test(new URL(h).protocol) ? h : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 type Primary =
@@ -89,8 +110,12 @@ const primaryOf = (a: EndCardActions | undefined): Primary => {
   return { kind: 'readAgain' };
 };
 
-/** Every action: a 44 px pill with the paper's focus ring (offset on the paper, so it reads on any page colour). */
-const BTN = `press inline-flex min-h-11 max-w-full items-center justify-center gap-2 ${RADIUS_ROUND} font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]`;
+/** The paper's focus ring (offset on the paper, so it reads on any page colour), never the app ring. */
+const PAPER_FOCUS = 'outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
+/** Every action: a 44 px pill with the paper's focus ring. */
+const BTN = `press inline-flex min-h-11 max-w-full items-center justify-center gap-2 ${RADIUS_ROUND} font-medium transition-colors ${PAPER_FOCUS}`;
+/** The Up next card: the wash, the panel radius, at least a 44 px target. */
+const NEXT_CARD = `mt-2 flex min-h-11 w-full max-w-[22rem] items-center gap-3 ${RADIUS_PANEL} bg-[var(--ds-reader-wash)] p-2 text-start transition-colors hover:bg-[var(--ds-reader-wash-strong)] ${PAPER_FOCUS}`;
 /** The one filled action: ink on the paper. */
 const FILLED = `${BTN} px-5 text-[14px] bg-[var(--ds-reader-ink)] text-[var(--ds-reader-paper-back)] hover:opacity-90`;
 /** The outlined action beside it: an ink hairline, no fill. */
@@ -101,6 +126,7 @@ const GHOST = `${BTN} px-4 text-[13px] bg-transparent text-[var(--ds-reader-ink)
 export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters, language, onReadAgain, onShare, onDownload, downloadBusy, dense }) => {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const nextTitleId = React.useId();
+  const nextLoglineId = React.useId();
   React.useEffect(() => {
     if (active) heading.current?.focus({ preventScroll: true });
   }, [active]);
@@ -113,6 +139,7 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
   const primary = primaryOf(endCard);
   const makeHref = safeHref(endCard?.makeLikeThisHref);
   const next = primary.kind === 'nextIssue' || primary.kind === 'upNext' ? primary : null;
+  const nextLogline = next?.kind === 'upNext' ? next.logline : undefined;
   const readAgain = (
     <button type="button" onClick={onReadAgain} className={primary.kind === 'readAgain' ? FILLED : GHOST} data-primary={primary.kind === 'readAgain' ? '' : undefined}>
       <RotateCcw className="h-4 w-4" aria-hidden /> {COPY.readAgain}
@@ -142,7 +169,14 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
           </ol>
         )}
         {next && (
-          <div data-part="up-next" className={`mt-2 flex w-full max-w-[22rem] items-center gap-3 ${RADIUS_PANEL} bg-[var(--ds-reader-wash)] p-2 text-start`}>
+          // A copy of the filled link (see the header): a tap anywhere on the card opens it, with no second tab stop.
+          <a
+            href={next.href}
+            tabIndex={-1}
+            aria-hidden="true"
+            data-part="up-next"
+            className={NEXT_CARD}
+          >
             {next.coverUrl && (
               <img
                 src={next.coverUrl}
@@ -157,19 +191,19 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
               <p id={nextTitleId} dir="auto" className="line-clamp-2 text-[14px] font-semibold [overflow-wrap:anywhere]">
                 {next.title}
               </p>
-              {next.kind === 'upNext' && next.logline && (
-                <p dir="auto" className="truncate text-[12px] text-[var(--ds-reader-ink-soft)]">
-                  {next.logline}
+              {nextLogline && (
+                <p id={nextLoglineId} dir="auto" className="truncate text-[12px] text-[var(--ds-reader-ink-soft)]">
+                  {nextLogline}
                 </p>
               )}
             </div>
-          </div>
+          </a>
         )}
         <div className="mt-2 flex max-w-full flex-wrap justify-center gap-2">
           {primary.kind === 'readAgain' ? (
             readAgain
           ) : (
-            <a href={primary.href} className={FILLED} data-primary="" aria-describedby={next ? nextTitleId : undefined}>
+            <a href={primary.href} className={FILLED} data-primary="" aria-describedby={next ? (nextLogline ? `${nextTitleId} ${nextLoglineId}` : nextTitleId) : undefined}>
               {primary.kind === 'library' ? <LibraryBig className="h-4 w-4" aria-hidden /> : null}
               {primary.label}
               {next ? <ArrowRight className="h-4 w-4" aria-hidden /> : null}
