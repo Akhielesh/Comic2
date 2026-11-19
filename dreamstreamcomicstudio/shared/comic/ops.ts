@@ -79,6 +79,7 @@ import {
   type StyleBible,
   type StyleOption,
   type TextTranslation,
+  type TranslationFailure,
   type TranslationRegister,
   type VersionMeta,
   // --- Ship 2 (K2a) ---
@@ -128,7 +129,7 @@ import {
   type LetterStylePatch
 } from './lettering/style.js';
 import { capFor, refsOf, refOwnerKey } from './refs.js';
-import { i18nOf, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextTranslation } from './i18n.js';
+import { i18nOf, isFailureKey, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextTranslation, normalizeTranslationFailure, TRANSLATION_FAILURES_MAX } from './i18n.js';
 import { languageSpec, sameLanguage } from './languages.js';
 import { harmonizePanelSizes, layoutConflicts, layoutPanelCount, parseLayout } from './pageGeometry.js';
 import { isPublicationMirror, type PublishRequest, type PublicationMirror, type PublicationSettingsPatch } from './publication.js';
@@ -230,8 +231,10 @@ export type DocOp =
   /** Create (patch object, edition missing), patch register, or remove (null). */
   | { op: 'edition'; lang: string; patch: { register?: TranslationRegister } | null }
   | { op: 'translation'; lang: string; lineId: string; patch: Partial<TextTranslation> | null }
-  /** Server-only batch upsert (one translator chunk). Never deletes. */
-  | { op: 'translations'; lang: string; lines: Record<string, TextTranslation> }
+  /** Server-only batch upsert (one translator chunk). Never deletes a translation. `failures` (STU-T0) records why a
+   *  line or title (key = line id or EditionTextField) was not translated, or clears a record (null); every id written
+   *  in `lines` loses its record. Empty `lines` with `failures` is a valid change. Unknown ids are ignored. */
+  | { op: 'translations'; lang: string; lines: Record<string, TextTranslation>; failures?: Record<string, TranslationFailure | null> }
   | { op: 'edition_text'; lang: string; field: EditionTextField; value: TextTranslation | null }
   | { op: 'edition_balloon'; lang: string; lineId: string; patch: BalloonGeometryOverride | null }
   | { op: 'glossary_term'; id: string; patch: Partial<GlossaryTerm> | null }
@@ -362,8 +365,10 @@ export type SpendAction =
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
   /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):
-   *  only these lines — the per-line "Re-translate line" (i18n.md §10.1). */
-  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; force?: boolean; overwriteEdits?: boolean } & Quoted)
+   *  the scope — only these lines (and title fields such as 'cover.title') are planned. redo (≤ 200, STU-T0): ids to
+   *  translate again although current (flagged lines; the author's edits still need overwriteEdits). chunkLines
+   *  (STU-T0): translator calls of at most 10 or 20 lines (after a time-out). planTranslation reads all three. */
+  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; redo?: string[]; chunkLines?: 10 | 20; force?: boolean; overwriteEdits?: boolean } & Quoted)
   /** Paid re-check of a drawn page (lettering.md §9): one vision call re-reads the art (QC, faces, speakers), then
    *  the balloons are re-laid around it. TEXT-priced (models.ts RELAYOUT_VISION_USD); gated, budgeted and refused
    *  for restricted accounts like every spend. The free re-layout is `relayout_balloons` (stored QC, no AI). */
@@ -1238,6 +1243,19 @@ const EDITION_FIELDS: Record<EditionTextField, ['cover' | 'brief', 'title' | 'ta
   'brief.logline': ['brief', 'logline']
 };
 
+const isEditionField = (key: string): key is EditionTextField => Object.prototype.hasOwnProperty.call(EDITION_FIELDS, key);
+
+/** The edition without the failure record of `key` (the same object when it has none); an empty map is dropped. */
+const withoutFailure = (e: LanguageEdition, key: string): LanguageEdition => {
+  if (!e.failures || !Object.prototype.hasOwnProperty.call(e.failures, key)) return e;
+  const failures = { ...e.failures };
+  delete failures[key];
+  const next: LanguageEdition = { ...e };
+  if (Object.keys(failures).length) next.failures = failures;
+  else delete next.failures;
+  return next;
+};
+
 const applyI18nOp = (
   doc: ComicDoc,
   op: Extract<DocOp, { op: 'edition' | 'translation' | 'translations' | 'edition_text' | 'edition_balloon' | 'glossary_term' }>
@@ -1259,11 +1277,12 @@ const applyI18nOp = (
     case 'translation': {
       const e = i18n.editions[op.lang];
       if (!e || !lineIdsOf(doc, true).has(op.lineId)) return doc;
+      // The author's edit (or removal) of a line settles its failure record (STU-T0).
       if (op.patch === null) {
         if (!(op.lineId in e.lines)) return doc;
         const lines = { ...e.lines };
         delete lines[op.lineId];
-        return setEdition(doc, op.lang, { ...e, lines });
+        return setEdition(doc, op.lang, withoutFailure({ ...e, lines }, op.lineId));
       }
       if (!isObject(op.patch)) return doc;
       const prev = e.lines[op.lineId];
@@ -1275,22 +1294,56 @@ const applyI18nOp = (
       if (!prev && !(typeof merged.text === 'string' && typeof merged.status === 'string' && typeof merged.sourceHash === 'string' && typeof merged.at === 'number')) return doc;
       const t = normalizeTextTranslation(merged);
       if (!t) return doc;
-      return setEdition(doc, op.lang, { ...e, lines: { ...e.lines, [op.lineId]: t } });
+      return setEdition(doc, op.lang, withoutFailure({ ...e, lines: { ...e.lines, [op.lineId]: t } }, op.lineId));
     }
     case 'translations': {
       const e = i18n.editions[op.lang];
       if (!e || !isObject(op.lines)) return doc;
       const ids = lineIdsOf(doc);
       const lines = { ...e.lines };
-      let changed = false;
+      const written: string[] = [];
       for (const [id, raw] of Object.entries(op.lines)) {
         if (!ids.has(id)) continue;
         const t = normalizeTextTranslation(raw);
         if (!t) continue;
         lines[id] = t;
-        changed = true;
+        written.push(id);
       }
-      return changed ? setEdition(doc, op.lang, { ...e, lines }) : doc;
+      // Failure records (STU-T0): set or clear per live line id or title field; a written line loses its record.
+      const failures: Record<string, TranslationFailure> = { ...(e.failures || {}) };
+      let count = Object.keys(failures).length;
+      let failuresChanged = false;
+      if (isObject(op.failures)) {
+        for (const [key, raw] of Object.entries(op.failures)) {
+          if (!isFailureKey(key) || !(ids.has(key) || isEditionField(key))) continue;
+          const had = Object.prototype.hasOwnProperty.call(failures, key);
+          if (raw === null) {
+            if (had) {
+              delete failures[key];
+              count -= 1;
+              failuresChanged = true;
+            }
+            continue;
+          }
+          const f = normalizeTranslationFailure(raw);
+          if (!f || (!had && count >= TRANSLATION_FAILURES_MAX)) continue;
+          const prev = had ? failures[key] : undefined;
+          if (prev && prev.reason === f.reason && prev.sourceHash === f.sourceHash && prev.attempts === f.attempts && prev.at === f.at) continue;
+          if (!had) count += 1;
+          failures[key] = f;
+          failuresChanged = true;
+        }
+      }
+      for (const id of written) {
+        if (!Object.prototype.hasOwnProperty.call(failures, id)) continue;
+        delete failures[id];
+        failuresChanged = true;
+      }
+      if (!written.length && !failuresChanged) return doc;
+      const next: LanguageEdition = { ...e, lines };
+      if (Object.keys(failures).length) next.failures = failures;
+      else delete next.failures;
+      return setEdition(doc, op.lang, next);
     }
     case 'edition_text': {
       const e = i18n.editions[op.lang];
@@ -1309,7 +1362,8 @@ const applyI18nOp = (
       const next = { ...e } as LanguageEdition;
       if (Object.keys(cur).length) (next as unknown as Record<string, unknown>)[group] = cur;
       else delete next[group];
-      return setEdition(doc, op.lang, next);
+      // Writing (or removing) a title's translation settles its failure record (STU-T0).
+      return setEdition(doc, op.lang, withoutFailure(next, op.field));
     }
     case 'edition_balloon': {
       const e = i18n.editions[op.lang];

@@ -321,3 +321,113 @@ describe('freeTranslationOps', () => {
     expect(freeTranslationOps(doc, { ...plan, freeLines: [] })).toEqual([]);
   });
 });
+
+// ── STU-T0: the fix action's fields (lineIds scope, redo, smaller parts) ─────
+
+/** Four pages of nine lines (36 lines, every source different), no titles: only line chunks. */
+function thirtySix(): ComicDoc {
+  const doc = createEmptyDoc('tp_36', 'x', 1_792_670_000_000);
+  doc.brief = { ...doc.brief, title: '', logline: '' };
+  doc.cast = [{ id: 'c_milo', name: 'Milo', tier: 'lead', look: { summary: 'a boy' }, refs: [], sheet: emptyRender() }];
+  doc.pages = Array.from({ length: 4 }, (_, p): Page => ({
+    id: `pg_${p + 1}`,
+    n: p + 1,
+    summary: `Beat ${p + 1}`,
+    layout: 'Row 1: one wide panel.',
+    panels: [{ id: `pn_${p + 1}`, n: 1, size: 'wide', shot: 'medium', action: 'Something happens.', castIds: ['c_milo'], lines: Array.from({ length: 9 }, (_, k) => line(`p${p + 1}_l${k + 1}`, `Line ${k + 1} of page ${p + 1}, and a few more words to say.`)) }],
+    render: emptyRender(),
+    balloons: []
+  }));
+  return doc;
+}
+
+const flagMajor = (doc: ComicDoc, lang: string, id: string): ComicDoc =>
+  applyOps(doc, [{ op: 'translation', lang, lineId: id, patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+
+describe('planTranslation — redo, lineIds scope and smaller parts (STU-T0)', () => {
+  it('redo forces only those lines, even though they are current', () => {
+    const doc = flagMajor(translateAll(sixPages(), 'te'), 'te', 'l9');
+    expect(planTranslation(doc, 'te').calls).toBe(0); // a flagged line is current: no plan re-translates it
+    const plan = planTranslation(doc, 'te', { redo: ['l9'] });
+    expect(plan.toTranslate).toEqual([{ pageId: 'pg_5', lineIds: ['l9'] }]);
+    expect(plan.upToDate).toBe(10);
+    expect(plan.calls).toBe(1);
+    expect(plan.coverTexts).toEqual([]);
+    expect(plan.tokens.input).toBeGreaterThan(0);
+  });
+
+  it('a redo line never copies its own flagged twin; a missing twin waits for the new wording', () => {
+    let doc = flagMajor(translateAll(sixPages(), 'te'), 'te', 'l2'); // l2 and l5 are both "Ribbit!" by the frog
+    doc = applyOps(doc, [{ op: 'translation', lang: 'te', lineId: 'l5', patch: null }]);
+    const plan = planTranslation(doc, 'te', { redo: ['l2'] });
+    expect(plan.toTranslate).toEqual([{ pageId: 'pg_1', lineIds: ['l2'] }]);
+    expect(plan.freeLines).toEqual([]);
+    expect(plan.deferred).toEqual([{ lineId: 'l5', sameAs: 'l2' }]);
+  });
+
+  it("edited lines are never redone without overwriteEdits (the author's words win)", () => {
+    const doc = applyOps(translateAll(sixPages(), 'te'), [{ op: 'translation', lang: 'te', lineId: 'l9', patch: { text: 'కలిసి కనుక్కున్నాం.', status: 'edited', issue: { severity: 'major', note: 'Off.' } } }]);
+    const plan = planTranslation(doc, 'te', { redo: ['l9'] });
+    expect(planLineCount(plan)).toBe(0);
+    expect(plan.skippedEdited).toBe(1);
+    expect(plan.calls).toBe(0);
+    expect(planTranslation(doc, 'te', { redo: ['l9'], overwriteEdits: true }).toTranslate).toEqual([{ pageId: 'pg_5', lineIds: ['l9'] }]);
+  });
+
+  it('lineIds scopes the plan to those lines (and titles only when named); unknown ids are ignored', () => {
+    const fresh = sixPages();
+    const scoped = planTranslation(fresh, 'te', { lineIds: ['l3', 'l9', 'nope'] });
+    expect(scoped.toTranslate).toEqual([{ pageId: 'pg_2', lineIds: ['l3'] }, { pageId: 'pg_5', lineIds: ['l9'] }]);
+    expect(scoped.coverTexts).toEqual([]);
+    expect(scoped.freeLines).toEqual([]);
+    expect(planTranslation(fresh, 'te', { lineIds: ['l4'] }).freeLines).toEqual([{ lineId: 'l4', text: '…', reason: 'punctuation' }]);
+    expect(planTranslation(fresh, 'te', { lineIds: ['brief.title'] })).toMatchObject({ toTranslate: [], coverTexts: ['brief.title'], calls: 1 });
+    expect(planTranslation(fresh, 'te', { lineIds: ['nope'] })).toMatchObject({ toTranslate: [], coverTexts: [], calls: 0 });
+    // Waiting-for-review lines in scope are reviewed; the others are left alone.
+    const machine = translateAll(sixPages(), 'te', 'machine');
+    expect(planTranslation(machine, 'te', { lineIds: ['l1', 'l10'] }).toReview).toEqual(['l1', 'l10']);
+    // A scoped plan is cheaper than the whole language.
+    expect(scoped.tokens.input).toBeLessThan(planTranslation(fresh, 'te').tokens.input);
+  });
+
+  it('redo of a title re-translates it; redo outside the scope does nothing', () => {
+    const done = translateAll(sixPages(), 'te');
+    expect(planTranslation(done, 'te', { redo: ['brief.title'] }).coverTexts).toEqual(['brief.title']);
+    expect(planTranslation(flagMajor(done, 'te', 'l9'), 'te', { lineIds: ['l1'], redo: ['l9'] }).calls).toBe(0);
+  });
+
+  it('chunkLines: 10 makes 4 chunks of a 36-line page set, and the token estimate grows accordingly', () => {
+    const doc = thirtySix();
+    const whole = planTranslation(doc, 'te');
+    expect(planLineCount(whole)).toBe(36);
+    expect(whole.calls).toBe(2); // 3 pages (27 lines), then 1 page
+    expect(whole.chunkLines).toBeUndefined();
+    const small = planTranslation(doc, 'te', { chunkLines: 10 });
+    expect(small.calls).toBe(4);
+    expect(small.chunkLines).toBe(10);
+    expect(chunkTranslation(small.toTranslate, small.chunkLines)).toHaveLength(4);
+    expect(small.tokens.input).toBeGreaterThan(whole.tokens.input); // each call re-sends the fixed prompt
+    expect(small.tokens.output).toBeGreaterThan(whole.tokens.output); // each answer has its own frame
+    expect(small.tokens.reviewInput).toBe(whole.tokens.reviewInput);
+    expect(planTranslation(doc, 'te', { chunkLines: 20 }).calls).toBe(2); // two 9-line pages per call
+    // Anything but 10 or 20 is today's chunking.
+    expect(planTranslation(doc, 'te', { chunkLines: 7 as never })).toEqual(whole);
+  });
+
+  it('chunkTranslation takes the line cap as an argument (default 40), pages still kept whole when they fit', () => {
+    const groups = Array.from({ length: 3 }, (_, i) => ({ pageId: `p${i}`, lineIds: Array.from({ length: 12 }, (_, k) => `p${i}_l${k}`) }));
+    expect(chunkTranslation(groups)).toEqual(chunkTranslation(groups, TRANSLATE_CHUNK_LINES));
+    const ten = chunkTranslation(groups, 10);
+    for (const c of ten) expect(c.reduce((n, g) => n + g.lineIds.length, 0)).toBeLessThanOrEqual(10);
+    expect(ten.flat().flatMap((g) => g.lineIds)).toHaveLength(36);
+    expect(chunkTranslation([{ pageId: 'p', lineIds: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'] }], 4).map((c) => c[0].lineIds.length)).toEqual([4, 4, 1]);
+    expect(chunkTranslation(groups, 0)).toEqual(chunkTranslation(groups)); // nonsense caps fall back to the default
+  });
+
+  it('redo and lineIds read at most 200 ids each', () => {
+    const doc = thirtySix();
+    const ids = [...Array.from({ length: 200 }, (_, i) => `x${i}`), 'p1_l1'];
+    expect(planLineCount(planTranslation(doc, 'te', { lineIds: ids }))).toBe(0);
+    expect(planLineCount(planTranslation(doc, 'te', { lineIds: ids.slice(-200) }))).toBe(1);
+  });
+});
