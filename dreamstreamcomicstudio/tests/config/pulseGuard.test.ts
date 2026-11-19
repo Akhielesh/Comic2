@@ -17,8 +17,10 @@
  * It RATCHETS against tests/config/baselines/pulse.json, exactly like DS-0's guards (baselines/README.md): a new
  * raw pulse fails, a new unguarded one fails, and a removed one fails until the baseline is lowered
  * (`UPDATE_BASELINES=1 npx vitest run tests/config/pulseGuard.test.ts`, by the slot's integration owner). On the tree
- * it landed on, the only unguarded pulses in Comic Studio are the board status chip's two dots
- * (components/comicstudio/board/ui.tsx, the `StatusChip` and the tile overlay: declutter F34; DC-3 makes them static).
+ * it landed on, the only unguarded pulses in Comic Studio were the board status chip's two dots
+ * (components/comicstudio/board/ui.tsx, the `StatusChip` and the tile overlay: declutter F34). Declutter DX-5 (the
+ * planned DC-3) made both static, so in Comic Studio the strict rule now holds with no exception: every raw pulse there
+ * stops under reduced motion, and the baseline lists no unguarded pulse under components/comicstudio/**.
  */
 import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -157,10 +159,11 @@ describe('pulse guard — the detector', () => {
     expect(tokensOf(plant('md:motion-safe:animate-ping'))).toEqual(['animate-ping']);
     expect(tokensOf(plant('animate-pulse motion-reduce:animate-none'))).toEqual(['animate-pulse']);
     expect(tokensOf(plant('animate-pulse motion-reduce:!animate-none'))).toEqual(['animate-pulse']);
-    // The board chip's shape: the pulse is a conditional part of cx(…), the stop sits in another part of the same call.
+    // A conditional pulse (the shape the board chip had before DX-5): the pulse is a conditional part of cx(…), the
+    // stop sits in another part of the same call.
     expect(tokensOf(`const D = () => <span className={cx('h-1.5 rounded-full motion-reduce:animate-none', on && 'animate-pulse')} />;`)).toEqual(['animate-pulse']);
     expect(tokensOf(`const D = () => <span className={cn(\`h-2 \${on ? 'animate-ping' : ''} motion-reduce:animate-none\`)} />;`)).toEqual(['animate-ping']);
-    // Today's board/ui.tsx: nothing in the list stops it.
+    // board/ui.tsx's status dot before DX-5 made it static: nothing in the list stops it.
     expect(tokensOf(`const D = () => <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse')} aria-hidden />;`)).toEqual([
       'animate-pulse',
       'unguarded'
@@ -220,32 +223,29 @@ describe('pulse guard — the ratchet', () => {
     expect(compareToBaseline(stripped, baseline, TEST_FILE).over).toEqual([`${rel}  unguarded: 1, baseline 0 — a file or token the baseline does not list must count 0`]);
   });
 
-  it('Comic Studio: only the board status chip (board/ui.tsx: two dots, DC-3) may hold unguarded pulses', () => {
+  it('Comic Studio: no file may hold an unguarded pulse (the board status chip is static since DX-5)', () => {
     const studio = Object.entries(baseline).filter(([rel, t]) => matchesGlob(rel, [PINNED_DIR]) && (t.unguarded ?? 0) > 0);
-    for (const [rel, t] of studio) {
-      expect(rel).toBe('components/comicstudio/board/ui.tsx');
-      expect(t.unguarded).toBeLessThanOrEqual(2);
-    }
+    expect(studio.map(([rel]) => rel), 'no Comic Studio file is an allowed exception').toEqual([]);
+    expect(baseline['components/comicstudio/board/ui.tsx'], 'the board kit holds no raw pulse at all').toBeUndefined();
   });
 
-  it('the "never" rule it ratchets towards fails today exactly at the board status chip (board/ui.tsx:421 and :537, F34)', { timeout: REAL_TREE_TIMEOUT }, () => {
+  it('the "never" rule holds in Comic Studio: every raw pulse there stops under reduced motion', { timeout: REAL_TREE_TIMEOUT }, () => {
     // Strict mode, no baseline: in Comic Studio every raw pulse must stop under reduced motion.
     const studio = pulseFiles().filter((rel) => matchesGlob(rel, [PINNED_DIR]));
+    expect(studio).toContain('components/comicstudio/board/ui.tsx');
     const strict = studio.flatMap((rel) =>
       findPulses(readFileSync(path.join(APP_ROOT, rel), 'utf8'), rel)
         .filter((h) => !h.guarded)
         .map((h) => `${rel}:${h.line}`)
     );
-    // An oracle that does not use the AST detector: the board chip's lines that write 'animate-pulse' with no
-    // motion-reduce / motion-safe on the same line (the StatusChip dot and the tile overlay dot).
+    expect(strict, 'a raw pulse in Comic Studio that ignores reduced motion: show the state in words, or use components/ds LiveDot').toEqual([]);
+    // An oracle that does not use the AST detector: the board chip (StatusChip and the tile overlay) writes no pulse
+    // class on any line, guarded or not; the dots are static and the label says "Drawing".
     const BOARD = 'components/comicstudio/board/ui.tsx';
     const oracle = readFileSync(path.join(APP_ROOT, BOARD), 'utf8')
       .split('\n')
-      .flatMap((text, i) => (/'animate-pulse'/.test(text) && !/motion-(?:reduce|safe):/.test(text) ? [`${BOARD}:${i + 1}`] : []));
-    expect(strict, 'the strict rule fails at exactly the board chip lines, nowhere else in Comic Studio').toEqual(oracle);
-    // The baseline tolerates exactly those. DC-3 makes the chip static; the integration owner then lowers the
-    // entry (the real-tree test below goes "under" first) and both lists are empty.
-    expect(strict.length).toBe(baseline[BOARD]?.unguarded ?? 0);
+      .flatMap((text, i) => (/animate-(?:pulse|ping|bounce)/.test(text) ? [`${BOARD}:${i + 1}`] : []));
+    expect(oracle).toEqual([]);
   });
 
   it('components/**, App.tsx and qa/** (minus components/ds/**) match tests/config/baselines/pulse.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {

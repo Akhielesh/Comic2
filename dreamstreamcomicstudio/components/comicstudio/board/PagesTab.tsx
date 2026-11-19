@@ -12,7 +12,9 @@
 //   • density (large / compact cards, remembered per device in `cs.pages.cols`);
 //   • thumbnails use the ≤ 480w variants; art sits behind the content-check veil;
 //   • art drawn at the wrong shape says so ("1:1 · book is 4:5") with a free "Fit to 4:5";
-//   • prices print through formatCostForUser: governed users see a share of their usage, never dollars.
+//   • prices print through formatCostForUser: governed users see a share of their usage, never dollars;
+//   • one price per spend: while a page-render approval is open, the header's draw-all and selection and every card
+//     that approval draws show "Waiting for your OK above" instead of their own button and price.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookImage, BookOpen, ChevronDown, ChevronUp, Crop, Image as ImageIcon, MoreHorizontal, RotateCcw, ScrollText, Sparkles } from 'lucide-react';
@@ -119,6 +121,28 @@ const PriceNote: React.FC<{ id: string; children: React.ReactNode; className?: s
   </span>
 );
 
+/** In place of a draw button and its price while the approval above holds that spend (muted, no price, no colour). */
+const WAITING_FOR_OK = 'Waiting for your OK above';
+const WaitingNote: React.FC<{ header?: boolean }> = ({ header }) => (
+  <span className={cx('min-w-0 leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]', header ? 'text-[12px]' : 'text-[11px]')}>{WAITING_FOR_OK}</span>
+);
+
+/**
+ * What an open page-render approval would draw: the pages and the cover its own run picks (the quote's targets, the
+ * rule the server's run uses), or null while none is open. Those cards print no price and no draw button of their own,
+ * because the approval's banner already prices that spend: one price per spend.
+ */
+const pageGateTargets = (doc: ComicDoc): { pageIds: ReadonlySet<string>; cover: boolean } | null => {
+  const gate = doc.gate;
+  if (gate?.status !== 'open' || gate.action.type !== 'render_pages') return null;
+  const a = gate.action;
+  const q = quoteRenderPages(doc, { pageIds: a.pageIds, force: a.force, includeCover: a.includeCover, byok: byokFromDoc(doc), tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
+  return { pageIds: new Set(q.pageIds), cover: q.cover };
+};
+
+/** While any approval is open its Approve is the screen's one primary action, so a card's own draw button steps back. */
+const drawButtonFor = (doc: ComicDoc) => (doc.gate?.status === 'open' ? GhostButton : PrimaryButton);
+
 /** A free re-shape of art drawn at the wrong aspect (software, never billed). */
 const FitButton: React.FC<{ studio: StudioController; target: RenderTarget; want: string; disabled?: boolean; short?: boolean }> = ({ studio, target, want, disabled, short }) => {
   const { busyKey, fire } = useClickGuard(3000);
@@ -152,7 +176,11 @@ export const PageCard: React.FC<{
   rating?: ContentRating;
   /** Open the clip menu anchored at this card. */
   onMenu?: (anchor: Element | null) => void;
-}> = ({ studio, doc, page, selected, onToggleSelect, byok, cost: costProp, compact = false, rating: ratingProp, onMenu }) => {
+  /** This page is in the open page-render approval (default: worked out from `doc.gate`). */
+  waiting?: boolean;
+}> = ({ studio, doc, page, selected, onToggleSelect, byok, cost: costProp, compact = false, rating: ratingProp, onMenu, waiting: waitingProp }) => {
+  const waiting = waitingProp ?? !!pageGateTargets(doc)?.pageIds.has(page.id);
+  const DrawButton = drawButtonFor(doc);
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
@@ -309,14 +337,17 @@ export const PageCard: React.FC<{
 
       <footer className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 px-0.5">
         {!scriptView && !compact && page.summary && <p className="mb-1 line-clamp-2 w-full text-[12px] leading-snug text-[var(--ds-muted)]">{page.summary}</p>}
-        {status === 'failed' ? (
-          <PrimaryButton size="xs" busy={busyKey === 'render'} onClick={() => render()} aria-describedby={priceId}>
+        {waiting ? (
+          // The approval above draws this page and prices it once, there.
+          <WaitingNote />
+        ) : status === 'failed' ? (
+          <DrawButton size="xs" busy={busyKey === 'render'} onClick={() => render()} aria-describedby={priceId}>
             <RotateCcw className="h-3 w-3" aria-hidden /> Retry
-          </PrimaryButton>
+          </DrawButton>
         ) : status === 'stale' ? (
-          <PrimaryButton size="xs" busy={busyKey === 'render'} onClick={() => render()} aria-describedby={priceId}>
+          <DrawButton size="xs" busy={busyKey === 'render'} onClick={() => render()} aria-describedby={priceId}>
             Re-render
-          </PrimaryButton>
+          </DrawButton>
         ) : status === 'planned' ? (
           <GhostButton size="xs" busy={busyKey === 'render'} onClick={() => render()} aria-describedby={priceId}>
             Render
@@ -326,7 +357,7 @@ export const PageCard: React.FC<{
             Re-render
           </GhostButton>
         ) : null}
-        {(status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
+        {!waiting && (status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
         {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={target} label={`Page ${page.n}`} />}
         {letteringEntry && (
@@ -355,7 +386,10 @@ export const CoverCard: React.FC<{
   /** Controlled "Cover text" disclosure (the clip menu's "Cover title & tagline" opens it). */
   textOpen?: boolean;
   onTextOpenChange?: (open: boolean) => void;
-}> = ({ studio, doc, byok, cost: costProp, rating: ratingProp, compact = false, onMenu, textOpen, onTextOpenChange }) => {
+  /** The open page-render approval also draws the cover (default: worked out from `doc.gate`). */
+  waiting?: boolean;
+}> = ({ studio, doc, byok, cost: costProp, rating: ratingProp, compact = false, onMenu, textOpen, onTextOpenChange, waiting: waitingProp }) => {
+  const waiting = waitingProp ?? !!pageGateTargets(doc)?.cover;
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
@@ -447,10 +481,17 @@ export const CoverCard: React.FC<{
         }
       />
       <footer className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 px-0.5">
-        <GhostButton size="xs" busy={busyKey === 'cover'} disabled={isBusy(render)} onClick={() => design()} aria-describedby={priceId}>
-          <Sparkles className={cx('h-3 w-3', !drawn && 'text-[var(--ds-accent)]')} aria-hidden /> {drawn ? 'Redesign' : 'Design cover'}
-        </GhostButton>
-        <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>
+        {waiting ? (
+          // The approval above draws the cover too and prices it once, there.
+          <WaitingNote />
+        ) : (
+          <>
+            <GhostButton size="xs" busy={busyKey === 'cover'} disabled={isBusy(render)} onClick={() => design()} aria-describedby={priceId}>
+              <Sparkles className={cx('h-3 w-3', !drawn && 'text-[var(--ds-accent)]')} aria-hidden /> {drawn ? 'Redesign' : 'Design cover'}
+            </GhostButton>
+            <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>
+          </>
+        )}
         {mismatch && <FitButton studio={studio} target={{ kind: 'cover' }} want={mismatch.want} disabled={isBusy(render)} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={{ kind: 'cover' }} label="Cover" />}
         {!compact && (
@@ -518,14 +559,19 @@ const PlanHeader: React.FC<{
   const drawn = doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length;
   const panels = totalPanels(doc);
   const draft = doc.planStatus !== 'approved';
-  // While an approval is open its Approve is the screen's one primary action, so drawing everything steps back.
-  const DrawAllButton = doc.gate?.status === 'open' ? GhostButton : PrimaryButton;
+  // While an approval is open its Approve is the screen's one primary action, so drawing everything (or a selection)
+  // steps back.
+  const DrawButton = drawButtonFor(doc);
+  // A page-render approval open in the banner above IS this spend: its price is shown once, there. The draw-all, its
+  // price and its cover option wait (one muted line instead), and so does Render selected with its price; all of them
+  // come back as soon as the approval closes.
+  const waitingForOk = !!pageGateTargets(doc);
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-pages-header>
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
           <h3 className="text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">
@@ -550,9 +596,11 @@ const PlanHeader: React.FC<{
         />
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        {toDraw > 0 && (
+        {waitingForOk ? (
+          <WaitingNote header />
+        ) : toDraw > 0 && (
           <>
-            <DrawAllButton
+            <DrawButton
               size="sm"
               busy={busyKey === 'all'}
               onClick={() => fire('all', () => studio.act({ type: 'render_pages', ...(quote.cover ? { includeCover: true } : {}) }))}
@@ -560,7 +608,7 @@ const PlanHeader: React.FC<{
               aria-describedby="pages-draw-all-price"
             >
               {draft ? 'Approve & render all' : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`}
-            </DrawAllButton>
+            </DrawButton>
             <PriceNote id="pages-draw-all-price">
               {cost.quote(quote.usd)} · {what}
             </PriceNote>
@@ -577,7 +625,7 @@ const PlanHeader: React.FC<{
           </GhostButton>
         )}
       </div>
-      {toDraw > 0 && coverOffer && (
+      {!waitingForOk && toDraw > 0 && coverOffer && (
         <label className="flex min-h-[36px] w-fit max-w-full cursor-pointer items-center gap-2 rounded-xl px-1 text-[12.5px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[44px]">
           <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[var(--ds-accent)] coarse:h-5 coarse:w-5" />
           <span className="min-w-0">
@@ -588,20 +636,27 @@ const PlanHeader: React.FC<{
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl bg-[var(--ds-well)] px-3 py-2" role="region" aria-label="Selected pages">
           <span className="text-[12px] font-medium text-[var(--ds-ink)]">{plural(selected.size, 'page')} selected</span>
-          <PrimaryButton
-            size="xs"
-            busy={busyKey === 'selected'}
-            disabled={!chosen.pages.length}
-            aria-describedby="pages-selected-price"
-            onClick={() => {
-              const ids = chosen.pages.map((p) => p.id);
-              fire('selected', () => studio.act({ type: 'render_pages', pageIds: ids, force: true }));
-              clearSelection();
-            }}
-          >
-            Render selected
-          </PrimaryButton>
-          <PriceNote id="pages-selected-price">{cost.quote(chosen.estimate.usd)}</PriceNote>
+          {waitingForOk ? (
+            // A second page render (and its price) waits while the approval above is open; Clear still works.
+            <WaitingNote header />
+          ) : (
+            <>
+              <DrawButton
+                size="xs"
+                busy={busyKey === 'selected'}
+                disabled={!chosen.pages.length}
+                aria-describedby="pages-selected-price"
+                onClick={() => {
+                  const ids = chosen.pages.map((p) => p.id);
+                  fire('selected', () => studio.act({ type: 'render_pages', pageIds: ids, force: true }));
+                  clearSelection();
+                }}
+              >
+                Render selected
+              </DrawButton>
+              <PriceNote id="pages-selected-price">{cost.quote(chosen.estimate.usd)}</PriceNote>
+            </>
+          )}
           <GhostButton size="xs" onClick={clearSelection}>
             Clear
           </GhostButton>
@@ -705,6 +760,8 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
   const ff = useFormFactor();
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const pages = useMemo(() => sortedPages(doc), [doc]);
+  // The open page-render approval's own targets, worked out once for every card.
+  const gateTargets = useMemo(() => pageGateTargets(doc), [doc]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [density, setDensityState] = useState<PagesDensity>(() => readDensity(ff.widthClass === 'compact' ? '2' : '1'));
   const [menu, setMenu] = useState<{ key: string; rect: DOMRect | null } | null>(null);
@@ -875,6 +932,7 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
           onMenu={(anchor) => openMenu('cover', anchor)}
           textOpen={coverText}
           onTextOpenChange={setCoverText}
+          waiting={!!gateTargets?.cover}
         />
         {pages.map((page) => (
           <PageCard
@@ -889,6 +947,7 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
             selected={selected.has(page.id)}
             onToggleSelect={() => toggle(page.id)}
             onMenu={(anchor) => openMenu(page.id, anchor)}
+            waiting={!!gateTargets?.pageIds.has(page.id)}
           />
         ))}
       </div>

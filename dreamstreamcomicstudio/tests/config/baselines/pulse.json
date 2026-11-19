@@ -2,7 +2,7 @@
   "guard": "pulse",
   "test": "tests/config/pulseGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/pulseGuard.test.ts lowers it (see README.md).",
-  "totals": { "animate-bounce": 7, "animate-ping": 1, "animate-pulse": 23, "unguarded": 13 },
+  "totals": { "animate-bounce": 7, "animate-ping": 1, "animate-pulse": 21, "unguarded": 11 },
   "files": {
     "components/HomePage.tsx": { "animate-bounce": 3 },
     "components/ProjectDashboard.tsx": { "animate-pulse": 1 },
@@ -15,7 +15,6 @@
     "components/chat/artifacts/LiveMonitorCard.tsx": { "animate-pulse": 2, "unguarded": 1 },
     "components/chat/artifacts/NewsDigest.tsx": { "animate-pulse": 2, "unguarded": 2 },
     "components/comicstudio/ComicStudio.tsx": { "animate-pulse": 1 },
-    "components/comicstudio/board/ui.tsx": { "animate-pulse": 2, "unguarded": 2 },
     "components/comicstudio/breakdown/BreakdownCard.tsx": { "animate-pulse": 1 },
     "components/comicstudio/conversation/ActivityLine.tsx": { "animate-ping": 1 },
     "components/comicstudio/conversation/MessageItem.tsx": { "animate-pulse": 1 },
