@@ -201,10 +201,12 @@ describe('vendor errors carry no key text', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it('a 401 on a text call keeps the status and code and drops the key', async () => {
+  it('a 401 on a text call keeps the vendor status and code, answers 502 and drops the key', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(echo, { status: 401, statusText: 'Unauthorized' })));
     const err = await provider.generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], retries: 1 }, { apiKey: 'k', byok: true }).catch((e) => e);
-    expect(err.status).toBe(401);
+    expect(err.vendorStatus).toBe(401);
+    expect(err.status).toBe(502);
+    expect(err.publicCode).toBe('PROVIDER_KEY_REJECTED');
     expect(err.message).toMatch(/^OpenAI \/chat\/completions failed: 401 Unauthorized \(invalid_api_key\)/);
     expect(err.message).not.toContain('sk-');
   });
@@ -212,7 +214,8 @@ describe('vendor errors carry no key text', () => {
   it('a refused stream says the same and drops the key', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(echo, { status: 401, statusText: 'Unauthorized' })));
     const err = await provider.generateTextStream!({ model: 'm', messages: [{ role: 'user', content: 'x' }] }, { apiKey: 'k', byok: true }, () => {}).catch((e) => e);
-    expect(err.status).toBe(401);
+    expect(err.vendorStatus).toBe(401);
+    expect(err.status).toBe(502);
     expect(err.message).toMatch(/^OpenAI stream failed: 401/);
     expect(err.message).not.toContain('sk-');
   });

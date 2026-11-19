@@ -11,15 +11,26 @@
 // Calls made with a person's own key (ctx.byok) go only to the registry address
 // (https://api.anthropic.com/v1, shared/providers.ts), never to an ANTHROPIC_BASE_URL override,
 // and never follow a redirect. Failures carry status, vendor code and a redacted detail only
-// (errors.ts vendorHttpError). generateText (never the stream) asks for a bounded thinking budget
-// when the request sets reasoningEffort.
+// (errors.ts vendorHttpError).
+//
+// The request shape follows the model's generation (claudeUsesAdaptiveThinking):
+//   - Claude 4.6 and later, and every 5.x model: no temperature (the newest models refuse any
+//     non-default sampling with a 400); when the request sets reasoningEffort, generateText sends
+//     thinking { type: 'adaptive' } with output_config { effort }. The fixed-budget form is
+//     refused by these models.
+//   - Older models (Haiku 4.5, Sonnet/Opus 4.5 and before, 3.7): the role temperature as before;
+//     with reasoningEffort, generateText sends a bounded budget (thinking { type: 'enabled',
+//     budget_tokens }) and no temperature, except once the history holds a tool call, because
+//     thinking blocks are not sent back (toAnthropic drops them) and the API asks for them then.
+// The stream (Chat) never asks for thinking. A 400 that names one of these settings retries that
+// call once with the plain body (no thinking, no effort, no temperature).
 
 import { ANTHROPIC_BASE_URL, ANTHROPIC_REQUEST_TIMEOUT_MS, ANTHROPIC_VERSION, CHAT_STREAM_MAX_TOTAL_MS } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { modelTimeoutError, vendorHttpError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { staticModelsFor } from './staticModels.js';
-import { reasoningBudget } from './openrouter.js';
+import { reasoningBudget } from '../reasoning.js';
 import { logger } from '../../lib/logger.js';
 import { PROVIDER_REGISTRY } from '../../../../shared/providers.js';
 import type {
@@ -73,7 +84,7 @@ const anthropicFetch = async <T = any>(
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw vendorHttpError('Anthropic', path, res.status, res.statusText, errBody);
+      throw vendorHttpError('Anthropic', path, res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -172,19 +183,64 @@ const toAnthropicTools = (tools?: ToolSpec[]) =>
 /** The thinking budget for an effort: the shared reasoning budget, never below Anthropic's minimum. */
 export const thinkingBudget = (effort: 'low' | 'medium' | 'high'): number => Math.max(MIN_THINKING_BUDGET, reasoningBudget(effort));
 
-const buildBody = (req: GenerateTextRequest, opts: { thinking?: boolean } = {}): Record<string, unknown> => {
+/**
+ * A Claude model id's generation, from the native forms: claude-<family>-<major>[-<minor>][-<date>]
+ * (Claude 4 and later, also with a dot: claude-sonnet-5.5) and claude-<major>[-<minor>]-<family>
+ * (Claude 3). A date suffix is not a minor version. Null when the id has neither form.
+ */
+const claudeVersion = (model: string): { major: number; minor: number } | null => {
+  const id = String(model || '').toLowerCase().trim().replace(/^anthropic[/.]/, '');
+  const modern = /^claude-[a-z]+-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?(?![\d.])/.exec(id);
+  if (modern) return { major: Number(modern[1]), minor: modern[2] ? Number(modern[2]) : 0 };
+  const older = /^claude-(\d)(?:[-.](\d))?-[a-z]/.exec(id);
+  if (older) return { major: Number(older[1]), minor: older[2] ? Number(older[2]) : 0 };
+  return null;
+};
+
+/**
+ * True for Claude 4.6 and later and every 5.x model (and an id this file cannot read, which is a
+ * newer one): adaptive thinking with an effort, and no sampling settings. False for the older
+ * models, which take a fixed thinking budget and keep their temperature.
+ */
+export const claudeUsesAdaptiveThinking = (model: string): boolean => {
+  const v = claudeVersion(model);
+  if (!v) return true;
+  return v.major > 4 || (v.major === 4 && v.minor >= 6);
+};
+
+/** Older models that accept the fixed-budget form: Claude 3.7 and every 4.x before 4.6. */
+const takesThinkingBudget = (model: string): boolean => {
+  const v = claudeVersion(model);
+  return Boolean(v) && !claudeUsesAdaptiveThinking(model) && (v!.major >= 4 || (v!.major === 3 && v!.minor >= 7));
+};
+
+const hasToolTurn = (messages: ChatMessage[]): boolean =>
+  messages.some((m) => m.role === 'tool' || (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0));
+
+/**
+ * The /messages body. `thinking` asks for thinking when the request sets reasoningEffort; `plain`
+ * leaves out every optional setting (thinking, effort, temperature): the retry after a refusal.
+ */
+const buildBody = (req: GenerateTextRequest, opts: { thinking?: boolean; plain?: boolean } = {}): Record<string, unknown> => {
   const { system, messages } = toAnthropic(req.messages);
   const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
   const body: Record<string, unknown> = { model: req.model, max_tokens: maxTokens, messages };
   if (system) body.system = system;
-  if (opts.thinking && req.reasoningEffort) {
-    const budget = thinkingBudget(req.reasoningEffort);
+  const wantsThinking = Boolean(opts.thinking && req.reasoningEffort && !opts.plain);
+  if (claudeUsesAdaptiveThinking(req.model)) {
+    // Never temperature/top_p/top_k here: the newest models answer a non-default value with a 400.
+    if (wantsThinking) {
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { effort: req.reasoningEffort };
+    }
+  } else if (wantsThinking && takesThinkingBudget(req.model) && !hasToolTurn(req.messages)) {
+    const budget = thinkingBudget(req.reasoningEffort!);
     body.thinking = { type: 'enabled', budget_tokens: budget };
     // Thinking counts against max_tokens, which must exceed the budget. A caller that sized
     // max_tokens for the visible reply only (comic/llm.ts pads it already) keeps that room.
     if (maxTokens <= budget) body.max_tokens = maxTokens + budget;
     // Anthropic accepts no temperature other than the default while thinking.
-  } else if (typeof req.temperature === 'number') {
+  } else if (!opts.plain && typeof req.temperature === 'number') {
     body.temperature = req.temperature;
   }
   const tools = toAnthropicTools(req.tools);
@@ -192,10 +248,14 @@ const buildBody = (req: GenerateTextRequest, opts: { thinking?: boolean } = {}):
   return body;
 };
 
-/** A 400 that names thinking: the model or the request shape refused the thinking settings. */
-const refusedThinking = (err: unknown): boolean => {
-  const e = err as { status?: number; message?: string } | undefined;
-  return e?.status === 400 && /thinking/i.test(String(e?.message || ''));
+const OPTIONAL_SETTINGS = ['thinking', 'output_config', 'temperature'] as const;
+const hasOptionalSettings = (body: Record<string, unknown>): boolean => OPTIONAL_SETTINGS.some((k) => k in body);
+
+/** A 400 that names one of the optional settings: the model refused that part of the request shape. */
+const refusedSettings = (err: unknown): boolean => {
+  const e = err as { status?: number; vendorStatus?: number; message?: string } | undefined;
+  const status = e?.vendorStatus ?? e?.status;
+  return status === 400 && /thinking|budget_tokens|effort|output_config|temperature|top_[pk]|sampling/i.test(String(e?.message || ''));
 };
 
 const extractTextBlocks = (content: any[]): { text: string; toolCalls?: { id: string; name: string; arguments: string }[]; reasoning?: string } => {
@@ -216,21 +276,23 @@ const generateTextOnce = async (req: GenerateTextRequest, ctx: ProviderContext):
   const wantsJson = Boolean(req.jsonSchema || req.jsonMode);
   const timeoutMs = req.timeoutMs ?? ANTHROPIC_REQUEST_TIMEOUT_MS;
 
-  // Thinking stays on for every round of this call until the vendor refuses it once.
-  let thinking = Boolean(req.reasoningEffort);
-  const send = (messages: ChatMessage[]) =>
-    anthropicFetch<any>('/messages', { method: 'POST', body: JSON.stringify(buildBody({ ...req, messages }, { thinking })) }, timeoutMs, ctx);
+  // The shaped body (thinking, effort, temperature) stays on for every round of this call until
+  // the vendor refuses one of those settings once; from then on every round sends the plain body.
+  let plain = false;
+  const send = (body: Record<string, unknown>) =>
+    anthropicFetch<any>('/messages', { method: 'POST', body: JSON.stringify(body) }, timeoutMs, ctx);
 
   const run = async (messages: ChatMessage[]) => {
+    const body = buildBody({ ...req, messages }, { thinking: true, plain });
     let data: any;
     try {
-      data = await send(messages);
+      data = await send(body);
     } catch (err) {
-      if (!thinking || !refusedThinking(err)) throw err;
-      // One retry of this call without thinking; the reason stays out of the log (no body).
-      thinking = false;
+      if (plain || !hasOptionalSettings(body) || !refusedSettings(err)) throw err;
+      // One retry of this call with the plain body; the reason stays out of the log (no body).
+      plain = true;
       logger.info('anthropic_thinking_retry', { model: req.model });
-      data = await send(messages);
+      data = await send(buildBody({ ...req, messages }, { plain: true }));
     }
     return { data, parsed: extractTextBlocks(data?.content) };
   };
@@ -305,7 +367,7 @@ const generateTextStream = async (
 
   armIdle();
   try {
-    // Never thinking here: Chat streaming keeps its request shape (and its temperature).
+    // Never thinking here. An older model keeps Chat's temperature; a 4.6+ or 5.x model gets none.
     const res = await fetch(`${baseFor(ctx)}/messages`, {
       method: 'POST',
       headers: buildHeaders(ctx),
@@ -315,7 +377,7 @@ const generateTextStream = async (
     });
     if (!res.ok || !res.body) {
       const errBody = await res.text().catch(() => '');
-      throw vendorHttpError('Anthropic', 'stream', res.status, res.statusText, errBody);
+      throw vendorHttpError('Anthropic', 'stream', res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
     }
 
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();

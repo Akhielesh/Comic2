@@ -20,7 +20,7 @@ vi.mock('../gateway.js', () => ({
   resolveProviderContext: (apiKey: string) => ({ apiKey, byok: true })
 }));
 
-import { makeImageTool, imageGenAvailable } from './imageGen.js';
+import { makeImageTool, imageGenAvailable, imageFailureKind } from './imageGen.js';
 import { generateGeminiImage } from '../image.js';
 import { generateIdeogramImage } from '../ideogram.js';
 import { generateFluxImage } from '../flux.js';
@@ -95,6 +95,22 @@ describe('imageGen (BYOK)', () => {
 
       gatewayFailure.next = new Error('OpenAI /images/generations failed: 503 Service Unavailable');
       expect((await makeImageTool({ openaiKey: 'k' }).execute({ prompt: 'x' })).content).toBe(sentence('OpenAI', 'the service is busy'));
+    });
+
+    it('a rate limit reads as busy, not out of credit; a quota or billing 429 is still credit', () => {
+      expect(imageFailureKind(new Error('Ideogram request failed: 429 Too Many Requests: Rate limit exceeded'))).toBe('busy');
+      expect(imageFailureKind(tagged(429, 'Resource has been exhausted (e.g. check quota).'))).toBe('busy');
+      expect(imageFailureKind(tagged(429, 'Too Many Requests'))).toBe('busy');
+      expect(imageFailureKind(tagged(429, 'You exceeded your current quota (insufficient_quota).'))).toBe('credit');
+      expect(imageFailureKind(new Error('OpenRouter /images failed: 403 Forbidden Key limit exceeded (total limit)'))).toBe('credit');
+      expect(imageFailureKind(new Error('Monthly spending limit reached for this key'))).toBe('credit');
+    });
+
+    it('reads the vendor status of a gateway error, not our mapped answer', () => {
+      const mapped = Object.assign(new Error('OpenAI /images/generations failed: 401 Unauthorized (invalid_api_key) nope'), { status: 502, vendorStatus: 401 });
+      expect(imageFailureKind(mapped)).toBe('refused');
+      const credit = Object.assign(new Error('xAI /images/generations failed'), { status: 503, vendorStatus: 402 });
+      expect(imageFailureKind(credit)).toBe('credit');
     });
 
     it('a picture blocked for safety reads as refused', async () => {

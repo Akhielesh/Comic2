@@ -77,6 +77,46 @@ describe('redactSecrets', () => {
     }
   });
 
+  it('finds a key right after a JSON escape or a percent-encoding in a raw body', () => {
+    // Raw JSON text, as the OpenRouter and NVIDIA adapters redact it: "\\n" is a backslash and an n.
+    expect(redactSecrets(`{"error":{"message":"Invalid key:\\n${FAKE.openrouter}"}}`)).toBe('{"error":{"message":"Invalid key:\\n[key]"}}');
+    expect(redactSecrets(`{"message":"provided:\\t${FAKE.openai}"}`)).toBe('{"message":"provided:\\t[key]"}');
+    expect(redactSecrets(`{"message":"key\\u003d${FAKE.anthropic}"}`)).toBe('{"message":"key\\u003d[key]"}');
+    expect(redactSecrets(`url?key%3D${FAKE.google}&x=1`)).toBe('url?key%3D[key]&x=1');
+    expect(redactSecrets(`a%20${FAKE.xai}`)).toBe('a%20[key]');
+  });
+
+  it('redacts a Z.AI key and a lower-case bearer token, and leaves prose about a bearer alone', () => {
+    const zai = `${'0123456789abcdef'.repeat(2)}.AbCdEfGhIjKlMnOp`;
+    expect(redactSecrets(`key ${zai} here`)).toBe('key [key] here');
+    expect(redactSecrets('authorization: bearer opaque-token-value-1234567890')).toBe('authorization: bearer [key]');
+    expect(redactSecrets('AUTHORIZATION: BEARER opaque-token-value-1234567890')).toBe('AUTHORIZATION: BEARER [key]');
+    expect(redactSecrets('the bearer of bad news')).toBe('the bearer of bad news');
+  });
+
+  it('keeps about 4,000 characters of a long string with no spaces (minified JSON, a URL)', () => {
+    const blob = 'a'.repeat(4500);
+    const out = redactSecrets(blob);
+    expect(out.length).toBeGreaterThanOrEqual(REDACT_MAX_CHARS - 64);
+    expect(out.length).toBeLessThanOrEqual(REDACT_MAX_CHARS + 1);
+    const minified = JSON.stringify({ error: { message: 'bad request', detail: Array.from({ length: 600 }, (_, i) => `f${i}:v${i}`).join(',') } });
+    expect(minified.length).toBeGreaterThan(REDACT_MAX_CHARS);
+    expect(redactSecrets(minified).length).toBeGreaterThan(REDACT_MAX_CHARS - 64);
+  });
+
+  it('never keeps a key fragment where the cap cuts a token with no spaces around it', () => {
+    // A key inside minified JSON that straddles the cap.
+    const lead = `{"a":"${'x'.repeat(REDACT_MAX_CHARS - 30)}","k":"`;
+    for (const key of [FAKE.openai, FAKE.jwt, FAKE.google, `${'0123456789abcdef'.repeat(2)}.AbCdEfGhIjKlMnOp`]) {
+      const out = redactSecrets(`${lead}${key}"}`.padEnd(REDACT_MAX_CHARS + 600, ' '));
+      for (const piece of [key.slice(0, 6), key.slice(-6)]) expect(out).not.toContain(piece);
+    }
+    // A key far longer than the look-ahead window, starting just before the cap.
+    const longJwt = `eyJ${'a'.repeat(400)}.eyJ${'b'.repeat(400)}.${'c'.repeat(400)}`;
+    const out = redactSecrets(`${'x '.repeat((REDACT_MAX_CHARS - 10) / 2)}${longJwt}`);
+    expect(out).not.toContain('eyJ');
+  });
+
   it('accepts a non-string without throwing', () => {
     expect(redactSecrets(undefined as unknown as string)).toBe('');
     expect(redactSecrets(42 as unknown as string)).toBe('42');

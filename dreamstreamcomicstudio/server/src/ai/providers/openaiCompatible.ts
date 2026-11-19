@@ -104,7 +104,7 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
       });
       if (!res.ok) {
         const errBody = await res.text().catch(() => '');
-        throw vendorHttpError(cfg.label, path, res.status, res.statusText, errBody);
+        throw vendorHttpError(cfg.label, path, res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
       }
       return (await res.json()) as T;
     } catch (err) {
@@ -287,7 +287,7 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
       });
       if (!res.ok || !res.body) {
         const errBody = await res.text().catch(() => '');
-        throw vendorHttpError(cfg.label, 'stream', res.status, res.statusText, errBody);
+        throw vendorHttpError(cfg.label, 'stream', res.status, res.statusText, errBody, { byok: Boolean(ctx?.byok) });
       }
 
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();

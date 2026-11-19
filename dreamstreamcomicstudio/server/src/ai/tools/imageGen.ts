@@ -40,14 +40,25 @@ const FAILURE_WORDS: Record<ImageFailureKind, string> = {
   busy: 'the service is busy'
 };
 
-const CREDIT_RE = /\b402\b|credit|quota|billing|insufficient|payment|balance|limit exceeded|spending limit/i;
+const CREDIT_RE = /\b402\b|credit|quota|billing|insufficient|payment|balance|spending limit|key limit/i;
+/** What turns a 429 into an empty balance rather than a wait. */
+const CREDIT_429_RE = /insufficient_quota|billing|credit/i;
 const REFUSED_RE =
   /refus|reject|safety|content.?policy|moderation|blocked|prohibited|invalid[^.]{0,20}key|api key not valid|unauthori[sz]ed|forbidden|permission|not allowed/i;
 
-/** The HTTP status of a failure: a tagged `.status`, else the code in "failed: NNN" / "failed (NNN …)". */
+const httpStatus = (value: unknown): number | undefined => {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 100 && n < 600 ? n : undefined;
+};
+
+/**
+ * The vendor's HTTP status of a failure: `.vendorStatus` (vendorHttpError; its `.status` is our
+ * own mapped answer), else a tagged `.status`, else the code in "failed: NNN" / "failed (NNN …)".
+ */
 const statusOfFailure = (err: unknown, message: string): number | undefined => {
-  const tagged = Number((err as { status?: unknown } | undefined)?.status);
-  if (Number.isInteger(tagged) && tagged >= 100 && tagged < 600) return tagged;
+  const e = err as { status?: unknown; vendorStatus?: unknown } | undefined;
+  const tagged = httpStatus(e?.vendorStatus) ?? httpStatus(e?.status);
+  if (tagged !== undefined) return tagged;
   const m = /failed:?\s*\(?(\d{3})\b/i.exec(message);
   return m ? Number(m[1]) : undefined;
 };
@@ -56,6 +67,8 @@ const statusOfFailure = (err: unknown, message: string): number | undefined => {
 export const imageFailureKind = (err: unknown): ImageFailureKind => {
   const message = String((err as Error | undefined)?.message ?? err ?? '');
   const status = statusOfFailure(err, message);
+  // A 429 is a wait ("Rate limit exceeded", Gemini's "check quota"), unless it names an empty balance.
+  if (status === 429) return CREDIT_429_RE.test(message) ? 'credit' : 'busy';
   if (status === 402 || CREDIT_RE.test(message)) return 'credit';
   if (status === 400 || status === 401 || status === 403 || REFUSED_RE.test(message)) return 'refused';
   return 'busy';

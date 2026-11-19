@@ -13,6 +13,8 @@ export type TaggedError = Error & {
   publicCode?: string;
   /** A message that is safe to show the user even in production (not masked as a 5xx). */
   publicMessage?: string;
+  /** The vendor's own HTTP status (vendorHttpError); `status` is what our API answers. */
+  vendorStatus?: number;
 };
 
 // Build a tagged 504 timeout error. `message` is kept for logs; `publicMessage`
@@ -87,6 +89,11 @@ export const makeProviderError = (status: number, logMessage: string): TaggedErr
 // words like content_policy_violation still reach the safety classifiers), but never the raw body:
 // the detail is the vendor's own error message, redacted (lib/redact.ts) and capped, because some
 // vendors echo the key they refused.
+//
+// The vendor's status is kept as `.vendorStatus` (and in the message); `.status` is what our own
+// API answers, mapped like makeProviderError: a vendor 401 passed through would read as "your
+// session expired" in the app, a 403 as "check your plan", a 404 as "the app may be mid-deploy",
+// and a vendor 4xx would drop out of the server_error telemetry.
 const VENDOR_CODE_RE = /^[A-Za-z0-9_.-]{1,48}$/;
 const VENDOR_DETAIL_MAX = 160;
 const VENDOR_STATUS_TEXT_MAX = 60;
@@ -99,7 +106,8 @@ const vendorCode = (...candidates: unknown[]): string | undefined => {
     const s = String(c);
     // A numeric code only repeats the HTTP status (OpenRouter, Gemini); a word says more.
     if (/^\d+$/.test(s)) continue;
-    if (VENDOR_CODE_RE.test(s)) return s;
+    // A "code" shaped like a key is dropped, never printed: the code is not redacted otherwise.
+    if (VENDOR_CODE_RE.test(s) && redactSecrets(s) === s) return s;
   }
   return undefined;
 };
@@ -127,12 +135,59 @@ const readVendorBody = (bodyText: string): { code?: string; message?: string } =
   return { code: vendorCode(e.code, e.type, e.status), message };
 };
 
+/** A spend cap or an empty balance, in a vendor's words (a 403 that is not a refused key). */
+const VENDOR_CAPACITY_RE = /key limit|limit exceeded|spending limit|quota|insufficient|credit|billing|balance/i;
+/** A refusal of the content rather than of the key. */
+const VENDOR_SAFETY_RE = /content.?policy|safety|moderation|flagged|prohibited/i;
+
+/** Our status, public code and user-safe sentence for a vendor's HTTP failure. */
+const mapVendorStatus = (
+  label: string,
+  status: number,
+  text: string,
+  byok: boolean
+): { status: number; publicCode: string; publicMessage: string } => {
+  if (status === 402 || (status === 403 && VENDOR_CAPACITY_RE.test(text))) {
+    return {
+      status: 503,
+      publicCode: 'PROVIDER_CAPACITY',
+      publicMessage: byok
+        ? `Your ${label} key is out of credit or over its spending limit. Top it up or raise the limit, then try again.`
+        : 'The AI service is out of credit right now. Try again later, or add your own key in Settings → API keys.'
+    };
+  }
+  // A 403 for the content (a safety filter) is not a refused key: it takes the generic sentence.
+  if (status === 401 || (status === 403 && !VENDOR_SAFETY_RE.test(text))) {
+    return {
+      status: 502,
+      publicCode: 'PROVIDER_KEY_REJECTED',
+      publicMessage: byok
+        ? `Your ${label} key was refused. Check it in Settings → API keys.`
+        : 'The AI service refused the request. Please try again later.'
+    };
+  }
+  if (status === 404) {
+    return { status: 502, publicCode: 'MODEL_NOT_FOUND', publicMessage: `That model isn't available from ${label} right now. Pick another model.` };
+  }
+  if (status === 429) {
+    return { status: 429, publicCode: 'RATE_LIMITED', publicMessage: `${label} is busy right now (too many requests). Wait a moment and try again.` };
+  }
+  if (status >= 500) {
+    return { status: 502, publicCode: 'BAD_GATEWAY', publicMessage: `${label} had a temporary problem. Please try again.` };
+  }
+  // Any other vendor 4xx (400, 413, 422 …) is a request the vendor turned down: still the
+  // upstream's answer, not a bad request from our client, and worth a server_error row. Its own
+  // code (not BAD_GATEWAY) so comic/llm.ts keeps treating it as a refusal, not a blip to retry.
+  return { status: 502, publicCode: 'PROVIDER_REJECTED', publicMessage: `${label} couldn't take this request. Try again, rephrase it, or pick another model.` };
+};
+
 export const vendorHttpError = (
   label: string,
   path: string,
   status: number,
   statusText: string,
-  bodyText: string
+  bodyText: string,
+  opts: { byok?: boolean } = {}
 ): TaggedError => {
   const body = typeof bodyText === 'string' ? bodyText : '';
   const { code, message } = readVendorBody(body);
@@ -145,7 +200,11 @@ export const vendorHttpError = (
   if (code) parts.push(`(${code})`);
   if (detail) parts.push(detail);
   const err = new Error(parts.join(' ')) as TaggedError;
-  err.status = status;
+  err.vendorStatus = status;
+  const mapped = mapVendorStatus(label, status, `${code ?? ''} ${detail}`, Boolean(opts.byok));
+  err.status = mapped.status;
+  err.publicCode = mapped.publicCode;
+  err.publicMessage = mapped.publicMessage;
   return err;
 };
 

@@ -10,17 +10,14 @@
 // Every string in the line (the event and every field, at any depth) passes through redactSecrets
 // first, so a vendor error that echoes a key never reaches the log store as text.
 
-import { redactSecrets } from './redact.js';
+import { redactJsonStrings } from './redact.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-
-/** JSON.stringify replacer: strings are redacted after any toJSON (Dates stay ISO strings). */
-const redactStrings = (_key: string, value: unknown): unknown => (typeof value === 'string' ? redactSecrets(value) : value);
 
 const emit = (level: LogLevel, event: string, fields?: Record<string, unknown>) => {
   let line: string;
   try {
-    line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields }, redactStrings);
+    line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields }, redactJsonStrings);
   } catch {
     // A field wasn't serializable (circular ref, BigInt, …) — never let logging throw.
     line = JSON.stringify({ ts: new Date().toISOString(), level, event, note: 'unserializable_fields' });

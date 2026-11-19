@@ -18,6 +18,7 @@ import {
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
+import { reasoningBudget } from '../reasoning.js';
 import { modelTimeoutError, makeProviderError } from './errors.js';
 import { markSharedKeyCapped } from '../providerCircuit.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
@@ -55,21 +56,9 @@ const JSON_REPAIR_INSTRUCTION =
 // Reasoning/thinking model families (id-based), kept in sync with the client capability index.
 const REASONING_MODEL_RE = /(?:^|[/:_-])(?:o1|o3|o4-mini|r1|qwq|deepseek-r1?|magistral|phi-4-reasoning|grok-3-mini)(?:[:_-]|$)|reasoning|thinking/i;
 
-// Bound the thinking budget so chat stays responsive. Unbounded `effort: 'high'` was
-// running 55-109s in production (the model rambling in its thinking phase). A capped
-// reasoning token budget keeps small/medium turns fast (they finish well under the
-// ceiling) while still allowing meaningful reasoning; genuinely deep work uses the agent
-// swarm, whose depth comes from running many agents rather than one giant reasoning call.
-// (Env-overridable via REASONING_BUDGET_* if a deployment wants more headroom.)
-//
-// Exported so callers that must also size max_tokens around the thinking budget (reasoning
-// tokens count against max_tokens, and Anthropic requires max_tokens > budget) can reuse
-// the exact same numbers instead of hard-coding a second copy.
-export const reasoningBudget = (effort: 'low' | 'medium' | 'high'): number => {
-  const defaults = { low: 1024, medium: 2048, high: 4096 };
-  const raw = Number(process.env[`REASONING_BUDGET_${effort.toUpperCase()}`]);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaults[effort];
-};
+// The bounded thinking budget lives in ai/reasoning.ts (shared with the Anthropic adapter and
+// comic/llm.ts); it is re-exported here for the callers that import it from this module.
+export { reasoningBudget };
 
 const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   const headers: Record<string, string> = {
