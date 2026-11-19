@@ -5,7 +5,10 @@
 //     (server/sql/comic_discovery.sql) and rebuilds every item from this allow-list (discoverPageFromRpc /
 //     discoverShelvesFromRpc), so nothing the RPC sends beyond it reaches a reader;
 //   * the Discover UI (DS-R6) builds request URLs (discoverListUrl / discoverShelvesUrl) and re-validates what comes
-//     back (decodeDiscoverPage / decodeDiscoverShelves), so a stray field never reaches a component.
+//     back (decodeDiscoverPage / decodeDiscoverShelves), so a stray field never reaches a component;
+//   * the share page's related shelves and Up next (GET /discover/related; Discover DISC-0) use the same pair:
+//     parseDiscoverRelatedQuery / discoverRelatedFromRpc at the edge, discoverRelatedUrl / decodeDiscoverRelated in the
+//     page. Continue reading looks comics up by slug through the list route (`slugs=`).
 //
 // What a listing may say about a comic is exactly DiscoverItem: never the snapshot, safety data, an asset key or a
 // user id. A creator byline (`creator`) is present only when the creator turned on "Show my username" for that
@@ -20,14 +23,22 @@ import { SLUG_RE } from './publication.js';
 
 export const DISCOVER_PATH = '/api/comic/public/discover';
 export const DISCOVER_SHELVES_PATH = '/api/comic/public/discover/shelves';
+/** The share page's "More like this" / "More from the Library" shelves and its end-of-comic Up next (Discover DISC-0). */
+export const DISCOVER_RELATED_PATH = '/api/comic/public/discover/related';
 /** Items per page, and the most a caller may ask for. */
 export const DISCOVER_LIMIT_MAX = 24;
 /** Longest search, in characters (code points). */
 export const DISCOVER_Q_MAX = 60;
 /** Items per shelf. */
 export const DISCOVER_SHELF_SIZE = 12;
-/** "In your language" and the Webtoons / Manga shelves only show with at least this many comics. */
+/** Trending, "In your language" and the Webtoons / Manga shelves only show with at least this many comics. */
 export const DISCOVER_SHELF_MIN = 4;
+/** The Top 10 shelf holds exactly this many comics, or is not shown (a "Top 10" of nine reads as broken). */
+export const DISCOVER_TOP10_SIZE = 10;
+/** The most comics `slugs=` may name (Continue reading asks for at most this many). */
+export const DISCOVER_SLUGS_MAX = 20;
+/** At most this many comics in each related list (`creator`, `similar`). */
+export const DISCOVER_RELATED_SIZE = 12;
 /**
  * Seconds a listing may be reused, in the browser (max-age) and again at the edge (s-maxage): a moderation hold or an
  * unpublish leaves every listing within 2 × 30 = 60 s. The comic itself (/c/<slug>) is never cached and stops at once.
@@ -62,11 +73,15 @@ export const DISCOVER_LENGTHS: Readonly<Record<DiscoverLength, { min: number; ma
   medium: { min: 9, max: 24 },
   long: { min: 25, max: 500 }
 };
-export type DiscoverShelfId = 'featured' | 'trending' | 'new' | 'kids' | 'lang' | 'webtoon' | 'manga';
+/**
+ * `top10`: the ten comics with the highest stored week score, sent only once ten comics have 3 or more reads in a week
+ * (comic_rank_state.top10_ok); it shows only with all ten (DISCOVER_TOP10_SIZE).
+ */
+export type DiscoverShelfId = 'featured' | 'trending' | 'top10' | 'new' | 'kids' | 'lang' | 'webtoon' | 'manga';
 /** Home order. Featured hides when nothing is featured; every shelf hides when empty. */
-export const DISCOVER_SHELF_IDS: readonly DiscoverShelfId[] = ['featured', 'trending', 'new', 'kids', 'lang', 'webtoon', 'manga'];
+export const DISCOVER_SHELF_IDS: readonly DiscoverShelfId[] = ['featured', 'trending', 'top10', 'new', 'kids', 'lang', 'webtoon', 'manga'];
 /** Shelves that need DISCOVER_SHELF_MIN comics to show (a thin shelf reads as broken). */
-export const DISCOVER_THIN_SHELVES: readonly DiscoverShelfId[] = ['lang', 'webtoon', 'manga'];
+export const DISCOVER_THIN_SHELVES: readonly DiscoverShelfId[] = ['trending', 'lang', 'webtoon', 'manga'];
 
 // ── Wire shapes ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -104,6 +119,25 @@ export type DiscoverShelves = Partial<Record<DiscoverShelfId, DiscoverItem[]>>;
 /** GET /api/comic/public/discover/shelves. Only shelves worth showing are present. */
 export interface DiscoverShelvesResponse { shelves: DiscoverShelves }
 
+/**
+ * Why `similar` holds what it holds. 'library': same rating ceiling, the reader's language first, same kind, same
+ * length, then the stored ranking (the share page titles it "More from the Library"). 'similar': phase 2 facets or
+ * co-reads matched ("More like this"). The contract does not change between the two.
+ */
+export type DiscoverRelatedBasis = 'library' | 'similar';
+export const DISCOVER_RELATED_BASES: readonly DiscoverRelatedBasis[] = ['library', 'similar'];
+/**
+ * GET /api/comic/public/discover/related?slug=&lang=. Never this comic; every item's rating at most this comic's
+ * (unknown counts as PG-13); at most DISCOVER_RELATED_SIZE in each list. `creator` (other comics by the same creator)
+ * is present only when both this comic and each listed one show their creator, and only when it is not empty.
+ * Unknown, revoked and unpublished slugs get the same fallback answer, so the answer never tells them apart.
+ */
+export interface DiscoverRelated {
+  creator?: DiscoverItem[];
+  similar: DiscoverItem[];
+  basis: DiscoverRelatedBasis;
+}
+
 export interface DiscoverQuery {
   sort: DiscoverSort;
   q?: string;
@@ -117,13 +151,28 @@ export interface DiscoverQuery {
   limit: number;
   /** A page's `next`, for the same query. */
   cursor?: string;
+  /**
+   * Exactly these comics (1..DISCOVER_SLUGS_MAX, each once), answered in this order: live, public and rated ones only
+   * (Continue reading). Every other field is ignored, so a slugs query is always `{ sort: 'trending', limit: 24, slugs }`
+   * and its canonical search is `slugs=` alone.
+   */
+  slugs?: string[];
 }
 export interface DiscoverShelvesQuery {
   rating?: DiscoverRatingFilter;
   lang?: string;
   kind?: ComicKind;
-  /** The reader's language, for the "In your language" shelf (shown only when `lang` is not set). */
+  /**
+   * The reader's language: the "In your language" shelf (shown only when `lang` is not set), and the language of
+   * every shelf's titles and descriptions where that edition is published.
+   */
   yourLang?: string;
+}
+export interface DiscoverRelatedQuery {
+  /** The comic the shelves are for (its share slug). */
+  slug: string;
+  /** The edition on screen (lower case): related comics published in it come first. */
+  lang?: string;
 }
 
 export type DiscoverParse<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -226,8 +275,9 @@ const cursorFromRpc = (v: unknown): DiscoverCursor | null =>
 
 // ── Queries ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const LIST_KEYS = new Set(['sort', 'q', 'rating', 'lang', 'kind', 'length', 'week', 'limit', 'cursor']);
+const LIST_KEYS = new Set(['sort', 'q', 'rating', 'lang', 'kind', 'length', 'week', 'limit', 'cursor', 'slugs']);
 const SHELF_KEYS = new Set(['rating', 'lang', 'kind', 'your_lang']);
+const RELATED_KEYS = new Set(['slug', 'lang']);
 
 function singles(params: URLSearchParams, allowed: Set<string>): DiscoverParse<Map<string, string>> {
   const out = new Map<string, string>();
@@ -262,11 +312,35 @@ function langFilter(v: string | undefined, name: string): DiscoverParse<string |
   return lang ? ok(lang) : fail(`"${name}" must be a language code such as en or pt-BR.`);
 }
 
-/** Strict: every parameter known, given once, well formed (the Worker answers 400 otherwise). */
+/** `slugs=`: 1..DISCOVER_SLUGS_MAX comma-separated slugs, each exactly slug-shaped; repeats dropped, order kept. */
+function slugList(v: string): DiscoverParse<string[]> {
+  const parts = v.split(',');
+  if (!v || parts.length > DISCOVER_SLUGS_MAX) return fail(`"slugs" must name 1 to ${DISCOVER_SLUGS_MAX} comics.`);
+  const out: string[] = [];
+  for (const slug of parts) {
+    if (!SLUG_RE.test(slug)) return fail('"slugs" must be comic slugs separated by commas.');
+    if (!out.includes(slug)) out.push(slug);
+  }
+  return ok(out);
+}
+
+/**
+ * Strict: every parameter known, given once, well formed (the Worker answers 400 otherwise). With `slugs`, the other
+ * parameters must still be well formed but are ignored: the query is the slugs alone.
+ */
 export function parseDiscoverQuery(search: string | URLSearchParams): DiscoverParse<DiscoverQuery> {
   const params = singles(typeof search === 'string' ? new URLSearchParams(search) : search, LIST_KEYS);
   if (params.ok === false) return params;
-  const p = params.value;
+  const parsed = parseListParams(params.value);
+  if (parsed.ok === false) return parsed;
+  const slugs = params.value.get('slugs');
+  if (slugs === undefined) return parsed;
+  const list = slugList(slugs);
+  if (list.ok === false) return list;
+  return ok({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: list.value });
+}
+
+function parseListParams(p: Map<string, string>): DiscoverParse<DiscoverQuery> {
   const sort = (p.get('sort') ?? 'trending') as DiscoverSort;
   if (!DISCOVER_SORTS.includes(sort)) return fail('Unknown sort.');
   const query: DiscoverQuery = { sort, limit: DISCOVER_LIMIT_MAX };
@@ -326,8 +400,26 @@ export function parseDiscoverShelvesQuery(search: string | URLSearchParams): Dis
   return ok(query);
 }
 
-/** The canonical query string (fixed order, defaults left out): the edge cache key and the URL the UI requests. */
+/** Strict: `slug` required and slug-shaped, `lang` optional; nothing else (the Worker answers 400 before any database call). */
+export function parseDiscoverRelatedQuery(search: string | URLSearchParams): DiscoverParse<DiscoverRelatedQuery> {
+  const params = singles(typeof search === 'string' ? new URLSearchParams(search) : search, RELATED_KEYS);
+  if (params.ok === false) return params;
+  const p = params.value;
+  const slug = p.get('slug');
+  if (slug === undefined || !SLUG_RE.test(slug)) return fail('"slug" must be a comic slug.');
+  const query: DiscoverRelatedQuery = { slug };
+  const lang = langFilter(p.get('lang'), 'lang');
+  if (lang.ok === false) return lang;
+  if (lang.value) query.lang = lang.value;
+  return ok(query);
+}
+
+/**
+ * The canonical query string (fixed order, defaults left out): the edge cache key and the URL the UI requests. A slugs
+ * query is `slugs=<a>,<b>` alone (slugs are base62, so the commas need no escaping).
+ */
 export function discoverSearch(query: DiscoverQuery): string {
+  if (query.slugs && query.slugs.length) return `slugs=${query.slugs.join(',')}`;
   const p = new URLSearchParams();
   if (query.sort !== 'trending') p.set('sort', query.sort);
   if (query.q) p.set('q', query.q);
@@ -350,31 +442,56 @@ export function discoverShelvesSearch(query: DiscoverShelvesQuery): string {
   return p.toString();
 }
 
+/** The related shelves' canonical query string, `slug=…&lang=…`: the edge cache key (slug + lang) and the UI URL. */
+export function discoverRelatedSearch(query: DiscoverRelatedQuery): string {
+  const p = new URLSearchParams();
+  p.set('slug', query.slug);
+  if (query.lang) p.set('lang', query.lang);
+  return p.toString();
+}
+
 const withSearch = (path: string, search: string) => (search ? `${path}?${search}` : path);
-/** The listing URL for a query (relative; the UI prefixes its API base). Filters: sort, q, rating, lang, kind, length, week. */
+/**
+ * The listing URL for a query (relative; the UI prefixes its API base). Filters: sort, q, rating, lang, kind, length,
+ * week; or `slugs` alone.
+ */
 export const discoverListUrl = (query: Partial<DiscoverQuery> = {}): string =>
   withSearch(DISCOVER_PATH, discoverSearch({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, ...query }));
 export const discoverShelvesUrl = (query: DiscoverShelvesQuery = {}): string => withSearch(DISCOVER_SHELVES_PATH, discoverShelvesSearch(query));
+export const discoverRelatedUrl = (query: DiscoverRelatedQuery): string => withSearch(DISCOVER_RELATED_PATH, discoverRelatedSearch(query));
 
-/** comic_discover_list's arguments for a query (names and order exactly as the SQL declares them). */
-export function discoverListRpcArgs(query: DiscoverQuery): Record<string, string | number | boolean | null> {
-  const after = query.cursor ? decodeDiscoverCursor(query.sort, query.cursor) : null;
-  return {
-    p_sort: query.sort,
-    p_q: query.q ?? null,
-    p_rating: query.rating ?? null,
-    p_lang: query.lang ?? null,
-    p_kind: query.kind ?? null,
-    p_length: query.length ?? null,
-    p_week: !!query.week,
-    p_limit: query.limit,
+/**
+ * comic_discover_list's arguments for a query (names and order exactly as the SQL declares them). A slugs query sends
+ * the defaults for every filter plus `p_slugs`; any other query sends no `p_slugs` (the SQL defaults it to null), so
+ * the call stays the same for the SQL as it is today.
+ */
+export function discoverListRpcArgs(query: DiscoverQuery): Record<string, string | number | boolean | null | string[]> {
+  const slugs = query.slugs && query.slugs.length ? [...query.slugs] : null;
+  const q: DiscoverQuery = slugs ? { sort: 'trending', limit: DISCOVER_LIMIT_MAX } : query;
+  const after = q.cursor ? decodeDiscoverCursor(q.sort, q.cursor) : null;
+  const args: Record<string, string | number | boolean | null | string[]> = {
+    p_sort: q.sort,
+    p_q: q.q ?? null,
+    p_rating: q.rating ?? null,
+    p_lang: q.lang ?? null,
+    p_kind: q.kind ?? null,
+    p_length: q.length ?? null,
+    p_week: !!q.week,
+    p_limit: q.limit,
     p_after_slug: after ? after.slug : null
   };
+  if (slugs) args.p_slugs = slugs;
+  return args;
 }
 
 /** comic_discover_shelves's arguments. */
 export function discoverShelvesRpcArgs(query: DiscoverShelvesQuery): Record<string, string | null> {
   return { p_rating: query.rating ?? null, p_lang: query.lang ?? null, p_kind: query.kind ?? null, p_your_lang: query.yourLang ?? null };
+}
+
+/** comic_discover_related(p_slug text, p_lang text)'s arguments. */
+export function discoverRelatedRpcArgs(query: DiscoverRelatedQuery): Record<string, string | null> {
+  return { p_slug: query.slug, p_lang: query.lang ?? null };
 }
 
 // ── Items ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -437,11 +554,22 @@ function buildShelves(raw: unknown, readCover: CoverReader, avatarOrigin?: strin
   const shelves: DiscoverShelves = {};
   if (!isRecord(raw)) return shelves;
   for (const id of DISCOVER_SHELF_IDS) {
-    const items = buildItems(raw[id], readCover, DISCOVER_SHELF_SIZE, avatarOrigin);
-    const min = DISCOVER_THIN_SHELVES.includes(id) ? DISCOVER_SHELF_MIN : 1;
+    const size = id === 'top10' ? DISCOVER_TOP10_SIZE : DISCOVER_SHELF_SIZE;
+    const items = buildItems(raw[id], readCover, size, avatarOrigin);
+    const min = id === 'top10' ? DISCOVER_TOP10_SIZE : DISCOVER_THIN_SHELVES.includes(id) ? DISCOVER_SHELF_MIN : 1;
     if (items.length >= min) shelves[id] = items;
   }
   return shelves;
+}
+
+const isRelatedBasis = (v: unknown): v is DiscoverRelatedBasis => typeof v === 'string' && (DISCOVER_RELATED_BASES as readonly string[]).includes(v);
+
+/** Both sides of the related answer: a known basis or nothing; `creator` only when it holds a comic. */
+function buildRelated(raw: unknown, readCover: CoverReader, avatarOrigin?: string): DiscoverRelated | null {
+  if (!isRecord(raw) || !isRelatedBasis(raw.basis)) return null;
+  const creator = buildItems(raw.creator, readCover, DISCOVER_RELATED_SIZE, avatarOrigin);
+  const similar = buildItems(raw.similar, readCover, DISCOVER_RELATED_SIZE, avatarOrigin);
+  return creator.length ? { creator, similar, basis: raw.basis } : { similar, basis: raw.basis };
 }
 
 export interface DiscoverRpcOptions {
@@ -477,6 +605,14 @@ export function discoverShelvesFromRpc(raw: unknown, opts: DiscoverRpcOptions): 
   return { shelves: buildShelves(raw, rpcCover(opts.coverUrl), opts.avatarOrigin) };
 }
 
+/**
+ * comic_discover_related's answer → the wire answer. The function always answers an object with a basis (unknown slugs
+ * get the fallback), so anything else, `null` included, is not an answer (the Worker answers 503).
+ */
+export function discoverRelatedFromRpc(raw: unknown, opts: DiscoverRpcOptions): DiscoverRelated | null {
+  return buildRelated(raw, rpcCover(opts.coverUrl), opts.avatarOrigin);
+}
+
 /** The UI's check of a listing response: the allow-list again (unknown fields dropped), or null for a non-listing. */
 export function decodeDiscoverPage(raw: unknown): DiscoverPage | null {
   if (!isRecord(raw) || !Array.isArray(raw.items)) return null;
@@ -488,4 +624,9 @@ export function decodeDiscoverPage(raw: unknown): DiscoverPage | null {
 export function decodeDiscoverShelves(raw: unknown): DiscoverShelvesResponse | null {
   if (!isRecord(raw) || !isRecord(raw.shelves)) return null;
   return { shelves: buildShelves(raw.shelves, wireCover) };
+}
+
+/** The share page's check of the related answer: the allow-list again, and null without a known basis (hidden). */
+export function decodeDiscoverRelated(raw: unknown): DiscoverRelated | null {
+  return buildRelated(raw, wireCover);
 }
