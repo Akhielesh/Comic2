@@ -325,7 +325,8 @@ const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, onRetry, retryi
         {reason && <span className={MUTED}> · {reason}</span>}
       </span>
       {retry.actions.length > 0 && (
-        <span className="inline-flex shrink-0 items-center gap-1.5">
+        // Never wider than the line: a long label truncates inside Retry and the price wraps under it.
+        <span className="inline-flex max-w-full shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1">
           {/* Usable mid-run: the server draws the retry once one of the comic's image slots is free. */}
           <Button variant="outline" size="sm" loading={retrying} aria-label={label} onClick={() => onRetry(retry.actions)}>
             <RotateCcw aria-hidden />
