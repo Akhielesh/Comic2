@@ -170,8 +170,11 @@ describe('ComicsHeader', () => {
       expect(within(banner).queryByRole('button', { name: /theme/i }), JSON.stringify(over)).toBeNull();
       const actions = banner.querySelector('[data-region="actions"]') as HTMLElement;
       const button = within(actions).getByRole('button', { name: 'Appearance: Light' });
-      // Hidden below 600 by its class (comicsShell.css), where the menu carries the same choice.
-      expect(button.className.split(/\s+/)).toContain('comics-header-theme');
+      // Hidden below 600 by its class (comicsShell.css), where the menu carries the same choice. The class sits on the
+      // wrapper, so nothing of the control is left in the actions row to take a gap there.
+      const wrapper = button.parentElement as HTMLElement;
+      expect(wrapper.parentElement).toBe(actions);
+      expect(wrapper.className.split(/\s+/)).toContain('comics-header-theme');
       const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
       const group = within(menu).getByRole('radiogroup', { name: 'Appearance', hidden: true });
       expect(within(group).getAllByRole('radio', { hidden: true }).map((r) => r.textContent)).toEqual(['Light', 'Dark', 'Paper', 'System']);
@@ -182,6 +185,25 @@ describe('ComicsHeader', () => {
       expect(within(row).getByText('Appearance')).toBeInTheDocument();
       unmount();
     }
+  });
+
+  it('one overlay at a time: opening Appearance closes the menu, and pressing the menu trigger closes Appearance', () => {
+    render(<ComicsHeader {...props({ signedIn: true, page: 'other', onOpenAccount: vi.fn() })} />);
+    const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+    const trigger = screen.getByRole('button', { name: 'Account and navigation' });
+    fireEvent.click(trigger);
+    expect(menu).not.toHaveAttribute('hidden');
+    const appearance = screen.getByRole('button', { name: /^Appearance: / });
+    fireEvent.pointerDown(appearance);
+    fireEvent.click(appearance);
+    expect(appearance).toHaveAttribute('aria-expanded', 'true');
+    expect(menu).toHaveAttribute('hidden');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    expect(menu).not.toHaveAttribute('hidden');
+    expect(appearance).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelector('[data-slot="appearance-panel"]')).toBeNull();
   });
 
   it('choosing Dark in the compact menu darkens the page at once and keeps the menu open', () => {

@@ -34,13 +34,18 @@ export interface AppearanceSegmentedProps {
   className?: string;
 }
 
+/** What a legacy pair no choice writes shows as: nothing checked, so every choice (the mode it reads as too) can be pressed. */
+const UNSETTLED = 'unsettled';
+
 export function AppearanceSegmented({ paper = false, fullWidth, size, className }: AppearanceSegmentedProps): React.ReactElement {
-  const { appearance, set } = useAppearance();
+  const { appearance, settled, set } = useAppearance();
   return (
-    <Segmented
+    <Segmented<Appearance | typeof UNSETTLED>
       label="Appearance"
-      value={appearance}
-      onChange={set}
+      value={settled ? appearance : UNSETTLED}
+      onChange={(value) => {
+        if (value !== UNSETTLED) set(value);
+      }}
       options={paper ? WITH_PAPER : WITHOUT_PAPER}
       fullWidth={fullWidth}
       size={size}
@@ -53,17 +58,27 @@ export function AppearanceSegmented({ paper = false, fullWidth, size, className 
 export interface AppearanceButtonProps {
   /** Offer Paper (Comic Studio screens). */
   paper?: boolean;
-  /** Placement classes from the header that hosts it. */
+  /** Classes for the button itself (a host's icon-button look). */
   className?: string;
+  /** Placement classes from the header that hosts it (show/hide by width): on the wrapper, so nothing is left behind. */
+  wrapperClassName?: string;
+  /** Told when the panel opens or closes, so the host can keep one overlay open at a time. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** Where the panel sits below 600 px: just under the button, set when it opens (the header's own height varies). */
 const PANEL_TOP_VAR = '--appearance-panel-top';
 const PANEL_GAP_PX = 8;
 
-export function AppearanceButton({ paper = false, className }: AppearanceButtonProps): React.ReactElement {
+export function AppearanceButton({ paper = false, className, wrapperClassName, onOpenChange }: AppearanceButtonProps): React.ReactElement {
   const { appearance } = useAppearance();
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onOpenChangeRef.current?.(next);
+  };
   const [top, setTop] = useState<number | null>(null);
   const panelId = useId();
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -76,20 +91,24 @@ export function AppearanceButton({ paper = false, className }: AppearanceButtonP
       const rect = buttonRef.current?.getBoundingClientRect();
       setTop(rect && rect.bottom > 0 ? Math.round(rect.bottom + PANEL_GAP_PX) : null);
     }
-    setOpen((v) => !v);
+    setOpen(!open);
   };
 
   // Focus the chosen look on open; Esc and a press outside close it. Listeners only while open.
   useEffect(() => {
     if (!open) return undefined;
     panelRef.current?.querySelector<HTMLElement>('[role="radio"][tabindex="0"]')?.focus();
+    const close = () => {
+      setOpenState(false);
+      onOpenChangeRef.current?.(false);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      setOpen(false);
+      close();
       buttonRef.current?.focus();
     };
     const onPress = (e: PointerEvent) => {
-      if (wrapRef.current && e.target instanceof Node && !wrapRef.current.contains(e.target)) setOpen(false);
+      if (wrapRef.current && e.target instanceof Node && !wrapRef.current.contains(e.target)) close();
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onPress);
@@ -102,7 +121,7 @@ export function AppearanceButton({ paper = false, className }: AppearanceButtonP
   return (
     <span
       ref={wrapRef}
-      className="relative inline-flex"
+      className={cn('relative inline-flex', wrapperClassName)}
       onBlur={(e) => {
         const next = e.relatedTarget;
         if (open && next instanceof Node && !e.currentTarget.contains(next)) setOpen(false);

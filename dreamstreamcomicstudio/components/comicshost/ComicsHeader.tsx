@@ -153,7 +153,9 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const actions = (
     <>
-      <AppearanceButton paper className="comics-header-theme" />
+      {/* One overlay at a time: opening Appearance closes the menu (a press on the menu trigger closes Appearance, as
+          any press outside it does). */}
+      <AppearanceButton paper wrapperClassName="comics-header-theme" onOpenChange={(opened) => opened && setOpen(false)} />
       {signedIn ? (
         <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'comics-header-entry comics-header-my-comics', !home && 'comics-primary-action')} onClick={onOpenComics}>
           My comics

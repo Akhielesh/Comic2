@@ -1,11 +1,13 @@
 // useThemeColor() (mobile.md §9.1): while the studio or reader is mounted, the browser chrome
 // (Android status bar, Safari's tab bar tint, the installed-PWA title bar) matches the studio canvas
 // instead of the landing page's brand blue. It follows the app's own `dark` class (services/theme.ts),
-// not only the OS scheme. On unmount an explicit colour gives back the colours it replaced; the canvas tint hands the
-// chrome back to services/theme.ts (the current canvas), since the look may have changed while the studio was open.
+// not only the OS scheme. An explicit colour holds the chrome (services/theme.ts holdThemeColor) so a change of look
+// does not repaint it, and the canvas tint waits while another screen holds it. On unmount each meta gets back what it
+// had, then services/theme.ts sets the look's own metas to the current canvas, since the look may have changed while
+// the studio was open (a share page's own colour stays the share page's).
 
 import { useEffect } from 'react';
-import { syncThemeColorMeta } from '../../../services/theme';
+import { holdThemeColor, syncThemeColorMeta, themeColorHeld } from '../../../services/theme';
 
 const readCanvas = (): string => {
   try {
@@ -33,11 +35,13 @@ export function useThemeColor(color?: string, enabled = true): void {
     }
     const previous = metas.map((m) => m.getAttribute('content'));
     const apply = () => {
+      if (!color && themeColorHeld()) return;
       const value = color || readCanvas();
       if (!value) return;
       for (const m of metas) m.setAttribute('content', value);
     };
     apply();
+    const release = color ? holdThemeColor() : null;
     // Re-read the canvas when either appearance choice changes.
     let observer: MutationObserver | null = null;
     if (!color && typeof MutationObserver !== 'undefined') {
@@ -46,19 +50,15 @@ export function useThemeColor(color?: string, enabled = true): void {
     }
     return () => {
       observer?.disconnect();
-      if (created) {
-        created.remove();
-        return;
-      }
-      if (!color) {
-        syncThemeColorMeta();
-        return;
-      }
-      metas.forEach((m, i) => {
-        const prev = previous[i];
-        if (prev === null) m.removeAttribute('content');
-        else m.setAttribute('content', prev);
-      });
+      release?.();
+      if (created) created.remove();
+      else
+        metas.forEach((m, i) => {
+          const prev = previous[i];
+          if (prev === null) m.removeAttribute('content');
+          else m.setAttribute('content', prev);
+        });
+      syncThemeColorMeta();
     };
   }, [color, enabled]);
 }

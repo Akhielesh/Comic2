@@ -2,18 +2,15 @@
 // The one appearance choice (navtheme NT-Q): Light, Dark, Paper or System, written to the two stores that already exist
 // (ds.theme.v1 for light/dark/system, ds.comic-theme.v1 for the Atlas/Paper material) by one writer, applied to the
 // whole page at once, followed by the browser's status-bar colour, and on System following the OS with nothing mounted.
-import { renderHook } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const host = vi.hoisted(() => ({ comics: false }));
-vi.mock('./productHost', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./productHost')>();
-  return { ...actual, isComicsHost: (hostname?: string) => (hostname === undefined ? host.comics : actual.isComicsHost(hostname)) };
-});
 
 import { loadAppearance, setAppearance, type Appearance } from './appearance';
 import { DS_SKIN_ATTR } from './productHost';
+import { holdThemeColor, initTheme, useTheme } from './theme';
 import { useThemeColor } from '../components/comicstudio/mobile/useThemeColor';
+import { useComicThemeScope } from '../components/comicstudio/useComicTheme';
 
 const MODE_KEY = 'ds.theme.v1';
 const MATERIAL_KEY = 'ds.comic-theme.v1';
@@ -25,8 +22,24 @@ const CANVAS_CSS = ':root { --ds-canvas: #ffffff; } .dark { --ds-canvas: #0a0a0a
 
 const metas = () => Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')).map((m) => m.getAttribute('content'));
 
+/** The App-level scope the comics host mounts for the whole app (App.tsx -> useComicsHost -> useComicThemeScope). */
+const mountComicsHostScope = () => renderHook(() => useComicThemeScope(true));
+
+/** A startViewTransition stand-in that records the page as it was when the transition began, and keeps the update for later. */
+const recordViewTransition = () => {
+  const updates: Array<() => void> = [];
+  const atStart: Array<{ material: string | null; dark: boolean; metas: Array<string | null> }> = [];
+  (document as { startViewTransition?: unknown }).startViewTransition = vi.fn((update: () => void) => {
+    atStart.push({ material: root.getAttribute('data-comic-theme'), dark: root.classList.contains('dark'), metas: metas() });
+    updates.push(update);
+    return { ready: Promise.resolve(), finished: new Promise(() => undefined), updateCallbackDone: new Promise(() => undefined) };
+  });
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+  root.setAttribute(DS_SKIN_ATTR, 'atlas');
+  return { atStart, runUpdates: () => updates.splice(0).forEach((u) => u()) };
+};
+
 beforeEach(() => {
-  host.comics = false;
   localStorage.clear();
   const style = document.createElement('style');
   style.setAttribute('data-test', 'canvas');
@@ -42,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
   window.matchMedia = realMatchMedia;
   localStorage.clear();
@@ -116,8 +130,8 @@ describe('appearance: one choice over the two stores', () => {
 });
 
 describe('appearance: the page changes at once', () => {
-  it('on a comics host, Paper then Light leaves no data-comic-theme on <html>', () => {
-    host.comics = true;
+  it('with the comics host scope mounted (as App does), Paper then Light leaves no data-comic-theme on <html>', () => {
+    mountComicsHostScope();
     setAppearance('paper');
     expect(root.getAttribute('data-comic-theme')).toBe('paper');
     setAppearance('light');
@@ -129,15 +143,25 @@ describe('appearance: the page changes at once', () => {
     expect(root.classList.contains('dark')).toBe(true);
   });
 
-  it('off the comics host <html> keeps no material (the studio scope hook owns it there)', () => {
-    host.comics = false;
+  it('setAppearance never writes <html data-comic-theme> itself: the scope hook is its one writer (off the comics host it is Comic Studio only)', () => {
     setAppearance('paper');
     expect(root.hasAttribute('data-comic-theme')).toBe(false);
     expect(localStorage.getItem(MATERIAL_KEY)).toBe('paper');
+    root.setAttribute('data-comic-theme', 'paper');
+    setAppearance('light');
+    expect(root.getAttribute('data-comic-theme')).toBe('paper');
+  });
+
+  it('the material store has its own module, so appearance.ts and useComicTheme.ts do not import each other', () => {
+    const appearance = readFileSync('services/appearance.ts', 'utf8');
+    const material = readFileSync('services/comicMaterial.ts', 'utf8');
+    expect(appearance).not.toMatch(/from '[^']*useComicTheme'/);
+    expect(appearance).toMatch(/from '\.\/comicMaterial'/);
+    expect(material).not.toMatch(/^import /m);
   });
 
   it('the theme-color metas equal --ds-canvas after each change', () => {
-    host.comics = true;
+    mountComicsHostScope();
     setAppearance('dark');
     expect(metas()).toEqual(['#0a0a0a', '#0a0a0a']);
     setAppearance('paper');
@@ -156,19 +180,102 @@ describe('appearance: the page changes at once', () => {
   });
 
   it('under the skin the metas follow the cross-fade: they change when the new theme lands, not before', () => {
-    root.setAttribute(DS_SKIN_ATTR, 'atlas');
-    const updates: Array<() => void> = [];
-    (document as { startViewTransition?: unknown }).startViewTransition = vi.fn((update: () => void) => {
-      updates.push(update);
-      return { ready: Promise.resolve(), finished: new Promise(() => undefined), updateCallbackDone: new Promise(() => undefined) };
-    });
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+    const vt = recordViewTransition();
     setAppearance('dark');
-    expect(updates).toHaveLength(1);
+    expect(vt.atStart).toEqual([{ material: null, dark: false, metas: ['#ffffff', '#0a0a0a'] }]);
+    // Until the update runs, nothing has moved: not the class, not the chrome.
     expect(root.classList.contains('dark')).toBe(false);
-    updates.splice(0).forEach((u) => u());
+    expect(metas()).toEqual(['#ffffff', '#0a0a0a']);
+    vt.runUpdates();
     expect(root.classList.contains('dark')).toBe(true);
     expect(metas()).toEqual(['#0a0a0a', '#0a0a0a']);
+  });
+
+  it('under the skin Paper to Dark is one cross-fade: the material and the chrome change inside it, not before it starts', () => {
+    mountComicsHostScope();
+    setAppearance('paper');
+    expect(metas()).toEqual(['#fbf8f0', '#fbf8f0']);
+    const vt = recordViewTransition();
+    setAppearance('dark');
+    // When the browser takes its "before" picture the page is still Paper, with the Paper chrome.
+    expect(vt.atStart).toEqual([{ material: 'paper', dark: false, metas: ['#fbf8f0', '#fbf8f0'] }]);
+    expect(root.getAttribute('data-comic-theme')).toBe('paper');
+    expect(metas()).toEqual(['#fbf8f0', '#fbf8f0']);
+    vt.runUpdates();
+    expect(root.hasAttribute('data-comic-theme')).toBe(false);
+    expect(root.classList.contains('dark')).toBe(true);
+    expect(metas()).toEqual(['#0a0a0a', '#0a0a0a']);
+    // Back to Paper: the same single flip the other way.
+    setAppearance('paper');
+    expect(vt.atStart[1]).toEqual({ material: null, dark: true, metas: ['#0a0a0a', '#0a0a0a'] });
+    vt.runUpdates();
+    expect(root.getAttribute('data-comic-theme')).toBe('paper');
+    expect(root.classList.contains('dark')).toBe(false);
+    expect(metas()).toEqual(['#fbf8f0', '#fbf8f0']);
+  });
+
+  it('when the mode does not change (Light to Paper) the material lands at once, with no transition', () => {
+    mountComicsHostScope();
+    const vt = recordViewTransition();
+    setAppearance('paper');
+    expect(vt.atStart).toEqual([]);
+    expect(root.getAttribute('data-comic-theme')).toBe('paper');
+    expect(metas()).toEqual(['#fbf8f0', '#fbf8f0']);
+  });
+
+  it('Paper picked in another tab with the mode unchanged repaints this tab and its chrome', () => {
+    mountComicsHostScope();
+    expect(metas()).toEqual(['#ffffff', '#ffffff']);
+    localStorage.setItem(MATERIAL_KEY, 'paper');
+    window.dispatchEvent(new StorageEvent('storage', { key: MATERIAL_KEY }));
+    expect(root.getAttribute('data-comic-theme')).toBe('paper');
+    expect(metas()).toEqual(['#fbf8f0', '#fbf8f0']);
+  });
+});
+
+describe('the chrome colour: only the look\'s own metas, never one another screen owns', () => {
+  it('a share page keeps its comic\'s colour: initTheme and a change leave an unscoped theme-color alone', () => {
+    document.head.querySelectorAll('meta[name="theme-color"]').forEach((n) => n.remove());
+    const card = document.createElement('meta');
+    card.name = 'theme-color';
+    card.setAttribute('content', '#5a2d82');
+    document.head.appendChild(card);
+    initTheme();
+    expect(card.getAttribute('content')).toBe('#5a2d82');
+    setAppearance('dark');
+    expect(card.getAttribute('content')).toBe('#5a2d82');
+  });
+
+  it('while a screen holds the chrome (an explicit colour) a change of look leaves it, and its release gives the current look', () => {
+    const { unmount } = renderHook(() => useThemeColor('#101010'));
+    expect(metas()).toEqual(['#101010', '#101010']);
+    setAppearance('dark');
+    expect(metas()).toEqual(['#101010', '#101010']);
+    unmount();
+    // Not the light colours it found when it opened: the look changed meanwhile.
+    expect(metas()).toEqual(['#0a0a0a', '#0a0a0a']);
+  });
+
+  it('holdThemeColor counts holders: the sync waits for the last release, and a release runs once', () => {
+    const a = holdThemeColor();
+    const b = holdThemeColor();
+    setAppearance('dark');
+    expect(metas()).toEqual(['#ffffff', '#0a0a0a']);
+    a();
+    a();
+    setAppearance('system');
+    expect(metas()).toEqual(['#ffffff', '#0a0a0a']);
+    b();
+    setAppearance('dark');
+    expect(metas()).toEqual(['#0a0a0a', '#0a0a0a']);
+  });
+
+  it("Chat's own Light/Dark/System (useTheme) writes Atlas with the mode, so no new Dark + Paper pair is made", () => {
+    setAppearance('paper');
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setPreference('dark'));
+    expect([localStorage.getItem(MODE_KEY), localStorage.getItem(MATERIAL_KEY)]).toEqual(['dark', 'atlas']);
+    expect(loadAppearance()).toBe('dark');
   });
 });
 

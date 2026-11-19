@@ -80,6 +80,32 @@ describe('useImmersive', () => {
     expect(meta.content).toBe('#ffffff');
   });
 
+  it('holds the chrome while open (a change of look leaves the room colour) and gives the current look back on exit', async () => {
+    const { setAppearance } = await import('../../../services/appearance');
+    const style = document.createElement('style');
+    style.textContent = ':root { --ds-canvas: #ffffff; } .dark { --ds-canvas: #0a0a0a; }';
+    document.head.appendChild(style);
+    const metas = ['(prefers-color-scheme: light)', '(prefers-color-scheme: dark)'].map((media) => {
+      const meta = document.createElement('meta');
+      meta.name = 'theme-color';
+      meta.setAttribute('media', media);
+      meta.content = '#ffffff';
+      document.head.appendChild(meta);
+      return meta;
+    });
+    const view = render(<Host onExit={() => undefined} themeColor="#101010" />);
+    await act(tick);
+    expect(metas[0].content).toBe('#101010');
+    setAppearance('dark');
+    expect(metas[0].content).toBe('#101010');
+    view.unmount();
+    expect(metas.map((m) => m.content)).toEqual(['#0a0a0a', '#0a0a0a']);
+    setAppearance('light');
+    style.remove();
+    localStorage.clear();
+    document.documentElement.classList.remove('dark', 'ds-no-transitions');
+  });
+
   it('holds a screen wake lock while visible and releases it on close', async () => {
     const release = vi.fn(async () => undefined);
     const request = vi.fn(async () => ({ released: false, release, addEventListener: () => undefined }));

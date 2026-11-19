@@ -39,6 +39,19 @@ describe('AppearanceSegmented', () => {
     expect(screen.getByRole('radio', { name: 'Paper' })).toHaveAttribute('aria-checked', 'true');
   });
 
+  it('a legacy Dark + Paper browser checks nothing, so pressing Dark (what it reads as) still writes Dark with Atlas', () => {
+    localStorage.setItem('ds.theme.v1', 'dark');
+    localStorage.setItem('ds.comic-theme.v1', 'paper');
+    render(<AppearanceSegmented paper />);
+    const group = screen.getByRole('radiogroup', { name: 'Appearance' });
+    expect(within(group).getAllByRole('radio').filter((r) => r.getAttribute('aria-checked') === 'true')).toEqual([]);
+    // The group stays reachable: the first choice takes the tab stop.
+    expect(within(group).getByRole('radio', { name: 'Light' })).toHaveAttribute('tabindex', '0');
+    fireEvent.click(within(group).getByRole('radio', { name: 'Dark' }));
+    expect([localStorage.getItem('ds.theme.v1'), localStorage.getItem('ds.comic-theme.v1')]).toEqual(['dark', 'atlas']);
+    expect(within(group).getByRole('radio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
+  });
+
   it('two controls on one page stay in step, and a change from another tab shows at once', () => {
     render(
       <>
@@ -101,6 +114,22 @@ describe('AppearanceButton', () => {
     expect(screen.getByRole('radiogroup', { name: 'Appearance' })).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByText('Outside'));
     expect(screen.queryByRole('radiogroup', { name: 'Appearance' })).toBeNull();
+  });
+
+  it('placement classes go on the wrapper, so a hidden button leaves no empty flex item behind; className stays on the button', () => {
+    render(<AppearanceButton paper className="look" wrapperClassName="place" />);
+    const button = screen.getByRole('button', { name: /^Appearance: / });
+    expect(button.className.split(/\s+/)).toContain('look');
+    expect((button.parentElement as HTMLElement).className.split(/\s+/)).toContain('place');
+  });
+
+  it('reports open and closed to its host (onOpenChange)', () => {
+    const changes: boolean[] = [];
+    render(<AppearanceButton paper onOpenChange={(o) => changes.push(o)} />);
+    const button = screen.getByRole('button', { name: /^Appearance: / });
+    fireEvent.click(button);
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(changes).toEqual([true, false]);
   });
 
   it('without paper the panel offers three choices', () => {
