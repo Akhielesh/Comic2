@@ -7,12 +7,21 @@
 //
 // NOTE: written against Anthropic's documented API; not runtime-verified in the build
 // sandbox. Validate with a real `sk-ant-` key.
+//
+// Calls made with a person's own key (ctx.byok) go only to the registry address
+// (https://api.anthropic.com/v1, shared/providers.ts), never to an ANTHROPIC_BASE_URL override,
+// and never follow a redirect. Failures carry status, vendor code and a redacted detail only
+// (errors.ts vendorHttpError). generateText (never the stream) asks for a bounded thinking budget
+// when the request sets reasoningEffort.
 
 import { ANTHROPIC_BASE_URL, ANTHROPIC_REQUEST_TIMEOUT_MS, ANTHROPIC_VERSION, CHAT_STREAM_MAX_TOTAL_MS } from '../../config.js';
 import { withRetry } from '../utils.js';
-import { modelTimeoutError } from './errors.js';
+import { modelTimeoutError, vendorHttpError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { staticModelsFor } from './staticModels.js';
+import { reasoningBudget } from './openrouter.js';
+import { logger } from '../../lib/logger.js';
+import { PROVIDER_REGISTRY } from '../../../../shared/providers.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -28,6 +37,11 @@ import type {
 } from './types.js';
 
 const DEFAULT_MAX_TOKENS = 4096;
+/** Anthropic's smallest accepted thinking budget. */
+const MIN_THINKING_BUDGET = 1024;
+const OWN_KEY_BASE_URL = PROVIDER_REGISTRY.anthropic.baseUrl;
+/** Own-key calls always go to the maker's fixed address; platform calls may use the override. */
+const baseFor = (ctx?: ProviderContext): string => (ctx?.byok ? OWN_KEY_BASE_URL : ANTHROPIC_BASE_URL);
 const JSON_REPAIR_INSTRUCTION =
   'Your previous reply was not valid JSON. Reply again with ONLY valid, minified JSON that matches the requested structure — no prose, no explanation, no markdown code fences.';
 
@@ -49,15 +63,17 @@ const anthropicFetch = async <T = any>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${ANTHROPIC_BASE_URL}${path}`, {
+    const res = await fetch(`${baseFor(ctx)}${path}`, {
       method: init.method || 'GET',
       headers: buildHeaders(ctx),
       body: init.body,
-      signal: controller.signal
+      signal: controller.signal,
+      // A redirect could carry the x-api-key header somewhere else: refuse it.
+      redirect: 'error'
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`Anthropic ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
+      throw vendorHttpError('Anthropic', path, res.status, res.statusText, errBody);
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -153,18 +169,33 @@ const toAnthropicTools = (tools?: ToolSpec[]) =>
     ? tools.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }))
     : undefined;
 
-const buildBody = (req: GenerateTextRequest): Record<string, unknown> => {
+/** The thinking budget for an effort: the shared reasoning budget, never below Anthropic's minimum. */
+export const thinkingBudget = (effort: 'low' | 'medium' | 'high'): number => Math.max(MIN_THINKING_BUDGET, reasoningBudget(effort));
+
+const buildBody = (req: GenerateTextRequest, opts: { thinking?: boolean } = {}): Record<string, unknown> => {
   const { system, messages } = toAnthropic(req.messages);
-  const body: Record<string, unknown> = {
-    model: req.model,
-    max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
-    messages
-  };
+  const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const body: Record<string, unknown> = { model: req.model, max_tokens: maxTokens, messages };
   if (system) body.system = system;
-  if (typeof req.temperature === 'number') body.temperature = req.temperature;
+  if (opts.thinking && req.reasoningEffort) {
+    const budget = thinkingBudget(req.reasoningEffort);
+    body.thinking = { type: 'enabled', budget_tokens: budget };
+    // Thinking counts against max_tokens, which must exceed the budget. A caller that sized
+    // max_tokens for the visible reply only (comic/llm.ts pads it already) keeps that room.
+    if (maxTokens <= budget) body.max_tokens = maxTokens + budget;
+    // Anthropic accepts no temperature other than the default while thinking.
+  } else if (typeof req.temperature === 'number') {
+    body.temperature = req.temperature;
+  }
   const tools = toAnthropicTools(req.tools);
   if (tools) { body.tools = tools; body.tool_choice = { type: 'auto' }; }
   return body;
+};
+
+/** A 400 that names thinking: the model or the request shape refused the thinking settings. */
+const refusedThinking = (err: unknown): boolean => {
+  const e = err as { status?: number; message?: string } | undefined;
+  return e?.status === 400 && /thinking/i.test(String(e?.message || ''));
 };
 
 const extractTextBlocks = (content: any[]): { text: string; toolCalls?: { id: string; name: string; arguments: string }[]; reasoning?: string } => {
@@ -185,13 +216,22 @@ const generateTextOnce = async (req: GenerateTextRequest, ctx: ProviderContext):
   const wantsJson = Boolean(req.jsonSchema || req.jsonMode);
   const timeoutMs = req.timeoutMs ?? ANTHROPIC_REQUEST_TIMEOUT_MS;
 
+  // Thinking stays on for every round of this call until the vendor refuses it once.
+  let thinking = Boolean(req.reasoningEffort);
+  const send = (messages: ChatMessage[]) =>
+    anthropicFetch<any>('/messages', { method: 'POST', body: JSON.stringify(buildBody({ ...req, messages }, { thinking })) }, timeoutMs, ctx);
+
   const run = async (messages: ChatMessage[]) => {
-    const data = await anthropicFetch<any>(
-      '/messages',
-      { method: 'POST', body: JSON.stringify({ ...buildBody({ ...req, messages }) }) },
-      timeoutMs,
-      ctx
-    );
+    let data: any;
+    try {
+      data = await send(messages);
+    } catch (err) {
+      if (!thinking || !refusedThinking(err)) throw err;
+      // One retry of this call without thinking; the reason stays out of the log (no body).
+      thinking = false;
+      logger.info('anthropic_thinking_retry', { model: req.model });
+      data = await send(messages);
+    }
     return { data, parsed: extractTextBlocks(data?.content) };
   };
 
@@ -265,15 +305,17 @@ const generateTextStream = async (
 
   armIdle();
   try {
-    const res = await fetch(`${ANTHROPIC_BASE_URL}/messages`, {
+    // Never thinking here: Chat streaming keeps its request shape (and its temperature).
+    const res = await fetch(`${baseFor(ctx)}/messages`, {
       method: 'POST',
       headers: buildHeaders(ctx),
       body: JSON.stringify({ ...buildBody(req), stream: true }),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     });
     if (!res.ok || !res.body) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`Anthropic stream failed: ${res.status} ${res.statusText} ${errBody.slice(0, 300)}`);
+      throw vendorHttpError('Anthropic', 'stream', res.status, res.statusText, errBody);
     }
 
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();

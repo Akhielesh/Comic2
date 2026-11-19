@@ -35,6 +35,8 @@ import {
   type FreeModelPredicate
 } from '../privacy/openrouterPolicy.js';
 import { logger } from '../../lib/logger.js';
+import { redactSecrets } from '../../lib/redact.js';
+import { PROVIDER_REGISTRY } from '../../../../shared/providers.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -79,6 +81,13 @@ const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   return headers;
 };
 
+/**
+ * Calls made with a person's own key (ctx.byok) go only to OpenRouter's registry address; an
+ * OPENROUTER_BASE_URL override applies to platform and key-free calls only.
+ */
+const OWN_KEY_BASE_URL = PROVIDER_REGISTRY.openrouter.baseUrl;
+const baseFor = (ctx?: ProviderContext): string => (ctx?.byok ? OWN_KEY_BASE_URL : OPENROUTER_BASE_URL);
+
 const openRouterFetch = async <T = any>(
   path: string,
   init: { method?: string; body?: string },
@@ -88,11 +97,13 @@ const openRouterFetch = async <T = any>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${OPENROUTER_BASE_URL}${path}`, {
+    const res = await fetch(`${baseFor(ctx)}${path}`, {
       method: init.method || 'GET',
       headers: buildHeaders(ctx),
       body: init.body,
-      signal: controller.signal
+      signal: controller.signal,
+      // A redirect could carry the Authorization header somewhere else: refuse it.
+      redirect: 'error'
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -102,7 +113,7 @@ const openRouterFetch = async <T = any>(
       // (and keeps the existing message-based retriable detection working).
       const err = makeProviderError(
         res.status,
-        `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`
+        `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${redactSecrets(errBody).slice(0, 500)}`
       );
       // Open the shared-key circuit breaker on a capacity error so subsequent chat routes to
       // free models instead of hammering the capped platform key. Scoped to the PLATFORM key —
@@ -536,15 +547,16 @@ const streamOnce = async (
 
   armIdle();
   try {
-    const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const res = await fetch(`${baseFor(ctx)}/chat/completions`, {
       method: 'POST',
       headers: buildHeaders(ctx),
       body: JSON.stringify({ ...buildBaseBody(req), messages: req.messages, stream: true, stream_options: { include_usage: true } }),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     });
     if (!res.ok || !res.body) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`OpenRouter stream failed: ${res.status} ${res.statusText} ${errBody.slice(0, 300)}`);
+      throw new Error(`OpenRouter stream failed: ${res.status} ${res.statusText} ${redactSecrets(errBody).slice(0, 300)}`);
     }
 
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -610,7 +622,7 @@ const streamOnce = async (
     if (streamError) {
       const status = Number(streamError.code) || 502;
       const err = new Error(
-        `OpenRouter stream failed: ${status} ${String(streamError.message || 'stream error').slice(0, 300)}`
+        `OpenRouter stream failed: ${status} ${redactSecrets(String(streamError.message || 'stream error')).slice(0, 300)}`
       ) as Error & { streamed?: boolean };
       err.streamed = Boolean(text || toolAcc.size);
       throw err;

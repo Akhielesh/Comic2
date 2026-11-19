@@ -6,6 +6,8 @@
 // user-safe message so the API answers with GATEWAY_TIMEOUT / MODEL_TIMEOUT and the
 // "pick a faster model" guidance reaches the user instead of "Unexpected server error".
 
+import { redactSecrets } from '../../lib/redact.js';
+
 export type TaggedError = Error & {
   status?: number;
   publicCode?: string;
@@ -75,6 +77,74 @@ export const makeProviderError = (status: number, logMessage: string): TaggedErr
     return err;
   }
   // Other 4xx: preserve the status but don't expose the raw body.
+  err.status = status;
+  return err;
+};
+
+// A failed vendor HTTP call, made with a person's key or the platform's. The message keeps the
+// shape the rest of the server reads ("<Label> <path> failed: <status> …": comic/llm.ts statusOf,
+// the fallback and retry checks that look for 404/429/503) and the vendor's short error code (so
+// words like content_policy_violation still reach the safety classifiers), but never the raw body:
+// the detail is the vendor's own error message, redacted (lib/redact.ts) and capped, because some
+// vendors echo the key they refused.
+const VENDOR_CODE_RE = /^[A-Za-z0-9_.-]{1,48}$/;
+const VENDOR_DETAIL_MAX = 160;
+const VENDOR_STATUS_TEXT_MAX = 60;
+/** Bodies past this size are not parsed as JSON; their first characters are the detail. */
+const VENDOR_JSON_MAX = 65_536;
+
+const vendorCode = (...candidates: unknown[]): string | undefined => {
+  for (const c of candidates) {
+    if (typeof c !== 'string' && typeof c !== 'number') continue;
+    const s = String(c);
+    // A numeric code only repeats the HTTP status (OpenRouter, Gemini); a word says more.
+    if (/^\d+$/.test(s)) continue;
+    if (VENDOR_CODE_RE.test(s)) return s;
+  }
+  return undefined;
+};
+
+const clip = (text: string, max: number): string => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+};
+
+/** The vendor's error code and message from an OpenAI, Anthropic, Gemini or OpenRouter style body. */
+const readVendorBody = (bodyText: string): { code?: string; message?: string } => {
+  if (!bodyText || bodyText.length > VENDOR_JSON_MAX) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return {};
+  }
+  const root = (Array.isArray(parsed) ? parsed[0] : parsed) as Record<string, unknown> | null;
+  if (!root || typeof root !== 'object') return {};
+  const inner = root.error;
+  if (typeof inner === 'string') return { code: vendorCode(root.code, root.type, root.status), message: inner };
+  const e = (inner && typeof inner === 'object' ? inner : root) as Record<string, unknown>;
+  const message = [e.message, root.message, root.detail, root.error_description].find((m): m is string => typeof m === 'string' && m.trim() !== '');
+  return { code: vendorCode(e.code, e.type, e.status), message };
+};
+
+export const vendorHttpError = (
+  label: string,
+  path: string,
+  status: number,
+  statusText: string,
+  bodyText: string
+): TaggedError => {
+  const body = typeof bodyText === 'string' ? bodyText : '';
+  const { code, message } = readVendorBody(body);
+  // A non-JSON (or message-less) body gives its first characters. Redaction runs before the clip
+  // (redactSecrets caps its own input and drops a token the cap cuts), so no key fragment is kept.
+  const detail = clip(redactSecrets(message ?? body), VENDOR_DETAIL_MAX);
+  const reason = clip(redactSecrets(String(statusText || '')), VENDOR_STATUS_TEXT_MAX);
+  const parts = [`${label} ${path} failed: ${status}`];
+  if (reason) parts.push(reason);
+  if (code) parts.push(`(${code})`);
+  if (detail) parts.push(detail);
+  const err = new Error(parts.join(' ')) as TaggedError;
   err.status = status;
   return err;
 };

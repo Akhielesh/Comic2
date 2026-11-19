@@ -142,3 +142,78 @@ describe('live model availability', () => {
     expect(models.every((m) => m.catalogOrigin === 'curated')).toBe(true);
   });
 });
+
+describe('structured JSON per provider (gateway wiring)', () => {
+  const schema = {
+    name: 'comic_translation',
+    schema: { type: 'object', properties: { lines: { type: 'array', items: { type: 'string' } } }, required: ['lines'], additionalProperties: false }
+  };
+  const bodies: any[] = [];
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    bodies.length = 0;
+  });
+  const stubOk = () =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)));
+        return new Response(JSON.stringify({ model: 'm', choices: [{ message: { content: '{"lines":["a"]}' } }] }));
+      })
+    );
+
+  it('openai with a schema sends strict json_schema', async () => {
+    const { getProvider } = await import('../gateway.js');
+    stubOk();
+    const r = await getProvider('openai').generateText(
+      { model: 'gpt-6-luna', messages: [{ role: 'user', content: 'x' }], jsonSchema: schema },
+      { apiKey: 'test-key', byok: true }
+    );
+    expect(r.json).toEqual({ lines: ['a'] });
+    expect(bodies[0].response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'comic_translation', schema: schema.schema, strict: true }
+    });
+  });
+
+  it('openai honours an explicit strict:false and keeps json_object for bare JSON mode', async () => {
+    const { getProvider } = await import('../gateway.js');
+    stubOk();
+    const openai = getProvider('openai');
+    await openai.generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], jsonSchema: { ...schema, strict: false } }, { apiKey: 'k', byok: true });
+    await openai.generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], jsonMode: true }, { apiKey: 'k', byok: true });
+    expect(bodies[0].response_format.json_schema.strict).toBe(false);
+    expect(bodies[1].response_format).toEqual({ type: 'json_object' });
+  });
+
+  it.each(['gemini', 'deepseek', 'xai'])('%s sends json_object for a schema', async (id) => {
+    const { getProvider } = await import('../gateway.js');
+    stubOk();
+    await getProvider(id).generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], jsonSchema: schema }, { apiKey: 'k', byok: true });
+    expect(bodies[0].response_format).toEqual({ type: 'json_object' });
+  });
+});
+
+describe('vendor errors carry no key text', () => {
+  const provider = createOpenAICompatibleProvider({ id: 'openai', label: 'OpenAI', baseUrl: 'https://example.invalid/v1', timeoutMs: 1000, modelsPath: '/models' });
+  const echo = JSON.stringify({
+    error: { message: `Incorrect API key provided: sk-proj-${'test0000'.repeat(6)}`, type: 'invalid_request_error', code: 'invalid_api_key' }
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('a 401 on a text call keeps the status and code and drops the key', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(echo, { status: 401, statusText: 'Unauthorized' })));
+    const err = await provider.generateText({ model: 'm', messages: [{ role: 'user', content: 'x' }], retries: 1 }, { apiKey: 'k', byok: true }).catch((e) => e);
+    expect(err.status).toBe(401);
+    expect(err.message).toMatch(/^OpenAI \/chat\/completions failed: 401 Unauthorized \(invalid_api_key\)/);
+    expect(err.message).not.toContain('sk-');
+  });
+
+  it('a refused stream says the same and drops the key', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(echo, { status: 401, statusText: 'Unauthorized' })));
+    const err = await provider.generateTextStream!({ model: 'm', messages: [{ role: 'user', content: 'x' }] }, { apiKey: 'k', byok: true }, () => {}).catch((e) => e);
+    expect(err.status).toBe(401);
+    expect(err.message).toMatch(/^OpenAI stream failed: 401/);
+    expect(err.message).not.toContain('sk-');
+  });
+});

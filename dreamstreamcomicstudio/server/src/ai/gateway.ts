@@ -37,37 +37,45 @@ import { openRouterProvider } from './providers/openrouter.js';
 import { nvidiaProvider } from './providers/nvidia.js';
 import { anthropicProvider } from './providers/anthropic.js';
 import { createOpenAICompatibleProvider } from './providers/openaiCompatible.js';
+import { PROVIDER_REGISTRY } from '../../../shared/providers.js';
 import type { AIProvider, AIProviderId, ProviderContext } from './providers/types.js';
 
+// Each OpenAI-compatible adapter gets two addresses: `baseUrl` (env-overridable, platform calls
+// only) and `ownKeyBaseUrl` (the registry's fixed vendor address, every call made with a person's
+// own key). OpenAI alone takes the request's JSON schema as strict structured output; the others
+// keep json_object, which every one of them accepts.
 const openaiProvider = createOpenAICompatibleProvider({
-  id: 'openai', label: 'OpenAI', baseUrl: OPENAI_BASE_URL, timeoutMs: OPENAI_REQUEST_TIMEOUT_MS,
+  id: 'openai', label: 'OpenAI', baseUrl: OPENAI_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.openai.baseUrl,
+  timeoutMs: OPENAI_REQUEST_TIMEOUT_MS, jsonSchemaMode: 'json_schema',
   modelsPath: '/models', supportsReasoningEffort: true, supportsTools: true, supportsImages: true
 });
 const geminiProvider = createOpenAICompatibleProvider({
-  id: 'gemini', label: 'Gemini', baseUrl: GEMINI_OPENAI_BASE_URL, timeoutMs: GEMINI_REQUEST_TIMEOUT_MS,
+  id: 'gemini', label: 'Gemini', baseUrl: GEMINI_OPENAI_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.gemini.baseUrl,
+  timeoutMs: GEMINI_REQUEST_TIMEOUT_MS,
   // supportsReasoningEffort: Gemini 2.5+ thinking models honour reasoning_effort on the
   // OpenAI-compatible endpoint; forwarding it is what caps thinking so the padded
   // max_tokens leaves room for the visible reply on the Gemini-direct route (see llm.ts).
   modelsPath: '/models', supportsReasoningEffort: true, supportsTools: true
 });
 const deepseekProvider = createOpenAICompatibleProvider({
-  id: 'deepseek', label: 'DeepSeek', baseUrl: DEEPSEEK_BASE_URL, timeoutMs: DEEPSEEK_REQUEST_TIMEOUT_MS,
-  modelsPath: '/models', supportsTools: true
+  id: 'deepseek', label: 'DeepSeek', baseUrl: DEEPSEEK_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.deepseek.baseUrl,
+  timeoutMs: DEEPSEEK_REQUEST_TIMEOUT_MS, modelsPath: '/models', supportsTools: true
 });
 const zaiProvider = createOpenAICompatibleProvider({
-  id: 'zai', label: 'Z.AI', baseUrl: ZAI_BASE_URL, timeoutMs: ZAI_REQUEST_TIMEOUT_MS,
-  modelsPath: null, supportsTools: true
+  id: 'zai', label: 'Z.AI', baseUrl: ZAI_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.zai.baseUrl,
+  timeoutMs: ZAI_REQUEST_TIMEOUT_MS, modelsPath: null, supportsTools: true
 });
 const minimaxProvider = createOpenAICompatibleProvider({
-  id: 'minimax', label: 'MiniMax', baseUrl: MINIMAX_BASE_URL, timeoutMs: MINIMAX_REQUEST_TIMEOUT_MS,
-  modelsPath: null, supportsTools: true
+  id: 'minimax', label: 'MiniMax', baseUrl: MINIMAX_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.minimax.baseUrl,
+  timeoutMs: MINIMAX_REQUEST_TIMEOUT_MS, modelsPath: null, supportsTools: true
 });
 const tencentProvider = createOpenAICompatibleProvider({
-  id: 'tencent', label: 'Hunyuan', baseUrl: TENCENT_BASE_URL, timeoutMs: TENCENT_REQUEST_TIMEOUT_MS,
-  modelsPath: '/models', supportsTools: true
+  id: 'tencent', label: 'Hunyuan', baseUrl: TENCENT_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.tencent.baseUrl,
+  timeoutMs: TENCENT_REQUEST_TIMEOUT_MS, modelsPath: '/models', supportsTools: true
 });
 const xaiProvider = createOpenAICompatibleProvider({
-  id: 'xai', label: 'xAI', baseUrl: XAI_BASE_URL, timeoutMs: XAI_REQUEST_TIMEOUT_MS,
+  id: 'xai', label: 'xAI', baseUrl: XAI_BASE_URL, ownKeyBaseUrl: PROVIDER_REGISTRY.xai.baseUrl,
+  timeoutMs: XAI_REQUEST_TIMEOUT_MS,
   modelsPath: '/models', supportsReasoningEffort: true, supportsTools: true, supportsImages: true
 });
 
