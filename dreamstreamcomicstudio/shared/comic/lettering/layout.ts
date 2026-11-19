@@ -1555,8 +1555,12 @@ function planAtDensity(
 }
 
 
-/** Linked balloons (speech chains) by the root of their linkTo chain — they touch by design. */
-const linkGroups = (items: readonly { id: string; linkTo?: string }[]): Map<string, string> => {
+/**
+ * Linked balloons (speech chains) by the root of their linkTo chain — they touch by design. Only members of a chain are
+ * in the map; two lines share a chain when they map to the same root. Exported for the free review (review/rules.ts),
+ * which skips the same pairs the never-over-text check does.
+ */
+export const linkGroups = (items: readonly { id: string; linkTo?: string }[]): Map<string, string> => {
   const ids = new Set(items.map((i) => i.id));
   const parent = new Map<string, string>();
   for (const it of items) parent.set(it.id, it.linkTo && it.linkTo !== it.id && ids.has(it.linkTo) ? it.linkTo : it.id);
