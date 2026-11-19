@@ -15,6 +15,7 @@ import {
   checkRenderSafety,
   cooldownFor,
   isServableToOwner,
+  mergeRenderVerdicts,
   onRenderVerdict,
   prefilterText,
   requireActiveUser,
@@ -377,6 +378,85 @@ describe('render verdicts', () => {
     resetSafety();
     fakes = installSafetyFakes({ llm: null });
     expect(await checkRenderSafety(ctxFor(), { kind: 'cover' }, asset('x.webp'))).toBeUndefined();
+  });
+});
+
+// PUB-1: the page check (QC) and the image-only check run side by side at render time; this is how their two answers
+// become the one stored verdict. Never looser than either; only an answer from both is vouched for as by:'check' (S14).
+describe('mergeRenderVerdicts', () => {
+  const RATINGS = ['G', 'PG', 'PG-13', 'X'] as const;
+  const RANK = { G: 0, PG: 1, 'PG-13': 2, X: 3 } as const;
+  const qc = (assessed: (typeof RATINGS)[number], o: Partial<SafetyVerdict> = {}): SafetyVerdict => ({ assessed, by: 'qc', model: 'qc-model', at: 10, ...o });
+  const check = (assessed: (typeof RATINGS)[number], o: Partial<SafetyVerdict> = {}): SafetyVerdict => ({ assessed, by: 'check', model: 'check-model', at: 20, ...o });
+
+  it.each([
+    // [page check, image check, stored rating, by, notes from]
+    ['PG-13', 'PG', 'PG-13', 'check', 'qc'],
+    ['PG', 'PG-13', 'PG-13', 'check', 'check'],
+    ['G', 'X', 'X', 'check', 'check'],
+    ['X', 'G', 'X', 'qc', 'qc'],
+    ['X', 'PG-13', 'X', 'qc', 'qc'],
+    ['X', 'X', 'X', 'check', 'check'],
+    ['PG', 'PG', 'PG', 'check', 'check']
+  ] as const)('page check %s + image check %s → %s by:%s, notes from the %s', (a, b, want, by, notesFrom) => {
+    const merged = mergeRenderVerdicts(qc(a, { notes: ['from the page check'] }), check(b, { notes: ['from the image check'] }));
+    expect(merged).toMatchObject({ assessed: want, by });
+    expect(merged?.notes).toEqual([notesFrom === 'qc' ? 'from the page check' : 'from the image check']);
+    expect(merged?.model).toBe(notesFrom === 'qc' ? 'qc-model' : 'check-model');
+  });
+
+  it('never looser than either answer, in every order; by:check unless the page check alone blocks', () => {
+    for (const a of RATINGS) {
+      for (const b of RATINGS) {
+        const merged = mergeRenderVerdicts(qc(a), check(b))!;
+        expect(RANK[merged.assessed as keyof typeof RANK], `${a} + ${b}`).toBe(Math.max(RANK[a], RANK[b]));
+        expect(merged.by, `${a} + ${b}`).toBe(a === 'X' && b !== 'X' ? 'qc' : 'check');
+        expect(safetyStatusOf(merged, 'PG')).toBe(safetyStatusOf(RANK[a] >= RANK[b] ? qc(a) : check(b), 'PG'));
+      }
+    }
+  });
+
+  it('over the rating: either side over the comic rating keeps the stored verdict over it', () => {
+    expect(safetyStatusOf(mergeRenderVerdicts(qc('PG'), check('PG-13')), 'PG')).toBe('over_rating');
+    expect(safetyStatusOf(mergeRenderVerdicts(qc('PG-13'), check('G')), 'PG')).toBe('over_rating');
+    expect(safetyStatusOf(mergeRenderVerdicts(qc('G'), check('PG')), 'PG')).toBe('pass');
+  });
+
+  it('categories from both answers are merged without repeats', () => {
+    const merged = mergeRenderVerdicts(qc('PG', { categories: ['violence', 'scary'] }), check('PG-13', { categories: ['scary', 'weapons'] }));
+    expect(merged?.categories).toEqual(['violence', 'scary', 'weapons']);
+    expect(mergeRenderVerdicts(qc('G'), check('G'))).not.toHaveProperty('categories');
+  });
+
+  it('only one answer: that one exactly as it is (a lone page-check pass stays by:qc, so the publish gate still re-rates it)', () => {
+    const lone = qc('PG', { categories: ['violence'] });
+    expect(mergeRenderVerdicts(lone, undefined)).toEqual(lone);
+    expect(mergeRenderVerdicts(lone, undefined)?.by).toBe('qc');
+    const alone = check('G');
+    expect(mergeRenderVerdicts(undefined, alone)).toEqual(alone);
+    expect(mergeRenderVerdicts(undefined, undefined)).toBeUndefined();
+    expect(mergeRenderVerdicts()).toBeUndefined();
+  });
+
+  it('neither answered: undefined, never an unrated verdict object', () => {
+    expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, undefined)).toBeUndefined();
+    expect(mergeRenderVerdicts(undefined, { by: 'check', at: 20 })).toBeUndefined();
+    expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, { by: 'check', at: 20 })).toBeUndefined();
+  });
+
+  it('an answer without a rating counts as no answer: a page-check pass is never promoted to by:check by it', () => {
+    const pass = qc('G');
+    expect(mergeRenderVerdicts(pass, { by: 'check', at: 20 })).toEqual(pass);
+    expect(mergeRenderVerdicts({ by: 'qc', at: 10 }, check('PG'))).toEqual(check('PG'));
+  });
+
+  it('a quarantined answer wins whatever the other says (credited to the check that quarantined it)', () => {
+    const merged = mergeRenderVerdicts(qc('G', { quarantined: true }), check('G'));
+    expect(merged).toMatchObject({ quarantined: true, by: 'qc' });
+    expect(safetyStatusOf(merged, 'PG-13')).toBe('blocked');
+    const byImage = mergeRenderVerdicts(qc('G'), check('G', { quarantined: true }));
+    expect(byImage).toMatchObject({ quarantined: true, by: 'check' });
+    expect(safetyStatusOf(byImage, 'PG-13')).toBe('blocked');
   });
 });
 
