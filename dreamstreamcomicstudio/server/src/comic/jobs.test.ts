@@ -15,6 +15,7 @@ import {
 } from '../../../shared/comic/doc.js';
 import type { SpendAction } from '../../../shared/comic/ops.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
+import { cardSettle, isOpenQuestion } from '../../../shared/comic/settle.js';
 import { PLATFORM_MARKUP, QC_USD_PER_PAGE, TIER_PRESETS, estimateJobs, imagePriceUsd, resolveImageJob, type SpendEstimate } from '../../../shared/comic/models.js';
 import { logger } from '../lib/logger.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
@@ -1027,6 +1028,44 @@ describe('message ordering (director.md §3.7)', () => {
     expect(conv.map((m) => m.id).indexOf('later')).toBe(conv.indexOf(progress) + 1);
     expect(conv.at(-1)!.text).toMatch(/^Page 1 is ready/);
     expect(conv.at(-1)!.nextSteps?.length).toBeGreaterThan(0);
+  });
+
+  it('Q-SETTLE: a question the director asks while starting a render stays open when the render finishes', async () => {
+    const doc = onePage(plannedDoc());
+    readySheets(doc);
+    doc.planStatus = 'approved';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    const question: Card = { type: 'options', id: 'q_end', question: 'Which ending?', choices: [{ id: 'c1', label: 'Happy' }, { id: 'c2', label: 'Sad' }] };
+    await directorTurn(ctx, 'draw page 1', async ({ opts, cards }) => {
+      await startTracked(ctx, { type: 'render_pages' }, opts);
+      cards.push(question);
+      return 'Page 1 is on its way. One question while it draws:';
+    });
+    const conv = session.doc.conversation;
+    expect(conv.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant']);
+    // The outcome is the run's own message: it says when the run started, before the reply that asked.
+    expect(conv[2].runAt).toEqual(expect.any(Number));
+    expect(conv[2].runAt!).toBeLessThanOrEqual(conv[1].at);
+    expect(conv[2].nextSteps?.length).toBeGreaterThan(0);
+    expect(cardSettle(session.doc, 1, question)).toEqual({ state: 'open' });
+    expect(isOpenQuestion(session.doc)).toBe(true);
+  });
+
+  it("Q-SETTLE: a render the creator starts after a question (a tap) still moves past it with its own progress", async () => {
+    const doc = onePage(plannedDoc());
+    readySheets(doc);
+    const session = newSession(doc);
+    const question: Card = { type: 'options', id: 'q_end', question: 'Which ending?', choices: [{ id: 'c1', label: 'Happy' }] };
+    session.commit([
+      { op: 'message', msg: { id: 'u0', role: 'user', text: 'start', at: Date.now() - 20 } },
+      { op: 'message', msg: { id: 'a0', role: 'assistant', text: 'Which ending?', at: Date.now() - 10, cards: [question] } }
+    ]);
+    await runAction(testContext(session), { type: 'render_pages' }, { confirmed: true });
+    const conv = session.doc.conversation;
+    expect(conv.length).toBeGreaterThan(2);
+    expect(cardSettle(session.doc, 1, question)).toEqual({ state: 'settled', outcome: 'skipped' });
+    expect(isOpenQuestion(session.doc)).toBe(false);
   });
 
   it('no committed assistant message is ever empty (success, billing denial, gate, nothing)', async () => {

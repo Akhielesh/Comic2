@@ -290,8 +290,10 @@ back in its box.
   - "Sends it as soon as the plan is in";
   - "Send this note now".
 
-**Chips.** While the director works, the latest reply's chips stay visible. A text chip tapped then goes to Up next,
-and an action chip waits for the turn lock.
+**Chips.** The latest reply's chips are live only while it is the newest ask and nothing has been sent (Q-SETTLE,
+`docs/features/settled-cards.md` §9): a typed message, a tapped text chip or a question's answer takes them away, with or
+without the queue. While a run holds the turn with nothing sent (`plan_pages`), a text chip tapped goes to Up next and
+the row reads "You chose: … · Up next"; an action chip waits for the turn lock.
 
 **Controller members:** `queue`, `editQueued`, `moveQueued`, `removeQueued`, `sendNow` and `queueSteers`.
 - `queueSteers` is true when the queue is on, `caps.liveAgent.steer` is on and a steer call exists. `useStudio`

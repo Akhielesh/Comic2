@@ -2492,8 +2492,12 @@ class RenderRun {
   }
 
   /** A job message in the user's terms (the governed-dollars safety net). */
+  /**
+   * Every message this run posts says when the run started (Msg.runAt): its outcome, landing after a reply the director
+   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn).
+   */
   private message(msg: Msg): Msg {
-    return governMsg(this.ctx, msg);
+    return governMsg(this.ctx, { ...msg, runAt: this.started });
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────

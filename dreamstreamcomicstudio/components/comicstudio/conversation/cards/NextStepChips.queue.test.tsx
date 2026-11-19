@@ -1,6 +1,7 @@
-// Suggestion chips with the live queue (agent-editor plan §3 A1): the latest reply keeps its chips while the director
-// works on the next message; a text chip tapped then goes to Up next instead of doing nothing, and an action chip
-// waits for the turn to be free.
+// Suggestion chips with the live queue (agent-editor plan §3 A1). Q-SETTLE: once the creator has sent anything the
+// reply's chips are gone (they are live only while it is the newest ask), with or without the queue. While a run holds
+// the turn with nothing sent (plan_pages), a text chip tapped goes to Up next instead of doing nothing, and an action
+// chip waits for the turn to be free.
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,17 +34,25 @@ const conversation: Msg[] = [
 const chips = () => within(screen.getByRole('group', { name: 'Next steps' }));
 
 describe('NextStepChips — the live queue', () => {
-  it('while the director works, the last reply keeps its chips: a text chip queues, an action chip waits, a client chip stays live', () => {
+  it('once the creator has sent their next message, the last reply’s chips are gone while the director works (Q-SETTLE)', () => {
     const studio = makeFakeStudio({ doc: makeSampleDoc({ conversation }), messageBusy: true, busy: true, turnLocked: true, queue: [] });
+    render(<ConversationPane studio={studio} />);
+    expect(screen.queryByRole('group', { name: 'Next steps' })).toBeNull();
+  });
+
+  it('while a run holds the turn and nothing was sent, the newest reply’s chips stay: a text chip queues, an action chip waits, a client chip stays live', () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc({ conversation: conversation.slice(0, 2) }), busy: true, turnLocked: true, queue: [] });
     render(<ConversationPane studio={studio} />);
     const text = chips().getByRole('button', { name: 'Make it funnier' });
     expect(text).toBeEnabled();
     expect(text).toHaveAttribute('title', 'Adds to Up next. The director reads it when it finishes this step');
-    // The tap runs the step (runNextStep → send(), which queues it while the turn is locked).
-    fireEvent.click(text);
-    expect(studio.runNextStep).toHaveBeenCalledWith({ label: 'Make it funnier', say: 'Make it funnier' });
     expect(chips().getByRole('button', { name: /Make the cover/ })).toBeDisabled();
     expect(chips().getByRole('button', { name: /Read it/ })).toBeEnabled();
+    // The tap runs the step (runNextStep → send(), which queues it while the turn is locked); the row then reads what
+    // was chosen (Q-SETTLE).
+    fireEvent.click(text);
+    expect(studio.runNextStep).toHaveBeenCalledWith({ label: 'Make it funnier', say: 'Make it funnier' });
+    expect(screen.getByRole('group', { name: 'Next steps' }).textContent).toBe('You chose: Make it funnier');
   });
 
   it('without the queue the chips stay hidden while the director works (today’s behaviour)', () => {
@@ -52,12 +61,9 @@ describe('NextStepChips — the live queue', () => {
     expect(screen.queryByRole('group', { name: 'Next steps' })).toBeNull();
   });
 
-  it('a legacy text suggestion is sent (queued) while busy, not dropped', () => {
-    const legacy: Msg[] = [
-      { id: 'a1', role: 'assistant', text: 'Hi', at: 1, suggestions: ['Show me 3 styles'] },
-      { id: 'u2', role: 'user', text: 'and a title', at: 2 }
-    ];
-    const studio = makeFakeStudio({ doc: makeSampleDoc({ conversation: legacy }), messageBusy: true, busy: true, turnLocked: true, queue: [] });
+  it('a legacy text suggestion is sent (queued) while a run holds the turn, not dropped', () => {
+    const legacy: Msg[] = [{ id: 'a1', role: 'assistant', text: 'Hi', at: 1, suggestions: ['Show me 3 styles'] }];
+    const studio = makeFakeStudio({ doc: makeSampleDoc({ conversation: legacy }), busy: true, turnLocked: true, queue: [] });
     render(<ConversationPane studio={studio} />);
     fireEvent.click(chips().getByRole('button', { name: 'Show me 3 styles' }));
     expect(studio.send).toHaveBeenCalledWith('Show me 3 styles');

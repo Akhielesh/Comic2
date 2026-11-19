@@ -121,10 +121,10 @@ describe('a waiting "wait and retry"', () => {
     expect(within(slot).getByRole('button', { name: /Don.t retry/ })).toBeEnabled();
   });
 
-  it('a non-admin sees the heist question "Not answered — you moved on" (R00 SF-1)', async () => {
+  it('a non-admin sees the heist question nobody answered disappear (R00 SF-1; Q-SETTLE: nothing chosen, nothing left)', async () => {
     const { container } = render(<ConversationPane studio={makeFakeStudio({ doc: makeQaDoc('heist-12p'), caps: DEFAULT_CAPS })} />);
     await flush();
-    expect(slotOf(container, 'o1').textContent).toBe('Not answered — you moved on');
+    expect(container.querySelector('[data-card-slot="o1"]')).toBeNull();
   });
 });
 

@@ -156,9 +156,15 @@ describe('NoticeCard fix chips', () => {
       safe: true,
       quotedUsd: 0.0845
     });
-    fireEvent.click(within(group).getByRole('button', { name: /^Make Meera's line in panel 6 a caption/ }));
+    // The redraw started: its alternatives for page 2 are not offered any more (Q-SETTLE, NoticeCard.settle.test.tsx).
+    await waitFor(() => expect(within(screen.getAllByRole('group', { name: 'Fixes' })[1]).queryByRole('button', { name: /^Make Meera's line in panel 6 a caption/ })).toBeNull());
+
+    const s3 = fakeStudio();
+    render(<NoticeCard card={qcNotice()} studio={s3} />);
+    const fresh = screen.getAllByRole('group', { name: 'Fixes' })[2];
+    fireEvent.click(within(fresh).getByRole('button', { name: /^Make Meera's line in panel 6 a caption/ }));
     await flush();
-    expect(s2.act).toHaveBeenLastCalledWith(qcNotice().fixes![0].action);
+    expect(s3.act).toHaveBeenLastCalledWith(qcNotice().fixes![0].action);
   });
 
   it('governed users see a share of their usage and never dollars; BYOK users see "on your key"', () => {

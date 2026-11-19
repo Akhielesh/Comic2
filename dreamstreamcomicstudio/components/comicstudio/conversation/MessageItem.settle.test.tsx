@@ -8,7 +8,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AssetRef, Card, ComicDoc, Msg } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import { buildSettleIndex, settleKey } from '../../../shared/comic/settle';
+import { buildSettleIndex, isHiddenSettle, settleKey } from '../../../shared/comic/settle';
 import type { PendingUserMessage } from '../studioReducer';
 import { makeQaDoc } from '../testing/qaFixtures';
 import scene, { directorSettledDoc } from '../../../qa/app/scenes/director-settled';
@@ -36,13 +36,14 @@ const ENABLED_CONTROLS = [
   '[contenteditable="true"]'
 ].join(', ');
 
-/** Every card the shared rule reads as settled, by id (folded breakdowns render nothing at all). */
+/** Every card the shared rule reads as settled and still shows a line, by id (folded breakdowns, unanswered questions
+ *  and unpicked looks render nothing at all: isHiddenSettle). */
 const settledIds = (doc: ComicDoc): string[] => {
   const index = buildSettleIndex(doc);
   const out: string[] = [];
   for (const m of doc.conversation) for (const c of m.cards || []) {
     const s = index.get(settleKey(m.id, c.id));
-    if (s?.state === 'settled' && s.outcome !== 'folded') out.push(c.id);
+    if (s?.state === 'settled' && !isHiddenSettle(c, s)) out.push(c.id);
   }
   return out;
 };
@@ -54,8 +55,9 @@ describe('the heist-12p conversation with settled cards on', () => {
     const doc = makeQaDoc('heist-12p');
     const { container } = render(<ConversationPane studio={makeFakeStudio({ doc, caps: ADMIN })} />);
     const ids = settledIds(doc);
-    // o1 (the look question nobody answered), cp1 (a newer book card replaced it), sc1 (the chat moved past it).
-    expect(ids).toEqual(expect.arrayContaining(['o1', 'cp1', 'sc1']));
+    // cp1 (a newer book card replaced it), sc1 (the chat moved past it); o1 (the look question nobody answered) is gone.
+    expect(ids).toEqual(expect.arrayContaining(['cp1', 'sc1']));
+    expect(ids).not.toContain('o1');
     for (const id of ids) {
       const s = slot(container, id);
       expect(s, `card ${id} is in the conversation`).not.toBeNull();
@@ -64,18 +66,15 @@ describe('the heist-12p conversation with settled cards on', () => {
       expect(s!.querySelectorAll('img'), `card ${id} mounts no image`).toHaveLength(0);
       expect(s!.querySelectorAll('a').length, `card ${id} keeps at most one link`).toBeLessThanOrEqual(1);
     }
-    expect(slot(container, 'o1')!.textContent).toBe('Not answered — you moved on');
+    expect(slot(container, 'o1')).toBeNull();
     expect(slot(container, 'cp1')!.textContent).toBe('Closed — a newer plan replaced it');
   });
 
-  it('a non-admin sees the same (R00 SF-1, settled cards for everyone): o1 is one line with no control left to tap', () => {
+  it('a non-admin sees the same (R00 SF-1, settled cards for everyone): o1, answered by nobody, is gone with its controls', () => {
     const doc = makeQaDoc('heist-12p');
     const { container } = render(<ConversationPane studio={makeFakeStudio({ doc, caps: DEFAULT_CAPS })} />);
     expect(DEFAULT_CAPS.admin).not.toBe(true);
-    const o1 = slot(container, 'o1')!;
-    expect(o1.querySelector('[data-settled]')).not.toBeNull();
-    expect(o1.textContent).toBe('Not answered — you moved on');
-    expect(o1.querySelectorAll(ENABLED_CONTROLS)).toHaveLength(0);
+    expect(slot(container, 'o1')).toBeNull();
     expect(slot(container, 'cp1')!.textContent).toBe('Closed — a newer plan replaced it');
   });
 

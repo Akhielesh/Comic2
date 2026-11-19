@@ -28,7 +28,7 @@
 import React from 'react';
 import { CircleCheck, CircleX, Info, Loader2, TriangleAlert } from 'lucide-react';
 import { isPageStale, type Card, type ComicDoc, type NoticeFix, type Page } from '../../../../shared/comic/doc';
-import { applyOps, isSpendAction, type DocOp, type StudioAction } from '../../../../shared/comic/ops';
+import { applyOps, isSpendAction, type StudioAction } from '../../../../shared/comic/ops';
 import { pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
 import { TONE_SURFACE, TONE_TEXT } from '../../../chat/studioDesign';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
@@ -36,6 +36,7 @@ import { useCostFormat, type CostFormat } from '../cost';
 import { ChipBadge, ChipButton, cx } from '../ui';
 import { chipLabel } from './NextStepChips';
 import { stopsSequence, useAction } from './useAction';
+import { opCheck, patchPageIds } from './patchState';
 
 type NoticeCardData = Extract<Card, { type: 'notice' }>;
 
@@ -117,35 +118,7 @@ export const noticePrice = (cost: CostFormat, usd: number, byok: boolean): strin
 /** How a chip shows right now: offered, already applied (free), already running (paid), or not offered. */
 export type NoticeChipState = 'live' | 'done' | 'started' | 'hidden';
 
-const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
-/** Every field a patch sets already has that value. */
-const patchIsIn = (target: object, patch: object): boolean =>
-  Object.entries(patch).every(([k, v]) => same((target as Record<string, unknown>)[k], v));
 const isBusyPage = (p: Page) => p.render.status === 'queued' || p.render.status === 'rendering';
-
-/** The page an op edits and whether it is already applied (null: its target is gone; undefined: can't tell). */
-const opCheck = (doc: ComicDoc, op: DocOp): { pageId?: string; noop?: boolean } | null => {
-  switch (op.op) {
-    case 'page': {
-      const page = doc.pages.find((p) => p.id === op.id);
-      return page ? { pageId: page.id, noop: !!op.patch && patchIsIn(page, op.patch) } : null;
-    }
-    case 'panel': {
-      const page = doc.pages.find((p) => p.id === op.pageId);
-      const panel = page?.panels.find((x) => x.id === op.id);
-      return page && panel ? { pageId: page.id, noop: !!op.patch && patchIsIn(panel, op.patch) } : null;
-    }
-    case 'line': {
-      const page = doc.pages.find((p) => p.id === op.pageId);
-      const line = page?.panels.find((x) => x.id === op.panelId)?.lines.find((l) => l.id === op.id);
-      if (!page) return null;
-      if (op.patch === null) return { pageId: page.id, noop: !line };
-      return line ? { pageId: page.id, noop: patchIsIn(line, op.patch) } : null;
-    }
-    default:
-      return { noop: false };
-  }
-};
 
 /** Pages a paid action draws or checks (for "Started"). */
 const spendPages = (action: StudioAction): string[] => {
@@ -241,6 +214,14 @@ export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeCh
   return 'live';
 };
 
+/** The pages a fix acts on; null when it names none (it may touch any page, so it counts as the same problem). */
+const fixPages = (doc: ComicDoc | null | undefined, chip: NoticeChip): string[] | null => {
+  if (!doc) return null;
+  const ids = chip.action.type === 'patch' ? patchPageIds(doc, chip.action.ops) : spendPages(chip.action);
+  return ids.length ? ids : null;
+};
+const sharesPage = (a: string[] | null, b: string[] | null): boolean => !a || !b || a.some((id) => b.includes(id));
+
 const STATE_TITLE: Partial<Record<NoticeChipState, string>> = {
   done: 'Done — already in your comic',
   started: 'Started — no need to tap again'
@@ -283,14 +264,22 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
   const states = React.useMemo(() => chips.map((c) => noticeChipState(doc, c, byok, postedAt)), [chips, doc, byok, postedAt]);
   // Paid draw chips show and send what they would draw now (liveNoticeChip), not the price when posted.
   const live = React.useMemo(() => chips.map((c) => liveNoticeChip(doc, c, byok)), [chips, doc, byok]);
-  const shown = live.map((c, i) => ({ c, i, state: states[i] })).filter((x) => x.state !== 'hidden');
+  const all = live
+    .map((c, i) => {
+      const key = `${cardId}:${i}`;
+      const state: NoticeChipState = states[i] === 'live' && c.paid && ran.has(key) ? 'started' : states[i];
+      return { c, i, key, state };
+    })
+    .filter((x) => x.state !== 'hidden');
+  // Q-SETTLE: the fixes are alternatives for the same problem. Once one is taken (tapped and running, a free fix in the
+  // comic, a paid one drawing), the others for the same page are not offered any more; a fix for another page stays.
+  const taken = all.filter((x) => x.state === 'done' || x.state === 'started' || isPending(x.key));
+  const shown = all.filter((x) => x.state !== 'live' || !taken.some((t) => sharesPage(fixPages(doc, t.c), fixPages(doc, x.c))));
   if (!shown.length) return null;
   return (
     <div className="mt-2 flex min-w-0 flex-wrap gap-1.5 pl-[1.625rem]" role="group" aria-label="Fixes">
-      {shown.map(({ c, i, state: derived }) => {
-        const key = `${cardId}:${i}`;
+      {shown.map(({ c, key, state }) => {
         const busy = isPending(key);
-        const state: NoticeChipState = derived === 'live' && c.paid && ran.has(key) ? 'started' : derived;
         const price = c.paid ? noticePrice(cost, c.usd ?? 0, byok) : 'Free';
         const badge = state === 'done' ? 'Done' : state === 'started' ? 'Started' : price;
         return (

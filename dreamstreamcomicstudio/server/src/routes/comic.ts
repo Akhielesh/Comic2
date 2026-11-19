@@ -1505,6 +1505,9 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
     const startSpend = session.doc.spend.totalUsd;
     const startEntries = new Set(session.doc.spend.entries.map((e) => e.id));
+    // The closing allowance notice says when this request started (Msg.runAt): it lands after the reply and never moves
+    // the chat past a question that reply asked.
+    const requestAt = Date.now();
     try {
       if (refusal || !ctx) {
         logRefusal(req, 'stream', { code: refusal?.code || 'INTERNAL', ...shape });
@@ -1579,7 +1582,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       if (notices.length) {
         // Never an empty assistant bubble (G7): the notice IS the message.
         const text = notices.map((n) => String(n.message || '').trim()).filter(Boolean).join(' ');
-        if (text) session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'assistant', text, at: Date.now() } }]);
+        if (text) session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'assistant', text, at: Date.now(), runAt: requestAt } }]);
       }
     } finally {
       sessionSignal.removeEventListener('abort', onSessionAbort);
