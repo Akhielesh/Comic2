@@ -196,7 +196,7 @@ function ArticleItem({ result, busy, pinned, onAdd }: { result: ComicResearchRes
           <span className="sr-only">: {result.title}</span>
         </a>
         {summary && overflows && (
-          <Button size="sm" variant="link" className="px-0 has-[>svg]:px-0" aria-expanded={open} aria-controls={textId} onClick={() => setOpen((o) => !o)}>
+          <Button size="sm" variant="link" className={cn('px-0 has-[>svg]:px-0', DENSITY.coarseSquare)} aria-expanded={open} aria-controls={textId} onClick={() => setOpen((o) => !o)}>
             {open ? 'Less' : 'More'}
           </Button>
         )}

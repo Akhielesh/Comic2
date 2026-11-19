@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { post } from '../../../services/apiClient';
-import { RADIUS_CONTROL } from '../../chat/studioDesign';
+import { DENSITY, RADIUS_CONTROL } from '../../chat/studioDesign';
 import { ResearchPanel } from './ResearchPanel';
 import type { ComicResearchResults } from '../../../shared/comic/research';
 
@@ -134,6 +134,8 @@ describe('articles', () => {
       expect(text).toHaveClass('line-clamp-2');
       expect(screen.queryByText('Railway station')).toBeNull();
       const more = screen.getByRole('button', { name: 'More' });
+      // A short word on a link-button: 44 px wide as well as tall on a coarse pointer.
+      for (const c of DENSITY.coarseSquare.split(' ')) expect(more).toHaveClass(c);
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveAttribute('aria-controls', text.id);
       fireEvent.click(more);
