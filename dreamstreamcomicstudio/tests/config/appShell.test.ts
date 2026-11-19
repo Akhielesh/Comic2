@@ -98,7 +98,7 @@ describe('index.html head', () => {
 
   it('says who sets theme-color at runtime truthfully (no landing page sets a brand blue)', () => {
     expect(head).not.toMatch(/brand blue/i);
-    for (const file of ['components/comicstudio/mobile/useThemeColor.ts', 'components/comicstudio/immersive/useImmersive.ts']) {
+    for (const file of ['services/theme.ts', 'components/comicstudio/mobile/useThemeColor.ts', 'components/comicstudio/immersive/useImmersive.ts']) {
       expect(head, file).toContain(file.replace('components/', ''));
       expect(read(file), file).toContain('theme-color');
     }

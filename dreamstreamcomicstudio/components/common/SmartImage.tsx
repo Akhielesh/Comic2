@@ -47,6 +47,11 @@ export const SmartImage: React.FC<SmartImageProps> = ({
         setStatus('loading');
     }, [sourceCandidates]);
 
+    // The detached preloader makes the real request (the <img> rendered afterwards reads it from the cache), so it
+    // carries the caller's fetch priority and decoding hint, set before src starts the fetch.
+    const fetchPriority = props.fetchPriority ?? 'auto';
+    const decoding = props.decoding ?? 'auto';
+
     useEffect(() => {
         if (sourceCandidates.length === 0) {
             setStatus('error');
@@ -54,6 +59,8 @@ export const SmartImage: React.FC<SmartImageProps> = ({
         }
         let cancelled = false;
         const img = new Image();
+        img.fetchPriority = fetchPriority;
+        img.decoding = decoding;
         img.src = sourceCandidates[activeSrcIndex];
         img.onload = () => {
             if (cancelled) return;
@@ -70,7 +77,7 @@ export const SmartImage: React.FC<SmartImageProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [sourceCandidates, activeSrcIndex]);
+    }, [sourceCandidates, activeSrcIndex, fetchPriority, decoding]);
 
     if (status === 'error') {
         return (
