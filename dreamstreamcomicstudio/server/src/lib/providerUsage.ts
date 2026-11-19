@@ -29,6 +29,7 @@ const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/(^|\.)bing\.com$/, 'bing-scrape'],
   [/(^|\.)wikipedia\.org$/, 'wikipedia'],
   [/^commons\.wikimedia\.org$/, 'wikipedia'],
+  [/^(www\.)?wikidata\.org$/, 'wikidata'],
   [/(^|\.)api\.met\.no$/, 'metno'],
   [/(^|\.)open-meteo\.com$/, 'open-meteo'],
   [/(^|\.)nominatim\.openstreetmap\.org$/, 'nominatim'],
@@ -38,7 +39,6 @@ const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/(^|\.)stooq\.com$/, 'stooq'],
   [/(^|\.)data\.alpaca\.markets$/, 'alpaca'],
   [/(^|\.)ipinfo\.io$/, 'ipinfo'],
-  [/(^|\.)ip-api\.com$/, 'ip-api'],
   [/^r\.jina\.ai$/, 'jina-reader'],
   [/(^|\.)overpass-api\.de$|^overpass\.kumi\.systems$/, 'overpass'],
   [/^routing\.openstreetmap\.de$/, 'osrm'],
@@ -96,6 +96,7 @@ const DEFAULT_BUDGETS: Record<string, ProviderBudget> = {
   duckduckgo: { perMin: 20, perDay: 1500 }, // scrape politeness
   'bing-scrape': { perMin: 10, perDay: 500 },
   wikipedia: { perMin: 60, perDay: 5000 },
+  wikidata: { perMin: 30, perDay: 1000 }, // country facts: up to 4 calls a look-up; Wikimedia API etiquette
   metno: { perMin: 60, perDay: 8000 }, // TOS soft cap 20 req/s — stay far under
   'open-meteo': { perMin: 20, perDay: 300 }, // non-commercial fallback — keep small
   nominatim: { perMin: 30, perDay: 2000 }, // TOS asks ~1 req/s
@@ -105,7 +106,6 @@ const DEFAULT_BUDGETS: Record<string, ProviderBudget> = {
   stooq: { perMin: 30, perDay: 2000 },
   alpaca: { perMin: 150, perDay: 20000 }, // plan allows ~200/min
   ipinfo: { perMin: 60, perDay: 5000 },
-  'ip-api': { perMin: 40, perDay: 1500 }, // hard upstream cap is 45/min
   'jina-reader': { perMin: 15, perDay: 400 }, // anonymous tier ~20 rpm/IP — stay under
   overpass: { perMin: 6, perDay: 500 }, // public instances rate-limit busy IPs hard
   osrm: { perMin: 20, perDay: 1500 }, // FOSSGIS demo server — fair use

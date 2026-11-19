@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowUp, Clock, Gauge, Plane } from 'lucide-react';
+import { ArrowUp, Clock, ExternalLink, Gauge, Plane } from 'lucide-react';
 import type { FlightStatusArtifact, FlightEndpointStatus, FlightPhase } from '../../../apiTypes';
+import { buttonClasses } from '../../ds/Button';
 import {
   Surface,
   SurfaceTitle,
@@ -23,6 +24,9 @@ import {
 //    struck through when the estimate moved, delays tinted) and altitude / speed /
 //    delay chips.
 //  • compact — one row: "UA 2402 · SFO → HND" + status badge + delay chip.
+//  • unavailable (no live data source answered) — the flight number, "Live status needs a
+//    data source" and one link to check the flight on the web. No times, gates, terminals,
+//    delays or arc: nothing that could read as a schedule the model remembered.
 
 const STATUS_COLORS: Record<FlightPhase, string> = {
   scheduled: NEUTRAL,
@@ -65,6 +69,55 @@ const bezier = (t: number): readonly [number, number] => {
 };
 
 const ARC_PATH = `M${P0[0]},${P0[1]} Q${C[0]},${C[1]} ${P1[0]},${P1[1]}`;
+
+const UNAVAILABLE_TEXT = 'Live status needs a data source';
+
+/** A web search for the flight number (no times of our own to show). */
+const flightSearchUrl = (flightNumber: string): string =>
+  `https://www.google.com/search?q=${encodeURIComponent(`${flightNumber} flight status`)}`;
+
+/** The card when no live data source answered: flight number, why, one link. */
+const UnavailableFlight: React.FC<{ title: string; flightNumber: string; compact: boolean }> = ({ title, flightNumber, compact }) => {
+  const link = (
+    <a
+      href={flightSearchUrl(flightNumber)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={buttonClasses({ variant: 'outline', size: 'sm' })}
+    >
+      Check this flight on the web
+      <ExternalLink aria-hidden="true" />
+    </a>
+  );
+  const reason = <p className="min-w-0 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">{UNAVAILABLE_TEXT}</p>;
+  if (compact) {
+    return (
+      <Surface>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5">
+          <Plane aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" />
+          <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{title}</span>
+          <div className="min-w-0 flex-1">{reason}</div>
+          {link}
+        </div>
+      </Surface>
+    );
+  }
+  return (
+    <Surface
+      header={
+        <div className="flex min-w-0 items-center gap-2">
+          <Plane aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
+          <SurfaceTitle>{title}</SurfaceTitle>
+        </div>
+      }
+    >
+      <div className="space-y-2 px-3 pb-3 pt-0.5">
+        {reason}
+        {link}
+      </div>
+    </Surface>
+  );
+};
 
 /** The route arc: dashed track, solid progress segment, plane dot at t=planeT. */
 const RouteArc: React.FC<{
@@ -143,7 +196,12 @@ export const FlightStatus: React.FC<{ data: FlightStatusArtifact }> = ({ data })
 
   if (!data.flightNumber && !data.departure?.code && !data.arrival?.code) return null;
 
-  const phase: FlightPhase = STATUS_COLORS[data.status] ? data.status : 'unknown';
+  if (data.unavailable) {
+    const label = [data.airline, data.flightNumber].filter(Boolean).join(' ') || 'Flight';
+    return <UnavailableFlight title={label} flightNumber={data.flightNumber || label} compact={compact} />;
+  }
+
+  const phase: FlightPhase = data.status && STATUS_COLORS[data.status] ? data.status : 'unknown';
   const statusColor = STATUS_COLORS[phase];
   const delayed = typeof data.delayMin === 'number' && data.delayMin > 0;
   const title = [data.airline, data.flightNumber].filter(Boolean).join(' ');

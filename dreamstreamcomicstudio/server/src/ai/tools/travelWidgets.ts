@@ -308,27 +308,13 @@ export const tripCountdownTool: ChatTool = {
 };
 
 // ---------------------------------------------------------------- flight status ---
-// Live via aviationstack when AVIATIONSTACK_API_KEY is configured (free tier:
-// 100 req/month, HTTP-only); otherwise renders the model-supplied schedule with
-// live:false and a notice naming the key. See docs/features/data-connectors.md §4-H.
+// Live via aviationstack when AVIATIONSTACK_API_KEY is set to a key that works over HTTPS (a paid
+// plan). The request is never retried over plain HTTP: the key travels in the query string, so a free
+// key (HTTP-only) counts as no key. Without live data the card carries the flight number only — no
+// times, gates, terminals or delays, not even ones the model remembers — and a link to check it on the
+// web. See docs/DATA_CONNECTORS.md.
 
 const FLIGHT_PHASES: FlightPhase[] = ['scheduled', 'active', 'landed', 'cancelled', 'diverted', 'unknown'];
-
-const coerceFlightEndpoint = (v: unknown): FlightEndpointStatus | null => {
-  if (!v || typeof v !== 'object') return null;
-  const r = v as Record<string, unknown>;
-  const code = str(r.code, 5)?.toUpperCase();
-  if (!code) return null;
-  return {
-    code,
-    city: str(r.city, 80),
-    scheduled: str(r.scheduled, 32),
-    estimated: str(r.estimated, 32),
-    actual: str(r.actual, 32),
-    terminal: str(r.terminal, 12),
-    gate: str(r.gate, 12)
-  };
-};
 
 /** 0–100 along the route from departure/arrival times (best-effort). */
 const progressFromTimes = (dep?: FlightEndpointStatus, arr?: FlightEndpointStatus): number | undefined => {
@@ -362,108 +348,89 @@ const avsEndpoint = (raw?: Record<string, unknown>): FlightEndpointStatus | null
   };
 };
 
-const fetchAviationstack = async (flightIata: string, key: string, signal?: AbortSignal): Promise<AvsFlight | null> => {
+type AvsAnswer = { ok: true; flight: AvsFlight | null } | { ok: false };
+
+/** One HTTPS request; never a plain-HTTP retry (the key is in the query string). */
+const fetchAviationstack = async (flightIata: string, key: string, signal?: AbortSignal): Promise<AvsAnswer> => {
   const query = `access_key=${encodeURIComponent(key)}&flight_iata=${encodeURIComponent(flightIata)}`;
-  // The free tier is HTTP-only; try HTTPS first for keyed/paid accounts.
-  for (const proto of ['https', 'http'] as const) {
-    try {
-      const data = await fetchJson<{ data?: AvsFlight[] }>(`${proto}://api.aviationstack.com/v1/flights?${query}`, { signal });
-      const flight = data.data?.[0];
-      if (flight) return flight;
-    } catch {
-      /* try the next protocol */
-    }
+  try {
+    const data = await fetchJson<{ data?: AvsFlight[] }>(`https://api.aviationstack.com/v1/flights?${query}`, { signal });
+    return { ok: true, flight: Array.isArray(data?.data) ? data.data[0] ?? null : null };
+  } catch {
+    return { ok: false };
   }
-  return null;
 };
+
+const FLIGHT_UNAVAILABLE = 'Live status needs a data source. Do not state times, gates or delays.';
+const FLIGHT_CARD_NOTE = 'The card shows the flight number and a link to check it on the web.';
+
+/** The card without live data: the flight number and airline, nothing that reads like a schedule. */
+const unavailableFlight = (flightNumber: string, airline: string | undefined): FlightStatusArtifact => ({
+  flightNumber,
+  ...(airline ? { airline } : {}),
+  live: false,
+  unavailable: true
+});
 
 export const flightStatusTool: ChatTool = {
   name: 'get_flight_status',
   description:
-    'Track a FLIGHT — status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate, and a route-progress arc. Use when the user asks "where is flight X", "is UA 2402 on time", or wants to track an upcoming flight. Pass the IATA flight number (e.g. "UA2402"); with a configured aviationstack key the data is live. WITHOUT the key, also pass whatever schedule you know (departure/arrival codes and times) so the card renders schedule-only — never invent gates or delays.',
+    'Track a FLIGHT by its IATA flight number (e.g. "UA2402"). With a configured live flight data source it returns the live status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate and a route-progress arc. Without one the card shows only the flight number and a link to check it on the web: then tell the user live status needs a data source, and do not state times, gates or delays — not even ones you remember.',
   parameters: {
     type: 'object',
     properties: {
       flightNumber: { type: 'string', description: 'IATA flight number, e.g. "UA2402".' },
-      airline: { type: 'string' },
-      status: { type: 'string', enum: FLIGHT_PHASES, description: 'Your best known status (fallback mode only).' },
-      departure: {
-        type: 'object',
-        properties: { code: { type: 'string' }, city: { type: 'string' }, scheduled: { type: 'string', description: 'ISO datetime.' }, terminal: { type: 'string' }, gate: { type: 'string' } },
-        required: ['code']
-      },
-      arrival: {
-        type: 'object',
-        properties: { code: { type: 'string' }, city: { type: 'string' }, scheduled: { type: 'string' }, terminal: { type: 'string' } },
-        required: ['code']
-      }
+      airline: { type: 'string', description: 'Airline name, e.g. "United" (optional).' }
     },
     required: ['flightNumber']
   },
   execute: async (args, signal) => {
     const flightNumber = str(args?.flightNumber, 10)?.toUpperCase().replace(/\s+/g, '');
     if (!flightNumber) return { content: 'A flight number is required, e.g. "UA2402".' };
+    const airline = str(args?.airline, 60);
     const key = envKey('AVIATIONSTACK_API_KEY');
-    if (key) {
-      const flight = await fetchAviationstack(flightNumber, key, signal);
-      const dep = avsEndpoint(flight?.departure);
-      const arr = avsEndpoint(flight?.arrival);
-      if (flight && dep && arr) {
-        const status = FLIGHT_PHASES.includes(flight.flight_status as FlightPhase) ? (flight.flight_status as FlightPhase) : 'unknown';
-        const delayMin = num(flight.departure?.delay);
-        const data: FlightStatusArtifact = {
-          airline: str(flight.airline?.name, 60) ?? str(args?.airline, 60),
-          flightNumber,
-          status,
-          departure: dep,
-          arrival: arr,
-          progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : status === 'scheduled' ? 0 : undefined,
-          altitudeM: num(flight.live?.altitude),
-          speedKmh: num(flight.live?.speed_horizontal),
-          delayMin,
-          live: true,
-          asOf: new Date().toISOString()
-        };
-        return {
-          content: `Live flight status for ${flightNumber}: ${status}${delayMin ? `, departure delayed ${delayMin} min` : ''}, ${dep.code} → ${arr.code}. The tracker card carries the detail — one short line is enough.`,
-          artifacts: [{ type: 'flight_status', data }]
-        };
-      }
-      // Keyed but no match — fall through to schedule-only with an honest note.
-    }
-    const dep = coerceFlightEndpoint(args?.departure);
-    const arr = coerceFlightEndpoint(args?.arrival);
-    if (!dep || !arr) {
+    const answer = key ? await fetchAviationstack(flightNumber, key, signal) : undefined;
+    const flight = answer?.ok ? answer.flight : null;
+    const dep = avsEndpoint(flight?.departure);
+    const arr = avsEndpoint(flight?.arrival);
+    if (flight && dep && arr) {
+      const status = FLIGHT_PHASES.includes(flight.flight_status as FlightPhase) ? (flight.flight_status as FlightPhase) : 'unknown';
+      const delayMin = num(flight.departure?.delay);
+      const data: FlightStatusArtifact = {
+        airline: str(flight.airline?.name, 60) ?? airline,
+        flightNumber,
+        status,
+        departure: dep,
+        arrival: arr,
+        progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : status === 'scheduled' ? 0 : undefined,
+        altitudeM: num(flight.live?.altitude),
+        speedKmh: num(flight.live?.speed_horizontal),
+        delayMin,
+        live: true,
+        asOf: new Date().toISOString()
+      };
       return {
-        content: key
-          ? `No live record found for ${flightNumber} (it may not be operating today). Provide the departure/arrival airports and times you know to render a schedule-only card.`
-          : `Live flight tracking is not configured. Provide the departure/arrival airports and scheduled times you know for ${flightNumber} and call this tool again to render a schedule-only card.`,
-        notice: {
-          level: key ? ('warn' as const) : ('info' as const),
-          message: key ? `aviationstack had no live record for ${flightNumber}.` : 'Flight tracking is in schedule-only mode — live status needs a key.',
-          fix: key ? undefined : 'Set AVIATIONSTACK_API_KEY (free 100 req/mo: aviationstack.com)'
-        }
+        content: `Live flight status for ${flightNumber}: ${status}${delayMin ? `, departure delayed ${delayMin} min` : ''}, ${dep.code} → ${arr.code}. The tracker card carries the detail — one short line is enough.`,
+        artifacts: [{ type: 'flight_status', data }]
       };
     }
-    const status = FLIGHT_PHASES.includes(args?.status as FlightPhase) ? (args?.status as FlightPhase) : 'scheduled';
-    const data: FlightStatusArtifact = {
-      airline: str(args?.airline, 60),
-      flightNumber,
-      status,
-      departure: dep,
-      arrival: arr,
-      progressPct: status === 'landed' ? 100 : status === 'active' ? progressFromTimes(dep, arr) : 0,
-      live: false,
-      asOf: new Date().toISOString()
-    };
+    const notice = !key
+      ? {
+          level: 'info' as const,
+          message: 'Live flight status needs a data source.',
+          fix: 'Set AVIATIONSTACK_API_KEY to an aviationstack key that works over HTTPS (a paid plan)'
+        }
+      : !answer?.ok
+        ? {
+            level: 'warn' as const,
+            message: 'aviationstack did not answer over HTTPS. A free key works only over plain HTTP, which is never used.',
+            fix: 'Use an aviationstack plan with HTTPS for AVIATIONSTACK_API_KEY'
+          }
+        : { level: 'info' as const, message: `aviationstack has no live record for ${flightNumber} today.` };
     return {
-      content: `Rendered ${flightNumber} ${dep.code} → ${arr.code} as a SCHEDULE-ONLY tracker (no live provider configured). Tell the user this reflects the schedule, not live status.`,
-      artifacts: [{ type: 'flight_status', data }],
-      notice: {
-        level: 'info' as const,
-        message: 'Flight card is schedule-only — live status/delays need a key.',
-        fix: key ? undefined : 'Set AVIATIONSTACK_API_KEY (free 100 req/mo: aviationstack.com)'
-      }
+      content: `${key && answer?.ok ? `No live record for ${flightNumber} today. ` : ''}${FLIGHT_UNAVAILABLE} ${FLIGHT_CARD_NOTE}`,
+      artifacts: [{ type: 'flight_status', data: unavailableFlight(flightNumber, airline) }],
+      notice
     };
   }
 };

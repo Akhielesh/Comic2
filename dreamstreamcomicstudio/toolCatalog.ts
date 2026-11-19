@@ -358,10 +358,11 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['countdown', 'days until', 'how long until my trip', 'trip countdown', 'departure countdown', 'days to go', 'upcoming trip']
   },
   {
-    name: 'get_flight_status', label: 'Flight tracker', category: 'travel', kind: 'builtin', provider: 'DreamStream (+ aviationstack when keyed)',
-    description: 'Track a flight — status, delays, terminal/gate and a route-progress arc. Live with an aviationstack key; renders the known schedule otherwise.',
-    auth: 'optional', authEnv: 'AVIATIONSTACK_API_KEY', rateLimit: 'aviationstack free: 100 req/month',
-    dataShape: 'Tracker card: route arc with plane position, times, delays, gates.', docsUrl: 'https://aviationstack.com/documentation',
+    name: 'get_flight_status', label: 'Flight tracker', category: 'travel', kind: 'builtin', provider: 'aviationstack (HTTPS key only)',
+    description: 'Track a flight — status, delays, terminal/gate and a route-progress arc, live from aviationstack. Without a live source the card shows the flight number and a link to check it on the web, never times, gates or delays.',
+    auth: 'optional', authEnv: 'AVIATIONSTACK_API_KEY', rateLimit: 'Per aviationstack plan; only plans with HTTPS work (a free HTTP-only key counts as no key)',
+    license: 'conditional', licenseNote: 'aviationstack data needs a paid plan for HTTPS; the key is never sent over plain HTTP.',
+    dataShape: 'Tracker card: route arc with plane position, times, delays, gates (live); flight number + web link (no live source).', docsUrl: 'https://aviationstack.com/documentation',
     keywords: ['flight status', 'track flight', 'is my flight on time', 'flight delayed', 'where is flight', 'arrival time', 'departure status', 'flight tracker']
   },
   {
@@ -445,19 +446,19 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   // ------------------------------------------------------------------ geo -------
   {
-    name: 'country_info', label: 'Country facts', category: 'geo', kind: 'api', provider: 'REST Countries',
-    description: 'Capital, population, languages, currencies, area, timezones and flag of a country.',
-    auth: 'none', rateLimit: 'Unlimited fair use (no key) — but see license note',
-    license: 'conditional', licenseNote: 'REST Countries deprecated its legacy keyless API in June 2026 (v3.1 now returns an error); the replacement v5 API requires an auth key. Needs a provider migration.',
-    dataShape: 'Metric board: population, area, capital, currency… + flag.', docsUrl: 'https://restcountries.com',
+    name: 'country_info', label: 'Country facts', category: 'geo', kind: 'api', provider: 'Wikidata (+ flagcdn.com flag image)',
+    description: 'Capital, population, continent, official languages, currency, area and flag of a country.',
+    auth: 'none', rateLimit: 'Keyless; budgeted 30/min, 1,000/day (2-4 calls a look-up)',
+    license: 'commercial-ok', licenseNote: 'Wikidata data is CC0. When it does not answer, the tool says the source is offline, never "not found".',
+    dataShape: 'Metric board: population, area, capital, continent, currency, languages + flag.', docsUrl: 'https://www.wikidata.org/wiki/Wikidata:Data_access',
     keywords: ['country', 'capital', 'population', 'currency of', 'flag', 'nation', 'demographics']
   },
   {
-    name: 'ip_lookup', label: 'IP geolocation', category: 'geo', kind: 'api', provider: 'IPinfo Lite (if keyed) → ip-api.com',
-    description: 'Geolocate an IP address or domain — country, network/ISP and (fallback) city and coordinates.',
-    auth: 'optional', authEnv: 'IPINFO_TOKEN', rateLimit: 'IPinfo Lite: unlimited (free token) · ip-api fallback: 45 req/min (HTTP, no key)',
-    license: 'conditional', licenseNote: 'ip-api.com free tier is non-commercial only — set a free IPINFO_TOKEN (commercial-OK with attribution, country/ASN level) for the compliant primary.',
-    dataShape: 'Text: location, ISP, ASN, coordinates.', docsUrl: 'https://ipinfo.io/lite',
+    name: 'ip_lookup', label: 'IP geolocation', category: 'geo', kind: 'api', provider: 'IPinfo Lite',
+    description: 'Geolocate an IP address or domain — country, continent and network/ISP. Needs a free IPinfo token; without one it says IP lookup needs a configured data source.',
+    auth: 'required', authEnv: 'IPINFO_TOKEN', rateLimit: 'IPinfo Lite: unlimited (free token, HTTPS)',
+    license: 'attribution', licenseNote: 'IPinfo Lite is free for commercial use with attribution. No keyless fallback (ip-api.com was plain HTTP and non-commercial).',
+    dataShape: 'Text: country, continent, ASN and network.', docsUrl: 'https://ipinfo.io/lite',
     keywords: ['ip', 'ip address', 'geolocate', 'whois', 'server location', 'hostname', 'isp']
   },
   {
@@ -1073,7 +1074,7 @@ export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
   },
   {
     env: 'IPINFO_TOKEN', provider: 'IPinfo Lite',
-    unlocks: 'Commercial-legal IP geolocation (country/ASN, unlimited) replacing non-commercial ip-api.com.',
+    unlocks: 'Turns on IP geolocation in Chat (country/ASN, unlimited, commercial use with attribution).',
     cost: 'Free (attribution required); city-level from $49/mo.',
     signupUrl: 'https://ipinfo.io/lite', tools: ['ip_lookup']
   },

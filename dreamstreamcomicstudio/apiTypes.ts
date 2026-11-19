@@ -1273,9 +1273,10 @@ export interface DebtClockArtifact {
 }
 
 // --- Flight status tracker ---
-// Emitted by `get_flight_status`. Live when AVIATIONSTACK_API_KEY is set
-// (real-time status/delays/gates); renders schedule-only (model-supplied)
-// otherwise, with `live: false`.
+// Emitted by `get_flight_status`. Live when AVIATIONSTACK_API_KEY is set to a key
+// that works over HTTPS (real-time status/delays/gates). Without live data the tool
+// sends `{ flightNumber, airline?, live: false, unavailable: true }` only: no times,
+// gates, terminals or delays, and the card shows a link to check the flight on the web.
 export type FlightPhase = 'scheduled' | 'active' | 'landed' | 'cancelled' | 'diverted' | 'unknown';
 export interface FlightEndpointStatus {
   /** IATA code. */
@@ -1293,17 +1294,22 @@ export interface FlightEndpointStatus {
 export interface FlightStatusArtifact {
   airline?: string;
   flightNumber: string;
-  status: FlightPhase;
+  /** Absent when `unavailable`. */
+  status?: FlightPhase;
   statusNote?: string;
-  departure: FlightEndpointStatus;
-  arrival: FlightEndpointStatus;
+  /** Absent when `unavailable`. */
+  departure?: FlightEndpointStatus;
+  /** Absent when `unavailable`. */
+  arrival?: FlightEndpointStatus;
   /** 0–100 along the route (drives the plane position on the arc). */
   progressPct?: number;
   altitudeM?: number;
   speedKmh?: number;
   delayMin?: number;
-  /** True when data came from a live provider (vs schedule-only). */
+  /** True when data came from a live provider. */
   live?: boolean;
+  /** No live data source answered: the card shows the flight number and a web link, never times. */
+  unavailable?: boolean;
   asOf?: string;
   density?: 'compact' | 'detailed';
 }
