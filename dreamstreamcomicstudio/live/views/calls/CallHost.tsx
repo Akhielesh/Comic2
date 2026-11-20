@@ -64,7 +64,7 @@ function IncomingCall({ r, busy, push }: { r: Ringing; busy: boolean; push: Push
     );
   }
   return (
-    <div className={cx('call-ring', stranger && 'stranger')} role="alertdialog" aria-label={`${who} is calling`} style={{ background: `radial-gradient(120% 90% at 50% 0%, rgba(0,0,0,.15), #0b0a09 70%), ${gradFor(r.call.from.name)}` }}>
+    <div className={cx('call-ring', stranger && 'stranger')} role="alertdialog" aria-modal="true" aria-label={`${who} is calling`} style={{ background: `radial-gradient(120% 90% at 50% 0%, rgba(0,0,0,.15), #0b0a09 70%), ${gradFor(r.call.from.name)}` }}>
       <div className="call-ring-who">
         <div className="call-ring-face"><Avatar name={r.call.from.name} size={112} /></div>
         <b>{who}</b>

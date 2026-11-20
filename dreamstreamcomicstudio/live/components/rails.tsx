@@ -2,6 +2,7 @@
 // log and stream health. All fed by the real EventRoom socket.
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../ui/icons';
+import { isImeComposing } from '../ui/hotkeys';
 import { AreaChart, Avatar, Btn, IconBtn, Meter, cx } from '../ui/primitives';
 import { fmtBps } from '../metrics';
 import type { ChatMsg, LobbyEntry, LogEntry, LogKind, PersonEntry, Role } from '../protocol';
@@ -141,7 +142,7 @@ export function ChatRail({ chat, pinned, slowSec, reactionsOn, quick, canModerat
             maxLength={400}
             aria-label="Chat message"
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
+            onKeyDown={(e) => e.key === 'Enter' && !isImeComposing(e) && send()}
           />
           <Btn variant="solid" size="sm" className="send" icon="send" onClick={send} aria-label="Send" />
         </div>

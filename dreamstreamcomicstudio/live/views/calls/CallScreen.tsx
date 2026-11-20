@@ -266,7 +266,7 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
   }
 
   return (
-    <div className={cx('call-root', !chrome && 'quiet', `n-${Math.max(1, others.length)}`)} role="dialog" aria-label={`Call with ${title}`} onPointerDown={poke}>
+    <div className={cx('call-root', !chrome && 'quiet', `n-${Math.max(1, others.length)}`)} role="dialog" aria-modal="true" aria-label={`Call with ${title}`} onPointerDown={poke}>
       {/* Your own picture fills the screen until someone picks up. */}
       {waiting && a.cam && <StreamVideo stream={a.local} muted mirror={a.facing === 'user'} className="call-backdrop" />}
       {others.length > 0 && (

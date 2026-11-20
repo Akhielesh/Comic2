@@ -25,6 +25,7 @@ import { NAME_MAX, cleanName } from '@/shared/accountName';
 import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
+import { isImeComposing } from '../ui/hotkeys';
 import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
 import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { cloudCopySettingDesc } from '../costCopy';
@@ -46,7 +47,8 @@ const SET_CATS = [
 ];
 
 const HOTKEYS: { keys: string[]; action: string }[] = [
-  { keys: ['G'], action: 'Go live / end stream' },
+  { keys: ['G'], action: 'Go live (after the ready check) — ending is the End stream button' },
+  { keys: ['I'], action: 'Invite people on camera' },
   { keys: ['Space'], action: 'Mute / unmute mic' },
   { keys: ['V'], action: 'Camera on / off' },
   { keys: ['R'], action: 'Start / stop recording' },
@@ -279,7 +281,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                         aria-label="Your name"
                         onChange={(e) => setDisplayName(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') saveName();
+                          if (e.key === 'Enter' && !isImeComposing(e)) saveName();
                         }}
                       />
                       <Btn variant="soft" size="sm" disabled={!nameDraft || nameDraft === accountName || savingName} onClick={saveName}>
@@ -619,7 +621,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
           {cat === 'hotkeys' && (
             <>
               <div className="set-head"><h2 className="serif">Hotkeys</h2></div>
-              <p className="set-intro">Drive the studio without touching the mouse. Active whenever you're not typing.</p>
+              <p className="set-intro">Drive the studio without touching the mouse. Plain keys only — browser shortcuts like ⌘G or Ctrl+R never trigger them — and they rest while you type or a sheet is open.</p>
               <div className="hotkey-list">
                 {HOTKEYS.map((h, i) => (
                   <div className="hotkey-row" key={i}>
