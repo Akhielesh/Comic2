@@ -74,6 +74,13 @@ settled chat options.
 - Comic Studio alerts (a reply, a question, a plan waiting, a drawing run that finished), live status in the panel,
   re-attaching to a running turn after a reload, and the free whole-comic review with its own screen.
 
+## Known follow-ups
+
+- After a model switch with "redraw everything", or an automatic retry, the later drawing run can close a question the
+  Director asked meanwhile. The run should carry the time the switch or retry was confirmed.
+- The "drawn" alert while you are away can count a withheld or reused picture as drawn; it should use the same rule
+  as the progress card.
+
 ## Rules every release keeps
 
 - Sign-up stays closed; people can register interest, and nobody on that list is emailed.

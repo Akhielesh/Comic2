@@ -8,40 +8,14 @@
 // earlier one back, an earlier take was reused, a failed redraw kept the old one) reads "earlier picture".
 
 import { findPage, getRender, renderTargetKey, type ComicDoc, type RenderState, type RenderTarget } from '../../../../shared/comic/doc';
-import { canServeToOwner } from '../../../../shared/comic/safety';
+import { progressState, type ProgressState } from '../../../../shared/comic/renderOutcome';
 import { listWords } from '../../../../shared/comic/settle';
 import { failureFacts, failureKind, failureReason } from './failure';
 import { describeTarget, tileProgress, type TargetMeta } from './renderTile';
 
 export { listWords };
 
-/** One target's place in the run. */
-export type ProgressState = 'drawn' | 'withheld' | 'kept' | 'drawing' | 'queued' | 'failed' | 'idle';
-
-/** The run drew this target's picture: its current picture, or one in its history (since swapped), is from `since` on. */
-const drewSince = (render: RenderState, since: number): boolean =>
-  [render.asset, ...(Array.isArray(render.history) ? render.history : [])].some((v) => !!v && typeof v.at === 'number' && v.at >= since);
-
-/** `since`: when the run queued its targets (the card's own time); without it every ready target counts as drawn. */
-export const progressState = (render?: RenderState, since?: number): ProgressState => {
-  switch (render?.status) {
-    case 'ready':
-    case 'stale':
-      // Blocked by the content check: never shown, so never "drawn".
-      if (render.asset && !canServeToOwner(render.asset)) return 'withheld';
-      if (typeof since === 'number' && render.asset && !drewSince(render, since)) return 'kept';
-      return 'drawn';
-    case 'rendering':
-      return 'drawing';
-    case 'queued':
-      return 'queued';
-    case 'failed':
-      return 'failed';
-    default:
-      // Never started, or put back by Stop.
-      return 'idle';
-  }
-};
+export { progressState, type ProgressState };
 
 export interface ProgressItem {
   key: string;

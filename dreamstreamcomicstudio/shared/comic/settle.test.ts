@@ -273,6 +273,24 @@ describe('renders cards', () => {
     expect(summaryById(three, 'r_old')?.text).toBe('Drew 1 page · 1 didn’t finish · 1 being redrawn');
   });
 
+  it('once settled, the line uses the live card’s rule: an earlier picture put back or a withheld take is never "drawn"', () => {
+    const T = 2_000_000;
+    type Asset = NonNullable<ComicDoc['pages'][number]['render']['asset']>;
+    const asset = (at: number, blocked = false): Asset => ({ path: `p/${at}.png`, source: 'generated', at, ...(blocked ? { safety: { assessed: 'X', at } } : {}) });
+    const withAsset = (doc: ComicDoc, assets: Record<string, Asset>): ComicDoc => ({
+      ...doc,
+      pages: doc.pages.map((p) => (assets[p.id] ? { ...p, render: { ...p.render, status: 'ready' as const, history: [], asset: assets[p.id] } } : p))
+    });
+    const card = (ids: string[]): Card => ({ type: 'renders', id: 'r_run', targets: ids.map(page), label: 'Drawing', since: T });
+    // Stop before anything landed: both pages show the pictures from before the run, then the person moves on.
+    const stopped = withAsset({ ...base, conversation: [reply('a1', [card([p1.id, p2.id])]), user('u1', 'ok')] }, { [p1.id]: asset(T - 10), [p2.id]: asset(T - 20) });
+    expect(settleById(stopped, 'r_run')?.state).toBe('settled');
+    expect(summaryById(stopped, 'r_run')?.text).toBe('Nothing was drawn · 2 kept earlier pictures');
+    // One page drawn by the run, one take withheld by the content check.
+    const withheld = withAsset({ ...base, conversation: [reply('a1', [card([p1.id, p2.id])]), user('u1', 'ok')] }, { [p1.id]: asset(T + 10), [p2.id]: asset(T + 20, true) });
+    expect(summaryById(withheld, 'r_run')?.text).toBe('Drew 1 page · 1 withheld');
+  });
+
   it('a card whose own run is still drawing stays live, even under a newer card for other pictures', () => {
     const conv = [reply('a1', [renders('r_run', [p1.id, p2.id])]), user('u1', 'and the cover'), reply('a2', [{ type: 'renders', id: 'r_cover', targets: [{ kind: 'cover' }], label: 'Cover' }])];
     const doc = withStatus({ ...base, conversation: conv }, { [p1.id]: 'ready', [p2.id]: 'rendering' });

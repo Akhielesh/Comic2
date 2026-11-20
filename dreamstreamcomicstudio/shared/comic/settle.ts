@@ -34,6 +34,7 @@ import { editionProgress } from './i18n.js';
 import { languageSpec } from './languages.js';
 import { getImageModel } from './models.js';
 import { getStylePreset } from './stylePresets.js';
+import { progressState } from './renderOutcome.js';
 
 // ── Flags ────────────────────────────────────────────────────────────────────
 
@@ -858,29 +859,36 @@ const targetTally = (targets: readonly RenderTarget[]): string[] => {
 
 function rendersSummary(card: Extract<Card, { type: 'renders' }>, doc: ComicDoc): SettledSummary {
   const targets = (Array.isArray(card.targets) ? card.targets : []).filter(isObject) as RenderTarget[];
+  const since = typeof card.since === 'number' && Number.isFinite(card.since) ? card.since : undefined;
+  // The same rule as the live card (renderOutcome.ts): only a picture this run drew, and the owner can see, is "drawn".
   const drawn: RenderTarget[] = [];
   const busy: RenderTarget[] = [];
+  let withheld = 0;
+  let kept = 0;
   let missed = 0;
   for (const t of targets) {
-    let status: string | undefined;
+    let state: ReturnType<typeof progressState>;
     try {
-      status = getRender(doc, t)?.status;
+      state = progressState(getRender(doc, t), since);
     } catch {
-      status = undefined;
+      state = 'idle';
     }
-    if (status === 'ready' || status === 'stale') drawn.push(t);
+    if (state === 'drawn') drawn.push(t);
+    else if (state === 'withheld') withheld += 1;
+    else if (state === 'kept') kept += 1;
     // A newer run is drawing it now (this card settled): never "didn't finish".
-    else if (status === 'queued' || status === 'rendering') busy.push(t);
-    // Failed, never started ('none') or gone.
+    else if (state === 'queued' || state === 'drawing') busy.push(t);
+    // Failed, never started, put back by Stop, or gone.
     else missed += 1;
   }
   const drew = targetTally(drawn);
   const redrawn = busy.length ? `${busy.length} being redrawn` : '';
+  const shown = [withheld ? `${withheld} withheld` : '', kept ? `${kept} kept ${kept === 1 ? 'an earlier picture' : 'earlier pictures'}` : ''];
   const text = drew.length
-    ? [`Drew ${listWords(drew)}`, missed ? `${missed} didn’t finish` : '', redrawn].filter(Boolean).join(' · ')
+    ? [`Drew ${listWords(drew)}`, ...shown, missed ? `${missed} didn’t finish` : '', redrawn].filter(Boolean).join(' · ')
     : busy.length
-      ? [`Being redrawn: ${listWords(targetTally(busy))}`, missed ? `${missed} didn’t finish` : ''].filter(Boolean).join(' · ')
-      : 'Nothing was drawn';
+      ? [`Being redrawn: ${listWords(targetTally(busy))}`, ...shown, missed ? `${missed} didn’t finish` : ''].filter(Boolean).join(' · ')
+      : ['Nothing was drawn', ...shown].filter(Boolean).join(' · ');
   const kinds = new Set(targets.map((t) => t.kind));
   const link =
     targets.length === 1 ? targetLink(doc, targets[0])
