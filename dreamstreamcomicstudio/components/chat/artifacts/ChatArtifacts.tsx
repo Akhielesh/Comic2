@@ -128,6 +128,9 @@ const ACTING_TYPES: Record<string, (data: unknown, turn: ArtifactTurn) => boolea
   clarify: (d, turn) => clarifySettled(d as ClarifyArtifact, turn)
 };
 
+/** The artifact types that wait on the person (the alert core's chat_question / chat_confirm, services/alerts/chatAlerts.ts). */
+export const ACTING_ARTIFACT_TYPES: readonly string[] = Object.freeze(Object.keys(ACTING_TYPES));
+
 /** The ArtifactTurn of artifact `index` of a turn (for the cards that act). */
 export const artifactTurnOf = (ref: ArtifactTurnRef, index: number, writing?: boolean): ArtifactTurn => {
   const key = artifactStateKey(ref.variant, index);

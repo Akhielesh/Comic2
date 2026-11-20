@@ -494,3 +494,35 @@ a comic is live (Link only included):
 
 **Not applied in S1, waiting for a lead decision:** PE-0's server sanitizer change, which keeps stored Pro lettering
 on an undo after a rollback (`docs/features/pro-edit.md` §7). It is carried to S2 PE-SERVER.
+
+## 10. Leaving a comic mid-turn (liveturn LT-2)
+
+App renders Comic Studio only while the view is the studio, so Settings, My comics, Chat or another comic unmount it.
+The Director's turn now keeps running in the browser while the person is away, and the comic shows it again on return.
+
+- **One owner of live streams:** `components/comicstudio/live/studioStreams.ts`, page scope, never persisted, no
+  network and no timers. Every message and action stream a studio starts goes through it (`begin`, `event`, `end`).
+  Patch streams (silent saves) do not; they still flush on unmount.
+- **Leaving** (`detach`): the streams keep reading with nobody watching. A small mirror per comic, folded with the
+  studio's own `studioReducer`, keeps the doc, the reply so far (tail kept, `LIVE_LIMITS.draftChars`), the step list
+  (`LIVE_LIMITS.activity`), the pending bubble, presence and signed URLs. A studio that has unmounted starts no new
+  message or action stream, so a card's next step never runs after the person left.
+- **Coming back** (`claim` at mount, `subscribe` once the doc has loaded): the studio adopts the mirror
+  (`streams_adopt` in `studioReducer.ts`) and owns the streams from then on, so "Thinking…", the steps, Stop and Up next
+  work as if the person never left, and every later event arrives exactly once. A mirror doc is used only when it is
+  newer than the loaded one and for the same comic.
+- **Work that ends while nobody watches** leaves a small leftover for the next studio of that comic, handed over once:
+  the "not sent" bubble with the person's words, notes a BUSY answer put back in Up next, and the error.
+- **Limits:** at most `LIVE_LIMITS.detachedComics` (3) comics are held with nobody watching; leaving a fourth aborts the
+  oldest one's streams in the browser (the server keeps working) and they settle as `lost`. A sign-out or another
+  account on the same tab aborts and drops every held entry of the previous account (`noteStudioAccount`, from a
+  listen-only auth listener in `useStudio.ts`).
+- **Moments** for alerts and other listeners: `subscribeStudioMoments(fn)` hears `replied` once per message stream and
+  `settled` once per stream, with `outcome` done, failed, stopped, lost or busy, and the doc before and after. A Stop is
+  reported as `stopped` from the studio's own Stop (`noteStop`), since the server ends a stopped stream with `done`.
+  `useStudioWorking(accountId)` (`live/useStudioWorking.ts`) lists the comics with work in this tab.
+- **Not covered here:** a reload, a phone app switch or a dropped connection still ends the browser's stream; the server
+  finishes the turn and the reply shows on the next load.
+- **QA scene:** `/qa/comic-qa.html?surface=app&scene=live-turn` runs the real `useStudio` over a scripted fake transport
+  (`?step=start`, `away` or `back` to open on a step). Tests: `live/studioStreams.test.ts`,
+  `useStudio.live.test.tsx`, `studioReducer.adopt.test.ts`.

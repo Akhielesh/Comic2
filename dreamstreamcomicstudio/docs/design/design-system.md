@@ -559,6 +559,13 @@ it; `tone: 'error'` is an alert of its own (announced at once), everything else 
 region, which stays in the page while idle (live regions never nest). `ToastCard` shows a static card (a scene, a doc).
 No timer runs while no toast is shown.
 
+**Alerts in the slot** (docs/features/alerts.md). The alert core's toasts say so (`toast({ …, source: 'alert' })`; they
+look the same). An alert never pushes someone else's toast off the screen: `toastSlotBusy()` is true while a non-alert
+app toast is shown or a component toast holds its claim, and a component ends its claim with `endToastClaim(id)` when
+its toast closes, is replaced or unmounts (the timeline's Undo toast and History's restore toast do). Slot listeners
+(`subscribeToastSlot`) are told on every claim, on a dismissal and on an ended claim, so a waiting alert shows the moment
+the slot frees, without a timer. A newer alert still replaces an older alert.
+
 **Bundle cost.** Together the overlays weigh about 45 KB gz (Menu about 34 KB with floating-ui, Dialog about 17.5 KB,
 Tooltip 22 KB, Popover 26 KB, sharing the popper and the overlay layer, which brings the sheets' stack and the back stack,
 about 1.7 KB of it). An unused overlay costs next to nothing, also through this barrel: their top-level `forwardRef` /
