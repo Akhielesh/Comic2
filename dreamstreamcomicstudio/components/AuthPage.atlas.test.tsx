@@ -182,13 +182,20 @@ describe('AuthPage on Atlas', () => {
     const original = window.location;
     Object.defineProperty(window, 'location', { configurable: true, value: { ...original, hostname: 'comics.dreamstreamstudio.ai' } });
     try {
-      for (const initialMode of ['signin', 'request-access'] as const) {
-        render(<AuthPage initialMode={initialMode} onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-        const link = screen.getByRole('link', { name: 'Sign in there' });
-        expect(link).toHaveAttribute('href', 'https://dreamstreamstudio.ai/?home=1');
-        for (const cls of DENSITY.coarseSquare.split(' ')) expect(link.className.split(/\s+/)).toContain(cls);
-        cleanup();
-      }
+      render(<AuthPage initialMode="signin" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+      const link = screen.getByRole('link', { name: 'Sign in there' });
+      expect(link).toHaveAttribute('href', 'https://dreamstreamstudio.ai/?home=1');
+      for (const cls of DENSITY.coarseSquare.split(' ')) expect(link.className.split(/\s+/)).toContain(cls);
+      // The line says who it is for, instead of naming studios nobody has explained.
+      expect(link.closest('p')).toHaveTextContent('Have a DreamStream account on the main site? Sign in there');
+      expect(screen.getByRole('main')).not.toHaveTextContent(/other DreamStream studios/i);
+      cleanup();
+      // Registering interest is about Comic Studio alone: no line about the main site under that card.
+      render(<AuthPage initialMode="request-access" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+      expect(screen.getByTestId('waitlist')).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Sign in there' })).toBeNull();
+      expect(screen.getByRole('main')).not.toHaveTextContent(/other DreamStream studios/i);
+      cleanup();
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: original });
     }
