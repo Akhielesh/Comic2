@@ -627,10 +627,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             </div>
 
             {/* Sessions are per host, and the main site's bare front page now opens Comic Studio: a member of the main
-                site (its other studios) gets back to its own front page here, never through the bare "/". */}
-            {comicsHost ? (
+                site gets back to its own front page here, never through the bare "/". Not under the Register interest
+                card, which is about Comic Studio alone. */}
+            {comicsHost && mode !== 'request-access' ? (
                 <p className="mt-6 text-center text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
-                    The other DreamStream studios are on the main site.{' '}
+                    Have a DreamStream account on the main site?{' '}
                     <a href={mainFrontPageUrl()} className={`inline-flex items-center justify-center ${textLink} font-medium ${DENSITY.coarseSquare}`}>
                         Sign in there
                     </a>

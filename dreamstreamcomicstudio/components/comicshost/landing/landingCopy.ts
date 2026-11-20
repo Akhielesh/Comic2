@@ -5,7 +5,8 @@
 // Rules for anything added here: true today, in production, for the reader it addresses; no price, amount, allowance,
 // plan name or date; no promise of an email, a reply, early access or a time; numbers and model names are never typed:
 // a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`. The interest form is the
-// app's own (components/WaitlistForm.tsx) with its own questions and thank-you, which promise nothing either.
+// app's own (components/WaitlistForm.tsx) with its own questions and thank-you, which promise nothing either: its one
+// box records that a person wants to be kept updated, and nothing is sent because of it.
 
 /** Fill `{NAME}` placeholders. A missing value throws, so a typo never ships as a literal brace. */
 export const fill = (text: string, values: Readonly<Record<string, string | number>> = {}): string =>
@@ -153,7 +154,7 @@ export const FAQ: readonly FaqCopy[] = [
   },
   {
     q: 'What happens after I register my interest?',
-    a: 'Your interest is recorded, with any answers you add. Nobody is emailed for registering. Accounts open by invite, and there is no date yet.'
+    a: 'Your interest is recorded, with any answers you add. Nobody is emailed for registering. If you ticked the box to be kept updated, we will let you know when updates start. Accounts open by invite, and there is no date yet.'
   },
   {
     q: 'Does it cost anything?',

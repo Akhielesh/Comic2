@@ -540,17 +540,20 @@ describe('RendersCard', () => {
     ]
   };
 
-  it('shows each target honestly and opens ready pages', () => {
+  it('a finished run is one honest line: what drew, what did not, and View', () => {
     const studio = renderCard(card);
-    expect(screen.getByText('1 ready · 1 failed')).toBeInTheDocument();
-    expect(screen.getByText('Not drawn yet')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Page 1' }));
-    expect(studio.openPage).toHaveBeenCalledWith('pg_1');
+    // pg_1 drawn, pg_2 never drawn, pg_3 failed, the deleted page left out.
+    const done = studio.container.querySelector('[data-renders-done]')!;
+    expect(done).toHaveTextContent(/^1 of 3 pages drawn · 1 not drawn/);
+    expect(studio.container.querySelector('[data-renders-failed]')).toHaveTextContent(/Page 3 didn’t draw/);
+    expect(studio.container.querySelectorAll('img')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'View the pages' }));
+    expect(studio.setTab).toHaveBeenCalledWith('pages');
   });
 
   it('retries a failed page with force', () => {
     const studio = renderCard(card);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry Page 3' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry page 3' }));
     const q = quoteRenderPages(makeSampleDoc(), { pageIds: ['pg_3'], force: true, byok: false, tier: 'standard' });
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_3'], force: true, quotedUsd: q.usd });
   });
@@ -561,31 +564,26 @@ describe('RendersCard', () => {
     renderCard(card, doc);
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
     // A progressbar always has a name (renders-progressbar-name).
-    expect(screen.getByRole('progressbar')).toHaveAccessibleName(/ready/);
-    expect(screen.getByText('Drawing…')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAccessibleName(/Drawing pages/);
+    expect(document.querySelector('[data-progress-headline]')).toHaveTextContent(/^Drawing pages · 1 of 3 · page 2/);
   });
 
-  it('failed tiles say when and why; the summary line is calm', () => {
+  it('a failure says what and why in one calm line; when and the provider words are one tap away', () => {
     const doc = makeSampleDoc();
     const at = new Date();
     at.setHours(16, 52, 0, 0);
     doc.pages[2] = { ...doc.pages[2], render: { ...doc.pages[2].render, status: 'failed', error: 'Provider said 429: rate limited', updatedAt: at.getTime() } };
     renderCard(card, doc);
-    expect(screen.getByText('failed 16:52 · rate limited')).toBeInTheDocument();
-    expect(screen.getByText(/1 image didn’t finish \(16:52 · rate limited\)/)).toBeInTheDocument();
-    // the frame never paints a red error wall
-    const frame = document.querySelector('[data-failed]')!;
-    const visible = Array.from(frame.childNodes)
-      .filter((n) => !(n instanceof Element && n.classList.contains('sr-only')))
-      .map((n) => n.textContent)
-      .join(' ');
-    expect(visible).not.toMatch(/Provider said/);
-    // …but screen readers get the whole story
-    expect(frame.querySelector('.sr-only')!.textContent).toMatch(/Page 3: failed 16:52 · rate limited\. Provider said 429/);
-    const details = screen.getByRole('button', { name: 'Details' });
+    const line = document.querySelector('[data-renders-failed]')!;
+    expect(line).toHaveTextContent(/Page 3 didn’t draw · rate limited/);
+    // never a red wall of provider text on the card
+    expect(line).not.toHaveTextContent(/Provider said/);
+    expect(document.querySelector('[data-failed]')).toBeNull();
+    const details = screen.getByRole('button', { name: /Details/ });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(details);
     expect(details).toHaveAttribute('aria-expanded', 'true');
-    expect(document.getElementById(details.getAttribute('aria-controls')!)).toHaveTextContent(/Provider said 429: rate limited\s*Failed at 16:52\./);
+    expect(document.getElementById(details.getAttribute('aria-controls')!)).toHaveTextContent(/Page 3 · Didn’t draw · failed 16:52 · rate limited\s*Provider said 429: rate limited/);
   });
 
   it('uses errorDetail when the server sets it: exact time, provider facts under Details', () => {
@@ -683,12 +681,13 @@ describe('RendersCard', () => {
       ],
       false
     );
-    fireEvent.click(screen.getByRole('button', { name: /Retry 3 failed images/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry 3 failed images' }));
     await waitFor(() => expect(studio.act).toHaveBeenCalledTimes(2));
     expect(studio.act.mock.calls.map((c) => c[0])).toEqual(expected.actions);
     expect(expected.actions[0]).toMatchObject({ type: 'render_pages', pageIds: ['pg_2', 'pg_3'], force: true });
     expect(expected.actions[1]).toMatchObject({ type: 'render_style_options', directions: [{ name: 'Retro', spec: 'Halftone' }] });
-    expect(screen.getByRole('button', { name: /Retry 3 failed images/ })).toHaveTextContent(formatUsd(expected.usd));
+    // The one Retry carries the honest quote beside it.
+    expect(studio.container.querySelector('[data-renders-failed]')).toHaveTextContent(formatUsd(expected.usd));
   });
 
   it('retry-all never draws (or bills) a sheet twice: the page retry already draws the missing sheets', () => {

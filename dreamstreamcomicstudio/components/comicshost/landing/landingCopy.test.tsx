@@ -24,7 +24,7 @@ vi.mock('../../../services/clientConfig', async (importOriginal) => ({
 
 import { ComicsLanding } from '../ComicsLanding';
 import { FAQ, FEATURES, HERO, HOW, MODELS, PRICING, fill } from './landingCopy';
-import { INTEREST_FEATURES_QUESTION, INTEREST_THANKS } from '../../../shared/interest';
+import { INTEREST_HEARD_QUESTION, INTEREST_MAKES_QUESTION, INTEREST_THANKS, INTEREST_UPDATES } from '../../../shared/interest';
 import { DEFAULT_MODEL, LANDING_VALUES, OTHER_MODELS } from './landingModels';
 
 beforeEach(() => {
@@ -114,22 +114,42 @@ describe('landing copy', () => {
     expect(hero).toMatch(/\bAI\b/);
   });
 
-  it('the register section is the app’s own interest form: email, the optional questions, one submit with source "landing"', async () => {
+  it('the register section is the app’s own interest form: email, the sensible questions, one submit with source "landing"', async () => {
     waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message: INTEREST_THANKS.access });
     renderLanding();
     const register = document.getElementById('register') as HTMLElement;
-    expect(within(register).getByRole('group', { name: new RegExp(INTEREST_FEATURES_QUESTION.replace(/[?]/g, '\\?')) })).toBeInTheDocument();
+    const esc = (s: string) => new RegExp(s.replace(/[?]/g, '\\?'));
+    expect(within(register).getByRole('group', { name: esc(INTEREST_MAKES_QUESTION) })).toBeInTheDocument();
+    expect(within(register).getByRole('combobox', { name: esc(INTEREST_HEARD_QUESTION) })).toBeInTheDocument();
+    expect(within(register).getByRole('checkbox', { name: INTEREST_UPDATES.label })).not.toBeChecked();
+    // No question about other studios: nothing on the page explains them.
+    expect(register.textContent).not.toMatch(/Other studios|Chat Studio|Stream Studio|Dashboards/);
     const email = within(register).getByRole('textbox', { name: /Email address/ });
     fireEvent.change(email, { target: { value: 'reader@example.com' } });
     await act(async () => {
       fireEvent.submit(email.closest('form')!);
     });
     expect(waitlist.submitWaitlistEmail).toHaveBeenCalledTimes(1);
-    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, {});
+    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, { keepUpdated: false });
   });
 
-  // The form's one thank-you, with or without answers (shared/interest.ts INTEREST_THANKS): it promises no email.
-  it.each([INTEREST_THANKS.access, INTEREST_THANKS.accessWithAnswers])('after sending, the page shows the form’s thank-you and no banned words (%s)', async (message) => {
+  it('the FAQ says what happens after registering, the box included, and promises no email', () => {
+    renderLanding();
+    const after = FAQ.find((f) => f.q === 'What happens after I register my interest?')!;
+    expect(after.a).toMatch(/Nobody is emailed for registering/);
+    expect(after.a).toMatch(/kept updated/);
+    const faq = squash((document.getElementById('faq') as HTMLElement).textContent || '');
+    expect(faq).toContain(after.a);
+  });
+
+  // The form's thank-you, with or without answers and with or without the ticked box (shared/interest.ts INTEREST_THANKS):
+  // it promises no email.
+  it.each([
+    INTEREST_THANKS.access,
+    INTEREST_THANKS.accessWithAnswers,
+    `${INTEREST_THANKS.access} ${INTEREST_THANKS.keptUpdated}`,
+    `${INTEREST_THANKS.accessWithAnswers} ${INTEREST_THANKS.keptUpdated}`
+  ])('after sending, the page shows the form’s thank-you and no banned words (%s)', async (message) => {
     waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message });
     const { container } = renderLanding();
     const register = document.getElementById('register') as HTMLElement;

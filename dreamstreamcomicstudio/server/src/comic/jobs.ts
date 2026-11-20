@@ -2492,8 +2492,12 @@ class RenderRun {
   }
 
   /** A job message in the user's terms (the governed-dollars safety net). */
+  /**
+   * Every message this run posts says when the run started (Msg.runAt): its outcome, landing after a reply the director
+   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn).
+   */
   private message(msg: Msg): Msg {
-    return governMsg(this.ctx, msg);
+    return governMsg(this.ctx, { ...msg, runAt: this.started });
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────
@@ -2861,7 +2865,7 @@ class RenderRun {
     if (!jobs.length) return;
     const at = Date.now();
     this.commit(jobs.map((j): DocOp => ({ op: 'render', target: j.target, patch: { status: 'queued', error: undefined, updatedAt: at } })));
-    this.startProgress(jobs, label);
+    this.startProgress(jobs, label, at);
     const end = activity(this.ctx, label, 'image');
     try {
       await body();
@@ -2883,8 +2887,9 @@ class RenderRun {
    * Director turns: the live `renders` card goes INTO the director's message (no message is
    * committed now). UI clicks: a progress message right after the click.
    */
-  private startProgress(jobs: ImageJob[], label: string) {
-    this.progressCard = { type: 'renders', id: newId('card'), targets: jobs.map((j) => j.target), label };
+  private startProgress(jobs: ImageJob[], label: string, since: number) {
+    // `since` lets the card tell a picture this run drew from one it only put back (Stop, reuse, a kept failure).
+    this.progressCard = { type: 'renders', id: newId('card'), targets: jobs.map((j) => j.target), label, since };
     if (this.opts.collectCard && this.hostable) {
       this.hosted = true;
       this.opts.collectCard(this.progressCard);

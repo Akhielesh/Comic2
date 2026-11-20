@@ -89,9 +89,9 @@ describe('flags', () => {
 describe('the heist-12p conversation (the QA studio scene)', () => {
   const doc = makeQaDoc('heist-12p');
 
-  it('o1 settles as skipped: "Noir ink, please" matches no choice, and the chat moved on', () => {
+  it('o1 settles as skipped: "Noir ink, please" matches no choice, and the chat moved on; nothing chosen, so it shows nothing', () => {
     expect(settleById(doc, 'o1')).toEqual({ state: 'settled', outcome: 'skipped' });
-    expect(summaryById(doc, 'o1')).toEqual({ text: 'Not answered — you moved on', tone: 'quiet' });
+    expect(summaryById(doc, 'o1')).toEqual({ text: '', tone: 'quiet', folded: true });
     // The same answer with the courtesy match (D7, off by default) would have picked Noir ink.
     const o1 = find(doc, 'o1').card as OptionsCard;
     expect(matchChoices(o1, 'Noir ink, please')).toEqual([]);
@@ -137,8 +137,11 @@ describe('the heist-12p conversation (the QA studio scene)', () => {
     // A gate's own breakdown is not a book view: it never replaces the plan card, and folds into the gate line.
     const gateBreakdown: Card = { type: 'breakdown', id: 'bd_gate', pageIds: [], view: 'cost', gateId: 'gate_qa' };
     expect(kindKeyOf(gateBreakdown)).toBeNull();
+    const same = withConv([reply('a0', [{ type: 'plan', id: 'p1' }, gateBreakdown])]);
+    expect(settleById(same, 'p1')).toEqual({ state: 'live' });
+    // A later gate message is a new turn: the plan view above it is moved past (not replaced).
     const only = withConv([reply('a0', [{ type: 'plan', id: 'p1' }]), reply('a1', [gateBreakdown])]);
-    expect(settleById(only, 'p1')).toEqual({ state: 'live' });
+    expect(settleById(only, 'p1')).toEqual({ state: 'settled', outcome: 'passed' });
   });
 
   it('latest-of-kind within one message: the first of two book cards is replaced by the second', () => {
@@ -179,7 +182,7 @@ describe('option cards', () => {
     const index = buildSettleIndex(doc);
     for (let k = 0; k < 10; k += 1) {
       expect(index.get(settleKey(`a${k}`, `o${k}`))).toEqual({ state: 'settled', outcome: 'skipped' });
-      expect(summaryById(doc, `o${k}`)?.text).toBe('Not answered — you moved on');
+      expect(summaryById(doc, `o${k}`)).toEqual({ text: '', tone: 'quiet', folded: true });
     }
   });
 
@@ -268,6 +271,24 @@ describe('renders cards', () => {
     const failed = withStatus(doc, { [p2.id]: 'failed', [base.pages[2].id]: 'ready' });
     const three = { ...failed, conversation: [reply('a1', [renders('r_old', [p1.id, p2.id, base.pages[2].id])]), conv[1], conv[2]] };
     expect(summaryById(three, 'r_old')?.text).toBe('Drew 1 page · 1 didn’t finish · 1 being redrawn');
+  });
+
+  it('once settled, the line uses the live card’s rule: an earlier picture put back or a withheld take is never "drawn"', () => {
+    const T = 2_000_000;
+    type Asset = NonNullable<ComicDoc['pages'][number]['render']['asset']>;
+    const asset = (at: number, blocked = false): Asset => ({ path: `p/${at}.png`, source: 'generated', at, ...(blocked ? { safety: { assessed: 'X', at } } : {}) });
+    const withAsset = (doc: ComicDoc, assets: Record<string, Asset>): ComicDoc => ({
+      ...doc,
+      pages: doc.pages.map((p) => (assets[p.id] ? { ...p, render: { ...p.render, status: 'ready' as const, history: [], asset: assets[p.id] } } : p))
+    });
+    const card = (ids: string[]): Card => ({ type: 'renders', id: 'r_run', targets: ids.map(page), label: 'Drawing', since: T });
+    // Stop before anything landed: both pages show the pictures from before the run, then the person moves on.
+    const stopped = withAsset({ ...base, conversation: [reply('a1', [card([p1.id, p2.id])]), user('u1', 'ok')] }, { [p1.id]: asset(T - 10), [p2.id]: asset(T - 20) });
+    expect(settleById(stopped, 'r_run')?.state).toBe('settled');
+    expect(summaryById(stopped, 'r_run')?.text).toBe('Nothing was drawn · 2 kept earlier pictures');
+    // One page drawn by the run, one take withheld by the content check.
+    const withheld = withAsset({ ...base, conversation: [reply('a1', [card([p1.id, p2.id])]), user('u1', 'ok')] }, { [p1.id]: asset(T + 10), [p2.id]: asset(T + 20, true) });
+    expect(summaryById(withheld, 'r_run')?.text).toBe('Drew 1 page · 1 withheld');
   });
 
   it('a card whose own run is still drawing stays live, even under a newer card for other pictures', () => {

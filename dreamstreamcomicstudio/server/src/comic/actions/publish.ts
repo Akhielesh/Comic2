@@ -19,14 +19,17 @@ type A<T extends StudioAction['type']> = Extract<StudioAction, { type: T }>;
 const done = (message: string): StartedAction => ({ outcome: { status: 'done', message }, done: Promise.resolve() });
 const blocked = (message: string, code?: StudioError['code']): StartedAction => ({ outcome: { status: 'blocked', message, ...(code ? { code } : {}) }, done: Promise.resolve() });
 
-/** Say it: into the director's message when collecting, else as a new assistant message. */
-function say(ctx: StudioContext, opts: RunActionOptions, text: string, tone: 'success' | 'info' | 'warn' | 'error', extra: Card[] = []): void {
+/**
+ * Say it: into the director's message when collecting, else as a new assistant message. `runAt` is when the publish
+ * started (Msg.runAt): its result, landing after the store answered, never moves the chat past a question asked meanwhile.
+ */
+function say(ctx: StudioContext, opts: RunActionOptions, text: string, tone: 'success' | 'info' | 'warn' | 'error', extra: Card[] = [], runAt?: number): void {
   const cards: Card[] = [{ type: 'notice', id: newId('card'), tone, text }, ...extra];
   if (opts?.collectCard) {
     cards.forEach((c) => opts.collectCard!(c));
     return;
   }
-  const msg: Msg = { id: newId('msg'), role: 'assistant', text, at: Date.now(), cards };
+  const msg: Msg = { id: newId('msg'), role: 'assistant', text, at: Date.now(), cards, ...(typeof runAt === 'number' ? { runAt } : {}) };
   ctx.session.commit([{ op: 'message', msg }], { origin: 'job' });
 }
 
@@ -47,6 +50,7 @@ const publishAction: ActionHandler<A<'publish'>> = {
   type: 'publish',
   spend: false,
   async run(ctx, action, opts) {
+    const runAt = Date.now();
     setCard(ctx, action.cardId, { status: 'running' });
     try {
       const { view, blockers, firstTime } = await publishWithOutcome(ctx, action.request);
@@ -58,14 +62,14 @@ const publishAction: ActionHandler<A<'publish'>> = {
       const text = firstTime
         ? `Published! ${who.charAt(0).toUpperCase()}${who.slice(1)} can read it — read-only${view.allowDownload ? ', with downloads' : ''}.${coverLeftOut} ${view.url ?? ''}`.trim()
         : `Updated — readers now see your latest version.${coverLeftOut} ${view.url ?? ''}`.trim();
-      say(ctx, opts, text, 'success', [{ type: 'share', id: newId('card') }]);
+      say(ctx, opts, text, 'success', [{ type: 'share', id: newId('card') }], runAt);
       return done(text);
     } catch (err) {
       const message = errorText(err);
       const details = err instanceof PublishError ? err.details : undefined;
       const blockers = Array.isArray(details?.blockers) ? (details!.blockers as NonNullable<Extract<Card, { type: 'publish' }>['result']>['blockers']) : undefined;
       setCard(ctx, action.cardId, { status: 'failed', result: { error: message, ...(blockers?.length ? { blockers } : {}) } });
-      say(ctx, opts, message, err instanceof PublishError && err.reason === 'SAFETY_BLOCKED' ? 'warn' : 'error');
+      say(ctx, opts, message, err instanceof PublishError && err.reason === 'SAFETY_BLOCKED' ? 'warn' : 'error', [], runAt);
       return blocked(message, codeOf(err));
     }
   }
@@ -75,17 +79,18 @@ const updateAction: ActionHandler<A<'update_publication'>> = {
   type: 'update_publication',
   spend: false,
   async run(ctx, action, opts) {
+    const runAt = Date.now();
     setCard(ctx, action.cardId, { status: 'running' });
     try {
       const view = await updatePublication(ctx, action.patch);
       setCard(ctx, action.cardId, { status: 'done', result: view.url ? { url: view.url } : {} });
       const text = `Link settings saved${action.patch.visibility ? ` — it's now ${view.visibility === 'public' ? 'in the Library + link' : 'Link only'}` : ''}.`;
-      say(ctx, opts, text, 'success');
+      say(ctx, opts, text, 'success', [], runAt);
       return done(text);
     } catch (err) {
       const message = errorText(err);
       setCard(ctx, action.cardId, { status: 'failed', result: { error: message } });
-      say(ctx, opts, message, 'error');
+      say(ctx, opts, message, 'error', [], runAt);
       return blocked(message, codeOf(err));
     }
   }
@@ -95,17 +100,18 @@ const unpublishAction: ActionHandler<A<'unpublish'>> = {
   type: 'unpublish',
   spend: false,
   async run(ctx, action, opts) {
+    const runAt = Date.now();
     setCard(ctx, action.cardId, { status: 'running' });
     try {
       await unpublish(ctx);
       setCard(ctx, action.cardId, { status: 'done', result: {} });
       const text = 'Unpublished. The link no longer works for anyone. Publishing again creates a new link.';
-      say(ctx, opts, text, 'info');
+      say(ctx, opts, text, 'info', [], runAt);
       return done(text);
     } catch (err) {
       const message = errorText(err);
       setCard(ctx, action.cardId, { status: 'failed', result: { error: message } });
-      say(ctx, opts, message, 'error');
+      say(ctx, opts, message, 'error', [], runAt);
       return blocked(message, codeOf(err));
     }
   }
@@ -115,17 +121,18 @@ const regenerateAction: ActionHandler<A<'regenerate_link'>> = {
   type: 'regenerate_link',
   spend: false,
   async run(ctx, action, opts) {
+    const runAt = Date.now();
     setCard(ctx, action.cardId, { status: 'running' });
     try {
       const view = await regenerateLink(ctx);
       setCard(ctx, action.cardId, { status: 'done', result: view.url ? { url: view.url } : {} });
       const text = `New link ready — the old one has stopped working. ${view.url ?? ''}`.trim();
-      say(ctx, opts, text, 'success', [{ type: 'share', id: newId('card') }]);
+      say(ctx, opts, text, 'success', [{ type: 'share', id: newId('card') }], runAt);
       return done(text);
     } catch (err) {
       const message = errorText(err);
       setCard(ctx, action.cardId, { status: 'failed', result: { error: message } });
-      say(ctx, opts, message, 'error');
+      say(ctx, opts, message, 'error', [], runAt);
       return blocked(message, codeOf(err));
     }
   }

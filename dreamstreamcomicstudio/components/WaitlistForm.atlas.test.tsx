@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The interest form on an Atlas surface (the sign-in card's "Register interest", qa scene `auth-access`): no comic
 // chrome or orange reaches the DOM (the layout smoke's legacy-kit check), every field is a ds primitive inside a
-// labelled Field, each checklist row is a 44 px target under a coarse pointer, and an error is an alert that clears
+// labelled Field, each quick pick and the keep-me-updated row is a 44 px target under a coarse pointer, and an error is an alert that clears
 // when the email is edited. WaitlistForm.test.tsx covers the questions, the payload and the thank-you.
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -29,24 +29,25 @@ const emailField = () => screen.getByRole('textbox', { name: /Email address/ });
 const fill = (email: string) => fireEvent.change(emailField(), { target: { value: email } });
 
 describe('WaitlistForm on an Atlas surface (the sign-in card’s "Register interest")', () => {
-  it('ds fields and button, no comic chrome or orange, every checklist row a 44 px target under a coarse pointer', () => {
+  it('ds fields and button, no comic chrome or orange, every pick and the box a 44 px target under a coarse pointer', () => {
     const { container } = render(<WaitlistForm kind="access" />);
     expect(container.innerHTML).not.toMatch(LEGACY);
     expect(container.innerHTML).not.toMatch(/orange|amber|hue-3|#[0-9a-f]{6}\b/i);
     expect(emailField()).toHaveAttribute('type', 'email');
     expect(emailField()).toBeRequired();
-    for (const field of container.querySelectorAll('input:not([type="checkbox"]), textarea')) {
+    for (const field of container.querySelectorAll('input:not([type="checkbox"]), textarea, select')) {
       expect(field.closest('[data-slot="field"]')).not.toBeNull();
     }
-    expect(screen.getByRole('textbox', { name: /Anything you would like/ })).toHaveAttribute('data-slot', 'textarea');
+    expect(screen.getByRole('textbox', { name: /Anything else/ })).toHaveAttribute('data-slot', 'textarea');
+    expect(screen.getByRole('combobox', { name: /How did you hear/ }).closest('[data-slot="select"]')).not.toBeNull();
     const submit = screen.getByRole('button', { name: 'Register interest' });
     expect(submit).toHaveAttribute('data-slot', 'button');
-    const rows = [
-      ...screen.getByRole('group', { name: /What would you use/ }).querySelectorAll('[data-slot="checkbox-row"]'),
-      ...screen.getByRole('group', { name: /Other studios/ }).querySelectorAll('[data-slot="checkbox-row"]')
-    ];
-    expect(rows).toHaveLength(8);
-    for (const row of rows) for (const cls of DENSITY.coarse.split(' ')) expect(row.className.split(/\s+/)).toContain(cls);
+    const picks = [...screen.getByRole('group', { name: /What would you like to make/ }).querySelectorAll('label')];
+    expect(picks).toHaveLength(5);
+    const box = screen.getByRole('checkbox', { name: /Keep me updated/ }).closest('[data-slot="checkbox-row"]')!;
+    for (const row of [...picks, box]) for (const cls of DENSITY.coarse.split(' ')) expect(row.className.split(/\s+/)).toContain(cls);
+    // Keyboard focus shows on the pick itself (the native box inside is visually hidden).
+    for (const pick of picks) expect(pick.className).toMatch(/has-\[:focus-visible\]:outline/);
   });
 
   it('an error is an alert with its words, and editing the email clears it', async () => {

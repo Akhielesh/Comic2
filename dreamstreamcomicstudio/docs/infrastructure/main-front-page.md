@@ -65,8 +65,8 @@ handoff into the main app whose destination is the front page (`server/src/servi
 
 No browser has the hint before this release: only the main app writes it, while a member is signed in there. So a
 member's first visit to `https://dreamstreamstudio.ai/` after the release opens Comic Studio, where they are signed
-out (sessions are per host). The comics sign-in card says so in one quiet line, "The other DreamStream studios are
-on the main site. Sign in there", which opens `/?home=1`; signing in (or simply opening any main-site page while
+out (sessions are per host). The comics sign-in card says so in one quiet line, "Have a DreamStream account on the
+main site? Sign in there", which opens `/?home=1` (it is not shown under the Register interest card); signing in (or simply opening any main-site page while
 still signed in there) sets the hint, and from then on the bare address serves their own front page.
 
 ## Member hint cookie

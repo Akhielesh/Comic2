@@ -99,6 +99,18 @@ describe('conversationForDirector outcomes (SETTLE-CORE #2 (e), amendment A)', (
     expect(out).not.toMatch(/options: [^\]]*; /);
   });
 
+  it('a question only assistant turns followed (a job outcome with next steps) still reads as asked, never "no option picked"', () => {
+    // The server's answer rule still takes the creator's next message as this question's answer (recordOptionAnswer).
+    const later: Msg = { ...msg('a2', 'assistant', 'Pages drawn.'), nextSteps: [{ label: 'Read it', client: { type: 'open_reader' }, usd: 0 }] };
+    const doc: ComicDoc = { ...plannedDoc(), conversation: [msg('u0', 'user', 'start'), msg('a1', 'assistant', 'Pick one.', [optionsCard()]), later] };
+    const out = text(doc, true);
+    expect(out).toContain('[asked: Which ink? — options: Noir ink / Bright ink]');
+    expect(out).not.toContain('no option picked');
+    // A user message after it still passes it.
+    const typed: ComicDoc = { ...doc, conversation: [...doc.conversation, msg('u1', 'user', 'something else')] };
+    expect(text(typed, true)).toContain('; no option picked]');
+  });
+
   it('the outcome is judged on the window: a passed card at the start of a long conversation keeps its own index', () => {
     const doc = approved(0.42);
     const filler = Array.from({ length: 30 }, (_, i) => msg(`f${i}`, i % 2 ? 'assistant' : 'user', `m${i}`));

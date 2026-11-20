@@ -664,6 +664,8 @@ const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcom
 /** Run an approved translation (background; `done` settles when every edition finished). */
 export async function runTranslation(ctx: StudioContext, action: TranslateAction, opts: RunActionOptions): Promise<StartedAction> {
   const doc = ctx.session.doc;
+  // The run's messages say when it started (Msg.runAt): its result never moves the chat past a question asked meanwhile.
+  const runAt = Date.now();
   // Every price this run words — start, completion, notices, the outcome — is worded for this user.
   const view = viewFor(ctx, opts);
   const fmt = costFormatter(view);
@@ -740,7 +742,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   let startMsgId: string | undefined;
   if (opts.collectCard) opts.collectCard(card);
   else {
-    const msg = message(startText, [card]);
+    const msg: Msg = { ...message(startText, [card]), runAt };
     startMsgId = msg.id;
     ctx.session.commit([{ op: 'message', msg }], { origin: 'job' });
   }
@@ -792,7 +794,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
       if (startMsgId && done.conversation.some((m) => m.id === startMsgId)) {
         ops.push({ op: 'message_patch', id: startMsgId, patch: { text: `${startText} The result is below.` } });
       }
-      ops.push({ op: 'message', msg: message(text, startMsgId ? [translationCard(codes)] : undefined, nextSteps) });
+      ops.push({ op: 'message', msg: { ...message(text, startMsgId ? [translationCard(codes)] : undefined, nextSteps), runAt } });
       ctx.session.commit(ops, { origin: 'job' });
     }
     const usd = round4(results.reduce((s, r) => s + r.usd, 0));

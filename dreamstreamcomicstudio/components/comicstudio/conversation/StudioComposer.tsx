@@ -1725,7 +1725,9 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               ref={chipsRef}
               onScroll={measureChips}
               className={cx(
-                'flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5',
+                // `relative`: the chips' screen-reader words (sr-only, absolutely placed) scroll and clip with the strip
+                // instead of escaping it and widening the page (a phone in landscape scrolled sideways by 54 px).
+                'relative flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5',
                 chipsClipped.end && chipsClipped.start
                   ? '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]'
                   : chipsClipped.end

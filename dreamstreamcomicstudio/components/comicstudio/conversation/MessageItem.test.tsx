@@ -213,19 +213,19 @@ describe('AssistantMessage — next-step chips', () => {
     expect(fit.textContent?.match(/Free/g)).toHaveLength(1);
   });
 
-  it('a running action chip never freezes the others (a render streams for minutes)', async () => {
+  it('a tapped action chip settles the row while it runs (Q-SETTLE): one line, no second tap; the chips come back if nothing was posted', async () => {
     let finish: () => void = () => undefined;
     const studio = dispatchingStudio();
     studio.act.mockImplementation(() => new Promise<void>((r) => (finish = r)));
     render(<AssistantMessage msg={msg('Page 1 is ready.', { nextSteps: steps })} showSuggestions studio={studio} />);
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' })).toBeDisabled());
-    // a second tap on the same chip is ignored while it runs
-    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' }));
+    const group = screen.getByRole('group', { name: 'Next steps' });
+    expect(group.textContent).toBe('You chose: Make the cover');
+    expect(within(group).queryAllByRole('button')).toHaveLength(0);
     expect(studio.act).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Read it, Free' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Make it funnier' })).toBeEnabled();
     finish();
+    // Here nothing posted a message (the real run posts its progress, which takes this row away): the chips return.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Read it, Free' })).toBeEnabled();
   });
 });

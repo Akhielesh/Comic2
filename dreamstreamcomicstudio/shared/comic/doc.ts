@@ -1155,7 +1155,9 @@ export type Card =
   | { type: 'cast'; id: string; characterIds: string[] }
   | { type: 'plan'; id: string }
   | { type: 'gate'; id: string; gateId: string }
-  | { type: 'renders'; id: string; targets: RenderTarget[]; label: string }
+  /** `since` (ms): when the run queued its targets (server clock). A picture stored before it was not drawn by this run
+   *  (a stopped redraw put the earlier one back, or an earlier take was reused). Absent on cards made before it existed. */
+  | { type: 'renders'; id: string; targets: RenderTarget[]; label: string; since?: number }
   /** `fixes` (plan §5.1): chips under the notice, free first; a paid one carries `quotedUsd` on its action and goes
    *  through the existing spend gate. */
   | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string; fixes?: NoticeFix[] }
@@ -1236,6 +1238,12 @@ export interface Msg {
   nextSteps?: NextStep[];
   /** A user note sent while the director was working ("Added while the director was working"; agent-editor plan §3 A2). */
   steered?: true;
+  /**
+   * Posted by background work (a render run, a translation, a publish, the request's closing notice), which started at
+   * this time. Such a message does not move the chat past a card posted after the work started unless it asks something
+   * itself (shared/comic/settle.ts movesOn): a render that finishes never closes a question asked while it drew.
+   */
+  runAt?: number;
 }
 
 export interface ComicDoc {

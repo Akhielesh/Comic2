@@ -9,22 +9,31 @@
 // on the fly. The chip's accessible name is its visible text (label + price), so voice-control
 // users can say what they see.
 //
-// Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): the latest reply's chips stay
-// visible while the director works. A text chip tapped then goes to Up next (send() queues it) instead of doing
-// nothing; a chip that runs an action waits until the turn is free, so nothing spends behind the director's back;
-// client chips (open the reader, a tab, undo) never reach the server and stay live.
+// Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): while a run holds the turn with
+// nothing sent (plan_pages), a text chip tapped goes to Up next (send() queues it) instead of doing nothing; a chip that
+// runs an action waits until the turn is free, so nothing spends behind the director's back; client chips (open the
+// reader, a tab, undo) never reach the server and stay live.
+//
+// Q-SETTLE (the options vanish once the creator has answered): the chips are live only while their reply is the newest
+// ask and nothing was sent (ConversationPane). A tap on a chip that does something (sends words or runs an action)
+// collapses the row at once to one line, "You chose: Make the cover", while it runs; the message it posts then takes the
+// row away for good. A refused tap brings the chips back. Two collapses are read from live state, so a reload agrees: a
+// text chip already waiting in Up next, and a free edit chip whose edit is already in the comic (a `patch` posts no
+// message, so the doc is what remembers the choice; its alternatives go with it). A free edit whose page is gone is not
+// offered. Navigation chips (Read it, See the pages) never collapse the row: they answer nothing.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 import { isPageStale, isValidNextStep, type ComicDoc, type Msg, type NextStep, type StudioTab } from '../../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../../shared/comic/limits';
-import { SPEND_ACTION_TYPES } from '../../../../shared/comic/ops';
+import { SPEND_ACTION_TYPES, type DocOp } from '../../../../shared/comic/ops';
 import type { ComicStudioController } from '../../useStudio';
 import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
 import { costFormat, useCostFormat, type CostFormat } from '../cost';
-import { TONE_CHIP } from '../../../chat/studioDesign';
+import { MUTED, TONE_CHIP } from '../../../chat/studioDesign';
 import { ChipButton, cx } from '../ui';
 import { hasRecap } from './recap';
+import { patchStateOf, type PatchState } from './patchState';
 
 /** A chip as rendered: a structured step, or a legacy string that is simply sent. */
 export interface ChipModel {
@@ -154,6 +163,24 @@ export const freeTitle = (step: NextStep): string => {
 /** Text chips go to the director, so they wait while a turn is streaming (or queue, with the live queue on). */
 export const sendsText = (c: ChipModel) => c.legacy || (!c.step.action && !c.step.client);
 
+/** The words a text chip sends (runNextStep: its `say`, else its label). */
+export const chipText = (c: ChipModel): string => ((!c.legacy && typeof c.step.say === 'string' && c.step.say.trim() ? c.step.say : c.step.label) || '').trim();
+
+/** A chip that answers the reply (sends words or runs an action); navigation chips (Read it, a tab) answer nothing. */
+export const answersReply = (c: ChipModel): boolean => sendsText(c) || !!c.step.action;
+
+const sameWords = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Where a free edit chip's edit stands in the live doc ('live' for any other chip). */
+const chipPatchState = (c: ChipModel, doc: ComicDoc | null | undefined): PatchState =>
+  doc && c.step.action?.type === 'patch' ? patchStateOf(doc, (c.step.action as { ops?: DocOp[] }).ops) : 'live';
+
+/** A free edit chip whose edit is already in the comic (or whose page is gone): it is not offered as a button again. */
+export const chipAlreadyDone = (c: ChipModel, doc: ComicDoc | null | undefined): boolean => chipPatchState(c, doc) !== 'live';
+
+/** The free edit chip the creator chose: its edit is in the comic now (the row reads it as the choice, after a reload too). */
+export const chipChosenInDoc = (c: ChipModel, doc: ComicDoc | null | undefined): boolean => chipPatchState(c, doc) === 'done';
+
 /**
  * Whether a chip is unavailable right now. Without the live queue a text chip waits for the director (and for a text
  * chip already on its way). With it, a text chip queues instead and only an action chip waits for the turn lock.
@@ -164,10 +191,12 @@ export const chipDisabled = (chip: ChipModel, opts: { pending: boolean; textPend
   return sendsText(chip) && (opts.messageBusy || opts.textPending);
 };
 
-export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioController; className?: string }> = ({ chips, studio, className }) => {
-  // Per chip: a long-running action (a render streams until it lands) must not freeze the
-  // other chips — "Read it" stays tappable while "Make the cover" draws.
+export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioController; className?: string }> = ({ chips: offered, studio, className }) => {
+  // Per chip: a long-running navigation (opening the reader) never freezes the others, and a chip that is running cannot
+  // be tapped twice. A chip that answers the reply collapses the whole row while it runs (below).
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  // Q-SETTLE: the chip the creator tapped, while it runs (the row reads one line until its message takes the row away).
+  const [chosen, setChosen] = useState<string | null>(null);
   const cost = useCostFormat(studio);
   const pendingRef = useRef(new Set<string>());
   const mounted = useRef(true);
@@ -179,12 +208,48 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
       mounted.current = false;
     };
   }, []);
-  if (!chips.length) return null;
+  // Keys come from the offered row (label and place), before anything is left out: a doc update that retires another
+  // chip never shifts them, so `pending` and `chosen` keep pointing at the chip that was tapped.
+  const keyed = offered.map((chip, i) => ({ chip, key: `${chip.step.label}:${i}` }));
+  // A free edit already in the comic is the creator's choice: the whole row reads it (from the live doc, so a reload and a
+  // second tab agree). One whose page is gone is simply not offered.
+  const doneInDoc = keyed.find((k) => chipChosenInDoc(k.chip, studio.doc));
+  const live = keyed.filter((k) => !chipAlreadyDone(k.chip, studio.doc));
+  if (!doneInDoc && !live.length) return null;
+  // A text chip already waiting in Up next answered this reply too (the queue is the controller's, kept per project).
+  const queuedTexts = queueMode ? (studio.queue || []).map((n) => (typeof n?.text === 'string' ? n.text : '')).filter(Boolean) : [];
+  const queued = live.find((k) => sendsText(k.chip) && queuedTexts.some((t) => sameWords(t, chipText(k.chip))));
+  const tapped = chosen !== null ? keyed.find((k) => k.key === chosen) : undefined;
+  const settledOn = tapped ?? doneInDoc ?? queued;
+  if (settledOn) {
+    const chip = settledOn.chip;
+    const running = !!tapped && pending.has(tapped.key);
+    const label = chipLabel(chip.step.label, priceBadge(chipUsd(chip.step), cost));
+    return (
+      <div
+        className={cx('flex min-h-7 min-w-0 items-center gap-2 pt-0.5 coarse:min-h-11', className)}
+        role="group"
+        aria-label="Next steps"
+        aria-busy={running || undefined}
+        data-chips-settled=""
+      >
+        <span aria-hidden className="grid size-3.5 shrink-0 place-items-center">
+          {running ? <Loader2 className={cx('size-3.5 animate-spin motion-reduce:animate-none', MUTED)} /> : <Check className={cx('size-3.5', MUTED)} strokeWidth={2.5} />}
+        </span>
+        <span className="min-w-0 text-[13px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
+          You chose: <span className="text-[var(--ds-ink)]">{label}</span>
+          {settledOn === queued && !tapped ? ' · Up next' : ''}
+        </span>
+      </div>
+    );
+  }
 
   const tap = async (chip: ChipModel, key: string) => {
     if (pendingRef.current.has(key)) return;
     pendingRef.current.add(key);
     setPending(new Set(pendingRef.current));
+    // Answering the reply collapses the row at once; navigating does not.
+    if (answersReply(chip)) setChosen(key);
     try {
       if (chip.legacy) await studio.send(chip.step.label);
       else await studio.runNextStep(stepToRun(chip.step));
@@ -192,14 +257,19 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
       console.warn('[comicstudio] next step failed', err);
     } finally {
       pendingRef.current.delete(key);
-      if (mounted.current) setPending(new Set(pendingRef.current));
+      if (mounted.current) {
+        setPending(new Set(pendingRef.current));
+        // Done: the message it posted has already taken this row away (only the newest reply shows chips), or a free edit
+        // is now in the comic, which keeps the row at its one line. Still here otherwise means it was refused: the chips
+        // come back.
+        setChosen((cur) => (cur === key ? null : cur));
+      }
     }
   };
 
   return (
     <div className={cx('flex flex-wrap gap-2 pt-0.5', className)} role="group" aria-label="Next steps">
-      {chips.map((chip, i) => {
-        const key = `${chip.step.label}:${i}`;
+      {live.map(({ chip, key }) => {
         const usd = chipUsd(chip.step);
         const badge = priceBadge(usd, cost);
         const label = chipLabel(chip.step.label, badge);
@@ -207,7 +277,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
         // Text chips wait for the director (or queue into Up next); a second text chip waits for the first one's turn.
         const disabled = chipDisabled(chip, {
           pending: busy,
-          textPending: chips.some((c, j) => sendsText(c) && pending.has(`${c.step.label}:${j}`)),
+          textPending: live.some((k) => sendsText(k.chip) && pending.has(k.key)),
           messageBusy: studio.messageBusy,
           queueMode,
           turnLocked

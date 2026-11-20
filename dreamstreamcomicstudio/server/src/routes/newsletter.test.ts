@@ -2,7 +2,8 @@
 // POST /api/newsletter/subscribe and GET /api/newsletter/confirm: registering interest sends
 // no email unless INTEREST_EMAILS is exactly "on", every valid address gets the same answer
 // (no account or invite lookup a caller could observe), and the optional answers are
-// validated and capped on the server.
+// validated and capped on the server. The "keep me updated" box is stored as an explicit consent flag with
+// its time and starts no email of its own.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { AddressInfo } from 'net';
@@ -49,7 +50,7 @@ const turnstile = vi.hoisted(() => ({ verifyTurnstile: vi.fn(async () => true) }
 vi.mock('../services/turnstile.js', () => turnstile);
 
 const { newsletterRouter, NEUTRAL_REPLY } = await import('./newsletter.js');
-const { INTEREST_LIMITS } = await import('../../../shared/interest.js');
+const { INTEREST_LIMITS, INTEREST_THANKS, INTEREST_UPDATES } = await import('../../../shared/interest.js');
 
 const app = express();
 app.use(express.json());
@@ -124,6 +125,14 @@ describe('no email while INTEREST_EMAILS is not "on"', () => {
     expect(sendCount()).toBe(0);
   });
 
+  it('ticking "keep me updated" sends nothing either', async () => {
+    for (const c of CASES) {
+      store.upsertSubscriber.mockResolvedValueOnce({ outcome: c.outcome });
+      expect((await post({ email: c.email, kind: 'access', keepUpdated: true })).status).toBe(200);
+    }
+    expect(sendCount()).toBe(0);
+  });
+
   it('the confirm link still confirms, without the welcome email', async () => {
     const res = await fetch(`${base}/api/newsletter/confirm?e=a%40example.com&t=abc`, { redirect: 'manual' });
     expect(res.status).toBe(302);
@@ -146,6 +155,16 @@ describe('INTEREST_EMAILS=on', () => {
     await post({ email: 'repeat@example.com', kind: 'access' });
     expect(mailer.sendAccessRequested).toHaveBeenCalledTimes(1);
     expect(invites.resendPendingInvite).not.toHaveBeenCalled();
+  });
+
+  it('the "keep me updated" box starts no email path of its own (the same mail as an unticked form)', async () => {
+    await post({ email: 'new@example.com', kind: 'access', keepUpdated: false });
+    const unticked = mailer.sendAccessRequested.mock.calls.length + mailer.sendNewsletterConfirm.mock.calls.length + mailer.sendNewsletterWelcome.mock.calls.length;
+    for (const fn of Object.values(mailer)) fn.mockClear();
+    await post({ email: 'new@example.com', kind: 'access', keepUpdated: true });
+    expect(mailer.sendNewsletterConfirm).not.toHaveBeenCalled();
+    expect(mailer.sendNewsletterWelcome).not.toHaveBeenCalled();
+    expect(sendCount()).toBe(unticked);
   });
 
   it('an updates row gets the confirm email; the confirm link sends the welcome', async () => {
@@ -209,6 +228,18 @@ describe('one neutral answer for every address', () => {
     expect(answered.body.message).toMatch(/Your answers help shape what we build next\.$/);
   });
 
+  it('a ticked box adds the truthful updates line, the same for every address', async () => {
+    const answers = [];
+    for (const c of CASES) {
+      store.upsertSubscriber.mockResolvedValueOnce({ outcome: c.outcome });
+      answers.push(await post({ email: c.email, kind: 'access', keepUpdated: true }));
+    }
+    for (const a of answers) {
+      expect(a).toEqual({ status: 200, body: { ok: true, status: 'registered', message: `${INTEREST_THANKS.access} ${INTEREST_THANKS.keptUpdated}` } });
+      expect(a.body.message).not.toMatch(/email|inbox|account|invite|already/i);
+    }
+  });
+
   it('a store failure answers 503, never a success', async () => {
     store.upsertSubscriber.mockRejectedValueOnce(new Error('db down'));
     const res = await post({ email: 'new@example.com', kind: 'access' });
@@ -226,50 +257,104 @@ describe('one neutral answer for every address', () => {
 });
 
 describe('optional answers: validated and capped on the server', () => {
+  const AT = '2026-11-19T10:00:00.000Z';
+  beforeEach(() => {
+    // Only the clock is fixed (the server stamps the consent time); timers stay real for the HTTP round trip.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(AT));
+  });
+  afterEach(() => vi.useRealTimers());
+
   const stored = () => {
     const call = store.upsertSubscriber.mock.calls[0] as unknown[];
     return { metadata: call[3] as Record<string, unknown>, intent: call[4] as Record<string, unknown> };
   };
+  const consent = (updates: boolean) => ({ updates, at: AT, wording: INTEREST_UPDATES.label });
 
-  it('email alone stores no answers', async () => {
-    await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access' });
+  it('email alone (the form sends the unticked box as false) stores no answers, and an explicit "no" to updates', async () => {
+    await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access', keepUpdated: false });
+    expect(stored()).toEqual({ metadata: { source: 'auth-request-access', consent: consent(false) }, intent: {} });
+  });
+
+  it('a request that never carried the box (a tab opened before it existed) records no choice, not a "no"', async () => {
+    const res = await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access' });
+    expect(res.body).toEqual(NEUTRAL_REPLY.access);
     expect(stored()).toEqual({ metadata: { source: 'auth-request-access' }, intent: {} });
   });
 
-  it('keeps known ids once, drops unknown ones, cleans control characters, keeps the comment line breaks', async () => {
+  it('the list card (kind updates) carries no consent flag', async () => {
+    await post({ email: 'new@example.com', kind: 'updates', source: 'home-stay-updated', keepUpdated: true });
+    expect(stored().metadata).toEqual({ source: 'home-stay-updated' });
+  });
+
+  it('stores the new questions: first name, what they would like to make, how they heard, anything else, the box', async () => {
     await post({
       email: 'new@example.com',
       kind: 'access',
+      source: 'landing',
       firstName: ' Asha\u0007 ',
-      features: ['chat', 'translations', 'chat', 'teleport', 42, 'print'],
-      featureOther: 'Voice\u0000 \u202Eacting',
-      studios: ['code_studio', 'mind_reading', 'code_studio'],
-      comment: 'Line one\r\nLine two\u001b\n\n\n\nLast\tline'
+      makes: ['kids', 'pitch', 'kids', 'teleport', 42, 'work'],
+      heardFrom: 'linkedin',
+      comment: 'Line one\r\nLine two\u001b\n\n\n\nLast\tline',
+      keepUpdated: true
     });
     expect(stored().metadata).toEqual({
+      source: 'landing',
       answers: {
-        v: 1,
-        features: ['chat', 'translations', 'print'],
-        other: 'Voice acting',
-        studios: ['code_studio'],
+        v: 2,
+        makes: ['kids', 'pitch', 'work'],
+        heardFrom: 'linkedin',
         comment: 'Line one\nLine two\n\nLast line',
         firstName: 'Asha'
-      }
+      },
+      consent: consent(true)
     });
-    expect(stored().intent).toEqual({ productInterests: ['code_studio'], feedback: 'Line one\nLine two\n\nLast line' });
+    // The note also lands in the existing feedback column; nothing goes to product_interests any more.
+    expect(stored().intent).toEqual({ feedback: 'Line one\nLine two\n\nLast line' });
   });
 
-  it('stores exactly the shape the form\'s direct save writes (shared interestMetadata)', async () => {
-    const answers = { features: ['series'], featureOther: 'Voice', studios: ['dashboards'], comment: 'Note', firstName: 'Ravi' };
+  it('only a real true is a yes, a real false is a no, and anything else records no choice (never a yes)', async () => {
+    for (const keepUpdated of [undefined, 'true', 'on', 1, null, ['yes']]) {
+      store.upsertSubscriber.mockClear();
+      const res = await post({ email: 'new@example.com', kind: 'access', keepUpdated });
+      expect(res.status).toBe(200);
+      expect(stored().metadata, String(keepUpdated)).not.toHaveProperty('consent');
+      expect(res.body.message).not.toContain(INTEREST_THANKS.keptUpdated);
+    }
+    store.upsertSubscriber.mockClear();
+    await post({ email: 'new@example.com', kind: 'access', keepUpdated: false });
+    expect(stored().metadata.consent).toEqual(consent(false));
+    store.upsertSubscriber.mockClear();
+    await post({ email: 'new@example.com', kind: 'access', keepUpdated: true });
+    expect(stored().metadata.consent).toEqual(consent(true));
+  });
+
+  it('an unknown "how did you hear" is dropped, not stored', async () => {
+    await post({ email: 'new@example.com', kind: 'access', heardFrom: 'billboard', keepUpdated: false });
+    expect(stored().metadata).toEqual({ consent: consent(false) });
+  });
+
+  it("stores exactly the shape the form's direct save writes (shared interestMetadata)", async () => {
+    const answers = { makes: ['webcomic'], heardFrom: 'search', comment: 'Note', firstName: 'Ravi', keepUpdated: true };
     await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access', ...answers });
     const { interestMetadata } = await import('../../../shared/interest.js');
-    expect(stored().metadata).toEqual(interestMetadata('auth-request-access', answers as never));
+    expect(stored().metadata).toEqual(interestMetadata('auth-request-access', answers as never, AT));
   });
 
-  it('older forms still work: `productInterests` studio picks and `feedback` are read', async () => {
-    await post({ email: 'new@example.com', kind: 'access', productInterests: ['comic_studio', 'nope'], feedback: 'Hi' });
-    expect(stored().intent).toEqual({ productInterests: ['comic_studio'], feedback: 'Hi' });
-    expect(stored().metadata).toEqual({ answers: { v: 1, studios: ['comic_studio'], comment: 'Hi' } });
+  it("still accepts an old open tab's payload: its studio, feature and something-else picks are not stored, its name and note are marked as the old set's, and no box choice is made up", async () => {
+    const res = await post({
+      email: 'new@example.com',
+      kind: 'access',
+      firstName: 'Old',
+      features: ['chat', 'translations'],
+      featureOther: 'x'.repeat(500),
+      studios: Array.from({ length: 40 }, () => 'dashboards'),
+      productInterests: ['comic_studio'],
+      feedback: 'Hi'
+    });
+    expect(res).toEqual({ status: 200, body: { ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers } });
+    expect(stored().intent).toEqual({ feedback: 'Hi' });
+    expect(stored().metadata).toEqual({ answers: { v: 1, comment: 'Hi', firstName: 'Old' } });
   });
 
   it('the surface tag is cut, never a reason to refuse', async () => {
@@ -280,11 +365,10 @@ describe('optional answers: validated and capped on the server', () => {
 
   const oversize: Array<[string, Record<string, unknown>]> = [
     ['a comment over the limit', { comment: 'x'.repeat(INTEREST_LIMITS.commentMax + 1) }],
-    ['a "something else" over the limit', { featureOther: 'x'.repeat(INTEREST_LIMITS.otherMax + 1) }],
     ['a first name over the limit', { firstName: 'x'.repeat(INTEREST_LIMITS.firstNameMax + 1) }],
-    ['too many features', { features: Array.from({ length: INTEREST_LIMITS.listMax + 1 }, () => 'chat') }],
-    ['too many studios', { studios: Array.from({ length: INTEREST_LIMITS.listMax + 1 }, () => 'dashboards') }],
-    ['features that are not a list', { features: 'chat' }],
+    ['too many picks', { makes: Array.from({ length: INTEREST_LIMITS.listMax + 1 }, () => 'kids') }],
+    ['picks that are not a list', { makes: 'kids' }],
+    ['a "how did you hear" that is not text', { heardFrom: ['friend'] }],
     ['a first name that is not text', { firstName: 42 }],
     ['a comment that is not text', { comment: { html: '<b>' } }],
     ['an email that is not an email', { email: 'not-an-email' }]

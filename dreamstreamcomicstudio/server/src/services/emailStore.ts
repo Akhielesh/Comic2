@@ -236,26 +236,20 @@ export const newConfirmToken = (): string => crypto.randomBytes(24).toString('he
 
 export type SubscribeOutcome = 'new' | 'pending' | 'already_confirmed' | 'already_registered';
 
-/** Product ids a signup can register interest in (whitelist for the intent capture). */
-export const WAITLIST_PRODUCTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
-
 export interface SubscriberIntent {
-  /** Whitelisted product ids the person wants first access to. */
-  productInterests?: string[];
-  /** Optional free-text "what would you like to see" (capped upstream). */
+  /** Optional free-text note (capped upstream); also kept in the existing feedback column. */
   feedback?: string;
 }
 
-const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string[]; feedback?: string } => {
-  const out: { product_interests?: string[]; feedback?: string } = {};
-  const products = Array.isArray(intent?.productInterests)
-    ? [...new Set(intent!.productInterests.filter((p) => (WAITLIST_PRODUCTS as readonly string[]).includes(p)))]
-    : [];
-  if (products.length) out.product_interests = products;
+const sanitizeIntent = (intent?: SubscriberIntent): { feedback?: string } => {
   const feedback = typeof intent?.feedback === 'string' ? intent.feedback.trim().slice(0, 1000) : '';
-  if (feedback) out.feedback = feedback;
-  return out;
+  return feedback ? { feedback } : {};
 };
+
+type Json = Record<string, unknown>;
+const asObject = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {});
+/** True when a row's (or a request's) metadata holds a yes to updates (`metadata.consent.updates === true`). */
+const saysYesToUpdates = (metadata: unknown): boolean => asObject(asObject(metadata).consent).updates === true;
 
 /** A waitlist write that did not happen (the route answers 503 and the form saves the row itself). */
 const storeFailed = (step: string, error?: { code?: string; message?: string } | null): Error =>
@@ -263,12 +257,16 @@ const storeFailed = (step: string, error?: { code?: string; message?: string } |
 
 /**
  * Store a waitlist signup and return what happened. Idempotent on (lower(email), kind).
- * - A new address gets one row: its metadata and intent (product interests / feedback), unconfirmed.
+ * - A new address gets one row: its metadata and intent (the note), unconfirmed.
  * - An address already on the list keeps its row as it is: rows are keyed by an email the caller
- *   supplies, so a repeat (or a stranger) never replaces the answers stored there. The one exception is
- *   an unconfirmed 'updates' row when `reissueToken` is set (interest emails on, so a fresh confirm link
- *   is about to be sent): only its confirm token and clock are renewed. With emails off nothing is
- *   renewed, so a confirm link sent earlier keeps working.
+ *   supplies, so a repeat (or a stranger) never replaces the answers stored there. Two narrow exceptions:
+ *   - an 'access' row that holds no yes to updates, when this request ticked the box: only `metadata.consent`
+ *     is set to the new yes (answers, feedback and every other key are kept, and a yes is never turned back
+ *     into a no). That adds nothing a stranger could not already do with a new row, and the flag is only a
+ *     request from an unverified address, never a reason to mail it (docs/features/register-interest.md).
+ *   - an unconfirmed 'updates' row when `reissueToken` is set (interest emails on, so a fresh confirm link
+ *     is about to be sent): only its confirm token and clock are renewed. With emails off nothing is
+ *     renewed, so a confirm link sent earlier keeps working.
  * Throws when nothing could be stored (no service role, or the database refused): supabase-js returns
  * its errors instead of throwing, so each one is read here. A unique violation on insert (two requests
  * at once) counts as already on the list.
@@ -277,7 +275,7 @@ export const upsertSubscriber = async (
   email: string,
   kind: 'updates' | 'access',
   token: string,
-  metadata: Record<string, unknown> = {},
+  metadata: Json = {},
   intent?: SubscriberIntent,
   options: { reissueToken?: boolean } = {}
 ): Promise<{ outcome: SubscribeOutcome }> => {
@@ -288,7 +286,7 @@ export const upsertSubscriber = async (
 
   const { data: existing, error: lookupError } = await db
     .from('waitlist_signups')
-    .select('id, confirmed')
+    .select('id, confirmed, metadata')
     .eq('email', normalized)
     .eq('kind', kind)
     .limit(1)
@@ -297,9 +295,20 @@ export const upsertSubscriber = async (
 
   const now = new Date().toISOString();
   if (existing) {
-    const row = existing as { id: string; confirmed?: boolean };
+    const row = existing as { id: string; confirmed?: boolean; metadata?: unknown };
     // 'access' rows have no confirm step: the email is simply already on the list.
-    if (kind === 'access') return { outcome: 'already_registered' };
+    if (kind === 'access') {
+      // A ticked box on a later visit is recorded (the thank-you says they will hear when updates start); the rest
+      // of the row stays as the first visit left it, and a stored yes is never overwritten.
+      if (saysYesToUpdates(metadata) && !saysYesToUpdates(row.metadata)) {
+        const { error: consentError } = await db
+          .from('waitlist_signups')
+          .update({ metadata: { ...asObject(row.metadata), consent: asObject(metadata).consent } })
+          .eq('id', row.id);
+        if (consentError) throw storeFailed('consent update', consentError);
+      }
+      return { outcome: 'already_registered' };
+    }
     if (row.confirmed) return { outcome: 'already_confirmed' };
     if (!options.reissueToken) return { outcome: 'already_registered' };
     // A fresh confirm link is about to be sent: renew the token and restart its expiry clock.
