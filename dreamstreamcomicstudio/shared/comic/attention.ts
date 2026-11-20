@@ -6,7 +6,8 @@
 //
 // Order of checks:
 //  1. approval: an open spend gate (doc.gate.status === 'open');
-//  2. question: in any assistant message since the person's last message, newest first, an open options card with
+//  2. question: in any assistant message since the person's last message, newest first, while the card is still live
+//     by the settle rule (a later agent turn settles it; a message from work already running does not), an open options card with
 //     choices, an unresolved conflict card, a pending publish confirm, or a live model-outage choice;
 //  3. plan: the page plan waits for its OK (planStatus 'draft', at least one page, a live plan card or a breakdown card
 //     that is not a gate's own, and nothing drawing);

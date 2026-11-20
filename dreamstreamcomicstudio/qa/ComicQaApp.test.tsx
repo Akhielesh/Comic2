@@ -265,7 +265,9 @@ describe('?surface=app', () => {
       await settle();
     });
     const crash = document.querySelector('[data-qa-crash]');
-    expect(crash?.getAttribute('data-qa-crash')).toMatch(/^Unknown app scene "nope" \(one of .*recipes/);
+    // The message names the scenes there are (the crash attribute may cut a long list short).
+    expect(crash?.getAttribute('data-qa-crash')).toMatch(/^Unknown app scene "nope" \(one of [a-z0-9-]+, [a-z0-9-]+/);
+    expect(crash?.getAttribute('data-qa-crash')).toContain('auth');
     err.mockRestore();
   });
 

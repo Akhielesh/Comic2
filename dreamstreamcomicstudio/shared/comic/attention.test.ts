@@ -67,8 +67,15 @@ describe('needsYouOf', () => {
     expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [noChoices])] }))).toBeNull();
   });
 
-  it('a question in an older assistant message since the person’s last message still counts', () => {
-    const d = doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [options('o1')]), msg('a2', 'assistant')] });
+  it('a question the agent has since moved on from no longer counts: the card has settled (options go once moved on)', () => {
+    const later = { ...msg('a2', 'assistant'), at: NOW + 1000 };
+    const d = doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [options('o1')]), later] });
+    expect(needsYouOf(d)).toBeNull();
+  });
+
+  it('a question still counts when the only later message comes from work that was already running when it was asked', () => {
+    const background = { ...msg('a2', 'assistant'), at: NOW + 1000, runAt: NOW - 5000 };
+    const d = doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [options('o1')]), background] });
     expect(needsYouOf(d)).toEqual({ why: 'question', key: 'card:a1:o1' });
   });
 
