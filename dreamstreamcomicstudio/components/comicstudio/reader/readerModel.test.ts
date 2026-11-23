@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { clampIndex, defaultReaderMode, isWithheld, keyDelta, readerItems, swipeDelta, tapDelta, viewOfItem } from './readerModel';
+import { clampIndex, isWithheld, keyDelta, readerItems, swipeDelta, tapDelta, viewOfItem } from './readerModel';
 
 const withCover = () =>
   makeSampleDoc((d) => {
@@ -34,7 +34,7 @@ describe('reading order', () => {
     const held = items.filter((i) => isWithheld(i)).map((i) => i.key);
     expect(held).toEqual(['cover', 'pg_2']);
     // Nothing to fetch, sign or preload for a withheld item.
-    for (const it of items.filter((i) => i.withheld)) expect(it.asset.path).toBe('');
+    for (const it of items.filter((i) => i.withheld)) expect(it.asset?.path).toBe('');
     expect(items[2].label).toBe('Page 2');
   });
 });
@@ -71,10 +71,7 @@ describe('navigation', () => {
     expect(clampIndex(2, 0)).toBe(0);
   });
 
-  it('scrolls webtoons by default', () => {
-    expect(defaultReaderMode(makeSampleDoc((d) => (d.format.kind = 'webtoon')))).toBe('scroll');
-    expect(defaultReaderMode(makeSampleDoc())).toBe('page');
-  });
+
 });
 
 describe('v5 helpers: deep links, chapters, withheld pages', () => {

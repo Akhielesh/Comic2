@@ -62,6 +62,8 @@ export interface ComicPageViewProps {
   /** Image loading hint (lazy by default; the editor loads eagerly). */
   loading?: 'lazy' | 'eager';
   onImageError?: () => void;
+  /** Readers can refresh an expired frame or printed overlay without discarding the page's main drawing. */
+  onSourceError?: () => void;
   /** Play the develop-in reveal when the render just landed (default true). */
   develop?: boolean;
   style?: React.CSSProperties;
@@ -275,6 +277,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   onSelectLine,
   loading = 'lazy',
   onImageError,
+  onSourceError,
   develop = true,
   style,
   alt,
@@ -460,7 +463,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
         // The page in its frames: one SVG (paper, frames, borders, overlays), the page image itself.
         <div className="absolute inset-0">
           <ImageDevelop key={assetPath || src || page.id} active={develop && isFreshRender(page.render)} className="h-full w-full" rounded="rounded-none">
-            <ComposedArt scene={scene} label={pageLabel} onImageError={(url) => url === src && onDrawingError()} />
+            <ComposedArt scene={scene} label={pageLabel} onImageError={(url) => url === src ? onDrawingError() : onSourceError?.()} />
           </ImageDevelop>
         </div>
       ) : showImage ? (
@@ -472,7 +475,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           </ImageDevelop>
         </div>
       ) : waitingForUrl && failed === null ? (
-        <div className={stillLoading ? 'absolute inset-0' : 'studio-shimmer absolute inset-0'} aria-label="Loading page image" role="img" />
+        <div data-reader-art-loading="" className={stillLoading ? 'absolute inset-0' : 'studio-shimmer absolute inset-0'} aria-label="Loading page image" role="img" />
       ) : (
         <div className="absolute inset-0 bg-[var(--ds-surface-strong)]">
           <PlanSketch doc={doc} page={page} width={width} />
@@ -483,7 +486,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           )}
         </div>
       )}
-      {showImage && !framed && scene && <ComposedArt scene={scene} />}
+      {showImage && !framed && scene && <ComposedArt scene={scene} onImageError={onSourceError} />}
       {paper && showImage && <div className="ds-reader-paper pointer-events-none absolute inset-0" aria-hidden data-testid="reader-paper" />}
       {lettering && (
         <BalloonLayer

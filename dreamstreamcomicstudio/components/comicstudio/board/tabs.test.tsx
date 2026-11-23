@@ -665,8 +665,7 @@ describe('ReaderTab', () => {
     render(<ReaderTab studio={studio} doc={studio.doc!} />);
     fireEvent.click(screen.getByRole('button', { name: 'Reader look' }));
     const panel = screen.getByRole('region', { name: 'Reader look' });
-    fireEvent.click(within(panel).getByRole('radio', { name: 'Fade' }));
-    expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { turn: 'fade' } }], { label: 'Change reader look' });
+    expect(within(panel).queryByRole('radio', { name: 'Fade' })).toBeNull();
     fireEvent.click(within(panel).getByRole('switch', { name: 'Paper texture' }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { paperTexture: false } }], { label: 'Change reader look' });
     edit(within(panel).getByLabelText('End card line'), 'By the Rao family');

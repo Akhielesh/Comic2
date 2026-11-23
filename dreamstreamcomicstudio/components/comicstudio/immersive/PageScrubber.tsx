@@ -22,7 +22,7 @@ export interface PageScrubberProps {
 }
 
 const thumbFor = (item: ReaderItem | undefined, urlFor: PageScrubberProps['urlFor']): string | undefined => {
-  if (!item || isWithheld(item)) return undefined;
+  if (!item?.asset || isWithheld(item)) return undefined;
   const paths = [item.asset.path, ...(item.asset.variants || []).map((v) => v.path)];
   for (const p of paths) {
     const key = availableCachedPath(p, urlFor);

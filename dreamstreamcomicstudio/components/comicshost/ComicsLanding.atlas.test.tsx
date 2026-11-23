@@ -172,6 +172,28 @@ describe('Comics landing', () => {
     expect(currentPage()).toHaveAttribute('src', expect.stringContaining('last-tram-page-1'));
   });
 
+  it('uses the paper surface for horizontal turns, leaves vertical gestures to scroll and mounts one resting illustration', () => {
+    renderLanding();
+    const figure = screen.getByRole('figure', { name: 'The Last Tram' });
+    const surface = figure.querySelector('[data-paper-turn-surface]')!;
+    const scene = within(figure).getByRole('status');
+    const touch = (clientX: number, clientY: number) => ({ identifier: 1, clientX, clientY });
+    const swipe = (endX: number, endY: number) => {
+      fireEvent.touchStart(surface, { touches: [touch(150, 80)] });
+      fireEvent.touchMove(surface, { touches: [touch(endX, endY)] });
+      fireEvent.touchEnd(surface, { touches: [], changedTouches: [touch(endX, endY)] });
+    };
+    expect(surface).toBeInTheDocument();
+    expect(surface.querySelectorAll('img')).toHaveLength(1);
+    swipe(145, 180);
+    expect(scene).toHaveTextContent('Page 1 of 2');
+    swipe(60, 84);
+    expect(scene).toHaveTextContent('Page 2 of 2');
+    expect(surface.querySelectorAll('img')).toHaveLength(1);
+    swipe(250, 80);
+    expect(scene).toHaveTextContent('Page 1 of 2');
+  });
+
   it('turns the sample page, announces the scene, and preserves the page across look changes', () => {
     renderLanding();
     fireEvent.click(screen.getByRole('button', { name: 'Preview Ligne claire' }));

@@ -67,7 +67,7 @@ describe('prefs', () => {
 
   it('viewer prefs override the creator; paper texture is off for webtoons and strips', () => {
     const creator = { ...DEFAULT_READER, turn: 'fade' as const, paperTexture: true };
-    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'fade', paper: true, ambient: true });
+    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'paper', paper: true, ambient: true });
     expect(effectiveReader(creator, { ...DEFAULT_PREFS, turn: 'paper', paper: 'off', ambient: 'off' }, 'manga')).toMatchObject({ turn: 'paper', paper: false, ambient: false });
     expect(effectiveReader(creator, DEFAULT_PREFS, 'webtoon').paper).toBe(false);
     expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'paper', paper: false });

@@ -82,6 +82,8 @@ const mount = () =>
 describe("classic reader preloading", () => {
   it("scroll mode makes at most 4 preloads for a 36-panel comic (it made 37), and they are the images right after the first", () => {
     mount();
+    preloads = [];
+    fireEvent.click(screen.getByRole('button',{name:'Scroll'}));
     expect(preloads.length).toBeLessThanOrEqual(4);
     expect(preloads.length).toBeGreaterThan(0);
     expect(preloads).toEqual(["https://cdn.test/panel-1.png", "https://cdn.test/panel-2.png", "https://cdn.test/panel-3.png"]);
@@ -111,6 +113,8 @@ describe("classic reader preloading", () => {
     }
     vi.stubGlobal("IntersectionObserver", StubIO);
     mount();
+    preloads=[];
+    fireEvent.click(screen.getByRole('button',{name:'Scroll'}));
     expect(preloads).toEqual([]); // nothing warmed before anything is in view
     const io = observers[observers.length - 1];
     expect(io.targets.length).toBeGreaterThanOrEqual(PANELS);
@@ -124,8 +128,7 @@ describe("classic reader preloading", () => {
 
   it("flip mode keeps its window: the page before and the 3 after", () => {
     mount();
-    preloads = [];
-    fireEvent.click(screen.getAllByRole("button", { name: /Page Flip/i })[0]);
+    expect(screen.getByRole('button',{name:'Scroll'})).toBeVisible();
     expect(preloads.length).toBeLessThanOrEqual(4);
     expect(preloads).toEqual(expect.arrayContaining(["https://cdn.test/panel-1.png"]));
   });

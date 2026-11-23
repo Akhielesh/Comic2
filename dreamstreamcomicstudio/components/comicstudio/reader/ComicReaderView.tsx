@@ -37,8 +37,8 @@ import { readerString } from '../i18n/readerStrings';
 import { EndCard } from '../immersive/EndCard';
 import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOptions, trimAspect, type ImmersiveReaderEndCard } from '../immersive/ImmersiveReader';
 import { availableCachedPath, connectionHints, pageImageCache } from '../immersive/pageImageCache';
-import { SlotContentView, slotImageSource, type SlotImage } from '../immersive/ReaderSlot';
-import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookView, type LayoutPref } from '../immersive/readerLayout';
+import { SlotContentView, slotImageSource, useReaderFrameUrl, type SlotImage } from '../immersive/ReaderSlot';
+import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookGeometry, type BookView, type LayoutPref } from '../immersive/readerLayout';
 import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition } from '../immersive/readerPrefs';
 import { createUrlSync } from '../immersive/readerUrl';
 import { useBackLayer } from '../mobile/backStack';
@@ -56,6 +56,7 @@ import {
   onFullscreenChange,
   shouldShowIosFullscreenNote
 } from '../../../services/fullscreen';
+import { PaperTurnSurface, type PaperTurnHandle, type PaperTurnDirection } from './PaperTurnSurface';
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 import { pageProgress, pageVisualStatus } from '../board/boardModel';
 
@@ -206,7 +207,8 @@ const ScrollPage: React.FC<{
   eager: boolean;
   onImageError?: () => void;
 }> = ({ doc, item, img, paper, eager, onImageError }) => {
-  const aspect = item.asset.w && item.asset.h ? item.asset.w / item.asset.h : item.page ? pageAspectOf(doc, item.page) : aspectNumber(doc.format.pageAspect);
+  const frameUrl = useReaderFrameUrl(img.urlFor);
+  const aspect = item.asset?.w && item.asset.h ? item.asset.w / item.asset.h : item.page ? pageAspectOf(doc, item.page) : aspectNumber(doc.format.pageAspect);
   if (isWithheld(item)) {
     // Never fetched, never an <img>: a neutral tile in the page's place.
     return (
@@ -225,7 +227,9 @@ const ScrollPage: React.FC<{
         <ComicPageView
           doc={doc}
           page={item.page}
-          imageUrl={img.urlFor(item.asset)}
+          imageUrl={item.asset ? img.urlFor(item.asset) : undefined}
+          urlForPath={frameUrl}
+          onSourceError={onImageError}
           srcWidth={(w) => slotImageSource(item, w, img)?.url}
           loading={eager ? 'eager' : 'lazy'}
           develop={false}
@@ -359,6 +363,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const chromeLang = lang || localized.format.language || 'en';
   const t = useCallback((key: Parameters<typeof readerString>[1], vars?: Record<string, string | number>) => readerString(chromeLang, key, vars), [chromeLang]);
   const fallback = useMemo(() => (localized !== doc ? fallbackLineIds(localized) : []), [localized, doc]);
+  const drawnPages = items.filter(item => item.kind === 'page').length;
   const rtl = localized.format.readingDirection === 'rtl';
   const kind = localized.format.kind;
   const trim = useMemo(() => trimAspect(items, aspectNumber(localized.format.pageAspect)), [items, localized.format.pageAspect]);
@@ -370,7 +375,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       const it = items[i];
       if (!it) return trim;
       const a = it.asset;
-      if (a.w && a.h) return a.w / a.h;
+      if (a?.w && a.h) return a.w / a.h;
       return it.page ? pageAspectOf(localized, it.page) : trim;
     },
     [items, trim, localized]
@@ -395,6 +400,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     const stored = readLayoutPref();
     return stored !== 'auto' ? stored : hostLayout ?? 'auto';
   });
+  const pagedPref = useRef<LayoutPref>(pref === 'scroll' ? hostLayout ?? 'auto' : pref);
   const rootRef = useRef<HTMLDivElement>(null);
   const [rootSizeRef, rootSize] = useElementSize<HTMLDivElement>();
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
@@ -433,8 +439,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     return start >= 80 && end <= boxW - 80 ? { start, end } : null;
   }, [ff.segments, frame.left, boxW]);
   const decision = useMemo(
-    () => decideLayout({ vw: boxW, vh: boxH, kind, pref, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: hingeX ? ff.segments : undefined }),
-    [boxW, boxH, kind, pref, trim, ff.widthClass, ff.heightClass, hingeX, ff.segments]
+    () => decideLayout({ vw: boxW, vh: boxH, kind, pref, storyPages: drawnPages, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: hingeX ? ff.segments : undefined }),
+    [boxW, boxH, kind, pref, drawnPages, trim, ff.widthClass, ff.heightClass, hingeX, ff.segments]
   );
   const layout = decision.layout;
   const viewLayout = layout === 'spread' ? 'spread' : 'single';
@@ -457,6 +463,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const currentView = views[viewIdx];
   const atEnd = !!currentView && !currentView.items.length;
 
+  const turnRef = useRef<PaperTurnHandle>(null);
   const goToView = useCallback(
     (v: number) => {
       const target = views[clampIndex(v, views.length)];
@@ -522,7 +529,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   // ── Navigation ────────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
-  const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
+  const swipe = useRef<{ x: number; y: number; id: number; onPaper: boolean } | null>(null);
   // Safe gestures: every pointer on the stage is tracked; once a second one touches down (a pinch) the swipe
   // candidate is gone and nothing turns until every finger is up, whichever lifts first.
   const pointers = useRef(new Set<number>());
@@ -537,6 +544,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // zoomedIn()). An explicit control — a toolbar arrow, a key, a mouse side zone — always turns, and
   // TouchCanvas snaps back to fit on the new page (resetKey), so no button is ever dead. (The invisible
   // side zones pause only while the browser itself is pinch-zoomed: a click there is a pan.)
+  const commitTurn = useCallback((direction: PaperTurnDirection) => {
+    setNote(null);
+    goToView(viewIdx + direction);
+    hideChromeNow();
+  }, [goToView, viewIdx, hideChromeNow]);
   const go = useCallback(
     (delta: number) => {
       if (!delta) return;
@@ -550,23 +562,24 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         target?.scrollIntoView?.({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
         return;
       }
-      setNote(null);
-      goToView(viewIdx + delta);
-      hideChromeNow();
+      const direction = delta > 0 ? 1 : -1;
+      if (turnRef.current) turnRef.current.turn(direction);
+      else commitTurn(direction);
     },
-    [layout, reduced, goToView, viewIdx, hideChromeNow]
+    [layout, reduced, commitTurn]
   );
 
-  const setLayoutChoice = (next: 'scroll' | 'page' | 'spread') => {
-    const p: LayoutPref = next === 'page' ? 'single' : next;
+  const setLayoutChoice = (p: LayoutPref) => {
+    if (p !== 'scroll') pagedPref.current = p;
     if (p === pref) return;
+    turnRef.current?.cancel();
     setPref(p);
     writeLayoutPref(p);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     // The immersive reader portals out of this box, but React still bubbles its keys here: it owns them.
-    if (immersive) return;
+    if (immersive || e.defaultPrevented) return;
     if (e.altKey || e.metaKey || e.ctrlKey) return;
     if (e.key === 'Escape' && viewportFullscreen) {
       e.preventDefault();
@@ -575,6 +588,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     }
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if ((e.key === ' ' || e.key === 'Enter') && (e.target as HTMLElement).closest?.('button,a[href],[role="button"],[role="radio"]')) return;
     if ((e.target as HTMLElement).closest?.('[role="menu"],[role="listbox"]')) return;
     if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault();
@@ -583,6 +597,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         if (c) c.scrollTop = e.key === 'Home' ? 0 : c.scrollHeight;
       } else {
         setNote(null);
+        turnRef.current?.cancel();
         goToView(e.key === 'Home' ? 0 : views.length - 1);
       }
       return;
@@ -659,6 +674,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [immersiveOn]);
   const openImmersive = () => {
+    turnRef.current?.cancel();
     immersivePage.current = null;
     const first = currentView?.items[0];
     const n = layout === 'scroll' ? pageNOf(items[itemIdx]) : pageNOfView(views, items, viewIdx);
@@ -769,14 +785,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     () => (hingeX && layout !== 'scroll' && !decision.perSegment ? (rtl ? { x: 0, w: hingeX.start } : { x: hingeX.end, w: Math.max(1, stageW - hingeX.end) }) : null),
     [hingeX, layout, decision.perSegment, rtl, stageW]
   );
-  const geo = useMemo(() => {
-    if (!currentView || layout === 'scroll') return null;
+  const geometryFor = useCallback((view: BookView) => {
     if (singleSeg) {
-      const g = bookGeometry({ view: currentView, stage: { w: singleSeg.w, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass });
+      const g = bookGeometry({ view, stage: { w: singleSeg.w, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass });
       return { ...g, book: { ...g.book, x: g.book.x + singleSeg.x } };
     }
-    return bookGeometry({ view: currentView, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment && hingeX ? hingeX : undefined });
-  }, [currentView, layout, stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
+    return bookGeometry({ view, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment && hingeX ? hingeX : undefined });
+  }, [stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
+  const geo = useMemo(() => currentView && layout !== 'scroll' ? geometryFor(currentView) : null, [currentView, layout, geometryFor]);
   /** The zoomable canvases: one over the stage, or one per segment on a dual-screen device. */
   const panes = useMemo(() => {
     if (!geo) return [];
@@ -806,7 +822,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     const keep = views
       .slice(Math.max(0, viewIdx - 2), viewIdx + 3)
       .flatMap((v) => v.items)
-      .flatMap((i) => [items[i]?.asset.path, sourceOf(i)?.path])
+      .flatMap((i) => [items[i]?.asset?.path, sourceOf(i)?.path])
       .map((path) => availableCachedPath(path, img.urlFor)).filter((path): path is string => !!path);
     pageImageCache.retain(keep);
     const controller = new AbortController();
@@ -883,7 +899,6 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   // ── Labels ────────────────────────────────────────────────────────────────
   // Pages in the reading order (anything with art, an out-of-date page included): page numbering.
-  const drawnPages = items.filter((i) => i.kind === 'page').length;
   // "Drawn" means one thing everywhere (the board's Pages badge, the timeline, here): drawn AND current.
   // An out-of-date page still reads (it has art) and is counted apart: "6 of 12 pages drawn · 1 out of date".
   const drawn = drawnCount(doc);
@@ -896,21 +911,21 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const counter = layout === 'scroll' ? `${drawnPages} ${drawnPages === 1 ? 'page' : 'pages'}` : `${shownLabel} · ${viewIdx + 1}/${views.length}`;
   const prevLabel = rtl ? t('nextPage') : t('previousPage');
   const nextLabel = rtl ? t('previousPage') : t('nextPage');
-  const layoutValue: 'scroll' | 'page' | 'spread' = layout === 'scroll' ? 'scroll' : layout === 'spread' ? 'spread' : 'page';
-  const layoutOptions =
-    kind === 'webtoon'
-      ? []
-      : [
-          { value: 'scroll' as const, label: (<><Rows3 className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('scroll')}</span></>), title: 'One long vertical scroll' },
-          { value: 'page' as const, label: (<><Square className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('page')}</span></>), title: 'One page at a time' },
-          // Facing pages need room — where they can't fit the option is left out rather than shown dead.
-          ...(kind !== 'strip' && (decision.allowSpread || layout === 'spread')
-            ? [{ value: 'spread' as const, label: (<><Columns2 className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('spread')}</span></>), title: 'Facing pages' }]
-            : [])
-        ];
+  const layoutValue = layout === 'scroll' ? 'scroll' : 'page';
+  const continuous = kind === 'webtoon' && drawnPages <= 1;
+  const layoutOptions = [
+    { value: 'page' as const, label: <><BookOpen className="h-3 w-3" aria-hidden /><span className={cx(oneRow && 'sr-only')}>{t('pageTurn')}</span></>, title: t('pageTurnHelp') },
+    { value: 'scroll' as const, label: <><Rows3 className="h-3 w-3" aria-hidden /><span className={cx(oneRow && 'sr-only')}>{t('scroll')}</span></>, title: t('scrollHelp') }
+  ];
   const narrow = boxW < 560 || compactH;
   const currentPageN = layout === 'scroll' ? pageNOf(items[itemIdx]) : pageNOfView(views, items, viewIdx);
   const menuItems = [
+    ...(layout !== 'scroll' && decision.allowSpread && kind !== 'strip' && kind !== 'webtoon' ? [{
+      id: 'page-layout',
+      label: t(layout === 'spread' ? 'singlePage' : 'facingPages'),
+      icon: layout === 'spread' ? <Square className="h-4 w-4" aria-hidden /> : <Columns2 className="h-4 w-4" aria-hidden />,
+      onSelect: () => setLayoutChoice(layout === 'spread' ? 'single' : 'spread')
+    }] : []),
     ...(allowDownload || onDownload
       ? [{ id: 'download', label: downloading ? 'Preparing…' : `${t('download')} (PDF)`, icon: <Download className="h-4 w-4" aria-hidden />, onSelect: () => void download(), disabled: downloading }]
       : []),
@@ -962,7 +977,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             : 'contents'
         }
       >
-        {layoutOptions.length > 1 && <Segmented label="Reading mode" size="xs" value={layoutValue} onChange={setLayoutChoice} options={layoutOptions} />}
+        {!continuous && items.length > 1 && <Segmented label="Reading mode" size="xs" value={layoutValue} onChange={value => setLayoutChoice(value === 'scroll' ? 'scroll' : pagedPref.current)} options={layoutOptions} />}
         {layout !== 'scroll' && (
           <div className="flex items-center gap-0.5">
             <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
@@ -1075,45 +1090,76 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   const bookLabel = localized.cover.title || localized.brief.title || 'Comic';
   const bookRegion = { 'data-testid': 'reader-book', role: 'region', 'aria-roledescription': 'book', 'aria-label': bookLabel } as const;
-  /** The book (these slots of it) placed in a pane that starts `dx` px into the stage. */
-  const bookAt = (slotIdx: number[], dx: number, region: boolean) =>
-    geo &&
-    currentView && (
+  const renderSlots = (geometry: BookGeometry, slots: number[], preview = false) =>
+    slots.map(index => {
+      const slot = geometry.slots[index];
+      const c = slot.content;
+      if (c.kind === 'blank') return null;
+      const item = c.kind === 'item' ? items[c.index] : undefined;
+      const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: drawnPages })) : undefined;
+      return (
+        <div
+          key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
+          className={cx('absolute overflow-hidden', PAGE_SHADOW)}
+          style={{ left: slot.x, top: slot.y, width: slot.w, height: slot.h, background: 'var(--ds-reader-paper-back)', contain: 'layout paint', ...READER_INK }}
+          data-side={slot.side}
+          {...(item && !preview ? { 'data-testid': 'reader-page', 'data-key': item.key, role: 'group', 'aria-roledescription': 'page', 'aria-label': label } : {})}
+        >
+          <SlotContentView
+            doc={localized}
+            content={c}
+            items={items}
+            width={slot.w}
+            height={slot.h}
+            contentAspect={slot.contentAspect}
+            img={img}
+            prio={preview ? 'next' : 'now'}
+            paper={eff.paper}
+            letteringAriaHidden={preview}
+            onImageError={onImageError}
+            onExpired={onImageError}
+            dedication={creator.dedication}
+            endCard={preview ? <p className="m-auto text-center text-[var(--ds-muted)]">{t('theEnd')}</p> : endNode}
+          />
+        </div>
+      );
+    });
+
+  // Apply the fold to the paper itself. Separate physical screen segments retain independent zoom/pan.
+  const bookAt = (indices: number[], dx: number, region: boolean) => {
+    if (!geo || !currentView) return null;
+    const face = renderSlots(geo, indices);
+    const tactile = !hingeX && !immersiveOn && views.length > 1;
+    return (
       <div className="absolute" style={{ left: geo.book.x - dx, top: geo.book.y, width: geo.book.w, height: geo.book.h }} data-layout={viewLayout} {...(region ? bookRegion : {})}>
-        {slotIdx.map((i) => geo.slots[i]).map((slot) => {
-          const c = slot.content;
-          if (c.kind === 'blank') return null;
-          const item = c.kind === 'item' ? items[c.index] : undefined;
-          const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: drawnPages })) : undefined;
-          return (
-            <div
-              key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
-              className={cx('absolute overflow-hidden', PAGE_SHADOW)}
-              style={{ left: slot.x, top: slot.y, width: slot.w, height: slot.h, background: 'var(--ds-reader-paper-back)', contain: 'layout paint', ...READER_INK }}
-              data-side={slot.side}
-              {...(item ? { 'data-testid': 'reader-page', 'data-key': item.key, role: 'group', 'aria-roledescription': 'page', 'aria-label': label } : {})}
-            >
-              <SlotContentView
-                doc={localized}
-                content={c}
-                items={items}
-                width={slot.w}
-                height={slot.h}
-                contentAspect={slot.contentAspect}
-                img={img}
-                prio="now"
-                paper={eff.paper}
-                letteringAriaHidden={false}
-                onImageError={onImageError}
-                onExpired={onImageError}
-                dedication={creator.dedication}
-                endCard={endNode}
-              />
-            </div>
-          );
-        })}
+        {tactile ? (
+          <PaperTurnSurface
+            ref={turnRef}
+            pageKey={JSON.stringify([doc.id, doc.rev, lang, currentView.key, viewLayout, rtl, geo.book.w, geo.book.h])}
+            rtl={rtl}
+            spread={viewLayout === 'spread'}
+            isZoomed={zoomedIn}
+            canTurn={direction => !!views[viewIdx + direction]}
+            onTurn={commitTurn}
+            className="relative h-full w-full"
+            renderAdjacent={direction => {
+              const next = views[viewIdx + direction];
+              if (!next) return null;
+              const target = geometryFor(next);
+              const scale = Math.min(geo.book.w / target.book.w, geo.book.h / target.book.h);
+              return (
+                <div className="absolute" style={{ width: target.book.w, height: target.book.h,
+                  left: (geo.book.w - target.book.w * scale) / 2, top: (geo.book.h - target.book.h * scale) / 2,
+                  transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+                  {renderSlots(target, target.slots.map((_, index) => index), true)}
+                </div>
+              );
+            }}
+          >{face}</PaperTurnSurface>
+        ) : face}
       </div>
     );
+  };
   /** A zoomable canvas (or the fit-to-width scroller / plain box) around a pane's book. */
   const zoomWrap = (id: string, label: string, child: React.ReactNode) =>
     canZoom ? (
@@ -1274,7 +1320,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
               swipe.current = null;
               return;
             }
-            swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+            swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId, onPaper: !!(e.target as Element).closest?.('[data-paper-turn-surface]') };
           }}
           onPointerUp={(e) => {
             pointers.current.delete(e.pointerId);
@@ -1287,7 +1333,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             if (!start || zoomedIn()) return;
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
-            const s = swipeDelta(dx, dy, rtl);
+            const s = start.onPaper ? 0 : swipeDelta(dx, dy, rtl);
             if (s) {
               go(s);
               return;

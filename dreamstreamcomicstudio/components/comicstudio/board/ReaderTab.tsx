@@ -30,7 +30,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Images, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
-import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
+import { readerOf, type ComicDoc, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
@@ -55,8 +55,9 @@ import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
 import { FOCUS_ITEM, FOCUS_RING, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT, STATUS_SURFACE } from '../../chat/studioDesign';
+import { hasReadablePage } from '../reader/readerModel';
 import { CLEAR } from './boardModel';
-import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
+import { GhostButton, InlineField, PrimaryButton, Surface, SwitchRow, cx } from './ui';
 
 const LARGE_PNG_EDGE = 3840;
 
@@ -156,22 +157,6 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
         <p className={OVERLINE}>Reader look</p>
         <span className="text-[11px] text-[var(--ds-muted)]">Readers can still change it for themselves</span>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
-        <span className="text-[12px] text-[var(--ds-muted)]" id="reader-turn-label">
-          Page turn
-        </span>
-        <Segmented<PageTurnStyle>
-          label="Page turn"
-          size="xs"
-          value={r.turn}
-          onChange={(turn) => set({ turn })}
-          options={[
-            { value: 'paper', label: 'Paper', title: 'A real page flip' },
-            { value: 'slide', label: 'Slide', title: 'Pages slide across' },
-            { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
-          ]}
-        />
-      </div>
       <div className="mt-1 grid gap-0.5 md:grid-cols-2">
         <SwitchRow label="Paper texture" description="A subtle paper grain under the art" checked={r.paperTexture} onChange={(on) => set({ paperTexture: on })} />
         <SwitchRow label="Ambient room" description="The room glows with each page’s colors" checked={r.ambient} onChange={(on) => set({ ambient: on })} />
@@ -247,7 +232,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
 
   const set = (s: ExportState) => mounted.current && setState(s);
   const working = state.kind === 'working';
-  const drawn = !!doc.cover.render.asset?.path || doc.pages.some((p) => !!p.render.asset?.path);
+  const drawn = !!doc.cover.render.asset?.path || doc.pages.some(hasReadablePage);
   const gifReady = doc.pages.filter(hasFinishedPageArt).length >= 2;
   const exportLabel = editionName ? ` (${editionName})` : '';
   // The exporters get the SOURCE doc and the edition's code: "-te" file names, that script's faces.

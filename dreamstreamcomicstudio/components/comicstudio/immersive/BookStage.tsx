@@ -164,7 +164,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       const it = items[s.content.index];
       // Withheld pages have no source (slotImageSource): never fetched, nothing to wait for.
       const source = it ? slotImageSource(it, letterbox(s.w, s.h, s.contentAspect).w, { ...img, original: false }) : undefined;
-      if (!it || !source) continue;
+      if (!it?.asset || !source) continue;
       const alts = (source.path === it.asset.path ? [source.path] : [source.path, it.asset.path])
         .map((path) => availableCachedPath(path, img.urlFor)).filter((path): path is string => !!path);
       if (alts.some((p) => pageImageCache.isDecoded(p))) continue;
@@ -975,9 +975,9 @@ const TurnGateArc: React.FC<{ dir: 1 | -1; rtl: boolean; x: number; y: number; w
 function useSlotShowThrough(plan: TurnPlan | null, items: ReaderItem[], img: Omit<SlotImage, 'original'>, W: number) {
   const c = plan?.backExtra === 'paper' ? plan.frontContent : undefined;
   const item = c && c.kind === 'item' ? items[c.index] : undefined;
-  const pick = item ? pickVariant(item.asset, W, { dpr: img.dpr, saveData: img.saveData }) : undefined;
+  const pick = item?.asset ? pickVariant(item.asset, W, { dpr: img.dpr, saveData: img.saveData }) : undefined;
   const cached = useCachedImage(item && !isWithheld(item) ? availableCachedPath(pick?.path, img.urlFor) : undefined, undefined, 'next');
-  const orig = useCachedImage(item && !isWithheld(item) ? availableCachedPath(item.asset.path, img.urlFor) : undefined, undefined, 'next');
+  const orig = useCachedImage(item && !isWithheld(item) ? availableCachedPath(item.asset?.path, img.urlFor) : undefined, undefined, 'next');
   const src = cached.src || orig.src;
   return { src, box: undefined as { x: number; y: number; w: number; h: number } | undefined };
 }

@@ -207,10 +207,14 @@ describe('ImmersiveReader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reader settings' }));
     const dialog = screen.getByRole('dialog', { name: 'Reader settings' });
     expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Display and accessibility'));
     fireEvent.click(screen.getByLabelText('Page-turn sound'));
     expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ sound: true });
-    fireEvent.click(screen.getByRole('radio', { name: 'Slide' }));
-    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'slide' });
+    expect(screen.getByRole('radio', { name: 'Page turn' })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Scroll' }));
+    expect(screen.getByRole('radio', { name: 'Scroll' })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Page turn' }));
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'paper' });
     press('Escape');
     expect(screen.queryByRole('dialog', { name: 'Reader settings' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
@@ -225,6 +229,7 @@ describe('ImmersiveReader', () => {
     expect(root()).toHaveAttribute('data-reader-room', 'night');
     const settings = screen.getByRole('button', { name: 'Reader settings' });
     fireEvent.click(settings);
+    fireEvent.click(screen.getByText('Display and accessibility'));
     const roomLight = within(screen.getByRole('group', { name: 'Room light' }));
     expect(roomLight.getByRole('radio', { name: 'Night' })).toBeChecked();
     fireEvent.click(roomLight.getByRole('radio', { name: 'Day' }));
@@ -236,6 +241,7 @@ describe('ImmersiveReader', () => {
     render(<ImmersiveReader {...props} />);
     expect(root()).toHaveAttribute('data-reader-room', 'day');
     fireEvent.click(screen.getByRole('button', { name: 'Reader settings' }));
+    fireEvent.click(screen.getByText('Display and accessibility'));
     fireEvent.click(screen.getByRole('radio', { name: 'Night' }));
     expect(root()).toHaveAttribute('data-reader-room', 'night');
     expect(counter()).toBe(position);

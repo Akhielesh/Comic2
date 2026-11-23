@@ -369,7 +369,10 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     const inline = await screen.findByTestId('comic-reader');
     // The header carries Download; the inline toolbar adds no second entry for it.
     expect(await screen.findByRole('button', { name: 'Download' })).toBeInTheDocument();
-    expect(within(inline).queryByRole('button', { name: 'More' })).toBeNull();
+    const inlineMenu = within(inline).getByRole('button', { name: 'More' });
+    fireEvent.click(inlineMenu);
+    expect(within(inline).queryByRole('menuitem', { name: /Download/ })).toBeNull();
+    fireEvent.click(inlineMenu);
     fireEvent.click(within(inline).getByRole('button', { name: /Full screen/ }));
     const dialog = await screen.findByTestId('immersive-reader');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
@@ -727,7 +730,9 @@ describe('PublicComicReader — project link and owner preview', () => {
     api.loadPublicComic.mockResolvedValue({ doc: makeSampleDoc(), urls });
     const { unmount } = render(<PublicComicReader projectId="proj_1" />);
     await screen.findByRole('heading', { name: 'The Saffron Thief' });
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.queryByRole('menuitem', { name: /Report/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /Download/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
     unmount();
     render(<PublicComicReader projectId="proj_1" isOwner />);
