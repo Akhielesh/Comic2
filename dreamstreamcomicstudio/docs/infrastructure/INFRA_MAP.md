@@ -195,6 +195,8 @@ follows a path on the same site or, with the switch on, Stream Studio's address
 
 ## 3. The backend — Cloudflare Container (since 2026-10-19)
 
+- Before a planned API deployment, CI polls the existing no-store health endpoint every 15 seconds. It requires a minute of consecutive idle observations on the same running build. The aggregate covers active Director sessions, unsaved Studio edits and renders, and active or queued image and text generation. It exposes neither user identities nor project counts. A busy or unverifiable backend for 30 minutes stops the workflow before deployment. Retry after current work finishes. On first adoption, CI allows a running build without the field only if its commit is a verified ancestor predating the readiness gate.
+- This check observes current work. New work may arrive between the last check and Cloudflare’s container handoff. Unexpected process termination can also interrupt a batch. The creator can retry the identified unfinished pages in the render card. CI never resubmits an image request.
 - **Image** (`Dockerfile.cloudflare`, built and pushed by `wrangler deploy` in
   `.github/workflows/deploy-api-proxy.yml`): the Express server is **bundled with esbuild into
   one `server.mjs`**; only `sharp`, `pyodide` and `sql.js` (native / WASM assets) are installed

@@ -23,6 +23,10 @@ export class GenerationQueue {
     maxWaiting?: number; maxCreatorWaiting?: number; maxBytes?: number; platformSlots?: number;
   } = {}) {}
 
+  get busy(): boolean {
+    return this.active > 0 || this.waiting > 0;
+  }
+
   async run<T>(creator: string, signal: AbortSignal | undefined, work: () => Promise<T>, options: {
     bytes?: number; waitMs?: number; ownKey?: boolean;
   } = {}): Promise<T> {

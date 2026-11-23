@@ -33,6 +33,7 @@ import {
   StudioSession,
   __resetSessionsForTests,
   drainStudioSessions,
+  studioSessionsReadyForRelease,
   getStudioSession,
   legacySpecHashOps,
   peekStudioSession,
@@ -480,6 +481,27 @@ describe('back-compat F1: legacy spec hashes are accepted once per load (recover
 
 describe('getStudioSession', () => {
   afterEach(() => __resetSessionsForTests());
+
+  it('keeps an active render in the same process on reconnect and waits for its final save', async () => {
+    const store = fakeDocStore();
+    const doc = plannedDoc('p1');
+    store.docs.set('p1', { userId: 'u1', doc });
+    const session = await getStudioSession('p1', 'u1', store, { saveDebounceMs: 60_000 });
+    expect(studioSessionsReadyForRelease()).toBe(true);
+    const release = session.retain();
+    const target = { kind: 'page' as const, id: session.doc.pages[0].id };
+    session.commit([{ op: 'render', target, patch: { status: 'rendering', updatedAt: Date.now() } }]);
+    await session.flush();
+    expect(studioSessionsReadyForRelease()).toBe(false);
+    const reopened = await getStudioSession('p1', 'u1', store);
+    expect(reopened).toBe(session);
+    expect(reopened.doc.pages[0].render.status).toBe('rendering');
+    session.commit([{ op: 'render', target, patch: { status: 'ready' } }]);
+    release();
+    expect(studioSessionsReadyForRelease()).toBe(false);
+    await session.flush();
+    expect(studioSessionsReadyForRelease()).toBe(true);
+  });
 
   it('loads, recovers interrupted renders, persists the repair and caches the session', async () => {
     const store = fakeDocStore();
