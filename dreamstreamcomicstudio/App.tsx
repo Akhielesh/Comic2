@@ -1,3 +1,4 @@
+import { originalLook, pendingOriginalLook, rememberOriginalLook } from './components/comicstudio/library/originalLooks';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { clearReaderUrlParams, readerDeepLinkId, setReaderUrlParams } from './services/readerUrl';
 import { assistantChrome } from './services/assistantChrome';
@@ -260,8 +261,17 @@ const App: React.FC = () => {
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
-  const [newComicRequested, setNewComicRequested] = useState(false);
-  const consumeNewComicRequest = useCallback(() => setNewComicRequested(false), []);
+  const [lookSlug, setLookSlug] = useState(pendingOriginalLook);
+  const [newComicRequested, setNewComicRequested] = useState(!!lookSlug);
+  const consumeNewComicRequest = useCallback(() => {
+    setNewComicRequested(false);
+    rememberOriginalLook();
+    const url = new URL(window.location.href);
+    if (url.pathname === '/' && url.searchParams.has('look')) {
+      url.searchParams.delete('look');
+      window.history.replaceState(window.history.state, '', url);
+    }
+  }, []);
   const [firstIdea, setFirstIdea] = useState<{ accountId: string; projectId: string; id: string; text: string } | null>(null);
   const accountRef = useRef(user?.id);
   accountRef.current = user?.id;
@@ -428,6 +438,8 @@ const App: React.FC = () => {
   const hasWarnedDobProfileCheckRef = useRef(false);
 
   const handleBackToHome = () => {
+    setLookSlug(undefined);
+    rememberOriginalLook();
     setNewComicRequested(false);
     setCurrentView('home');
     setActiveProjectId(null);
@@ -887,6 +899,8 @@ const App: React.FC = () => {
 
   const handleStartCreating = () => {
     // Route through the existing auth/product gate. Opening the form does not create a project.
+    setLookSlug(undefined);
+    rememberOriginalLook();
     handleNavigate('dashboard');
     setNewComicRequested(true);
   };
@@ -1271,6 +1285,7 @@ const App: React.FC = () => {
               key={`auth-${authRequest}`}
               initialMode={authInitialMode}
               onModeChange={setAuthInitialMode}
+              returnToOriginal={newComicRequested ? lookSlug : undefined}
               returnToWorkspace={currentView === 'images' ? 'images' : currentView === 'chat'
                 ? (new URLSearchParams(window.location.search).get('voice') === '1' ? 'voice' : 'chat') : undefined}
               pendingInviteCode={getPendingInviteCode()}
@@ -1308,6 +1323,14 @@ const App: React.FC = () => {
             <PublicGallery
               onBack={handleBackToHome}
               onRequireAuth={() => setCurrentView('auth')}
+              onUseOriginalLook={(slug) => {
+                if (!originalLook(slug)) return;
+                setLookSlug(slug);
+                rememberOriginalLook(slug);
+                if (user) handleNavigate('dashboard');
+                else goToAuth('signup');
+                setNewComicRequested(true);
+              }}
               onReadComic={(id) => {
                 void navigateToReader(id, 'gallery');
               }}
@@ -1342,7 +1365,8 @@ const App: React.FC = () => {
             <ProjectDashboard
               key={user?.id ?? 'signed-out'}
               accountId={user?.id}
-              comicWorkspace={comicsHost.active}
+              comicWorkspace={comicsHost.active || !!lookSlug}
+              initialLookBrief={lookSlug && newComicRequested ? originalLook(lookSlug)?.brief : undefined}
               projects={projects}
               projectsLoaded={projectsLoaded}
               openNewComic={newComicRequested}

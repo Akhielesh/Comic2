@@ -564,6 +564,29 @@ describe('first-party editions in the public Library', () => {
     expect(await screen.findByRole('link',{name:'Read The Harbor That Listened'})).toHaveAttribute('href','/c/DSOriginalPort001');
     expect(screen.queryByRole('link',{name:/When the Tide Clock Stopped/})).toBeNull();
   });
+  it('shows the registered thirty-page manga and omits a truncated landscape edition', async () => {
+    const manga = { ...orchard, slug: 'DSOriginalMarg001', title: 'The Girl in the Margin', pageCount: 30 };
+    const partial = { ...orchard, slug: 'DSOriginalWest001', title: 'West of the Glass Hills', pageCount: 15 };
+    originalsRpc.mockResolvedValue({ data: [manga, partial] });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(await screen.findByRole('link', { name: 'Read The Girl in the Margin' })).toHaveAttribute('href', '/c/DSOriginalMarg001');
+    expect(screen.getByText('DreamStream Studio Originals · 30 pages')).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Read West of the Glass Hills' })).toBeNull();
+  });
+  it('finds a landscape technique and sends only its public style identifier to the creator', async () => {
+    const west = { ...orchard, slug: 'DSOriginalWest001', title: 'West of the Glass Hills', pageCount: 20 };
+    const useLook = vi.fn();
+    originalsRpc.mockResolvedValue({ data: [orchard, west] });
+    render(<PublicGallery onReadComic={vi.fn()} onUseOriginalLook={useLook} />);
+    const link = await screen.findByRole('link', { name: 'Read West of the Glass Hills' });
+    expect(link.querySelector('[data-orientation="landscape"]')).toBeInTheDocument();
+    submitSearch('LANDSCAPE');
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Read The Last Orchard/ })).toBeNull());
+    const start = screen.getByRole('button', { name: 'Start a comic like West of the Glass Hills' });
+    expect(start.closest('a')).toBeNull();
+    fireEvent.click(start);
+    expect(useLook).toHaveBeenCalledWith(west.slug);
+  });
   it('discovers a live Original, counts it once, and searches it without a member project or likes', async () => {
     viewer.id = 'reader';
     originalsRpc.mockResolvedValue({ data:[orchard,orchard,{...orchard,slug:SLUG},{...orchard,slug:'DSOriginalFox0001',coverPath:'u/owner/private.webp'}] });

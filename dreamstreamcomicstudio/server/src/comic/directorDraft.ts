@@ -1,6 +1,6 @@
 // A creator explicitly requested one private first draft. The action handler owns the
 // durable reservation and takeover state. The creator approves a single itemized drawing run after the plan is ready.
-import { DIRECTOR_DRAFT_IDEA_LIMIT, pageSpecHash, planInputHashOf, type ComicDoc } from '../../../shared/comic/doc.js';
+import { DIRECTOR_DRAFT_IDEA_LIMIT, pageSpecHash, planInputHashOf, type ComicDoc, type Format } from '../../../shared/comic/doc.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import type { DocOp } from '../../../shared/comic/ops.js';
 import { offerDirectorDraftBook, pickDefaultPreset, planPages, presetStylePatch } from './jobs.js';
@@ -58,11 +58,23 @@ export async function runDirectorDraft(ctx: StudioContext, idea: string, screenN
   }
   if (!idea.trim()) throw new StudioError('BAD_REQUEST', 'Enter an idea or script to start a draft.');
   const ops: DocOp[] = [];
-  const pageCount = pagesForBrief(idea, before.format.pageCount, ctx.caps?.maxPages ?? DOC_LIMITS.pages);
-  if (pageCount !== before.format.pageCount) ops.push({ op: 'format', patch: { pageCount } });
-  const shortIdea = idea.trim().replace(/\s+/g, ' ');
+  // The Library offers these as visible, editable lines. A draft uses the text actually submitted.
+  const layout = /^format:[ \t]*[0-9]{1,3}[- ]pages? (comic|manga),[ \t]*(portrait|landscape),[ \t]*(left to right|right to left)\.?[ \t]*$/im.exec(idea);
+  const pageCount = pagesForBrief(layout?.[0] ?? idea, before.format.pageCount, ctx.caps?.maxPages ?? DOC_LIMITS.pages);
+  const format: Partial<Format> = {};
+  if (pageCount !== before.format.pageCount) format.pageCount = pageCount;
+  if (layout) {
+    format.kind = layout[1].toLowerCase() === 'manga' ? 'manga' : 'comic';
+    format.pageAspect = layout[2].toLowerCase() === 'landscape' ? '3:2' : '2:3';
+    format.readingDirection = layout[3].toLowerCase() === 'right to left' ? 'rtl' : 'ltr';
+  }
+  const artDirection = /^art direction:[ \t]*(\S[^\r\n]*)/im.exec(idea)?.[1].trim().slice(0, 1200);
+  if (artDirection && /\bblack[- ]and[- ]white\b/i.test(artDirection)) format.colorMode = 'bw';
+  if (Object.keys(format).length) ops.push({ op: 'format', patch: format });
+  const storyText = idea.split(/\r?\n/).filter(line => !/^(?:format|art direction):/i.test(line)).join(' ').trim();
+  const shortIdea = (storyText || idea.trim()).replace(/\s+/g, ' ');
   if (!before.source.script?.trim()) ops.push({ op: 'source', patch: { script: idea, updatedAt: Date.now() } });
-  const title = !before.brief.title.trim() || /^untitled(?: comic)?$/i.test(before.brief.title.trim())
+  const title = storyText && (!before.brief.title.trim() || /^untitled(?: comic)?$/i.test(before.brief.title.trim()))
     ? shortIdea.split(/[.!?]\s|\n/)[0].split(/\s+/).slice(0, 9).join(' ').slice(0, 100)
     : undefined;
   if (title || !before.brief.premise) {
@@ -71,10 +83,15 @@ export async function runDirectorDraft(ctx: StudioContext, idea: string, screenN
   if (ops.length) session.commit(ops, { origin: 'director', label: 'Capture the draft idea' });
   const style = session.doc.style;
   if (style.status === 'empty' && !style.spec && !style.name && !style.refs.length && !style.options.length) {
-    const preset = pickDefaultPreset(session.doc);
-    const patch = presetStylePatch(preset, 'drafted');
-    patch.avoid = [...new Set([...(style.avoid || []), ...preset.avoid])];
-    session.commit([{ op: 'style', patch }], { origin: 'director', label: 'Choose a comic look' });
+    if (artDirection) {
+      const name = artDirection.split(/[.!?]/, 1)[0].trim().slice(0, 100);
+      session.commit([{ op: 'style', patch: { status: 'drafted', name, spec: artDirection } }], { origin: 'director', label: 'Apply the requested art direction' });
+    } else {
+      const preset = pickDefaultPreset(session.doc);
+      const patch = presetStylePatch(preset, 'drafted');
+      patch.avoid = [...new Set([...(style.avoid || []), ...preset.avoid])];
+      session.commit([{ op: 'style', patch }], { origin: 'director', label: 'Choose a comic look' });
+    }
   }
 
   // Check the actual source, brief, format, cast, and visual decisions after each await.

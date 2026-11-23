@@ -7,6 +7,7 @@
 // throttled-network LCP would measure the harness, not the reader route.)
 
 import { test, expect } from './helpers/harness';
+import { LAYOUT_KEY } from '../../components/comicstudio/immersive/readerPrefs';
 
 test.describe('performance on a mid-range phone', () => {
   // Frame timing is sensitive to whatever else the runner is doing; a real regression fails every attempt.
@@ -75,6 +76,8 @@ test.describe('performance on a mid-range phone', () => {
         /* unsupported */
       }
     });
+    // Measure a returning reader's chosen Scroll experience from first paint.
+    await page.addInitScript(key => localStorage.setItem(key, 'scroll'), LAYOUT_KEY);
     await qa.open({ surface: 'reader', fixture: 'webtoon-20p' }, { settle: 1200 });
     const { cls, lcp } = await page.evaluate(() => {
       const w = window as unknown as { __cls: number; __lcp: number };

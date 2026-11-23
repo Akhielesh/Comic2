@@ -42,12 +42,13 @@ interface AuthPageProps {
     initialMode?: 'signin' | 'signup';
     onModeChange?: (mode: 'signin' | 'signup') => void;
     returnToWorkspace?: AuthWorkspace;
+    returnToOriginal?: string;
     checkGoogleAvailability?: typeof googleSignInAvailable;
     /** Optional product invitation to redeem after the email is verified. */
     pendingInviteCode?: string | null;
 }
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', onModeChange, pendingInviteCode = null, returnToWorkspace, checkGoogleAvailability = googleSignInAvailable }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', onModeChange, pendingInviteCode = null, returnToWorkspace, returnToOriginal, checkGoogleAvailability = googleSignInAvailable }) => {
     const [takenUsername, setTakenUsername] = useState('');
     const [googleConflict, setGoogleConflict] = useState(false);
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -107,6 +108,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             if (turnstileEnabled() && !captchaToken) throw new Error('Please complete the verification challenge.');
             const viaApi = await requestAuthEmail('resend', {
                 returnToWorkspace,
+                ...(returnToOriginal ? { returnToOriginal } : {}),
                 email: normalizedEmail,
                 app: 'main',
                 captchaToken: captchaToken || undefined
@@ -238,6 +240,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 // Our backend creates the account and sends the confirmation from dreamstreamstudio.ai.
                 const viaApi = await requestAuthEmail('signup', {
                     returnToWorkspace,
+                    ...(returnToOriginal ? { returnToOriginal } : {}),
                     app: 'main',
                     email: normalizedEmail,
                     password,
@@ -312,6 +315,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
 
                 const viaApi = await requestAuthEmail('magiclink', {
                     returnToWorkspace,
+                    ...(returnToOriginal ? { returnToOriginal } : {}),
                     email: normalizedEmail,
                     app: 'main',
                     captchaToken: captchaToken || undefined

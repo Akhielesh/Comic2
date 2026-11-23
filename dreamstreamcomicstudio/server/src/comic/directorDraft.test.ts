@@ -98,6 +98,20 @@ describe('the explicitly requested director draft', () => {
     expect(vi.mocked(writePagePlan).mock.calls[0][0].doc.format.pageCount).toBe(2);
   });
 
+  it.each([
+    ['30-page manga, portrait, right to left', 'Black-and-white manga. Dense ink and screen tones.', 30, 'manga', '2:3', 'rtl', 'bw'],
+    ['20-page comic, landscape, left to right', 'Western travel poster. Use ochre and indigo.', 20, 'comic', '3:2', 'ltr', 'color']
+  ])('passes the editable gallery format and art direction through to the writer and drawing quote', async (layout, art, pageCount, kind, pageAspect, readingDirection, colorMode) => {
+    const { ctx, session } = setup();
+    await runDirectorDraft(ctx, `A letter arrives by train.\nFormat: ${layout}.\nArt direction: ${art}`);
+    const doc = vi.mocked(writePagePlan).mock.calls[0][0].doc;
+    expect(doc.format).toMatchObject({ pageCount, kind, pageAspect, readingDirection, colorMode });
+    expect(doc.style.spec).toBe(art);
+    expect(doc.brief.title).toBe('A letter arrives by train.');
+    expect(session.doc.gate?.status).toBe('open');
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+
   it('preserves an existing title and source and includes the separate direction in the writer input', async () => {
     const { ctx, session } = setup();
     session.commit([{ op: 'brief', patch: { title: 'River Mail' } }, { op: 'source', patch: { script: 'Original script' } }]);

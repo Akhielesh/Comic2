@@ -10,7 +10,7 @@ const env = {
 };
 
 describe('Studio Originals release', () => {
-  it('schedules the four current books independently and preserves all five registered reader identities', () => {
+  it('schedules all current books independently and preserves the registered reader identities', () => {
     const workflow = readFileSync(new URL('../../../.github/workflows/publish-studio-originals.yml', import.meta.url), 'utf8');
     expect(workflow).toMatch(/fail-fast:\s*false/);
     expect(workflow).toMatch(/ORIGINAL_BOOK:\s*\$\{\{ matrix.book \}\}/);
@@ -21,7 +21,9 @@ describe('Studio Originals release', () => {
     expect(titles?.sort()).toEqual([...PUBLISHABLE_ORIGINAL_KEYS].sort());
     expect(titles).toContain('harbor');
     expect(titles).not.toContain('tide');
-    expect(ORIGINAL_KEYS).toHaveLength(5);
+    expect(ORIGINAL_KEYS).toHaveLength(10);
+    expect(new Set(Object.values(ORIGINAL_SLUGS)).size).toBe(10);
+    expect(Object.values(ORIGINAL_SLUGS).every((slug) => /^[a-zA-Z0-9]{17}$/.test(slug))).toBe(true);
     expect(isOriginalSlug(ORIGINAL_SLUGS.tide)).toBe(true);
   });
 

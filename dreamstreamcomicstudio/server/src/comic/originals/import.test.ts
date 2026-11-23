@@ -7,11 +7,11 @@ import { dirname, join } from 'node:path';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
-import { ORIGINAL_SLUGS } from '../../../../shared/comic/originals.js';
+import { ORIGINAL_SLUGS, collectionEdition, type OriginalKey } from '../../../../shared/comic/originals.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
 import { cleanAnswer } from '../safety/fakes.js';
 import { installSafetyFakes, resetSafety } from '../safety/testkit.js';
-import { sha256 } from './book.js';
+import { inspectOriginal, originalMetadata, sha256 } from './book.js';
 import { publishBundledOriginal } from './import.js';
 
 vi.mock('../../services/supabase.js', async (importOriginal) => ({
@@ -45,6 +45,40 @@ beforeAll(async () => {
       .webp()
       .toBuffer();
     await writeFile(join(folder, i ? 'p' + String(i).padStart(2, '0') + '.webp' : 'cover.webp'), image);
+  }
+});
+function collectionSource(key: OriginalKey) {
+  const { pages: count, ...format } = collectionEdition(key)!;
+  return {
+    ...source,
+    ...format,
+    pages: Array.from({ length: count }, (_, i) => ({
+      n: i + 1,
+      alt: 'Panel description ' + (i + 1),
+      transcript: 'Lettered line ' + (i + 1)
+    }))
+  };
+}
+beforeAll(async () => {
+  for (const key of ['margin', 'glass-hills'] as const) {
+    const book = collectionSource(key);
+    const dir = join(root, key);
+    await mkdir(dir);
+    await writeFile(join(dir, 'book.json'), JSON.stringify(book));
+    const landscape = book.orientation === 'landscape';
+    for (let i = 0; i <= book.pages.length; i++) {
+      const bytes = await sharp({
+        create: {
+          width: landscape ? 720 : 480,
+          height: landscape ? 480 : 720,
+          channels: 3,
+          background: { r: 30 + 5 * i, g: 150 - 3 * i, b: 180 + 2 * i }
+        }
+      })
+        .webp()
+        .toBuffer();
+      await writeFile(join(dir, i ? 'p' + String(i).padStart(2, '0') + '.webp' : 'cover.webp'), bytes);
+    }
   }
 });
 afterAll(async () => {
@@ -310,7 +344,12 @@ it('publishes Harbor from its separate manuscript and sixteen original plates th
     expect(sha256(db.objects.get(locators[i].path)!)).toBe(digest);
     if (i) {
       expect(doc.pages[i - 1].readerAlt).toBe(manuscript.pages[i - 1].alt);
-      expect(doc.pages[i - 1].panels[0].lines.map(l => l.text)).toEqual(manuscript.pages[i - 1].transcript.split(/\r?\n/).map(line => line.trim()).filter(Boolean));
+      expect(doc.pages[i - 1].panels[0].lines.map((l) => l.text)).toEqual(
+        manuscript.pages[i - 1].transcript
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      );
     }
   }
   expect(doc.cover.readerAlt).toBe(manuscript.coverAlt);
@@ -328,6 +367,113 @@ const historicalOrchard = {
   source_digest: 'dbcb04155d5e7db8b818dc1ed20fadd979a249c0d89023d59804ab01bdafd0a3',
   gate_hash: 'b293c8b66d1b68d397ddbf04'
 };
+
+describe('registered collection reading formats', () => {
+  it.each(['margin', 'parrots', 'bubble', 'glass-hills', 'night-atlas'] as const)(
+    'rejects a short, mislabeled or reordered %s edition',
+    (key) => {
+      const raw = collectionSource(key);
+      expect(originalMetadata(key, raw)).toMatchObject({ kind: raw.kind, readingDirection: raw.readingDirection });
+      expect(() => originalMetadata(key, { ...raw, pages: raw.pages.slice(0, -1) })).toThrow('story pages');
+      expect(() => originalMetadata(key, { ...raw, pages: [...raw.pages].reverse() })).toThrow('reading order');
+      expect(() => originalMetadata(key, { ...raw, readingDirection: raw.readingDirection === 'rtl' ? 'ltr' : 'rtl' })).toThrow(
+        'reading format'
+      );
+      expect(() => originalMetadata(key, { ...raw, title: 'Another title' })).toThrow('registered edition');
+    }
+  );
+  it.each(['margin', 'glass-hills'] as const)(
+    'checks every illustrated leaf of %s and publishes the native reading format',
+    async (key) => {
+      const fake = installSafetyFakes();
+      const db = localBackend();
+      const edition = collectionEdition(key)!;
+      const count = edition.pages;
+      await expect(publishBundledOriginal(key, root)).resolves.toEqual({ slug: ORIGINAL_SLUGS[key] });
+      const report = db.dbRow.review_report as EditorialReview['report'];
+      expect(report.pages).toHaveLength(count);
+      expect([report.text, report.cover, ...report.pages].every((t) => t.status === 'pass')).toBe(true);
+      expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(count + 1);
+      expect(JSON.stringify(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_text'))).toContain('Lettered line ' + count);
+      expect(db.rpc.mock.calls.some(([name]) => name === 'studio_claim_original_revision')).toBe(false);
+      const doc = db.dbRow.snapshot as ComicDoc;
+      const aspect = edition.orientation === 'landscape' ? '3:2' : '2:3';
+      expect(doc.format).toMatchObject({
+        pageCount: count,
+        kind: edition.kind,
+        readingDirection: edition.readingDirection,
+        pageAspect: aspect
+      });
+      expect(db.dbRow.card).toMatchObject({ pageCount: count, aspect, kindLabel: edition.kind === 'manga' ? 'Manga' : 'Comic' });
+      expect(doc.pages.at(-1)?.readerAlt).toBe('Panel description ' + count);
+    },
+    40000
+  );
+  it.each(['margin', 'parrots', 'bubble', 'glass-hills', 'night-atlas'] as const)(
+    'builds the reader from every frozen source plate in the published %s bundle',
+    async (key) => {
+      const fake = installSafetyFakes();
+      const db = localBackend();
+      const edition = collectionEdition(key)!;
+      const manuscript = JSON.parse(await readFile(join(bundledRoot, key, 'book.json'), 'utf8')) as typeof source;
+      await expect(publishBundledOriginal(key, bundledRoot)).resolves.toEqual({ slug: ORIGINAL_SLUGS[key] });
+      expect(db.dbRow.status).toBe('live');
+      const doc = db.dbRow.snapshot as ComicDoc;
+      expect(doc.format).toMatchObject({ kind: edition.kind, readingDirection: edition.readingDirection, pageCount: edition.pages });
+      expect(doc.format.colorMode).toBe(edition.colorMode ?? 'color');
+      expect(doc.pages.map((p) => p.readerAlt)).toEqual(manuscript.pages.map((p) => p.alt));
+      expect(doc.pages.map((p) => p.panels[0].lines.map((line) => line.text))).toEqual(
+        manuscript.pages.map((p) =>
+          p.transcript
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+        )
+      );
+      const uploaded = [doc.cover.render.asset!, ...doc.pages.map((p) => p.render.asset!)];
+      for (const [index, asset] of uploaded.entries()) {
+        const file = index ? 'p' + String(index).padStart(2, '0') + '.webp' : 'cover.webp';
+        expect(sha256(db.objects.get(asset.path)!)).toBe(sha256(await readFile(join(bundledRoot, key, file))));
+      }
+      const report = db.dbRow.review_report as EditorialReview['report'];
+      expect(report.pages).toHaveLength(edition.pages);
+      expect([report.text, report.cover, ...report.pages].every((v) => v.status === 'pass')).toBe(true);
+      expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(edition.pages + 1);
+    },
+    90_000
+  );
+
+  it('catches a late-page moderation refusal before any long-book artwork is uploaded', async () => {
+    const fake = installSafetyFakes();
+    let images = 0;
+    fake.llm.fallback = (req) =>
+      req.jsonSchema?.name === 'comic_safety_image' && ++images === 30
+        ? { ...cleanAnswer(req), rating: 'X', categories: ['graphic_gore'] }
+        : cleanAnswer(req);
+    const db = localBackend();
+    await expect(publishBundledOriginal('margin', root)).rejects.toThrow('did not clear');
+    expect(images).toBe(31);
+    expect(db.dbRow.status).toBe('blocked');
+    expect(db.dbRow.snapshot).toBeUndefined();
+    expect(db.objects.size).toBe(0);
+  }, 40000);
+  it('rejects an extra original leaf and a portrait image in a registered landscape book', async () => {
+    const dir = join(root, 'glass-hills');
+    const extra = join(dir, 'p21.webp');
+    const page = join(dir, 'p19.webp');
+    const original = await readFile(page);
+    try {
+      await writeFile(extra, original);
+      await expect(inspectOriginal(root, 'glass-hills')).rejects.toThrow('roster');
+      await rm(extra);
+      await writeFile(page, await readFile(join(root, 'margin', 'p19.webp')));
+      await expect(inspectOriginal(root, 'glass-hills')).rejects.toThrow('landscape orientation');
+    } finally {
+      await rm(extra, { force: true });
+      await writeFile(page, original);
+    }
+  }, 20000);
+});
 
 describe('review of the PG metadata revision', () => {
   it.each(['cleared', 'blocked', 'needs_check'] as const)(

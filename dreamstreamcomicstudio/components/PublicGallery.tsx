@@ -19,6 +19,7 @@ import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
 import { clearLibraryReads, GUEST_LIBRARY_HISTORY_KEY, libraryPicks, libraryReads, LIBRARY_HISTORY_CHANGED, type DiscoveryComic } from '../services/libraryDiscovery';
 import { loadStudioOriginals, type StudioOriginalCard } from '../services/studioOriginals';
+import { originalLook } from './comicstudio/library/originalLooks';
 import { isOriginalSlug } from '../shared/comic/originals';
 import { filterPublicListing, isPubliclyListed } from '../services/publicListing';
 import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
@@ -77,6 +78,7 @@ const coverCandidates = (project: Project): string[] => {
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
+    onUseOriginalLook?: (slug: string) => void;
     /** Kept for its callers; the page has no Back button (the header's lockup goes home). */
     onBack?: () => void;
     /** Asked when a signed-in-only action is attempted without an account (kept for its callers; visitors see no such action). */
@@ -202,7 +204,7 @@ function discoveryComic(project: LibraryCard): DiscoveryComic | null {
         liked:!!project.isLiked} : null;
 }
 
-export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onRequireAuth }) => {
+export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onRequireAuth, onUseOriginalLook }) => {
     const { user, loading: authLoading } = useAuth();
     const owner = user?.id ?? null;
     const [historyVersion, setHistoryVersion] = useState(0);
@@ -429,8 +431,16 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     };
     const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
     const discoveryActive = filter === 'discovery' && !query && !search.trim() && !kidsOnly && !authLoading && listingOwner === owner;
-    const visibleOriginals = useMemo(() => originals.filter(card => (!kidsOnly || isKidsFriendly(card.contentRating)) &&
-        (!query || card.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))), [originals, query, kidsOnly]);
+    const visibleOriginals = useMemo(() => {
+        const term = query.toLocaleLowerCase();
+        return originals.filter(card => {
+            if (kidsOnly && !isKidsFriendly(card.contentRating)) return false;
+            if (!term) return true;
+            const look = originalLook(card.slug);
+            const fields = [card.name, look?.label, look?.format, look?.brief, `${card.pageCount} pages`];
+            return fields.some(value => value?.toLocaleLowerCase().includes(term));
+        });
+    }, [originals, query, kidsOnly]);
     const ranked = useMemo(() => {
         if (!discoveryActive) return [];
         const toComic = (rows: LibraryCard[]) => rows.map(discoveryComic).filter((c): c is DiscoveryComic => !!c);
@@ -487,7 +497,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 <span>Made in Comic Studio</span></div>
             {showTools && <>
                 <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
-                    <label className="library-search-field"><Search aria-hidden /><span className="sr-only">Search comic titles</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder="Search comic titles" /></label>
+                    <label className="library-search-field"><Search aria-hidden /><span className="sr-only">{originals.length ? 'Search titles, art styles and formats' : 'Search comic titles'}</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder={originals.length ? 'Search titles, styles or formats' : 'Search comic titles'} /></label>
                     {search && <button type="button" className={cn('library-clear-search', FOCUS_RING)} aria-label="Clear search" onClick={() => { setSearch(''); setQuery(''); }}><X aria-hidden /></button>}
                     <Button type="submit" variant="outline" className="library-search-submit">Search</Button>
                 </form>
@@ -508,11 +518,12 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                         {filteredProjects.map((project) => {
                             const covers = project.editorial ? [project.coverImage] : coverCandidates(project);
                             const slug = librarySlug(project);
+                            const look = project.editorial ? originalLook(project.slug) : undefined;
                             const pick = slug ? picks.get(slug) : undefined;
                             const resume = pick?.resumePage;
                             const why = pick?.reason && (showTools || resume || pick.reason.startsWith('Because you')) ? pick.reason : '';
                             const likes = project.likesCount || 0;
-                            const cover = <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}{!few && <span className="library-cover-read" aria-hidden>{resume ? 'Continue reading' : 'Read comic'} <ArrowRight /></span>}</div>;
+                            const cover = <div className="library-cover" data-orientation={look?.landscape ? 'landscape' : undefined}><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}{!few && <span className="library-cover-read" aria-hidden>{resume ? 'Continue reading' : 'Read comic'} <ArrowRight /></span>}</div>;
                             const published = <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>;
                             // A wide card keeps one link (cover, title, date and "Read comic"); the likes sit beside it, outside the link.
                             return <li key={project.id} ref={project.id === nextFocusId.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} data-layout={few ? 'wide' : undefined} className="library-card">
@@ -525,7 +536,12 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                                 {why && !few && <p className="library-discovery-reason">{why}</p>}
                                 {pick && !few && project.publicOverview && <p className="library-discovery-summary">{project.publicOverview}</p>}
                                 {!few && published}
-                                {project.editorial ? <p className="library-published">{project.authorName} · {project.pageCount} pages</p> :
+                                {project.editorial ? <>
+                                  <p className="library-published">{project.authorName} · {project.pageCount} pages</p>
+                                  {look && <div className="library-technique"><span>{look.label} · {look.format}</span>
+                                    {onUseOriginalLook && <button type="button" className={cn('library-look-action', FOCUS_RING)} aria-label={`Start a comic like ${project.name}`} onClick={() => onUseOriginalLook(project.slug)}>Start a comic like this <ArrowRight aria-hidden /></button>}
+                                  </div>}
+                                </> :
                                 <div className="library-card-stats">
                                     {/* Reading needs no account: a visitor sees the likes, a signed-in reader can add one. */}
                                     {user

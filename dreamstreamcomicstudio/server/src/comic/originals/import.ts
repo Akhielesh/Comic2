@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
-import { ORIGINAL_SLUGS, isPublishableOriginal, type OriginalKey } from '../../../../shared/comic/originals.js';
+import { ORIGINAL_SLUGS, isPublishableOriginal, originalStoryPages, type OriginalKey } from '../../../../shared/comic/originals.js';
 import { applyOps } from '../../../../shared/comic/ops.js';
 import type { AssetRef, ComicDoc } from '../../../../shared/comic/doc.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
 import { newAssetKey } from '../publication/ids.js';
 import { renderOgCard } from '../publication/ogImage.js';
-import { buildShareCard, buildSnapshot, ogPath, planSnapshot } from '../publication/snapshot.js';
+import { buildShareCard, buildSnapshot, kindLabelOf, ogPath, planSnapshot } from '../publication/snapshot.js';
 import { publicObjectUrl } from '../publication/publication.js';
 import { PUBLIC_BUCKET } from '../storagePaths.js';
 import { claimReviewedEdition, editorialReview } from './review.js';
@@ -70,7 +70,7 @@ export async function reviewOriginal(book: OriginalBook, source: ComicDoc) {
     doc,
     { pageIds: doc.pages.map((p) => p.id), includeCover: true, languages: ['en'] }
   );
-  return editorialReview(gate, doc);
+  return editorialReview(gate, doc, originalStoryPages(book.key));
 }
 
 export async function publishBundledOriginal(key: OriginalKey, root: string): Promise<{ slug: string }> {
@@ -182,8 +182,8 @@ export async function publishBundledOriginal(key: OriginalKey, root: string): Pr
     const og = await renderOgCard({
       title: book.metadata.title,
       subtitle: book.metadata.summary,
-      kindLabel: 'Comic',
-      pageCount: 15,
+      kindLabel: kindLabelOf(snapshot.format.kind),
+      pageCount: snapshot.pages.length,
       lang: 'en',
       languagesLabel: 'English',
       coverBuf: await verifiedBytes(book.images[0]),

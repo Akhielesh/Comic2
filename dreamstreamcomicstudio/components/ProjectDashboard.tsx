@@ -137,6 +137,7 @@ interface ProjectDashboardProps {
   projectsLoaded?: boolean;
   /** One-shot navigation intent: show the existing creation form without creating a draft. */
   openNewComic?: boolean;
+  initialLookBrief?: string;
   onNewComicOpened?: () => void;
   /** The comics host's focused entry. Main-suite and classic dashboards retain their existing UI. */
   comicWorkspace?: boolean;
@@ -155,7 +156,7 @@ interface ProjectDashboardProps {
 
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
-  projects, projectsLoaded = true, openNewComic = false, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onOpenStudioWork, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
+  projects, projectsLoaded = true, openNewComic = false, initialLookBrief, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onOpenStudioWork, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
   const [isCreating, setIsCreating] = useState(openNewComic || (comicWorkspace && projectsLoaded && !projects.length));
   const ff = useFormFactor();
@@ -166,14 +167,20 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     initialEntryChosen.current = true;
     if (comicWorkspace && !projects.length) setIsCreating(true);
   }, [projectsLoaded, comicWorkspace, projects.length]);
+  const draft = useComicIdeaDraft(comicWorkspace ? accountId : undefined);
+  const requestOpened = useRef(false);
   useEffect(() => {
-    if (!openNewComic) return;
+    if (!openNewComic) { requestOpened.current = false; return; }
+    if (requestOpened.current) return;
+    requestOpened.current = true;
+    if (initialLookBrief && !draft.idea.includes(initialLookBrief)) {
+      draft.setIdea([draft.idea.trimEnd(), initialLookBrief].filter(Boolean).join('\n\n'));
+    }
     initialEntryChosen.current = true;
     setIsCreating(true);
     setClassicForm(false);
     onNewComicOpened?.();
-  }, [openNewComic, onNewComicOpened]);
-  const draft = useComicIdeaDraft(comicWorkspace ? accountId : undefined);
+  }, [openNewComic, initialLookBrief, onNewComicOpened, draft.idea, draft.setIdea]);
   const { name: newProjectName, setName: setNewProjectName } = draft;
   const [createPending, setCreatePending] = useState<NewComicMode | null>(null);
   // Synchronous guard: Enter + click in the same tick must not create two comics.

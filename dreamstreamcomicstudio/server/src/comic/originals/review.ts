@@ -21,7 +21,7 @@ const targetReport = (status: SafetyStatus | undefined, verdict?: Verdict) => ({
 });
 
 /** Operator-facing codes only. No book text, provider answers, filenames or raw moderation notes. */
-export function editorialReview(gate: PublishGateResult, judged: ComicDoc) {
+export function editorialReview(gate: PublishGateResult, judged: ComicDoc, expectedPages: number) {
   const report = {
     text: targetReport(gate.text.status, judged.safety?.text),
     cover: targetReport(gate.cover?.status, judged.cover.render.asset?.safety),
@@ -32,7 +32,7 @@ export function editorialReview(gate: PublishGateResult, judged: ComicDoc) {
   const cleared =
     gate.status === 'cleared' &&
     gate.rating === judged.settings.rating &&
-    report.pages.length === 15 &&
+    report.pages.length === expectedPages &&
     targets.every((v) => v.status === 'pass' && isContentRating(v.assessed) && ratingRank(v.assessed) <= ratingRank(gate.rating));
   const status: PublishGateResult['status'] = blocked || gate.status === 'blocked' ? 'blocked' : cleared ? 'cleared' : 'needs_check';
   return { status, rating: gate.rating, checkedHash: gate.checkedHash, costUsd: gate.costUsd, report };

@@ -444,14 +444,18 @@ describe('the rated description', () => {
   });
 });
 
-it.each([['DSOriginalTree001','The Last Orchard on Six'],['DSOriginalPort001','The Harbor That Listened']])('uses the editorial share card, Organization byline and embed page for %s on both comic hosts', async (slug,title) => {
+it.each([
+  ['DSOriginalTree001', 'The Last Orchard on Six', 15], ['DSOriginalPort001', 'The Harbor That Listened', 15],
+  ['DSOriginalMarg001', 'The Girl in the Margin', 30], ['DSOriginalWest001', 'West of the Glass Hills', 20]
+] as const)('uses the editorial share card, Organization byline and embed page for %s on both comic hosts', async (slug,title,count) => {
   for (const host of ['comics.dreamstreamstudio.ai','comic.dreamstreamstudio.ai']) {
-    const e=env(card({slug,visibility:'public'}, {title,creator:'DreamStream Studio Originals',pageCount:15,i18n:{}}));
+    const e=env(card({slug,visibility:'public'}, {title,creator:'DreamStream Studio Originals',pageCount:count,i18n:{}}));
     const req=new Request('https://'+host+'/c/'+slug);
     const result=await handleShare(req,e);
     expect(result.status).toBe(200);
     const html=await result.text();
     expect(html).toContain(title);
+    expect(html).toContain('"numberOfPages":'+count);
     expect(html).toContain('"author":{"@type":"Organization","name":"DreamStream Studio Originals"}');
     expect(e.calls[0]).toMatch(/\/comic_originals_share_card$/);
     expect((await handleShare(new Request(req.url+'/embed'),e)).status).toBe(200);
