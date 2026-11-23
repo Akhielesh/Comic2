@@ -162,7 +162,8 @@ export const generateImage = async (
         }
       });
     }
-    return generateGeminiImage(prompt, aspectRatio, resolution, referenceImageIds, projectId, {
+    const refs = stage === 'world' && modelId === GEMINI_IMAGE_MODEL_ID ? referenceImageIds.slice(0, 3) : referenceImageIds;
+    return generateGeminiImage(prompt, aspectRatio, resolution, refs, projectId, {
       ...options,
       meta,
       modelId

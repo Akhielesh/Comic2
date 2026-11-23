@@ -116,6 +116,7 @@ import {
 import { ANCHORS_ENV, ANCHOR_SHEET_RES, anchorKindsFromFlag, planAnchors } from '../../../shared/comic/anchors.js';
 import { partsOf } from '../../../shared/comic/parts.js';
 import { PLATFORM_CEILING, canServeToOwner, effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
+import { comicImageCapacity, comicTextCapacity } from './generationCapacity.js';
 import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../shared/comic/sendable.js';
 import {
   IMAGE_MODELS,
@@ -659,15 +660,22 @@ export interface TextSpendTracker {
 
 export const newTextSpendTracker = (): TextSpendTracker => ({ usd: 0, estimated: false, byok: false, calls: 0 });
 
-const textOf = (messages: ChatMessage[]): { chars: number; images: number } => {
+const textOf = (messages: ChatMessage[]) => {
+  let imageChars = 0;
   let chars = 0;
   let images = 0;
   for (const m of messages) {
     if (typeof m.content === 'string') chars += m.content.length;
-    else for (const part of m.content || []) part.type === 'text' ? (chars += part.text.length) : (images += 1);
+    else for (const part of m.content || []) {
+      if (part.type === 'text') chars += part.text.length;
+      else {
+        images++;
+        imageChars += part.image_url.url.length;
+      }
+    }
     if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
   }
-  return { chars, images };
+  return { chars, images, bytes: chars * 2 + imageChars };
 };
 
 /** Generic per-1M prices when a model is not in the price table (keeps estimates honest, never $0). */
@@ -679,11 +687,17 @@ const UNKNOWN_TEXT_PRICE = { input: 1, output: 5 };
  */
 export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void } }): LlmClient {
   return {
-    async complete(req) {
-      // Cancelled before we even reserved: nothing to bill or release.
-      if (req.signal?.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
-      const route = resolveTextRoute(req.role, ctx.keys);
+    complete(req) {
       const size = textOf(req.messages);
+      const signal = req.signal ?? ctx.signal;
+      const route = resolveTextRoute(req.role, ctx.keys);
+      return comicTextCapacity.run(ctx.userId, signal, () => metered(req, size, route, signal), { bytes: size.bytes, ownKey: route?.key.byok });
+    }
+  };
+
+  async function metered(req: Parameters<LlmClient['complete']>[0], size: ReturnType<typeof textOf>, route: ReturnType<typeof resolveTextRoute>, signal?: AbortSignal) {
+      // Cancelled before we even reserved: nothing to bill or release.
+      if (signal?.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       const approxPrompt = Math.ceil(size.chars / 4) + size.images * 1100;
       let projectedDraftSpend = 0;
       if (args.draft) {
@@ -721,7 +735,7 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
         // Cancelled while the reserve was in flight: release it — nothing was dispatched, so
         // billing the usual CANCELLED estimate here would be charging for a call never made.
         // (Nothing is awaited between here and llm.ts's own pre-dispatch abort check.)
-        if (req.signal?.aborted) {
+        if (signal?.aborted) {
           await reservation.release('cancelled_before_dispatch');
           throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
         }
@@ -768,8 +782,7 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
       args.tracker.calls += 1;
       args.tracker.model = result.model || args.tracker.model;
       return result;
-    }
-  };
+  }
 }
 
 /** Commit one spend entry for a text tracker (no-op when nothing was called). */
@@ -3294,14 +3307,22 @@ class RenderRun {
     let outcome: DrawOutcome = { kind: 'done' };
     try {
       if (this.stopReason || this.signal.aborted) return this.restore(job);
-      if (!getRender(this.session.doc, job.target)) {
-        this.results.push({ job, ok: false, skipped: true });
-        return;
-      }
-      outcome = await this.draw(job);
+      // Queue before reading the full-size reference files or reserving any usage.
+      outcome = await comicImageCapacity.run(this.ctx.userId, this.signal, async () => {
+        if (this.stopReason || this.signal.aborted) {
+          this.restore(job);
+          return { kind: 'done' } as const;
+        }
+        if (!getRender(this.session.doc, job.target)) {
+          this.results.push({ job, ok: false, skipped: true });
+          return { kind: 'done' } as const;
+        }
+        return this.draw(job);
+      }, { ownKey: imageRouteFor(this.specOf(job), this.ctx.keys)?.byok, waitMs: 30 * 60_000 });
     } catch (err) {
       const error = asStudioError(err);
-      this.fail(job, error.userMessage);
+      if (error.code === 'CANCELLED') this.restore(job);
+      else this.fail(job, error.userMessage);
     } finally {
       release?.();
       this.endTurn();
@@ -3526,6 +3547,11 @@ class RenderRun {
       return { outcome: { kind: 'done' }, asset: null };
     }
 
+    if (this.signal.aborted || this.stopReason) {
+      end(false);
+      this.restore(job);
+      return { outcome: { kind: 'done' }, asset: null };
+    }
     const reserved = await ctx.billing.reserve({
       operation: imageOperation[job.kind],
       provider: picked.route,
@@ -3547,6 +3573,12 @@ class RenderRun {
       return { outcome: { kind: 'done' }, asset: null };
     }
     const reservation = reserved.reservation;
+    if (this.signal.aborted || this.stopReason) {
+      await reservation.release('cancelled_before_dispatch');
+      end(false);
+      this.restore(job);
+      return { outcome: { kind: 'done' }, asset: null };
+    }
 
     let result: ImageResult | undefined;
     let lastError: StudioError | undefined;

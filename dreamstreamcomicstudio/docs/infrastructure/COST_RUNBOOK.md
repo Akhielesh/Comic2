@@ -21,7 +21,7 @@ paid provider changes.
 
 | Service | What you pay for | Est. monthly | Lever |
 |---|---|---|---|
-| **Backend container** (`Backend`, `basic` 1/4 vCPU · 1 GiB · 4 GB) | Memory + disk per awake second, CPU per *active* second | **~$0–1** at a few hours/day awake; **~$7 worst case** if kept awake 24/7 | Sleeps 15 min after the last request; one instance; Node heap cap, no Redis, lazy Pyodide |
+| **Backend container** (`Backend`, `basic` 1/4 vCPU · 1 GiB · 4 GB) | Memory + disk per awake second, CPU per *active* second | **~$0–1** at a few hours/day awake; **~$7 worst case** if kept awake 24/7 | One named instance with a 15-minute idle window and bounded extensions for approved renders |
 | **Cloudflare Workers Paid** | Flat plan fee (required by the backend container) | **$5** | Includes 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk of Containers per month |
 | **Railway** | Nothing — trial expired, deployments removed | **$0** | Dormant fallback; don't upgrade the plan unless returning (`INFRA_MAP.md` §3a) |
 | **Railway dead projects** | Idle volumes only (~1.4 GB total) | **~$0** while the account is on an expired trial | Delete dead services/volumes (§4) |
@@ -64,6 +64,16 @@ the list-price value, the headroom left in each allowance and the month-end proj
   the 1 GiB ceiling (watch for exit code 137 in Workers → dreamstream-api → logs).
 - **Verify:** Cloudflare dashboard → Workers & Pages → Containers → `dreamstream-api-backend`
   → instances should read 0 running when nobody is using the app.
+
+### Comic generation capacity
+
+The named container admits work round-robin across signed-in accounts before opening a billing reservation or decoding render references. Defaults allow 12 platform text calls and six platform image calls at once. Personal credentials can use up to 16 text and eight image slots in total. Each account can use up to six text calls and three images across its projects. The shared Sharp decoder runs at most three pipelines. The authenticated rate limits also use account IDs, so creators sharing a network retain their own limits.
+
+An approved Studio image can wait up to 30 minutes for admission. A text step can wait 12 minutes, subject to the Director's 14-minute overall planning deadline. A synchronous image API request waits up to 45 seconds and returns a retryable 429 when full. The server admits up to 384 waiting steps per queue, 16 per account, with a 48 MiB pending-payload limit. Large uploads share a 48 MiB body budget before parsing at the standard 10 MiB upload limit. Local tests simulate provider latency. Actual throughput depends on the provider's capacity and each document's page count.
+
+An open response stream keeps the container awake. When the last browser disconnects, an already-running Studio job can extend the ordinary 15-minute sleep window up to three times. Idle containers still sleep at the first check. A restart or a job that outlasts the one-hour unattended window uses the Studio's existing interrupted-render recovery.
+
+Standalone image metadata checks run concurrently against the enabled personal Gemini and OpenRouter credentials. Each check has a 1.8-second limit, with short-lived results scoped to the exact account, credential and model. The private save records the chosen provider. An ambiguous generation or save outcome blocks replay of the same action while its idempotency record is retained. Action records are held in the serving process for up to 15 minutes with the default configuration and an overall cap of 1,000 actions.
 
 ### 2.0b Railway (dormant)
 The Railway trial expired on 2026-10-16 and the Comic2 deployment was removed; nothing bills.

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import sharp from 'sharp';
+import { withSharpSlot, SHARP_INPUT } from '../comic/imageMeasure.js';
 import type { ImageResolution } from '../../../types.js';
 import { COMIC_PRIVATE_BUCKET, STORAGE_BUCKET } from '../config.js';
 import { getSupabaseAdmin } from './supabase.js';
@@ -113,10 +114,18 @@ export const persistGeneratedImage = async ({
 
   const { buffer: rawBuffer } = parseDataUrl(dataUrl);
   const croppedBuffer = await cropToRatioIfNeeded(rawBuffer, cropToRatio);
-  const quality = WEBP_QUALITY[resolution || '1K'] || WEBP_QUALITY['1K'];
-  const webp = await sharp(croppedBuffer, { failOn: 'none', limitInputPixels: 50_000_000 })
-    .webp({ quality, effort: WEBP_EFFORT })
-    .toBuffer({ resolveWithObject: true });
+  const quality = standalone ? 90 : WEBP_QUALITY[resolution || '1K'] || WEBP_QUALITY['1K'];
+  const webp = await withSharpSlot(async () => {
+    const image = sharp(croppedBuffer, SHARP_INPUT);
+    // A provider WebP is already usable. Keep that final artwork byte-for-byte on this private path.
+    if (standalone && !cropToRatio) {
+      const metadata = await image.metadata();
+      if (metadata.format === 'webp' && metadata.width && metadata.height) {
+        return { data: croppedBuffer, info: { width: metadata.width, height: metadata.height } };
+      }
+    }
+    return image.webp({ quality, effort: standalone ? 1 : WEBP_EFFORT }).toBuffer({ resolveWithObject: true });
+  });
 
   const imageId = crypto.randomUUID();
   const path = standalone ? `u/${userId}/standalone/${imageId}.webp` : buildStoragePath(userId, imageId, projectId);

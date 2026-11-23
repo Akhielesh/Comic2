@@ -391,6 +391,9 @@ describe('createSupabaseDocStore', () => {
     const next = docWith({ rev: 4, brief: { title: 'The Spice Market', logline: 'Rivals cook.', notes: [] }, pages: [page(1, 'ready', 'u/a/p1.webp')] });
     await store.save({ projectId: PID, userId: USER, doc: next, summary: { title: 'The Spice Market', logline: 'Rivals cook.' } });
     expect(db.tables.comic_docs[0]).toMatchObject({ rev: 4 });
+    expect(db.tables.comic_docs[0].doc.workspaceActivity.finished).toContainEqual(expect.objectContaining({ kind: 'pages', count: 1 }));
+    expect(await store.load(PID, USER)).not.toHaveProperty('workspaceActivity');
+    expect(sanitizePublicDoc(db.tables.comic_docs[0].doc)).not.toHaveProperty('workspaceActivity');
     expect(db.tables.comic_docs[0].doc.brief.title).toBe('The Spice Market');
     const project = db.tables.projects[0];
     expect(project.name).toBe('The Spice Market');

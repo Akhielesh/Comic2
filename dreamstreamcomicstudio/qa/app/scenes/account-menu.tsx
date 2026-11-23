@@ -2,7 +2,7 @@
 // end of a header, as every Comic Studio header mounts it, with its real panel. Variants by query:
 //   (default)       signed in: the initial, the panel with Appearance (Paper offered), the Settings rows, Help, Sign out;
 //   &state=staff    with the Admin console row;
-//   &state=busy     the open comic reports the Director at work: the rows say they open a new tab;
+//   &state=busy     settings stays in the current tab during studio work;
 //   &state=signedout  the Appearance button alone;
 //   &sheet=1        the panel as the bottom sheet at every width (the ⋯ row inside a comic asks for it);
 //   &open=1         the panel opened on load.
@@ -12,7 +12,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AccountMenu } from '../../../components/account/AccountMenu';
 import { AccountProvider, type AccountContextValue } from '../../../components/account/AccountContext';
-import { setStudioBusy, useAccountSettingsListener } from '../../../components/account/accountNav';
+import { useAccountSettingsListener } from '../../../components/account/accountNav';
 import { useComicTheme } from '../../../components/comicstudio/useComicTheme';
 import { ComicsMark } from '../../../components/comicshost/ComicsMark';
 import { BrandLockup } from '../../../components/layout/BrandLockup';
@@ -27,12 +27,6 @@ function AccountMenuScene() {
   const [signedIn, setSignedIn] = useState(state !== 'signedout');
   const [last, setLast] = useState<string>('Nothing opened yet.');
   const { theme } = useComicTheme();
-
-  useEffect(() => {
-    if (state !== 'busy') return undefined;
-    setStudioBusy(true);
-    return () => setStudioBusy(false);
-  }, [state]);
 
   useEffect(() => {
     if (param('open') !== '1') return;

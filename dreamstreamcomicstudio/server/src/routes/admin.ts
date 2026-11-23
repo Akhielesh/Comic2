@@ -1,3 +1,4 @@
+import { ReportError, readFeedbackScreenshot } from '../services/feedbackReports.js';
 import { NextFunction, Request, Response, Router } from 'express';
 import type { BillingPlanTier } from '../../../shared/types/billing.js';
 import { streamAppHref } from '../../../shared/streamHost.js';
@@ -506,7 +507,20 @@ adminRouter.get('/analytics/events', requireAdmin, async (req, res, next) => {
   }
 });
 
+adminRouter.get('/analytics/feedback/:id/screenshots/:position', requireAdmin, async (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  try {
+    const image = await readFeedbackScreenshot(String(req.params.id), Number(req.params.position));
+    return res.type('image/webp').send(image);
+  } catch (error) {
+    if (error instanceof ReportError) return res.status(error.status).json({ error: { message: error.message } });
+    next(error);
+  }
+});
+
 adminRouter.get('/analytics/feedback', requireAdmin, async (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   try {
     res.json(await listFeedback({
       vote: typeof req.query.vote === 'string' ? req.query.vote : undefined,

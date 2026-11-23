@@ -53,7 +53,7 @@ googleLoginRouter.post('/complete', async (req, res) => {
     if (!found || found.data.origin !== origin) return failed(res, 410, 'This sign-in has expired. Continue with Google again.');
     const { identity, authoritativeEmail } = found.data;
     const account = await resolveGoogleAccount(identity);
-    if (account === 'email-conflict') return failed(res, 409, 'This email already has an account. Use your existing sign-in method.');
+    if (account === 'email-conflict') return res.status(409).json({ code: 'email-conflict', message: 'This email already has an account. Use your existing sign-in method.' });
     if (account === 'needs-profile') {
       if (!authoritativeEmail) return failed(res, 400, 'Please use email signup so we can verify this address directly.');
       if (!profile) return res.json({ needsProfile: true, firstName: identity.firstName || '', email: identity.email });
@@ -65,12 +65,12 @@ googleLoginRouter.post('/complete', async (req, res) => {
     } catch (error) {
       if (error instanceof GoogleLoginAccountError && ['invalid-profile','username-taken'].includes(error.code)) {
         const replacement = await saveGoogleFlow('complete', found.data, challenge, found.expiresAt);
-        return res.status(422).json({ message: error.message, grant: replacement });
+        return res.status(422).json({ code: error.code, message: error.message, grant: replacement });
       }
       throw error;
     }
   } catch (error) {
-    if (error instanceof GoogleLoginAccountError) return failed(res, error.code === 'unavailable' ? 503 : 409, error.message);
+    if (error instanceof GoogleLoginAccountError) return res.status(error.code === 'unavailable' ? 503 : 409).json({ code: error.code, message: error.message });
     return failed(res, 503);
   }
 });

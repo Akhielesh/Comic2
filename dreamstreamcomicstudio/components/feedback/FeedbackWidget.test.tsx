@@ -6,18 +6,27 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../services/feedback', () => ({
-  FEEDBACK_CATEGORIES: ['Comic Studio', 'Chat Studio'],
-  submitFeedback: vi.fn(async () => undefined)
+vi.mock('../../services/feedbackReports', async (load) => ({
+  ...await load<typeof import('../../services/feedbackReports')>(),
+  sendFeedbackReport: vi.fn(async () => ({ id: 'b48e2af7-a5e9-4b0c-8c3f-65ad306b891e' })),
+  prepareReportScreenshot: vi.fn(async (file: File) => ({
+    name: file.name,
+    image: 'dGVzdA==',
+    mime: 'image/webp'
+  }))
 }));
-
-import { submitFeedback } from '../../services/feedback';
+import { sendFeedbackReport } from '../../services/feedbackReports';
+import { openFeedbackReport } from '../../services/openFeedbackReport';
 import { OVERLAY, SCRIM, Z } from '../chat/studioDesign';
 import { expectClasses } from '../ds/ds.testkit';
 import { FEEDBACK_LAUNCHER, FeedbackWidget } from './FeedbackWidget';
 
-const classesIn = (root: Element): string[] => [root, ...root.querySelectorAll('*')].flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/)).filter(Boolean);
-const LEGACY = /^(?:[\w-]+:)*(?:border-black|shadow-comic|font-comic|font-display|(?:bg|text|border)-brand-[\w/]+|(?:bg|text|border)-slate-\d+|(?:text|bg)-green-\d+|bg-black|text-white|shadow-\[\d)/;
+const classesIn = (root: Element): string[] =>
+  [root, ...root.querySelectorAll('*')]
+    .flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/))
+    .filter(Boolean);
+const LEGACY =
+  /^(?:[\w-]+:)*(?:border-black|shadow-comic|font-comic|font-display|(?:bg|text|border)-brand-[\w/]+|(?:bg|text|border)-slate-\d+|(?:text|bg)-green-\d+|bg-black|text-white|shadow-\[\d)/;
 
 describe('FeedbackWidget', () => {
   it('the pill is the raised Atlas pill on the chrome layer, above the bottom safe area', () => {
@@ -77,13 +86,72 @@ describe('FeedbackWidget', () => {
     expect(send).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Happy' }));
     expect(screen.getByRole('button', { name: 'Happy' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.change(screen.getByRole('combobox', { name: "What's it about?" }), { target: { value: 'Chat Studio' } });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Tell us more' }), { target: { value: '  Love the reader  ' } });
+    fireEvent.change(screen.getByRole('combobox', { name: "What's it about?" }), {
+      target: { value: 'Speed / performance' }
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tell us more' }), {
+      target: { value: '  Love the reader  ' }
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
     });
-    expect(submitFeedback).toHaveBeenCalledWith(expect.objectContaining({ sentiment: 'positive', category: 'Chat Studio', comment: 'Love the reader' }));
+    expect(sendFeedbackReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentiment: 'positive',
+        category: 'Speed / performance',
+        comment: 'Love the reader'
+      }),
+      undefined,
+      expect.any(AbortSignal)
+    );
     expect(screen.getByRole('status')).toHaveTextContent('Thanks — we hear you.');
+  });
+
+  it('keeps the draft on connection failure and safely retries the same submission', async () => {
+    vi.mocked(sendFeedbackReport).mockClear().mockRejectedValueOnce(new Error('unreviewed upstream detail'));
+    render(<FeedbackWidget showLauncher={false} ownerId="member-one" surface="comicstudio" />);
+    act(() => openFeedbackReport('bug'));
+    const input = screen.getByRole('textbox', { name: 'What happened?' });
+    fireEvent.change(input, { target: { value: 'A blank panel.' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send bug report' })));
+    expect(screen.getByRole('alert')).toHaveTextContent('Your report could not be saved. Please retry.');
+    expect(screen.queryByText(/unreviewed upstream/)).toBeNull();
+    expect(input).toHaveValue('A blank panel.');
+    expect(screen.queryByText('Report ID')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send bug report' })));
+    const [first, second] = vi.mocked(sendFeedbackReport).mock.calls;
+    expect(first[0]).toEqual(second[0]);
+    expect(first[0]).toMatchObject({ kind: 'bug', surface: undefined, comment: 'A blank panel.', images: [] });
+    expect(first[1]).toBe('member-one');
+    expect(screen.getByRole('status')).toHaveTextContent('b48e2af7');
+  });
+
+  it('lets the reporter review and remove screenshots and opt in to sharing the app area', async () => {
+    vi.mocked(sendFeedbackReport).mockClear();
+    render(<FeedbackWidget surface="comicstudio" />);
+    act(() => openFeedbackReport('bug'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Check the page layout.' } });
+    const files = Array.from(
+      { length: 11 },
+      (_, i) => new File(['synthetic'], 'shot-' + i + '.png', { type: 'image/png' })
+    );
+    const choose = screen.getByLabelText(/Screenshots \(0\/10\)/);
+    await act(async () => fireEvent.change(choose, { target: { files } }));
+    expect(screen.getByRole('alert')).toHaveTextContent('up to 10');
+    expect(screen.queryAllByRole('img')).toHaveLength(0);
+    await act(async () => fireEvent.change(choose, { target: { files: files.slice(0, 10) } }));
+    expect(screen.getAllByRole('img')).toHaveLength(10);
+    expect(choose).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove screenshot 1' }));
+    expect(screen.getAllByRole('img')).toHaveLength(9);
+    expect(choose).toBeEnabled();
+    expect(sendFeedbackReport).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Include current area/ }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send bug report' })));
+    const [payload] = vi.mocked(sendFeedbackReport).mock.calls[0];
+    expect(payload.surface).toBe('comicstudio');
+    expect(payload.images).toHaveLength(9);
+    expect(JSON.stringify(payload)).not.toContain('shot-');
   });
 
   it('leaving the page cancels its delayed steps: no timer is left behind after unmount', () => {

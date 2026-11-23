@@ -1,3 +1,6 @@
+import { SignupUsername } from './SignupUsername';
+import { USERNAME_REGEX } from '../shared/username';
+import { signInWithUsername } from '../services/usernames';
 import { userFacingErrorMessage } from '../services/apiErrors';
 import React, { useEffect, useRef, useState } from 'react';
 import { cancelGoogleSignIn, completeGoogleSignIn, googleSignInAvailable, pendingGoogleSignIn, startGoogleSignIn, type GoogleProfile } from '../services/googleSignIn';
@@ -45,7 +48,8 @@ interface AuthPageProps {
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', onModeChange, pendingInviteCode = null, returnToWorkspace, checkGoogleAvailability = googleSignInAvailable }) => {
-    const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
+    const [takenUsername, setTakenUsername] = useState('');
+    const [googleConflict, setGoogleConflict] = useState(false);
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const MIN_SIGNUP_AGE_YEARS = 8;
     const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link'>(pendingInviteCode ? 'signup' : initialMode);
@@ -127,6 +131,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const finishGoogle = async (profile?: GoogleProfile) => {
         setGoogleLoading(true);
         setError(null);
+        setGoogleConflict(false);
         try {
             const result = await completeGoogleSignIn(profile);
             if (result.needsProfile === true) {
@@ -137,6 +142,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 else onLoginSuccess();
             }
         } catch (err) {
+            const code = (err as { code?: string })?.code;
+            if (code === 'username-taken' && profile) setTakenUsername(profile.username);
+            if (code === 'email-conflict') setGoogleConflict(true);
             setError(userFacingErrorMessage(err, 'Google sign-in could not finish. Try again or use email.'));
         } finally { setGoogleLoading(false); }
     };
@@ -237,6 +245,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     data: signupData
                 });
                 if (viaApi.status === 'error') {
+                    if (viaApi.code === 'username_taken') setTakenUsername(normalizedUsername);
                     if (viaApi.code === 'email_exists') {
                         throw new Error("An account with this email already exists. Please sign in or reset your password.");
                     }
@@ -253,7 +262,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
                 if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
 
-                setMessage("Check your email and open the verification link to finish creating your account.");
+                setMessage("For a new account, check your email and open the verification link. Already joined? Sign in below or reset your password.");
                 setPendingVerificationEmail(normalizedEmail);
                 onModeChange?.('signin');
                 setMode('signin');
@@ -263,31 +272,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 // Sign In
                 const loginInput = email.trim();
                 if (!loginInput) throw new Error("Email or username is required.");
-                let signInEmail = loginInput;
+                const byEmail = loginInput.includes('@');
+                const signInEmail = byEmail ? loginInput.toLowerCase() : null;
                 setPendingVerificationEmail(null);
                 setAuthPersistMode(rememberMe ? 'local' : 'session');
-
-                // Simple heuristic: if doesn't contain '@', treat as username lookup
-                if (!loginInput.includes('@')) {
-                    const { data, error } = await supabase.rpc('resolve_email_from_username', { login_username: loginInput });
-                    if (error) throw error;
-
-                    const resolvedEmail = Array.isArray(data)
-                        ? data[0]?.email
-                        : (data as { email?: string } | null)?.email;
-                    if (!resolvedEmail) {
-                        throw new Error("Username not found. Please use your email.");
-                    }
-                    signInEmail = resolvedEmail;
-                } else {
-                    signInEmail = loginInput.toLowerCase();
-                }
-
-                const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-                    email: signInEmail,
-                    password,
-                    options: { captchaToken: captchaToken || undefined },
-                });
+                const { data: signInData, error: signInError } = byEmail
+                    ? await supabase.auth.signInWithPassword({ email: signInEmail!, password, options: { captchaToken: captchaToken || undefined } })
+                    : await signInWithUsername(loginInput, password, captchaToken || undefined);
                 if (signInError) {
                     const signInMessage = String(signInError.message || '').toLowerCase();
                     if (signInMessage.includes('email not confirmed') || signInMessage.includes('email not verified')) {
@@ -360,7 +351,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         }
     };
 
-    const resetNotices = () => { setError(null); setMessage(null); setPendingVerificationEmail(null); };
+    const resetNotices = () => { setError(null); setMessage(null); setPendingVerificationEmail(null); setGoogleConflict(false); };
     const choice: 'signin' | 'join' = mode === 'signin' || mode === 'forgot' || mode === 'magic-link' ? 'signin' : 'join';
     const chooseSignIn = () => { setMode('signin'); onModeChange?.('signin'); resetNotices(); };
     const chooseJoin = () => { setMode('signup'); onModeChange?.('signup'); resetNotices(); };
@@ -413,6 +404,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             </span>
                         </div>
                     )}
+                    {googleConflict && <Button type="button" variant="outline" className="mb-4 w-full" onClick={() => { setGoogleConflict(false); chooseSignIn(); }}>Sign in with my existing account</Button>}
                     {googleLoading && !googleProfile && <p role="status" className="mb-4 text-[var(--ds-muted)]">Connecting to Google…</p>}
                     {error && (
                         <div role="alert" className={`mb-6 flex items-start gap-2 ${RADIUS_CONTROL} border p-3 text-[length:var(--ds-text-base)] ${STATUS_SURFACE.error}`}>
@@ -454,7 +446,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         </div>
                     )}
                     {googleProfile ? (
-                        <GoogleAccountProfile {...googleProfile} maxDob={maxSignupDob} busy={googleLoading}
+                        <GoogleAccountProfile {...googleProfile} maxDob={maxSignupDob} busy={googleLoading} takenUsername={takenUsername} onEditUsername={() => setTakenUsername('')}
                             onSubmit={profile => void finishGoogle(profile)} onCancel={() => {
                                 cancelGoogleSignIn();
                                 setGoogleProfile(null);
@@ -462,17 +454,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             }} />
                     ) : <form onSubmit={handleAuth} className="space-y-4">
                         {mode === 'signup' && (
-                            <Field label="Username" required>
-                                <Input
-                                    type="text"
-                                    required
-                                    autoComplete="username"
-                                    value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
-                                    className="font-mono"
-                                    placeholder="Super_hero"
-                                />
-                            </Field>
+                            <SignupUsername value={username} onChange={value => { setUsername(value); setTakenUsername(''); }} taken={takenUsername}
+                                onSignIn={() => { setEmail(username); setPassword(''); chooseSignIn(); }} />
                         )}
 
                         {mode === 'signup' && (

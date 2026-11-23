@@ -190,7 +190,7 @@ describe('OutageCard', () => {
     );
   });
 
-  it('shows every option with its real price; the key link opens Settings → API keys in a new tab', async () => {
+  it('shows every option with its real price; the key link opens Settings → API keys in this tab', async () => {
     await renderCard();
     const group = screen.getByRole('group', { name: 'Ways to continue' });
     const buttons = within(group).getAllByRole('button');
@@ -200,8 +200,7 @@ describe('OutageCard', () => {
     expect(buttons[1]).toHaveTextContent('same family · redraw 3 drawn images ≈ $0.52 to keep the book consistent');
     const link = within(group).getByRole('link', { name: /Add a Gemini key/ });
     expect(link).toHaveAttribute('href', '/?view=settings&tab=settings');
-    expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).not.toHaveAttribute('target');
   });
 
   it('switching only opens the model picker on that model — it never changes the model itself', async () => {

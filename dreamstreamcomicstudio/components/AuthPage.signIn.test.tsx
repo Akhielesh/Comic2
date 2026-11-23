@@ -6,7 +6,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ signInWithPassword: vi.fn(), signOut: vi.fn() }));
+const auth = vi.hoisted(() => ({ signInWithPassword: vi.fn(), setSession: vi.fn(), signOut: vi.fn() }));
 vi.mock('../services/supabase', () => ({
   supabase: { auth },
   getAuthPersistMode: () => 'local',
@@ -51,6 +51,22 @@ describe('AuthPage — password sign-in', () => {
   });
 });
 
+
+it('submits a handle privately and adopts the password-verified session without looking up a mailbox in the browser', async () => {
+  const onLoginSuccess = vi.fn();
+  const request = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ access_token: 'verified-access', refresh_token: 'verified-refresh' }));
+  auth.setSession.mockResolvedValue({ data: { user: { id: 'member', email_confirmed_at: 'today' } }, error: null });
+  try {
+    render(<AuthPage onLoginSuccess={onLoginSuccess} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /Email or username/ }), { target: { value: 'My_Handle' } });
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: 'fixture-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enter Studio' }));
+    await waitFor(() => expect(onLoginSuccess).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith('/api/auth/username/signin', expect.objectContaining({ body: JSON.stringify({ username: 'My_Handle', password: 'fixture-password' }) }));
+    expect(auth.setSession).toHaveBeenCalledWith({ access_token: 'verified-access', refresh_token: 'verified-refresh' });
+    expect(auth.signInWithPassword).not.toHaveBeenCalled();
+  } finally { request.mockRestore(); }
+});
 
 it.each([true, false])('passes the standalone image destination on magic link requests only when requested (%s)', async (returnToImages) => {
   const sent = vi.fn(async (_url: string, _options: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }));

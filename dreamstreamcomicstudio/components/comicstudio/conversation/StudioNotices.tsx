@@ -11,6 +11,7 @@
 //    "Free — done by the editor, no AI cost" (decisions-final #6), with the amount it saved in
 //    the user's terms (dollars for admins / own key, a share of usage for everyone else).
 
+import { openApiKeysLink } from '../../account/accountNav';
 import React, { useEffect, useRef, useState } from 'react';
 import { CircleCheck, Coffee, Info, PenLine, RefreshCw, Redo2, ShieldCheck, Undo2, X } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
@@ -101,7 +102,7 @@ export const StudioErrorBanner: React.FC<{ studio: Pick<ComicStudioController, '
           {p.title && <span className="font-semibold">{p.title}: </span>}
           {studio.error}
         </p>
-        {p.accountAction && <a href={API_KEYS_HREF} className={cx(SMALL_BTN, 'mt-1 underline')}>{p.accountAction}</a>}
+        {p.accountAction && <a href={API_KEYS_HREF} onClick={openApiKeysLink} className={cx(SMALL_BTN, 'mt-1 underline')}>{p.accountAction}</a>}
         {p.hint && (
           <p className="mt-0.5 flex items-start gap-1 text-[11.5px] text-[var(--ds-muted)]">
             {p.tone === 'care' && <PenLine className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />}

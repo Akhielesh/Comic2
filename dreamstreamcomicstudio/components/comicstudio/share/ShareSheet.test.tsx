@@ -369,7 +369,15 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     // The same view StaticSiteHeader's Library item opens (App restores ?view=gallery).
     expect(library).toHaveAttribute('href', '/?view=gallery');
     expect(library.className).toContain('min-h-[44px]');
-    expect(library.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(library).not.toHaveAttribute('target');
+    const navigate = vi.fn((event: MouseEvent) => {
+      expect(event.defaultPrevented).toBe(false);
+      expect(event.target).toBe(library);
+      event.preventDefault(); // jsdom does not implement full-page navigation.
+    });
+    window.addEventListener('click', navigate, { once: true });
+    fireEvent.click(library);
+    expect(navigate).toHaveBeenCalledOnce();
     // Link first, then the Library entry, then the choices.
     const group = screen.getByRole('radiogroup', { name: 'Who can read it' });
     expect(link.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

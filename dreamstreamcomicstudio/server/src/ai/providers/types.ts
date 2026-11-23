@@ -111,6 +111,9 @@ export type GenerateTextResult = {
 };
 
 export type GenerateImageRequest = {
+  /** Provider-supported, validated native output settings for a standalone image. */
+  aspectRatio?: string;
+  imageSize?: string;
   model: string;
   prompt: string;
   /** Reference/input images as data URLs or public URLs (drives character consistency). */

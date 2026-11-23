@@ -845,17 +845,17 @@ describe('runDirectorTurn — never silent (contract §12.2)', () => {
     expect(String(second.content)).not.toContain('IP NOTE');
   });
 
-  it('shows up to 8 images as 768 px previews', async () => {
+  it('shows up to 10 images as 768 px previews', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const llm = scriptedLlm({ director: [{ text: 'Nice photos — who are they?' }] });
     const ctx = testContext(session, { llm });
-    const atts = Array.from({ length: 9 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/r${i}.webp`, source: 'upload' as const, at: i }));
+    const atts = Array.from({ length: 11 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/r${i}.webp`, source: 'upload' as const, at: i }));
     for (const a of atts) ctx.assetsFake.files.set(a.path, 'data:image/webp;base64,QQ==');
     const preview = vi.spyOn(ctx.assetsFake, 'previewDataUrl');
     await runDirectorTurn(ctx, { text: '', attachments: atts });
     const content = llm.calls[0].messages[llm.calls[0].messages.length - 1].content as Array<{ type: string; text?: string }>;
-    expect(content.filter((p) => p.type === 'image_url')).toHaveLength(8);
-    expect(content[0].text).toContain('(9 images available; the first 8 are shown.)');
+    expect(content.filter((p) => p.type === 'image_url')).toHaveLength(10);
+    expect(content[0].text).toContain('(11 images available; the first 10 are shown.)');
     expect(preview).toHaveBeenCalledWith(atts[0].path, 768);
   });
 

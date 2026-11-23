@@ -44,3 +44,5 @@ export const submitFeedback = async (
     return { ok: false, persisted: false };
   }
 };
+
+export { openFeedbackReport } from './openFeedbackReport';

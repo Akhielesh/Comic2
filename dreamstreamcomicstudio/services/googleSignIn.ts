@@ -83,7 +83,7 @@ export async function completeGoogleSignIn(profile?: GoogleProfile): Promise<Goo
   if (!response.ok) {
     if (validToken(data.grant)) save({ ...attempt, grant: data.grant });
     else if (response.status < 500) cancelGoogleSignIn();
-    throw new Error(data.message || 'Google sign-in could not finish.');
+    throw Object.assign(new Error(data.message || 'Google sign-in could not finish.'), { code: data.code });
   }
   if (data.needsProfile === true) return { needsProfile: true, email: data.email, firstName: data.firstName };
   if (typeof data.tokenHash !== 'string' || !data.tokenHash) throw new Error(expired);

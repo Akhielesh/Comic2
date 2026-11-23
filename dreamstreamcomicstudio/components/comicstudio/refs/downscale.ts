@@ -246,3 +246,6 @@ export async function quickReject(file: Blob & { name?: string }): Promise<strin
 }
 
 export { readHead };
+
+// Report screenshots use the same browser orientation and canvas compatibility paths.
+export { defaultDecode as decodeRasterFile, defaultEncode as encodeRasterFile };

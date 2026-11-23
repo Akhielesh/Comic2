@@ -1,4 +1,4 @@
-export const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
+export { USERNAME_REGEX } from '../../../shared/username.js';
 const MIN_SIGNUP_AGE_YEARS = 8;
 const DAY_MS = 86_400_000;
 

@@ -136,10 +136,11 @@ const normalizeFeedback = (raw: unknown, ctx: TelemetryContext) => {
   const f = (raw && typeof raw === 'object' ? raw : {}) as Partial<FeedbackInput>;
   const vote = typeof f.vote === 'string' && VOTES.has(f.vote) ? f.vote : null;
   const sentiment = typeof f.sentiment === 'string' && SENTIMENTS.has(f.sentiment) ? f.sentiment : null;
+  const targetType = str(f.targetType, 40);
   return {
     user_id: ctx.userId,
     session_id: str(f.sessionId, 128),
-    target_type: str(f.targetType, 40) || 'platform',
+    target_type: targetType && targetType !== 'bug' && targetType !== 'feedback' ? targetType : 'platform',
     target_id: str(f.targetId, 200),
     vote,
     category: str(f.category, 80),

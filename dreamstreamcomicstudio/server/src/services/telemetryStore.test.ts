@@ -41,6 +41,11 @@ describe('telemetry surfaces never store a read capability (S19)', () => {
     expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain(SLUG);
   });
 
+  it('keeps receipt-bearing report types exclusive to the validated report route', async () => {
+    await recordFeedback({targetType:'  bug ', comment:'test', metadata:{attachmentCount:10}}, {userId:null});
+    expect(inserts[0].rows).toMatchObject({target_type:'platform'});
+  });
+
   it('masks a classic /share/<token> page in user_feedback', async () => {
     await recordFeedback({ vote: 'like', surface: '/share/tok123secret' }, { userId: null });
     expect(inserts[0].table).toBe('user_feedback');

@@ -1,3 +1,5 @@
+import { readAttachmentBatch } from '../../services/attachmentBatch';
+import { readLegacyReference } from '../../services/legacyReferenceImages';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutTemplate, UploadCloud, Wand2, Check, Grid, ArrowRight, AlertCircle } from 'lucide-react';
 import { ComicAgentSettings, LayoutType, TextLayout, AspectRatio, Scene, PricingConfig } from '../../types';
@@ -62,13 +64,6 @@ interface LayoutSelectorProps {
     pricingConfig?: PricingConfig;
 }
 
-const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = error => reject(error);
-});
-
 // ---------------------------------------------------------------------------
 // Slot-based visual preview
 // ---------------------------------------------------------------------------
@@ -115,6 +110,8 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     agentSettings: rawAgentSettings,
     pricingConfig
 }) => {
+    const [layoutNotice, setLayoutNotice] = useState('');
+    const [loadingFiles, setLoadingFiles] = useState(false);
     const [customImages, setCustomImages] = useState<string[]>([]);
     const [customLayoutPrompt, setCustomLayoutPrompt] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -152,11 +149,17 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     // ---- Handlers ----------------------------------------------------------
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files) return;
-        const files = Array.from(e.target.files).slice(0, 4);
-        const base64s = await Promise.all(files.map(fileToBase64));
-        setCustomImages(base64s);
-        setCustomLayoutPrompt(null);
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        if (!files.length || loadingFiles) return;
+        setLoadingFiles(true);
+        try {
+            const { added, notice } = await readAttachmentBatch(files, customImages.length,
+                customImages.reduce((n, img) => n + img.length, 0), readLegacyReference, data => data);
+            setCustomImages(current => [...current, ...added]);
+            setLayoutNotice(notice);
+            if (added.length) setCustomLayoutPrompt(null);
+        } finally { setLoadingFiles(false); }
     };
 
     const handleAnalyzeLayout = async () => {
@@ -481,10 +484,10 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                 <label className={cn(UPLOAD_TILE, 'flex-1 flex-col justify-center gap-0 text-center')}>
                                     <UploadCloud size={28} aria-hidden="true" />
                                     <span className="mt-2 text-xs font-medium">Upload layout refs</span>
-                                    <input type="file" multiple accept="image/*" className="sr-only" onChange={handleFileChange} />
+                                    <input type="file" multiple accept="image/*" disabled={loadingFiles || isAnalyzing} className="sr-only" onChange={handleFileChange} />
                                 </label>
                                 {customImages.length > 0 && (
-                                    <div className="grid h-1/2 grid-cols-2 gap-2">
+                                    <div className="grid max-h-32 grid-cols-3 gap-2 overflow-auto">
                                         {customImages.map((src, i) => (
                                             <button
                                                 key={i}
@@ -492,7 +495,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                                 onClick={() => setPreviewImage(src)}
                                                 className={cn('overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)]', FOCUS_RING)}
                                             >
-                                                <img src={src} className="h-full w-full object-cover" />
+                                                <img alt={`Layout reference ${i + 1}`} src={src} className="h-12 w-full object-cover" />
                                             </button>
                                         ))}
                                     </div>
@@ -500,8 +503,10 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                             </div>
                             <div className="flex flex-1 flex-col p-4">
                                 <h3 className={cn('mb-2', STAGE_BOARD_TITLE)}>Custom layout</h3>
-                                <p className="mb-3 flex-1 text-xs leading-5 text-[var(--ds-muted)]">Analyze up to four reference images.</p>
+                                <p className="mb-3 flex-1 text-xs leading-5 text-[var(--ds-muted)]">Analyze up to ten reference images, 6 MB total.</p>
 
+                                {layoutNotice && <p role="status" className="text-xs">{layoutNotice}</p>}
+                                {customImages.length > 0 && <Button size="sm" variant="ghost" disabled={loadingFiles || isAnalyzing} onClick={() => {setCustomImages([]); setCustomLayoutPrompt(null); setLayoutNotice('');}}>Clear references</Button>}
                                 {customLayoutPrompt && (
                                     <div className={cn('mb-3 p-3 text-xs leading-5 text-[var(--ds-ink)]', STAGE_WELL, WRAP_TEXT)}>
                                         {customLayoutPrompt}

@@ -242,7 +242,7 @@ const App: React.FC = () => {
   // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
   const allowedProducts = useProductAccess();
   const streamOnlyRedirectedRef = useRef(false);
-  const { projects, projectsLoaded, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets, reloadProjects } = useProjectManager();
+  const { projects, projectsLoaded, saveIssue, recoverSave, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets, reloadProjects } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
@@ -1177,6 +1177,17 @@ const App: React.FC = () => {
       <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome || comicsDashboard)}>
         {/* The app's one toast slot: every app toast renders here (portalled to <body>, above the tab bar). */}
         <ToastHost />
+        {user && saveIssue && (
+          <ErrorState
+            variant="inline"
+            title={saveIssue.conflict ? `“${saveIssue.name}” changed elsewhere` : `“${saveIssue.name}” has unsaved changes`}
+            description={saveIssue.conflict
+              ? 'Keep your edits in a private library copy. The other version will stay in the original comic.'
+              : 'Keep this tab open. Saving will resume when the connection returns, or you can retry now.'}
+            retryLabel={saveIssue.conflict ? 'Save a private copy' : 'Retry saving'}
+            onRetry={() => void recoverSave(saveIssue.id)}
+          />
+        )}
         {/* Alerts (notify NF-4): a chime and a toast when work lands while the person is elsewhere; signed-in only. */}
         <AlertsHost accountId={user?.id ?? null} onOpenComic={handleOpenProject} onOpenChat={() => handleNavigate('chat')} />
         {showSharedHeader && (() => {
@@ -1234,6 +1245,8 @@ const App: React.FC = () => {
           {/* Views */}
           {effectiveView === 'home' && (comicsHost.active ? (
             <ComicsLanding
+              key={user?.id ?? 'guest'}
+              tourAccountId={user?.id}
               signedIn={!!user}
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('signup')}
@@ -1336,6 +1349,7 @@ const App: React.FC = () => {
               onNewComicOpened={consumeNewComicRequest}
               onCreateProject={handleCreateProject}
               onOpenProject={handleOpenProject}
+              onOpenStudioWork={openComicStudio}
               onDeleteProject={deleteProject}
               onDuplicateProject={duplicateProject}
               onReadProject={handleReadProject}
@@ -1344,8 +1358,11 @@ const App: React.FC = () => {
             />
           )}
 
-          {effectiveView === 'images' && user && (
-            <ImageWorkspace key={user.id} userId={user.id} onBack={() => handleNavigate('dashboard')} />
+          {(effectiveView === 'images' || (effectiveView === 'settings' && settingsReturnView === 'images')) && user && (
+            // Keep private reference images and the generation retry key in memory during a trip to API settings.
+            <div hidden={effectiveView !== 'images'}>
+              <ImageWorkspace key={user.id} userId={user.id} onBack={() => handleNavigate('dashboard')} />
+            </div>
           )}
 
           {effectiveView === 'learn' && (
@@ -1371,7 +1388,7 @@ const App: React.FC = () => {
                 <ComicStudio key={`${user?.id}:${activeProjectId}`} projectId={activeProjectId} onBack={leaveComicStudio}
                   initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
                   onInitialIdeaConsumed={consumeFirstIdea}
-                  navigationFooter={<Suspense fallback={null}><ComicProjectNavigation projects={projects} activeProjectId={activeProjectId}
+                  navigationFooter={<Suspense fallback={null}><ComicProjectNavigation projects={projects} accountId={user?.id} onOpenStudioWork={openComicStudio} activeProjectId={activeProjectId}
                     onNewComic={handleStartCreating} onImages={() => handleNavigate('images')} onAllComics={leaveComicStudio} onLibrary={handleBrowseComicsLibrary} onOpenProject={handleOpenProject} /></Suspense>} />
               </StudioErrorBoundary>
             </div>
@@ -1478,7 +1495,7 @@ const App: React.FC = () => {
           </Suspense>
         )}
 
-        {showFeedbackWidget && <FeedbackWidget />}
+        <FeedbackWidget key={user?.id ?? 'guest'} showLauncher={showFeedbackWidget} ownerId={user?.id} surface={effectiveView} />
 
         {showQuickFinder && (
           <Suspense fallback={null}>

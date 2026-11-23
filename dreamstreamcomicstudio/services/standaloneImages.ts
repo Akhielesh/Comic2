@@ -4,7 +4,7 @@ import { downloadBlob } from './download';
 import { getModelSpecificKey } from './appSettings';
 import type { ImageGenerateRequest, ImageGenerateResponse } from '../apiTypes';
 import {
-  MAX_REF_BYTES, REF_MIME_TYPES, STANDALONE_MODEL,
+  MAX_REF_BYTES, REF_MIME_TYPES, STANDALONE_MODEL, NATIVE_REFERENCE_MODEL, type WorkspaceQuality, type StandaloneRoute,
   type SavedStandaloneImage, type StandaloneGallery, type ImageFormatChoice
 } from '../shared/standaloneImage';
 
@@ -12,15 +12,26 @@ const endpoint = '/api/image/standalone';
 
 export const loadImageHistory = (offset = 0) => get<StandaloneGallery>(`${endpoint}?offset=${offset}`);
 
+export function loadStandaloneRoute(owner: string, quality: WorkspaceQuality, signal: AbortSignal, allowPaidImage = false) {
+  const model = quality === 'native' ? STANDALONE_MODEL : NATIVE_REFERENCE_MODEL;
+  return get<StandaloneRoute>(`${endpoint}/route?model=${encodeURIComponent(model)}`, {
+    expectedAccountId: owner, apiKey: getModelSpecificKey(model) || undefined, modelId: model, signal, allowPaidImage
+  });
+}
+
 export async function renderStandalone(
-  owner: string, prompt: string, aspectRatio: ImageFormatChoice, referenceImages: string[], requestId: string
+  owner: string, prompt: string, aspectRatio: ImageFormatChoice, referenceImages: string[], requestId: string, quality: WorkspaceQuality = 'native', options: { signal?: AbortSignal; allowPaidImage?: boolean; expectedRoute?: StandaloneRoute } = {}
 ): Promise<SavedStandaloneImage> {
-  const result = await post<Omit<ImageGenerateRequest, 'aspectRatio'> & { aspectRatio: ImageFormatChoice }, ImageGenerateResponse>(endpoint, {
-    prompt: prompt.trim(), aspectRatio, resolution: '1K', model: STANDALONE_MODEL, referenceImages
-  }, { expectedAccountId: owner, idempotencyKey: requestId, apiKey: getModelSpecificKey(STANDALONE_MODEL) || undefined });
+  const model = quality === 'native' ? STANDALONE_MODEL : NATIVE_REFERENCE_MODEL;
+  const target = options.expectedRoute ? endpoint + '?' + new URLSearchParams({
+    expectedProvider: options.expectedRoute.provider, expectedPayer: options.expectedRoute.payer
+  }) : endpoint;
+  const result = await post<Omit<ImageGenerateRequest, 'aspectRatio'> & { aspectRatio: ImageFormatChoice }, ImageGenerateResponse>(target, {
+    prompt: prompt.trim(), aspectRatio, resolution: quality === 'native' ? '1K' : quality, model, referenceImages
+  }, { expectedAccountId: owner, idempotencyKey: requestId, signal: options.signal, allowPaidImage: options.allowPaidImage, apiKey: getModelSpecificKey(model) || undefined });
   if (!result.imageId || !result.imageUrl) throw new Error('Your image could not be opened. Refresh your saved images before trying again.');
   emitBillingSummaryRefresh();
-  return { imageId: result.imageId, imageUrl: result.imageUrl, createdAt: new Date().toISOString() };
+  return { imageId: result.imageId, imageUrl: result.imageUrl, createdAt: new Date().toISOString(), model: result.model, provider: result.provider, byok: result.payer ? result.payer === 'personal' : result.billing?.byokBypass, apiMs: result.timings?.apiMs, saveMs: result.timings?.saveMs };
 }
 
 export async function loadReference(file: File): Promise<{ name: string; data: string }> {

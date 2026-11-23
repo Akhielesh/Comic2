@@ -19,6 +19,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { logger } from '../lib/logger.js';
 import { hashString, normalizeDoc, type AssetRef, type ComicDoc, type RenderState } from '../../../shared/comic/doc.js';
+import { summarizeComicWork } from '../../../shared/comic/workspaceActivity.js';
 import { StudioError, type DocStore, type ProjectRowSummary } from './types.js';
 
 const PROJECT_NAME_MAX = 200;
@@ -236,7 +237,7 @@ const publicI18n = (i18n: unknown): unknown => {
  * trash, unsorted ref uploads, the server-only safety record (moderation categories, notes,
  * source screening), the server-only publication mirror and the planner fingerprint.
  */
-const PRIVATE_DOC_KEYS = ['directorDraft', 'memory', 'archive', 'trash', 'refInbox', 'safety', 'publication', 'planInputHash'] as const;
+const PRIVATE_DOC_KEYS = ['workspaceActivity', 'directorDraft', 'memory', 'archive', 'trash', 'refInbox', 'safety', 'publication', 'planInputHash'] as const;
 
 /**
  * Strip everything private from a published doc (idempotent; the input is not mutated).
@@ -294,12 +295,23 @@ export function sanitizePublicDoc(doc: ComicDoc): ComicDoc {
   return clean;
 }
 
+// Listing an outcome is optional. An unfamiliar field in an imported or older doc must never prevent its save.
+function storedOwnerDoc(doc: ComicDoc, projectId: string) {
+  const saved = { ...doc, id: projectId };
+  try {
+    return jsonbSafe({ ...saved, workspaceActivity: summarizeComicWork(doc) });
+  } catch {
+    return jsonbSafe(saved);
+  }
+}
+
 /** Stored row → normalized doc (the row's project id and rev are authoritative). */
 const hydrateDoc = (projectId: string, rawDoc: unknown, rawRev: unknown): ComicDoc | null => {
   if (!isRecord(rawDoc)) return null;
   const storedRev = typeof rawRev === 'number' && Number.isFinite(rawRev) ? rawRev : 0;
   const docRev = typeof rawDoc.rev === 'number' && Number.isFinite(rawDoc.rev) ? rawDoc.rev : 0;
-  return normalizeDoc({ ...(rawDoc as Partial<ComicDoc>), id: projectId, rev: Math.max(storedRev, docRev) });
+  const { workspaceActivity: _listing, ...editableDoc } = rawDoc;
+  return normalizeDoc({ ...(editableDoc as Partial<ComicDoc>), id: projectId, rev: Math.max(storedRev, docRev) });
 };
 
 type PgError = { code?: string; message?: string; details?: string };
@@ -473,7 +485,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const { error: docError } = await db.from('comic_docs').insert({
       project_id: projectId,
       user_id: userId,
-      doc: jsonbSafe({ ...doc, id: projectId }),
+      doc: storedOwnerDoc(doc, projectId),
       rev: doc.rev || 0,
       created_at: stamp,
       updated_at: stamp
@@ -508,7 +520,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const db = admin();
     const rev = typeof doc.rev === 'number' ? doc.rev : 0;
     const stamp = new Date(now()).toISOString();
-    const payload = { doc: jsonbSafe({ ...doc, id: projectId }), rev, updated_at: stamp };
+    const payload = { doc: storedOwnerDoc(doc, projectId), rev, updated_at: stamp };
 
     // Owner-scoped, never-backwards update. Zero rows → missing, stale, or not ours.
     const write = db
@@ -656,7 +668,7 @@ export function createMemoryDocStore(): MemoryDocStore {
         state: jsonbSafe(buildLegacyProjectState(doc)),
         isPublic: false,
         forcedPrivate: false,
-        doc: clone(jsonbSafe({ ...doc, id: projectId })),
+        doc: clone(storedOwnerDoc(doc, projectId)),
         rev: doc.rev || 0
       });
     },
@@ -668,7 +680,7 @@ export function createMemoryDocStore(): MemoryDocStore {
       if (expectedRev !== undefined && row.rev !== expectedRev) throw new StudioError('CONFLICT', 'This comic changed. Reopen it before starting a draft.', { status: 409 });
       if (row.doc && row.rev > rev) return; // stale writer never clobbers a newer doc
       // The same jsonb-safe write as the Supabase store, so tests read back what production stores.
-      row.doc = clone(jsonbSafe({ ...doc, id: projectId }));
+      row.doc = clone(storedOwnerDoc(doc, projectId));
       row.rev = rev;
       row.name = jsonbSafeText(projectName(summary?.title || doc.brief.title));
       const legacy = buildLegacyProjectState(doc);

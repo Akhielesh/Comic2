@@ -94,6 +94,20 @@ describe('useStudio — load', () => {
     expect(api.cancelStudio).not.toHaveBeenCalled();
   });
 
+  it('syncs an idle comic edited elsewhere on reconnect and coalesces foreground events', async () => {
+    const original = makeSampleDoc();
+    const { result } = await setup(original);
+    api.loadStudioProject.mockResolvedValue({ doc: makeSampleDoc({ rev: original.rev + 1, brief: { title: 'Edited on a tablet', notes: [] } }), urls: {} });
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(result.current.doc?.brief.title).toBe('Edited on a tablet'));
+    expect(api.loadStudioProject).toHaveBeenCalledTimes(2);
+    expect(api.streamStudio).not.toHaveBeenCalled();
+  });
+
   it('reports a fatal load error', async () => {
     api.loadStudioProject.mockRejectedValue(new StudioApiError('not_found', "This comic doesn't exist or you don't have access to it.", { status: 404 }));
     const { result } = renderHook(() => useStudio('missing'));

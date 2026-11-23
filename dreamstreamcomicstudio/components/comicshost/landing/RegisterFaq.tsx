@@ -37,7 +37,7 @@ export const RegisterSection: React.FC<{ signedIn: boolean; onSignUp: () => void
             </p>
             <details onToggle={(event) => { if (event.currentTarget.open) setFeedbackOpened(true); }}>
               <summary className={cn('cursor-pointer', QUIET_LINK)}>Tell us what you’d like to make</summary>
-              {feedbackOpened && <WaitlistForm kind="access" source="landing" buttonLabel="Send feedback" className="landing-register-form" />}
+              {feedbackOpened && <WaitlistForm kind="access" source="landing" buttonLabel="Send my preferences" className="landing-register-form" />}
             </details>
           </>
         )}

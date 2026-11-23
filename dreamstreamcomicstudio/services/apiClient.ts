@@ -62,6 +62,8 @@ const providerKeyHeaders = (): Record<string, string> => {
 export class ApiError extends Error {
   status: number;
   details?: unknown;
+  code?: string;
+  retryAfterSeconds?: number;
   constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.status = status;
@@ -73,7 +75,11 @@ const parseError = async (res: Response) => {
   try {
     const data = await res.json();
     const message = data?.error?.message || res.statusText;
-    return new ApiError(message, res.status, data?.error?.details ?? data);
+    const error = new ApiError(message, res.status, data?.error?.details ?? data);
+    error.code = typeof data?.error?.code === 'string' ? data.error.code : undefined;
+    const retryAfter = res.headers.get('Retry-After');
+    if (retryAfter && /^\d+$/.test(retryAfter)) error.retryAfterSeconds = Number(retryAfter);
+    return error;
   } catch {
     return new ApiError(res.statusText, res.status);
   }
@@ -123,6 +129,14 @@ const getAuthToken = async (): Promise<string | undefined> => {
   return session?.access_token;
 };
 
+const getAccountToken = async (expectedAccountId?: string): Promise<string | undefined> => {
+  const token = await getAuthToken();
+  if (expectedAccountId && (!token || token !== cachedAccessToken || cachedUserId !== expectedAccountId)) {
+    throw new ApiError('The active account changed. Sign in again and retry.', 401);
+  }
+  return token;
+};
+
 // Build the common request headers (provider keys honoring governance, auth token,
 // model/source selection, free-only, allowed-sources). Shared by post + postStream.
 const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string; expectedAccountId?: string; useSarvamKey?: boolean }): Promise<Record<string, string>> => {
@@ -130,10 +144,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   const fluxKey = isProviderEnabled('pixazo') ? getProviderKeyValue('pixazo') : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getProviderKeyValue('ideogram') : null;
   const sarvamKey = options?.useSarvamKey && isProviderEnabled('sarvam') ? getProviderKeyValue('sarvam') : null;
-  const token = await getAuthToken();
-  if (options?.expectedAccountId && (!token || token !== cachedAccessToken || cachedUserId !== options.expectedAccountId)) {
-    throw new ApiError('The active account changed. Sign in again and retry.', 401);
-  }
+  const token = await getAccountToken(options?.expectedAccountId);
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
   const textSource = options?.stage ? getSourceForStage(options.stage) : getSelectedTextSource();
 
@@ -155,9 +166,10 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   };
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string; useSarvamKey?: boolean; idempotencyKey?: string }): Promise<TRes> => {
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string; useSarvamKey?: boolean; idempotencyKey?: string; allowPaidImage?: boolean }): Promise<TRes> => {
   const attempt = async (): Promise<TRes> => {
     const headers = await buildRequestHeaders(options);
+    if (options?.allowPaidImage && path.split('?')[0] === '/api/image/standalone') delete headers['X-Free-Only'];
     if (options?.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
     const res = await safeFetch(buildApiUrl(path), {
       method: 'POST',
@@ -225,12 +237,26 @@ export const patch = async <TReq, TRes>(path: string, body: TReq, options?: { si
   return res.json() as Promise<TRes>;
 };
 
-export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
+export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal; apiKey?: string; expectedAccountId?: string; allowPaidImage?: boolean; authOnly?: boolean }): Promise<TRes> => {
+  if (path.startsWith('/api/image/standalone/route?')) {
+    const headers = await buildRequestHeaders(options);
+    if (options?.allowPaidImage) delete headers['X-Free-Only'];
+    const response = await safeFetch(buildApiUrl(path), { headers, signal: options?.signal });
+    if (!response.ok) throw await parseError(response);
+    return response.json() as Promise<TRes>;
+  }
+  const token = await getAccountToken(options?.expectedAccountId);
+  if (options?.authOnly) {
+    const res = await safeFetch(buildApiUrl(path), {
+      signal: options.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!res.ok) throw await parseError(res);
+    return res.json() as Promise<TRes>;
+  }
   const providerHeaders = providerKeyHeaders();
   const fluxKey = isProviderEnabled('pixazo') ? getProviderKeyValue('pixazo') : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getProviderKeyValue('ideogram') : null;
-  const token = await getAuthToken();
-
   const res = await safeFetch(buildApiUrl(path), {
     signal: options?.signal,
     headers: {

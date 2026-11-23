@@ -12,12 +12,12 @@ import { ChatComposer, ENHANCE_FAILED_NOTE, ENHANCE_PAUSED_NOTE } from './ChatCo
 
 const features = { reasoning: false, webSearch: false, vision: false, structured: false, longContext: false, contextLength: 8000 };
 
-const setup = () => {
+const setup = (vision = false) => {
   const onSend = vi.fn();
   render(
     <ChatComposer
       busy={false}
-      features={features}
+      features={{ ...features, vision }}
       reasoningLevel={'medium' as never}
       webSearch={false}
       dreamstreamAccess={false}
@@ -85,4 +85,17 @@ describe('ChatComposer prompt polish', () => {
     expect(screen.getByText('Prompt enhanced.')).toBeInTheDocument();
     expect(screen.queryByRole('status')).toBeNull();
   });
+});
+
+it('sends ten selected pictures and explains the eleventh without losing earlier selections', async () => {
+  const { box, onSend } = setup(true);
+  const pick = (ids: number[]) => fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: ids.map(i => new File(['pixel'], `picture-${i}.png`, {type:'image/png'})) } });
+  pick([0]);
+  await screen.findByRole('img', {name: 'picture-0.png'});
+  pick(Array.from({ length: 10 }, (_, i) => i + 1));
+  await screen.findByRole('img', {name: 'picture-9.png'});
+  expect(screen.getByRole('status')).toHaveTextContent('10 attachments');
+  expect(screen.queryByRole('img', {name: 'picture-10.png'})).toBeNull();
+  fireEvent.keyDown(box, {key:'Enter'});
+  expect(onSend.mock.calls[0][1]).toHaveLength(10);
 });

@@ -16,7 +16,7 @@ vi.mock('../../services/db', () => ({ getProfileFace: db.getProfileFace }));
 import { AccountPanel, type AccountPanelProps } from './AccountPanel';
 import { AccountMenu } from './AccountMenu';
 import { AccountProvider, forgetRememberedProfiles, type AccountContextValue, type AccountPerson } from './AccountContext';
-import { ACCOUNT_SETTINGS_EVENT, setStudioBusy } from './accountNav';
+import { ACCOUNT_SETTINGS_EVENT } from './accountNav';
 import { FormFactorProvider } from '../comicstudio/mobile/useFormFactor';
 import { DESKTOP_FORM_FACTOR, classifyViewport } from '../comicstudio/mobile/formFactor';
 
@@ -66,7 +66,6 @@ beforeEach(() => {
 afterEach(() => {
   window.removeEventListener(ACCOUNT_SETTINGS_EVENT, onRequest);
   cleanup();
-  setStudioBusy(false);
   forgetRememberedProfiles();
   localStorage.clear();
   document.documentElement.classList.remove('dark', 'ds-no-transitions');
@@ -137,18 +136,7 @@ describe('AccountPanel', () => {
     expect(requests).toEqual([]);
   });
 
-  it('while the Director works, a row opens a new tab (no in-app request) and the panel says so', () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    setStudioBusy(true);
-    render(<Harness value={ctx()} panel={{ resume: 'new-comic' }} />);
-    expect(within(panel()).getByText('Opens in a new tab while the Director is working.')).toBeInTheDocument();
-    fireEvent.click(within(panel()).getByRole('button', { name: 'Preferences' }));
-    expect(open).toHaveBeenCalledWith('/?view=settings&tab=preferences', '_blank', 'noopener');
-    expect(requests).toEqual([]);
-  });
-
   it('shows no money: no "$" and no cents anywhere, staff and busy included', () => {
-    setStudioBusy(true);
     render(<Harness value={ctx({ staff: true })} />);
     expect(panel().textContent).not.toMatch(/\$|¢|\bcents?\b|USD/i);
   });
@@ -206,21 +194,12 @@ describe('AccountPanel', () => {
     await waitFor(() => expect(requests).toEqual([{ tab: 'preferences' }]));
   });
 
-  it('as the sheet while the Director works, a row opens the new tab inside the press itself (not after the sheet settles)', () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    setStudioBusy(true);
-    render(
-      <FormFactorProvider value={PHONE}>
-        <Harness value={ctx()} panel={{ resume: 'new-comic' }} />
-      </FormFactorProvider>
-    );
-    expect(panel()).toHaveAttribute('aria-modal', 'true');
+  it('keeps the new comic return target when a member opens settings from a phone', async () => {
+    const popup = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<FormFactorProvider value={PHONE}><Harness value={ctx()} panel={{ resume: 'new-comic' }} /></FormFactorProvider>);
     fireEvent.click(within(panel()).getByRole('button', { name: 'Preferences' }));
-    // Synchronously, in the click: a popup opened after a popstate or a timer is blocked by the browser.
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(open).toHaveBeenCalledWith('/?view=settings&tab=preferences', '_blank', 'noopener');
-    expect(requests).toEqual([]);
-    expect(screen.queryByRole('dialog', { name: 'Account and settings' })).toBeNull();
+    await waitFor(() => expect(requests).toEqual([{ tab: 'preferences', resume: 'new-comic' }]));
+    expect(popup).not.toHaveBeenCalled();
   });
 
   it('presentation="sheet" asks for the sheet at any width (the ⋯ row inside a comic)', () => {

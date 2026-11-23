@@ -116,7 +116,7 @@ export const MEMORY_TRIGGER = 40;
 /** Fold at least this many new out-of-window messages at a time (one cheap call). */
 const MEMORY_MIN_BATCH = 10;
 /** Images shown to the director per turn (768 px previews; attachments first, then carried ones). */
-export const MAX_TURN_IMAGES = 8;
+export const MAX_TURN_IMAGES = DOC_LIMITS.imagesPerMessage;
 const PREVIEW_EDGE = 768;
 const SUMMARY_CHAR_BUDGET = 12_000;
 const MEMORY_MARKER = /\n?⟦through:([A-Za-z0-9_-]+)⟧\s*$/;

@@ -76,6 +76,22 @@ const locationOf = async (headers: Record<string, unknown>, body?: Record<string
   return r.prepared.clientContext?.location;
 };
 
+describe('image attachments on the current user turn', () => {
+  const makeImages = (count: number) => Array.from({length:count}, (_,i) => ({type:'image_url',image_url:{url:'data:image/png;base64,'+Buffer.from(String(i)).toString('base64')}}));
+  it('reconstructs all ten named tool files from the authenticated request’s image parts', async () => {
+    const parts = makeImages(10);
+    const body = { messages:[{ role:'user', content:[{type:'text',text:'Review these pictures'}, ...parts] }],
+      attachments:parts.map((_,i) => ({name:`p${i}.png`, mimeType:'image/png', messageImageIndex:i})) };
+    const result = await prepareChat(fakeReq({},body));
+    if (!('prepared' in result)) throw new Error(JSON.stringify(result.error));
+    expect(result.prepared.attachments.map(a => a.dataUri)).toEqual(parts.map(p => p.image_url.url));
+  });
+  it('refuses an eleventh image and a file reference outside this turn', async () => {
+    expect(await prepareChat(fakeReq({}, {messages:[{role:'user',content:makeImages(11)}]}))).toMatchObject({error:{status:400}});
+    expect(await prepareChat(fakeReq({}, {messages:[{role:'user',content:'Question'}], attachments:[{name:'old.png',mimeType:'image/png',messageImageIndex:0}]}))).toMatchObject({error:{status:400}});
+  });
+});
+
 describe('chat turn: approximate place from the edge', () => {
   it('uses the X-DS-Geo place when the browser shared none, marked approximate', async () => {
     expect(await locationOf({ 'x-ds-geo': encode(EDGE_PLACE), 'cf-connecting-ip': '203.0.113.9' })).toEqual({ ...EDGE_PLACE, approximate: true });

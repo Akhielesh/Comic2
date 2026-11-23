@@ -199,15 +199,23 @@ describe('screenTurnInput: review fixes', () => {
     expect(fakes.llm.calls).toHaveLength(0);
   });
 
-  it('every image a message may carry is screened (12), not only the first 6', async () => {
+  it('screens all ten permitted photos, including a blocked last attachment', async () => {
     const ctx = ctxFor();
     const data = `data:image/webp;base64,${(await webp({ r: 30, g: 60, b: 90 })).toString('base64')}`;
-    const atts: RefAsset[] = Array.from({ length: 12 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/a${i}.webp`, source: 'upload' as const, at: i + 1 }));
+    const atts: RefAsset[] = Array.from({ length: 10 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/a${i}.webp`, source: 'upload' as const, at: i + 1 }));
     for (const a of atts) ctx.assetsFake.files.set(a.path, data);
-    fakes.llm.script.vision = [...Array.from({ length: 11 }, () => imageAnswer({ rating: 'G' })), imageAnswer({ rating: 'X', categories: ['graphic_gore'] })];
+    fakes.llm.script.vision = [...Array.from({ length: 9 }, () => imageAnswer({ rating: 'G' })), imageAnswer({ rating: 'X', categories: ['graphic_gore'] })];
     const r = await screenTurnInput(ctx, { text: 'use these', attachments: atts, rating: 'PG-13' });
-    expect(imageCalls()).toHaveLength(12);
-    expect(r.blockedAttachmentPaths).toEqual([atts[11].path]);
+    expect(imageCalls()).toHaveLength(10);
+    expect(r.blockedAttachmentPaths).toEqual([atts[9].path]);
+  });
+
+  it('rejects an eleventh attachment before starting any paid check', async () => {
+    const attachments: RefAsset[] = Array.from({ length: 11 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/a${i}.webp`, source: 'upload', at: i + 1 }));
+    await expect(screenTurnInput(ctxFor(), { text: FIXTURES.adapt[0].text, attachments, rating: 'PG-13' }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', status: 400, message: 'Send up to 10 images per message.' });
+    expect(fakes.llm.calls).toHaveLength(0);
+    expect(fakes.store.costs).toHaveLength(0);
   });
 
   it('first-person crisis wording that is not an instruction reaches the director with a care note', async () => {

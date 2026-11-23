@@ -88,6 +88,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
     tables: {} as Record<string, Row[]>,
     queries: [] as RecordedQuery[],
     upserts: [] as Array<{ table: string; row: Row }>,
+    writes: [] as Array<{ table: string; row: Row }>,
     inserts: [] as Array<{ table: string; row: Row }>,
     userId: options.userId === undefined ? 'user-1' : options.userId,
     missingColumns: new Set(options.missingColumns ?? []),
@@ -103,6 +104,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
     state.tables = {};
     state.queries = [];
     state.upserts = [];
+    state.writes = [];
     state.inserts = [];
     state.userId = options.userId === undefined ? 'user-1' : options.userId;
     state.missingColumns = new Set(options.missingColumns ?? []);
@@ -117,7 +119,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
     const orders: Array<{ column: string; ascending: boolean }> = [];
     let range: [number, number] | undefined;
     let limit: number | undefined;
-    let mode: 'select' | 'upsert' | 'insert' | 'delete' = 'select';
+    let mode: 'select' | 'upsert' | 'insert' | 'update' | 'delete' = 'select';
     let payload: Row | undefined;
 
     const run = async (): Promise<{ data: unknown; error: unknown; count?: number | null }> => {
@@ -129,8 +131,17 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
         return { data: null, error };
       }
       const rows = (state.tables[table] ??= []);
+      if (mode === 'update' && payload) {
+        const matched = rows.filter(row => predicates.every(({ test }) => test(row)));
+        for (const row of matched) {
+          Object.assign(row, structuredClone(payload));
+          state.writes.push({ table, row: structuredClone(payload) });
+        }
+        return { data: null, error: null, count: matched.length };
+      }
       if (mode === 'upsert' && payload) {
         state.upserts.push({ table, row: structuredClone(payload) });
+        state.writes.push({ table, row: structuredClone(payload) });
         const at = rows.findIndex((r) => r.id === payload!.id);
         if (at >= 0) rows[at] = { ...rows[at], ...structuredClone(payload) };
         else rows.push(structuredClone(payload));
@@ -138,6 +149,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       }
       if (mode === 'insert' && payload) {
         state.inserts.push({ table, row: structuredClone(payload) });
+        state.writes.push({ table, row: structuredClone(payload) });
         rows.push(structuredClone(payload));
         return { data: null, error: null };
       }
@@ -239,6 +251,12 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       },
       upsert: (row: Row) => {
         mode = 'upsert';
+        payload = row;
+        q.columns = '';
+        return builder;
+      },
+      update: (row: Row) => {
+        mode = 'update';
         payload = row;
         q.columns = '';
         return builder;

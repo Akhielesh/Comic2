@@ -342,6 +342,16 @@ describe('createImageGenerator — Gemini direct', () => {
     ...over
   });
 
+  it('uses the finished image when the provider sends a thought image first', async () => {
+    const finished = geminiImage({ candidates: [{ content: { parts: [
+      { thought: true, inlineData: { mimeType: 'image/png', data: 'RFJBRlQ=' } },
+      { inlineData: { mimeType: 'image/png', data: 'RklOQUw=' } }
+    ]}, finishReason: 'STOP' }] });
+    const { generate } = setup(GEM, [], { generateContent: vi.fn().mockResolvedValue(finished) });
+    const result = await generate(baseReq());
+    expect(result.dataUrl).toBe('data:image/png;base64,RklOQUw=');
+  });
+
   it('interleaves labels with references and sends imageConfig', async () => {
     const generateContent = vi.fn(async (_params: Record<string, unknown>) => geminiImage());
     const { generate } = setup(GEM, [], { generateContent });

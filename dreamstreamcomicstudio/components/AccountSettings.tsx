@@ -383,7 +383,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setDisplayName(localName);
             setSavedName(localName);
             void fetchAccountAccess().then((access) => {
-                const name = access?.account.name;
+                const name = access?.account?.name;
                 if (!active || !name) return;
                 setSavedName(name);
                 setDisplayName((current) => (current === localName ? name : current));

@@ -1,3 +1,4 @@
+import { MAX_IMAGE_ATTACHMENTS, MAX_INLINE_ATTACHMENT_CHARS } from '../../../shared/attachmentLimits.js';
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
@@ -108,7 +109,7 @@ export const chatRouter = Router();
 
 const MAX_HISTORY = 40;
 const MAX_TEXT_CHARS = 24_000;
-const MAX_ATTACHMENTS = 6;
+const MAX_ATTACHMENTS = MAX_IMAGE_ATTACHMENTS;
 
 const REASONING_LEVELS: ChatReasoningLevel[] = ['none', 'low', 'medium', 'high'];
 const isReasoningLevel = (value: unknown): value is ChatReasoningLevel =>
@@ -370,6 +371,15 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const incoming = Array.isArray(body.messages) ? body.messages : [];
+  const latestContent = incoming.at(-1)?.content;
+  const exceedsCount = (Array.isArray(latestContent) && latestContent.filter(p => p?.type === 'image_url').length > MAX_IMAGE_ATTACHMENTS)
+    || (Array.isArray(body.attachments) && body.attachments.length > MAX_IMAGE_ATTACHMENTS);
+  const chars = incoming.reduce((n, m) => n + (Array.isArray(m?.content) ? m.content.reduce((sum, part) =>
+    sum + (part?.type === 'image_url' && typeof part.image_url?.url === 'string' ? part.image_url.url.length : 0), 0) : 0), 0)
+    + (Array.isArray(body.attachments) ? body.attachments.reduce((n, a) => n + (a && typeof a === 'object' && 'dataUri' in a && typeof a.dataUri === 'string' ? a.dataUri.length : 0), 0) : 0);
+  if (exceedsCount || chars > MAX_INLINE_ATTACHMENT_CHARS) {
+    return { error: { status: 400, body: { error: { message: 'Attach up to ten files and keep the total under 6 MB.' } } } };
+  }
   const messages = incoming.map(sanitizeMessage).filter((m): m is ChatMessage => m !== null).slice(-MAX_HISTORY);
 
   if (messages.length === 0) {
@@ -673,25 +683,22 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
-  // Files attached to the CURRENT user turn (images, CSV/JSON/text) for tools like
-  // run_python. Cap to 6 items; each must be a base64 data URI under ~16MB encoded.
-  const MAX_ATTACHMENTS = 6;
-  const MAX_DATA_URI_LEN = 16_000_000;
-  const attachments = Array.isArray(body.attachments)
-    ? body.attachments
-        .filter(
-          (a): a is { name: string; mimeType: string; dataUri: string } =>
-            !!a &&
-            typeof a === 'object' &&
-            typeof (a as { name?: unknown }).name === 'string' &&
-            typeof (a as { mimeType?: unknown }).mimeType === 'string' &&
-            typeof (a as { dataUri?: unknown }).dataUri === 'string' &&
-            (a as { dataUri: string }).dataUri.startsWith('data:') &&
-            (a as { dataUri: string }).dataUri.length <= MAX_DATA_URI_LEN
-        )
-        .slice(0, MAX_ATTACHMENTS)
-        .map((a) => ({ name: a.name.slice(0, 200), mimeType: a.mimeType.slice(0, 120), dataUri: a.dataUri }))
-    : [];
+  // Resolve image references against this request's current user message, never a stored account file.
+  const lastImages = Array.isArray(lastUserMessage?.content) ? lastUserMessage.content.flatMap(p => p.type === 'image_url' ? [p.image_url.url] : []) : [];
+  const attachments: ChatAttachmentInput[] = [];
+  for (const a of Array.isArray(body.attachments) ? body.attachments : []) {
+    if (!a || typeof a !== 'object' || typeof a.name !== 'string' || typeof a.mimeType !== 'string') continue;
+    let dataUri: unknown;
+    if ('messageImageIndex' in a) {
+      if (!Number.isInteger(a.messageImageIndex) || a.messageImageIndex < 0 || a.messageImageIndex >= lastImages.length) {
+        return { error: { status: 400, body: { error: { message: 'That image attachment could not be matched to this message.' } } } };
+      }
+      dataUri = lastImages[a.messageImageIndex];
+    } else dataUri = a.dataUri;
+    if (typeof dataUri === 'string' && dataUri.startsWith('data:') && dataUri.length <= MAX_INLINE_ATTACHMENT_CHARS) {
+      attachments.push({ name: a.name.slice(0, 200), mimeType: a.mimeType.slice(0, 120), dataUri });
+    }
+  }
 
   const toolContext =
     clientContext || attachments.length || req.user?.id

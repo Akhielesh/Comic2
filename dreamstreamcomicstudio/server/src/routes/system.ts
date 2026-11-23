@@ -6,6 +6,7 @@ import { getMissingRequiredEnvVars, STRICT_ENV_VALIDATION } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
+import { sanitizeImagePath } from '../../../shared/comic/imagePaths.js';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
@@ -18,7 +19,6 @@ export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
 /** Private lanes (reference photos) sign for 5 minutes at most (contract §12.5). */
 const PRIVATE_SIGNED_URL_TTL_SECONDS = SIGNED_TTL_SEC.private;
-const STORAGE_PATH_MAX_LENGTH = 512;
 type SignedTransform = { width?: number; height?: number; quality?: number; format?: 'origin' };
 
 const resolveAppVersion = () => {
@@ -43,22 +43,6 @@ const parsePositiveInt = (value: unknown, min: number, max: number): number | un
   const intValue = Math.floor(parsed);
   if (intValue < min || intValue > max) return undefined;
   return intValue;
-};
-
-const sanitizeImagePath = (value: unknown): string | null => {
-  const raw = typeof value === 'string' ? value : Array.isArray(value) ? value[0] : '';
-  const normalized = raw.trim().replace(/^\/+/, '');
-  if (!normalized) return null;
-  if (normalized.length > STORAGE_PATH_MAX_LENGTH) return null;
-  if (normalized.includes('..') || normalized.includes('\\')) return null;
-  // The path is authorized as a literal string but signed through a URL (storage-js does not
-  // encode it), and URL parsing collapses dot segments — including percent-encoded ones
-  // (`%2e%2e`) — so `u/<me>/%2e%2e/<victim>/...` would be authorized as the requester's own
-  // path yet signed as the victim's. Storage paths are plain [A-Za-z0-9._-] segments: refuse
-  // percent-escapes, query/fragment markers, control characters and empty or dot segments.
-  if (/[%?#\u0000-\u001f\u007f]/.test(normalized)) return null;
-  if (normalized.split('/').some((segment) => segment === '' || segment === '.')) return null;
-  return normalized;
 };
 
 const parseImageTransform = (query: Record<string, unknown>): SignedTransform | undefined => {

@@ -144,6 +144,7 @@ interface ProjectDashboardProps {
   /** May return a promise: the dashboard shows progress and an inline error if it rejects. */
   onCreateProject: (name: string, mode: NewComicMode, initialIdea?: string, directorCreationId?: string) => void | Promise<void>;
   onOpenProject: (id: string) => void;
+  onOpenStudioWork?: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDuplicateProject: (id: string) => void;
   onReadProject: (id: string) => void;
@@ -154,7 +155,7 @@ interface ProjectDashboardProps {
 
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
-  projects, projectsLoaded = true, openNewComic = false, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
+  projects, projectsLoaded = true, openNewComic = false, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onOpenStudioWork, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
   const [isCreating, setIsCreating] = useState(openNewComic || (comicWorkspace && projectsLoaded && !projects.length));
   const ff = useFormFactor();
@@ -799,7 +800,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
     onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
-    navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
+    navigation={{ projects, accountId, onOpenStudioWork, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
       onNewComic: beginNewComic,
       onImages: onNavigate && (() => onNavigate('images')),
       onChat: onNavigate && (() => onNavigate('chat')),

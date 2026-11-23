@@ -1,3 +1,4 @@
+import { MAX_IMAGE_ATTACHMENTS, MAX_INLINE_ATTACHMENT_CHARS } from '../../../shared/attachmentLimits.js';
 import { Request, Response, Router } from 'express';
 import { requireGeminiKey, requireOpenRouterKey } from '../middleware/keys.js';
 import {
@@ -36,6 +37,11 @@ visionRouter.post('/analyze-layout', async (req, res, next) => {
     const { images } = req.body || {};
     if (!Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: { message: 'images array is required' } });
+    }
+
+    if (images.length > MAX_IMAGE_ATTACHMENTS || images.some(image => typeof image !== 'string' || !/^data:image\/(png|jpeg|webp|gif|avif);base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) ||
+        images.reduce((n, image) => n + image.length, 0) > MAX_INLINE_ATTACHMENT_CHARS) {
+      return res.status(400).json({ error: { message: 'Choose up to ten image references, 6 MB total.' } });
     }
 
     const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : undefined;

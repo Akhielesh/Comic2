@@ -147,6 +147,30 @@ afterEach(() => {
 });
 
 describe('useStudio — leaving a comic mid-turn and coming back', () => {
+  it('keeps a long-running draft in sync after six minutes, fetching the full comic only when its revision changes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    let doc = makeSampleDoc({ id: 'long-run', directorDraft: { status: 'planning', idea: 'A lunar ferry.' } });
+    const loadStudioProject = vi.fn(async () => ({ doc, urls: {} }));
+    const loadStudioRevision = vi.fn(async () => doc.rev);
+    const hook = renderHook(() => useStudio('long-run', { transport: { loadStudioProject, loadStudioRevision } }));
+    try {
+      await act(async () => {});
+      expect(hook.result.current.doc?.id).toBe('long-run');
+      await act(async () => { await vi.advanceTimersByTimeAsync(6 * 60_000); });
+      expect(loadStudioRevision).toHaveBeenCalledTimes(45);
+      expect(loadStudioProject).toHaveBeenCalledTimes(1);
+      doc = { ...doc, rev: doc.rev + 1, directorDraft: { status: 'review', idea: 'A lunar ferry.' } };
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(hook.result.current.doc?.directorDraft?.status).toBe('review');
+      expect(loadStudioProject).toHaveBeenCalledTimes(2);
+      expect(api.streamStudio).not.toHaveBeenCalled();
+    } finally {
+      hook.unmount();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
   it('keeps the turn running, then restores busy, the steps and the reply so far; the rest streams in once, in order', async () => {
     const first = await mount();
     const s = startTurn(first.result);

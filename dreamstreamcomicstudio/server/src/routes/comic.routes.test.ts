@@ -977,7 +977,10 @@ describe('public reader (GET /api/comic/public/:id)', () => {
 describe('parseStreamRequest', () => {
   it('validates message limits and action names', () => {
     expect(parseStreamRequest({ kind: 'message', text: '  hi  ' })).toEqual({ kind: 'message', text: 'hi' });
-    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array.from({ length: 7 }, () => ({ dataUrl: 'data:image/png;base64,AA' })) })).toThrow('at most 6');
+    const image = { dataUrl: 'data:image/png;base64,AA' };
+    expect(parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(10).fill(image) })).toMatchObject({ attachments: Array(10).fill(image) });
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(11).fill(image) })).toThrow('up to 10');
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(7).fill({ dataUrl: 'data:text/plain;base64,WA==' }) })).toThrow('at most 6');
     expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ dataUrl: 'https://evil' }] })).toThrow('could not be read');
     expect(parseStreamRequest({ kind: 'action', action: { type: 'approve_plan' } })).toEqual({ kind: 'action', action: { type: 'approve_plan' } });
     expect(() => parseStreamRequest({ kind: 'action', action: { type: 'drop_tables' } })).toThrow('Unknown action');
@@ -1010,13 +1013,13 @@ describe('parseStreamRequest', () => {
     expect(parseFocus('nope')).toBeUndefined();
   });
 
-  it('accepts {inboxPath} items up to 12 images, de-duplicated, mixed with legacy data URLs', () => {
-    const inbox = Array.from({ length: 12 }, (_, i) => ({ inboxPath: `u/user-1/p/proj-1/ref/r${i}.webp` }));
+  it('accepts {inboxPath} items up to 10 images, de-duplicated, mixed with legacy data URLs', () => {
+    const inbox = Array.from({ length: 10 }, (_, i) => ({ inboxPath: `u/user-1/p/proj-1/ref/r${i}.webp` }));
     expect(parseStreamRequest({ kind: 'message', text: '', attachments: inbox })).toEqual({ kind: 'message', text: '', attachments: inbox });
-    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox, { inboxPath: 'u/user-1/p/proj-1/ref/r12.webp' }] })).toThrow('up to 12 images');
-    // 11 inbox + 2 legacy images = 13 images → refused; a duplicate path counts once.
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox, { inboxPath: 'u/user-1/p/proj-1/ref/r10.webp' }] })).toThrow('up to 10 images');
+    // 9 inbox + 2 legacy images = 11 images → refused; a duplicate path counts once.
     const legacy = { name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AA' };
-    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox.slice(0, 11), legacy, legacy] })).toThrow('up to 12 images');
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox.slice(0, 9), legacy, legacy] })).toThrow('up to 10 images');
     const dup = parseStreamRequest({ kind: 'message', text: 'x', attachments: [inbox[0], inbox[0], legacy] }) as { attachments: unknown[] };
     expect(dup.attachments).toHaveLength(2);
     expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ inboxPath: '' }] })).toThrow('could not be read');
@@ -1091,6 +1094,16 @@ describe('POST /projects/:id/urls', () => {
     expect((await api('/api/comic/projects/proj-1/urls', { user: 'user-1', body: {} })).status).toBe(400);
   });
 
+  it('checks an owned comic revision without signing art or loading model capabilities', async () => {
+    const doc = plannedDoc();
+    seed(doc);
+    const response = await api('/api/comic/projects/proj-1/revision', { user: 'user-1' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ rev: doc.rev });
+    expect(assets.signed).toHaveLength(0);
+    expect(llm.calls).toHaveLength(0);
+  });
+
   it('GET /projects/:id signs display paths only (no history) and never a blocked asset', async () => {
     const doc = plannedDoc();
     const old = { path: 'u/user-1/p/proj-1/img/old.webp', source: 'generated' as const, at: 1 };
@@ -1106,6 +1119,7 @@ describe('POST /projects/:id/urls', () => {
 describe('IDOR: every /projects/:id route needs the JWT owner', () => {
   const routes: { name: string; method: 'GET' | 'POST'; path: string; body?: unknown }[] = [
     { name: 'GET project', method: 'GET', path: '/api/comic/projects/proj-1' },
+    { name: 'GET project revision', method: 'GET', path: '/api/comic/projects/proj-1/revision' },
     { name: 'cancel', method: 'POST', path: '/api/comic/projects/proj-1/cancel', body: {} },
     { name: 'urls', method: 'POST', path: '/api/comic/projects/proj-1/urls', body: { paths: ['u/user-1/p/proj-1/img/p1.webp'] } },
     { name: 'stream message', method: 'POST', path: '/api/comic/projects/proj-1/stream', body: { kind: 'message', text: 'rename it to Owned', userId: 'user-1' } },

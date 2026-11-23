@@ -1,6 +1,8 @@
 import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, LearnProgress, ReaderState, UserProfile, UserPrivateProfile, AccountProfile, Comment, Follow, AppNotification, Review } from "../types";
 import { buildProjectReport } from "./reporting";
-import { supabase } from "./supabase";
+import { getStoredSessionOwnerId, isStoredSession, supabase } from "./supabase";
+import { isPrivatePath, sanitizeImagePath } from "../shared/comic/imagePaths";
+import type { Session } from "@supabase/supabase-js";
 import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorage";
 import { isMissingPrivateProfileTableError } from "./profilePrivate";
 import { buildApiUrl } from "./clientConfig";
@@ -23,7 +25,30 @@ const IMAGE_URL_CACHE_TTL_MS = 15 * 60 * 1000;
 const SIGNED_IMAGE_URL_TIMEOUT_MS = 8000;
 const SIGNED_IMAGE_URL_MAX_ATTEMPTS = 2; // initial try + one retry on a transient failure
 const SIGNED_IMAGE_URL_RETRY_DELAY_MS = 250;
-const imageUrlCache = new Map<string, { url: string; expiresAt: number }>();
+interface SignedImage { url: string; expiresAt: number }
+const imageUrlCache = new Map<string, SignedImage>();
+const pendingImageUrls = new Map<string, Promise<string | undefined>>();
+const IMAGE_URL_CACHE_MAX = 1_024;
+let imageOwner: string | null | undefined;
+let imageOwnerVersion = 0;
+let watchingImageOwner = false;
+
+function changeImageOwner(next: string | null) {
+  if (imageOwner === next) return;
+  imageOwner = next;
+  imageOwnerVersion++;
+  imageUrlCache.clear();
+  pendingImageUrls.clear();
+}
+
+function watchImageOwner() {
+  if (watchingImageOwner || typeof window === 'undefined') return;
+  watchingImageOwner = true;
+  supabase.auth.onAuthStateChange?.((event, session) => {
+    if (event === 'SIGNED_OUT') changeImageOwner(null);
+    else if (!session || isStoredSession(session)) changeImageOwner(session?.user.id ?? null);
+  });
+}
 
 // (Keeping IndexedDB logic for these specific stores)
 const openDb = (): Promise<IDBDatabase> => {
@@ -123,31 +148,6 @@ const buildImagePathCandidates = (imagePath: string): string[] => {
   return Array.from(new Set(candidates));
 };
 
-const buildImageCacheKey = (path: string, options?: { transform?: ImageTransformPreset }) => {
-  const transform = options?.transform;
-  const transformKey = transform
-    ? [transform.width || '', transform.height || '', transform.quality || '', transform.format || ''].join(':')
-    : 'origin';
-  return `${path}::${transformKey}`;
-};
-
-const readCachedImageUrl = (cacheKey: string): string | undefined => {
-  const cached = imageUrlCache.get(cacheKey);
-  if (!cached) return undefined;
-  if (cached.expiresAt <= Date.now()) {
-    imageUrlCache.delete(cacheKey);
-    return undefined;
-  }
-  return cached.url;
-};
-
-const writeCachedImageUrl = (cacheKey: string, url: string) => {
-  imageUrlCache.set(cacheKey, {
-    url,
-    expiresAt: Date.now() + IMAGE_URL_CACHE_TTL_MS
-  });
-};
-
 const toTransformQuery = (transform?: ImageTransformPreset): string => {
   if (!transform) return '';
   const params = new URLSearchParams();
@@ -166,68 +166,54 @@ const toTransformQuery = (transform?: ImageTransformPreset): string => {
   return params.toString();
 };
 
+type ImageSignResult = { signed?: SignedImage; denied?: boolean; retryable?: boolean };
+
 const fetchSignedImageUrlFromApi = async (
-  imagePath: string,
-  options?: { transform?: ImageTransformPreset }
-): Promise<string | undefined> => {
-  if (typeof window === 'undefined') return undefined;
+  imagePath: string, accessToken: string | undefined, version: number, transformQuery: string
+): Promise<ImageSignResult> => {
+  if (typeof window === 'undefined' || version !== imageOwnerVersion) return {};
 
-  const query = new URLSearchParams();
+  const query = new URLSearchParams(transformQuery);
   query.set('path', imagePath);
-  const transformQuery = toTransformQuery(options?.transform);
-  if (transformQuery) {
-    const parsed = new URLSearchParams(transformQuery);
-    parsed.forEach((value, key) => query.set(key, value));
-  }
-
-  // One signing attempt. Returns the URL on success, otherwise a `retryable` flag:
-  // network/timeout/5xx/429 are transient and worth one retry, while 4xx (auth,
-  // not-found) and malformed payloads will not improve on a second try.
-  const attempt = async (): Promise<{ url?: string; retryable: boolean; reason: string }> => {
+  const attempt = async (): Promise<ImageSignResult> => {
+    const started = Date.now();
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), SIGNED_IMAGE_URL_TIMEOUT_MS);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(buildApiUrl(`/api/system/image-url?${query.toString()}`), {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+        cache: 'no-store',
         signal: controller.signal
       });
       if (!response.ok) {
-        return { retryable: response.status >= 500 || response.status === 429, reason: `http ${response.status}` };
+        return {
+          denied: response.status === 401 || response.status === 403,
+          retryable: response.status >= 500 || response.status === 429 || response.status === 408
+        };
       }
-      const payload = await response.json().catch(() => null) as { url?: unknown } | null;
-      if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) {
-        return { retryable: false, reason: 'empty payload' };
-      }
-      return { url: payload.url.trim(), retryable: false, reason: 'ok' };
-    } catch (error) {
-      return { retryable: true, reason: error instanceof Error ? error.name : 'network error' };
+      const payload = await response.json().catch(() => null);
+      if (typeof payload?.url !== 'string' || !payload.url.trim()) return {};
+      const ttl = payload.expiresIn;
+      // Older signers omit expiry. Hand that URL to this caller once without caching it.
+      if (typeof ttl !== 'number' || !Number.isFinite(ttl)) return { signed: { url: payload.url, expiresAt: 0 } };
+      const lifeMs = ttl * 1000;
+      if (lifeMs <= 0 || Date.now() >= started + lifeMs) return {};
+      const usableMs = lifeMs - Math.min(30_000, lifeMs / 10);
+      return { signed: { url: payload.url, expiresAt: started + Math.min(IMAGE_URL_CACHE_TTL_MS, usableMs) } };
+    } catch {
+      return { retryable: true };
     } finally {
       window.clearTimeout(timeout);
     }
   };
 
-  let lastReason = 'unknown';
-  let lastRetryable = false;
-  for (let i = 0; i < SIGNED_IMAGE_URL_MAX_ATTEMPTS; i++) {
+  for (let n = 0; n < SIGNED_IMAGE_URL_MAX_ATTEMPTS; n++) {
+    if (version !== imageOwnerVersion) return {};
     const result = await attempt();
-    if (result.url) return result.url;
-    lastReason = result.reason;
-    lastRetryable = result.retryable;
-    if (!result.retryable) break;
-    if (i < SIGNED_IMAGE_URL_MAX_ATTEMPTS - 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, SIGNED_IMAGE_URL_RETRY_DELAY_MS));
-    }
+    if (!result.retryable || n === SIGNED_IMAGE_URL_MAX_ATTEMPTS - 1) return result;
+    await new Promise(resolve => window.setTimeout(resolve, SIGNED_IMAGE_URL_RETRY_DELAY_MS));
   }
-
-  // This used to fail silently — images just vanished with no diagnostic. The caller
-  // still falls back to a public URL, but surface transient/outage failures so a flaky
-  // backend or expired session is visible. Stay quiet on deterministic 4xx, which is the
-  // expected "not signable here, use the public URL" path and would otherwise spam.
-  if (lastRetryable) {
-    console.warn(`[db] Signed image URL unavailable for ${imagePath} after ${SIGNED_IMAGE_URL_MAX_ATTEMPTS} attempts (${lastReason}).`);
-  }
-  return undefined;
+  return {};
 };
 
 
@@ -580,12 +566,16 @@ export class CardSaveRefusedError extends Error {
 }
 
 // 1. Projects
-export const saveProject = async (project: Project): Promise<void> => {
+export const saveProject = async (
+  project: Project,
+  editing?: { ownerId: string; revision?: string }
+): Promise<string | undefined> => {
   // Before any await: a card must never be upserted over the full row. A save that passed this check
   // carries a full state, whatever a library reload flags while it is in flight.
   if (cardOnlyIds.has(project.id) || isCardState(project.state)) throw new CardSaveRefusedError(project.id);
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (editing && user?.id !== editing.ownerId) throw new Error('Sign back in to the account that owns this comic.');
   if (!user) {
     // Auth-first mode: do not persist projects without a signed-in user.
     return;
@@ -610,18 +600,30 @@ export const saveProject = async (project: Project): Promise<void> => {
     if (import.meta.env.DEV) console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
   }
 
-  const { error } = await supabase.from('projects').upsert({
+  // Preserve the database's original microseconds in the comparison. Advancing
+  // even during a rapid pair of edits prevents two writers claiming the same revision.
+  const expected = !isStudioComic ? editing?.revision : undefined;
+  const revision = new Date(Math.max(updatedAt, expected ? Date.parse(expected) + 1 : updatedAt)).toISOString();
+  const row = {
     id,
     user_id: user.id,
     name,
     cover_image_url: coverImage,
     ...(isStudioComic ? {} : { is_public: !!isPublic }),
     state: stateWithPublishMeta, // JSONB
-    updated_at: new Date(updatedAt).toISOString(),
+    updated_at: revision,
     created_at: new Date(createdAt).toISOString()
-  });
-
+  };
+  if (expected) {
+    const { error, count } = await supabase.from('projects').update(row, { count: 'exact' })
+      .eq('id', id).eq('user_id', user.id).eq('updated_at', expected);
+    if (error) throw error;
+    if (count !== 1) throw Object.assign(new Error('The saved comic changed on another device.'), { code: 'PROJECT_SAVE_CONFLICT' });
+    return revision;
+  }
+  const { error } = await supabase.from('projects').upsert(row);
   if (error) throw error;
+  return revision;
 };
 
 export const deleteProject = async (projectId: string): Promise<void> => {
@@ -679,7 +681,7 @@ export const reloadProjects = async (): Promise<Project[]> => {
  * generating a comic listed as a card. It does not clear the card-only flag: the caller does, in the same step as
  * it puts the state in memory (markStateLoaded).
  */
-export const loadProjectState = async (projectId: string): Promise<{ state: Project['state']; updatedAt: number }> => {
+export const loadProjectState = async (projectId: string): Promise<{ state: Project['state']; updatedAt: number; revision: string }> => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in to open this comic.');
 
@@ -694,7 +696,7 @@ export const loadProjectState = async (projectId: string): Promise<{ state: Proj
   if (!isRecord(data) || !isRecord(data.state) || typeof data.updated_at !== 'string') {
     throw new Error('This comic could not be loaded.');
   }
-  return { state: data.state as unknown as Project['state'], updatedAt: new Date(data.updated_at).getTime() };
+  return { state: data.state as unknown as Project['state'], updatedAt: new Date(data.updated_at).getTime(), revision: data.updated_at };
 };
 
 // A public read signs what the reader shows: the cover, each panel's current art and each Page Studio page's current
@@ -1083,37 +1085,60 @@ export const getImageUrl = async (
   imageId: string,
   options?: { transform?: ImageTransformPreset }
 ): Promise<string | undefined> => {
-  if (!imageId) return undefined;
-
-  const candidatePaths = buildImagePathCandidates(imageId);
-  for (const candidate of candidatePaths) {
-    const cacheKey = buildImageCacheKey(candidate, options);
-    const cachedUrl = readCachedImageUrl(cacheKey);
-    if (cachedUrl) return cachedUrl;
-
-    const signedUrl = await fetchSignedImageUrlFromApi(candidate, options);
-    if (signedUrl) {
-      writeCachedImageUrl(cacheKey, signedUrl);
-      return signedUrl;
-    }
+  const path = sanitizeImagePath(imageId);
+  if (!path) return undefined;
+  watchImageOwner();
+  const beforeSession = imageOwnerVersion;
+  let session: Session | null = null;
+  try {
+    ({ data: { session } } = await supabase.auth.getSession());
+  } catch {
+    // A session that cannot be resolved cannot authorize a private lookup.
+    if (isPrivatePath(path) || imageOwner) return undefined;
   }
+  const owner = session?.user?.id ?? null;
+  if (session && (!owner || !isStoredSession(session))) return undefined;
+  if (beforeSession !== imageOwnerVersion && owner !== imageOwner) return undefined;
+  changeImageOwner(owner);
+  if (isPrivatePath(path) && (!owner || !path.startsWith(`u/${owner}/`))) return undefined;
+  const version = imageOwnerVersion;
+  const transformQuery = toTransformQuery(options?.transform);
+  const key = JSON.stringify([owner, path, transformQuery]);
+  const cached = imageUrlCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.url;
+  imageUrlCache.delete(key);
+  const pending = pendingImageUrls.get(key);
+  if (pending) return pending;
 
-  // Last resort only after every candidate failed to sign. getPublicUrl() builds a
-  // URL string without checking existence, so doing it per-candidate (as before)
-  // returned a URL to the first — often non-existent — candidate and skipped later
-  // ones that are actually valid. Fall back to the primary candidate's public URL.
-  const primaryCandidate = candidatePaths[0];
-  if (primaryCandidate) {
-    const { data } = supabase.storage
-      .from(BUCKET_NAME)
-      .getPublicUrl(primaryCandidate, options?.transform ? { transform: options.transform as any } : undefined);
-    if (data?.publicUrl) {
-      writeCachedImageUrl(buildImageCacheKey(primaryCandidate, options), data.publicUrl);
-      return data.publicUrl;
+  const resolve = async () => {
+    const candidates = buildImagePathCandidates(path);
+    let primaryDenied = false;
+    for (const candidate of candidates) {
+      const result = await fetchSignedImageUrlFromApi(candidate, session?.access_token, version, transformQuery);
+      if (version !== imageOwnerVersion) return undefined;
+      if (session && !isStoredSession(session) && getStoredSessionOwnerId() !== owner) return undefined;
+      if (result.signed) {
+        if (result.signed.expiresAt > Date.now()) {
+          if (imageUrlCache.size >= IMAGE_URL_CACHE_MAX) imageUrlCache.delete(imageUrlCache.keys().next().value!);
+          imageUrlCache.set(key, result.signed);
+        }
+        return result.signed.url;
+      }
+      if (candidate === candidates[0] && result.denied) primaryDenied = true;
     }
-  }
-
-  return undefined;
+    // A constructed public URL is appropriate only for legacy/public artwork. Project working
+    // copies can be restricted to the author even when their storage bucket is publicly addressable.
+    if (primaryDenied || isPrivatePath(path) || /^u\/[^/]+\/p\//.test(path)) return undefined;
+    // Keep retrying the signer on future loads. getPublicUrl only constructs a string.
+    return supabase.storage.from(BUCKET_NAME).getPublicUrl(
+      candidates[0], options?.transform ? { transform: options.transform as any } : undefined
+    ).data?.publicUrl;
+  };
+  const resolution = resolve().finally(() => {
+    if (pendingImageUrls.get(key) === resolution) pendingImageUrls.delete(key);
+  });
+  pendingImageUrls.set(key, resolution);
+  return resolution;
 };
 
 export const getImageDataUrl = async (imageId: string): Promise<string | undefined> => {

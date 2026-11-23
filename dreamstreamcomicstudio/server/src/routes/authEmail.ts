@@ -1,3 +1,4 @@
+import { lookupHandles } from '../services/usernames.js';
 import { dobProblem, USERNAME_REGEX } from '../services/signupValidation.js';
 export { dobProblem } from '../services/signupValidation.js';
 import { AUTH_WORKSPACE_PATHS, authWorkspace, type AuthWorkspace } from '../../../shared/authWorkspace.js';
@@ -465,8 +466,15 @@ authEmailRouter.post('/signup', async (req, res, next) => {
     const limit = await checkThrottle(email);
     if (limit) return throttled(res, limit);
 
+    // Check the public handle independently of email ownership. Existing mailboxes and
+    // new ones get the same public acknowledgement; the database still decides races.
+    const handle = String(input.data.username);
+    const taken = async () => (await lookupHandles(admin, [handle])).has(handle.toLowerCase());
+    const handleConflict = () => fail(res, 409, 'username_taken', 'That username is taken. Choose another or sign in to your account.');
+    if (input.app === 'main' && await taken()) return handleConflict();
+    const existingEmail = () => input.app === 'main' ? res.json({ ok: true, confirmEmail: true }) : fail(res, 409, 'email_exists', EMAIL_EXISTS_MESSAGE);
     const account = await lookupAccount(admin, email);
-    if (account.status === 'confirmed') return fail(res, 409, 'email_exists', EMAIL_EXISTS_MESSAGE);
+    if (account.status === 'confirmed') return existingEmail();
 
     const workspace = input.app === 'main' ? requestedWorkspace(body) : undefined;
     const { origin, redirectTo } = linkTarget(req, workspace);
@@ -485,9 +493,10 @@ authEmailRouter.post('/signup', async (req, res, next) => {
 
     if (error) {
       const e = error as LinkError;
-      if (isEmailExists(e)) return fail(res, 409, 'email_exists', EMAIL_EXISTS_MESSAGE);
+      if (isEmailExists(e)) return existingEmail();
       // The profile trigger failed (username taken, …). The live app retries with a new username.
       if (isDatabaseError(e)) {
+        if (input.app === 'main') return await taken() ? handleConflict() : fail(res, 503, 'signup_unavailable', 'Account creation is temporarily unavailable. Please try again.');
         return fail(res, 422, 'database_error', 'Database error saving new user — that username may already be taken.');
       }
       if (e.code === 'weak_password') return fail(res, 400, 'weak_password', e.message || 'Please choose a stronger password.');

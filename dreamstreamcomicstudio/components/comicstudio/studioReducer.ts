@@ -978,6 +978,7 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       const base = take || !current ? action.doc : current;
       return withView({
         ...state,
+        ...(state.errorCode === 'SYNC_READ' ? { error: null, errorCode: null } : {}),
         base,
         refreshing: false,
         loading: false,
@@ -997,7 +998,7 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
         syncDue: false,
         hardRefresh: false,
         // Retrying a failed first load keeps the fatal screen, with the newest reason.
-        ...(action.message ? (state.base ? { error: action.message } : { loadError: action.message }) : {})
+        ...(action.message ? (state.base ? { error: action.message, errorCode: 'SYNC_READ' } : { loadError: action.message }) : {})
       };
     case 'stream_start':
       return {

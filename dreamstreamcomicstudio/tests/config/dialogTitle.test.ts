@@ -49,6 +49,7 @@ const CENTRED: Record<string, 'DIALOG_TITLE' | 'DIALOG_TITLE_FROM_SM'> = {
   'components/comicstudio/share/ShareSheet.tsx': 'DIALOG_TITLE',
   // A bottom sheet below `sm`, centred from `sm` up (`items-end sm:items-center`).
   'components/comicstudio/timeline/ui.tsx': 'DIALOG_TITLE_FROM_SM',
+  'components/feedback/FeedbackWidget.tsx': 'DIALOG_TITLE_FROM_SM',
   'components/comicstudio/models/ModelChangeConfirm.tsx': 'DIALOG_TITLE_FROM_SM',
   'components/comicstudio/models/lab/RunConfirmDialog.tsx': 'DIALOG_TITLE_FROM_SM',
   // Centred on the scrim at every width (DS-3).

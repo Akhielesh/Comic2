@@ -24,6 +24,8 @@
 // Keyboard-safe: the root follows the visible height (--app-h from useKeyboardInset), safe areas are
 // tokens (--sa-*), and the back gesture closes the top layer (reader, sheets) before the studio.
 
+import { consumeTaskTarget, TASK_TARGET_EVENT } from './home/workspaceTaskTarget';
+import { useAuth } from '../../contexts/AuthContext';
 import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
@@ -993,6 +995,11 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
     });
   };
   useEffect(() => { setNavigationOpen(false); }, [navigationOverlay]);
+  useEffect(() => {
+    const closeNavigation = () => setNavigationOpen(false);
+    window.addEventListener('dreamstream:open-feedback-report', closeNavigation);
+    return () => window.removeEventListener('dreamstream:open-feedback-report', closeNavigation);
+  }, []);
   const [view, setView] = useState<'chat' | 'board'>('chat');
   const [paneModeState, setPaneModeState] = useState<PaneMode>(() => readPaneMode(ff.widthClass));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1003,6 +1010,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const composerApi = useRef<StudioComposerHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
+  const { user } = useAuth();
 
   // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
   useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
@@ -1047,6 +1055,20 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
     if (phone) setView('chat');
     else if (paneMode === 'board') setPaneModeState('both');
   }, [phone, paneMode]);
+  useEffect(() => {
+    if (!doc?.id) return;
+    const openTask = () => {
+      const target = consumeTaskTarget(user?.id, doc.id);
+      if (!target) return;
+      setNavigationOpen(false);
+      if (target === 'conversation') showChat();
+      else { setTab(target); showBoard(); }
+    };
+    openTask();
+    window.addEventListener(TASK_TARGET_EVENT, openTask);
+    return () => window.removeEventListener(TASK_TARGET_EVENT, openTask);
+  }, [doc?.id, user?.id, setTab, showBoard, showChat]);
+
   const chatStudio = useMemo<ComicStudioController>(
     () => ({
       ...studio,

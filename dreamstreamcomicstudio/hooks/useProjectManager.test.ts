@@ -148,7 +148,7 @@ describe('useProjectManager with library cards', () => {
 
   const stateLoads = () => fakeSupabase.queriesOn('projects').filter((q) => q.columns === 'state,updated_at');
   const cardLoads = () => fakeSupabase.queriesOn('projects').filter((q) => q.columns.includes('state->'));
-  const upserts = () => fakeSupabase.state.upserts.filter((u) => u.table === 'projects').map((u) => u.row);
+  const saves = () => fakeSupabase.state.writes.filter((u) => u.table === 'projects').map((u) => u.row);
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const mount = async () => {
@@ -179,7 +179,7 @@ describe('useProjectManager with library cards', () => {
     expect(classic.state.panels[0].imageUrl).toBe('https://signed.test/user-1/p1.png?thumb');
     expect(listed(hook, 'legacy-1').state.step).toBe(2);
     await sleep(700);
-    expect(upserts()).toHaveLength(0);
+    expect(saves()).toHaveLength(0);
   });
 
   it('a rename on a card loads the state once, then saves the full state', async () => {
@@ -188,9 +188,9 @@ describe('useProjectManager with library cards', () => {
       hook.result.current.updateProject('classic-1', { name: 'Renamed' });
       hook.result.current.updateProject('classic-1', (prev) => ({ state: { ...prev.state, isFeatured: !prev.state.isFeatured } }));
     });
-    await waitFor(() => expect(upserts()).toHaveLength(1), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(1), { timeout: 2000 });
     expect(stateLoads()).toHaveLength(1);
-    const saved = upserts()[0];
+    const saved = saves()[0];
     expect(saved).toMatchObject({ id: 'classic-1', name: 'Renamed' });
     const savedState = saved.state as Record<string, unknown>;
     expect(savedState.versions).toEqual(VERSIONS);
@@ -202,7 +202,7 @@ describe('useProjectManager with library cards', () => {
     expect(listed(hook, 'classic-1').state.coverImageUrl).toBe('https://signed.test/user-1/cover.png?thumb');
     // Now full: the next change saves without another load.
     act(() => hook.result.current.updateProject('classic-1', { name: 'Again' }));
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
     expect(stateLoads()).toHaveLength(1);
   });
 
@@ -212,7 +212,7 @@ describe('useProjectManager with library cards', () => {
     act(() => hook.result.current.updateProject('classic-1', { name: 'Lost' }));
     await waitFor(() => expect(document.getElementById('project-state-notice')).toHaveTextContent(STATE_LOAD_FAILED_SAVE));
     await sleep(700);
-    expect(upserts()).toHaveLength(0);
+    expect(saves()).toHaveLength(0);
     expect(listed(hook, 'classic-1').name).toBe('Comic classic-1');
     expect(isCardOnly('classic-1')).toBe(true);
   });
@@ -246,11 +246,11 @@ describe('useProjectManager with library cards', () => {
     expect((listed(hook, 'classic-1').state as unknown as Record<string, unknown>).versions).toEqual(VERSIONS);
     expect(isCardOnly('classic-1')).toBe(true);
     expect(listed(hook, 'classic-1').updatedAt).toBe(Date.parse('2026-10-06T00:00:00.000Z'));
-    const before = upserts().length;
+    const before = saves().length;
     act(() => hook.result.current.updateProject('classic-1', { name: 'After remote edit' }));
-    await waitFor(() => expect(upserts()).toHaveLength(before + 1), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(before + 1), { timeout: 2000 });
     expect(stateLoads()).toHaveLength(2);
-    const saved = upserts()[before];
+    const saved = saves()[before];
     expect(saved.name).toBe('After remote edit');
     expect((saved.state as Record<string, unknown>).script).toBe('Edited on another device');
     expect((saved.state as Record<string, unknown>).versions).toEqual(VERSIONS);
@@ -262,16 +262,16 @@ describe('useProjectManager with library cards', () => {
       await hook.result.current.hydrateProjectAssets('classic-1');
     });
     await sleep(50);
-    const before = upserts().length;
+    const before = saves().length;
     act(() => hook.result.current.updateProject('classic-1', { name: 'Typing' }));
     await act(async () => {
       await hook.result.current.reloadProjects();
     });
     expect(listed(hook, 'classic-1').name).toBe('Typing');
     expect(isCardOnly('classic-1')).toBe(false);
-    await waitFor(() => expect(upserts()).toHaveLength(before + 1), { timeout: 2000 });
-    expect(upserts()[before]).toMatchObject({ id: 'classic-1', name: 'Typing' });
-    expect((upserts()[before].state as Record<string, unknown>).versions).toEqual(VERSIONS);
+    await waitFor(() => expect(saves()).toHaveLength(before + 1), { timeout: 2000 });
+    expect(saves()[before]).toMatchObject({ id: 'classic-1', name: 'Typing' });
+    expect((saves()[before].state as Record<string, unknown>).versions).toEqual(VERSIONS);
   });
 
   it('an update built by spreading a card\'s state is laid over the full state, never put in its place', async () => {
@@ -286,8 +286,8 @@ describe('useProjectManager with library cards', () => {
     const card = listed(hook, 'pages-1');
     // A component still holding the card changes one key the way many do: a spread of what it holds.
     act(() => hook.result.current.updateProject('pages-1', { state: { ...card.state, overview: 'New blurb' } }));
-    await waitFor(() => expect(upserts()).toHaveLength(1), { timeout: 2000 });
-    const saved = upserts()[0].state as Record<string, any>;
+    await waitFor(() => expect(saves()).toHaveLength(1), { timeout: 2000 });
+    const saved = saves()[0].state as Record<string, any>;
     expect(saved.overview).toBe('New blurb');
     expect(saved.versions).toEqual(VERSIONS);
     expect(saved.imageTags).toEqual(classicState.imageTags);
@@ -297,9 +297,9 @@ describe('useProjectManager with library cards', () => {
     expect(saved.pageStudio.pages.map((p: { id: string }) => p.id)).toEqual(['pg1']);
     // The same spread after the swap (a stale prop) is merged too.
     act(() => hook.result.current.updateProject('pages-1', { state: { ...card.state, overview: 'Later' } }));
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
-    expect((upserts()[1].state as Record<string, any>).pageStudio.style).toEqual(STYLE);
-    expect((upserts()[1].state as Record<string, any>).versions).toEqual(VERSIONS);
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
+    expect((saves()[1].state as Record<string, any>).pageStudio.style).toEqual(STYLE);
+    expect((saves()[1].state as Record<string, any>).versions).toEqual(VERSIONS);
   });
 
   it.each(['stored-original', 'url-only-original'])('PageStudio resets the selected snapshot to its %s across save and reopen', async (variant) => {
@@ -326,8 +326,8 @@ describe('useProjectManager with library cards', () => {
     }));
     expect(screen.getByAltText('generated page')).toHaveAttribute('src', 'https://signed.test/user-1/selected-edit.png');
     fireEvent.click(screen.getByTitle('Revert to the original generated page'));
-    await waitFor(() => expect((upserts().at(-1)?.state as Record<string, any>)?.pageStudio?.pages[0]?.edits).toEqual([]), { timeout: 2000 });
-    const saved = upserts().at(-1)!.state as Record<string, any>;
+    await waitFor(() => expect((saves().at(-1)?.state as Record<string, any>)?.pageStudio?.pages[0]?.edits).toEqual([]), { timeout: 2000 });
+    const saved = saves().at(-1)!.state as Record<string, any>;
     expect(saved.pageStudio.pages[0].imageId).toBe(baseId);
     expect(saved.pageStudio.pages[0].edits).toEqual([]);
     expect(saved.pageStudio.pages[0].imageUrl).toBe(baseId ? undefined : baseUrl);
@@ -354,8 +354,8 @@ describe('useProjectManager with library cards', () => {
       await hook.result.current.duplicateProject('classic-1');
     });
     expect(stateLoads()).toHaveLength(1);
-    expect(upserts()).toHaveLength(1);
-    const copy = upserts()[0];
+    expect(saves()).toHaveLength(1);
+    const copy = saves()[0];
     expect(copy.id).not.toBe('classic-1');
     expect(copy.name).toBe('Comic classic-1 (Copy)');
     const copyState = copy.state as Record<string, unknown>;
@@ -375,11 +375,11 @@ describe('useProjectManager with library cards', () => {
     });
     expect(stateLoads()).toHaveLength(0);
     act(() => hook.result.current.updateProject('studio-1', { name: 'Spice Thief', isPublic: true }));
-    await waitFor(() => expect(upserts()).toHaveLength(1), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(1), { timeout: 2000 });
     expect(stateLoads()).toHaveLength(1);
-    expect(upserts()[0]).toMatchObject({ id: 'studio-1', name: 'Spice Thief' });
-    expect('is_public' in upserts()[0]).toBe(false);
-    expect(upserts()[0].state).toMatchObject({ studioVersion: 4, stylePrompt: 'ink wash', overview: 'Rivals cook.', studioPages: 6 });
+    expect(saves()[0]).toMatchObject({ id: 'studio-1', name: 'Spice Thief' });
+    expect('is_public' in saves()[0]).toBe(false);
+    expect(saves()[0].state).toMatchObject({ studioVersion: 4, stylePrompt: 'ink wash', overview: 'Rivals cook.', studioPages: 6 });
   });
 
   it('startGeneration loads the full state before the run starts', async () => {

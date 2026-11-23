@@ -278,8 +278,8 @@ export const listFeedback = async (opts: ListOptions & { vote?: string; targetTy
     const items = (data || []) as Array<Record<string, unknown>>;
     return { items, nextCursor: items.length === limit ? String(offset + limit) : undefined };
   } catch (error) {
-    logger.warn('analytics_feedback_failed', { message: (error as Error)?.message || String(error) });
-    return { items: [], nextCursor: undefined };
+    logger.warn('analytics_feedback_failed', { code: (error as {code?: string})?.code });
+    throw new Error('Feedback could not be loaded.');
   }
 };
 

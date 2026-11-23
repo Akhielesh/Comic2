@@ -9,6 +9,8 @@
 // | publication copies   | comic-assets   | pub/<assetKey>/<slot>-<sha12>[-w480|-w1080].webp       |
 // | platform library     | comic-assets   | library/v<ver>/<id>/<rev>[@320|@640].webp              |
 
+import { isPrivatePath } from '../../../shared/comic/imagePaths.js';
+export { isPrivatePath, isQuarantinePath } from '../../../shared/comic/imagePaths.js';
 import { ASSET_KEY_RE } from '../../../shared/comic/publication.js';
 import { COMIC_PRIVATE_BUCKET, STORAGE_BUCKET } from '../config.js';
 
@@ -20,8 +22,6 @@ export const PRIVATE_BUCKET: string = COMIC_PRIVATE_BUCKET;
 /** Signed-URL lifetimes per bucket (seconds). */
 export const SIGNED_TTL_SEC = { public: 3600, private: 300 } as const;
 
-const REF_PATH_RE = /^u\/[^/]+\/p\/[^/]+\/ref\//;
-const QUARANTINE_PATH_RE = /^q\//;
 const PUB_PATH_RE = /^pub\/[A-Za-z0-9]{22}\//;
 const LIBRARY_PATH_RE = /^library\//;
 const SHA12_RE = /^[0-9a-f]{12}$/;
@@ -32,13 +32,6 @@ const segment = (value: string, what: string): string => {
   if (!clean || /^-+$/.test(clean)) throw new Error(`storagePaths: empty ${what}`);
   return clean;
 };
-
-/** Private lanes: reference photos (…/ref/…) and quarantine (q/…). */
-export const isPrivatePath = (path: string): boolean =>
-  typeof path === 'string' && (REF_PATH_RE.test(path) || QUARANTINE_PATH_RE.test(path));
-
-/** Quarantine lane (q/…): moderators only, never served to readers or owners. */
-export const isQuarantinePath = (path: string): boolean => typeof path === 'string' && QUARANTINE_PATH_RE.test(path);
 
 /** The bucket that holds a path. Anything not private is in the public bucket. */
 export const bucketForPath = (path: string): string => (isPrivatePath(path) ? PRIVATE_BUCKET : PUBLIC_BUCKET);
