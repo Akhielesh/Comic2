@@ -61,6 +61,10 @@ export function originalMetadata(raw: unknown): OriginalMetadata {
   };
 }
 
+export function editionDigest(key: OriginalKey, metadata: OriginalMetadata, images: OriginalImage[]): string {
+  return sha256(JSON.stringify([key, metadata, images.map(({ name, sha256 }) => [name, sha256])]));
+}
+
 export async function inspectOriginal(root: string, key: OriginalKey): Promise<OriginalBook> {
   if (!ORIGINAL_KEYS.includes(key)) throw new Error('Unknown Studio Original.');
   const directory = join(root, key);
@@ -82,7 +86,7 @@ export async function inspectOriginal(root: string, key: OriginalKey): Promise<O
     if (images.some((prior) => prior.sha256 === hash)) throw new Error(key + ' contains duplicate illustrations.');
     images.push({ name, file, sha256: hash, width: image.width, height: image.height, bytes: buffer.length });
   }
-  const digest = sha256(JSON.stringify([key, metadata, images.map(({ name, sha256 }) => [name, sha256])]));
+  const digest = editionDigest(key, metadata, images);
   return { key, metadata, images, digest };
 }
 

@@ -10,6 +10,8 @@ const failureCodes = new Map([
   ['Editorial publication is busy, withdrawn, or its source changed.', 'EDITION_UNAVAILABLE'],
   ['Editorial publication lease or review state changed.', 'PUBLICATION_CONFLICT'],
   ['The complete original did not clear the publication checks.', 'REVIEW_INCOMPLETE'],
+  ['Editorial rating revision is unavailable.', 'RATING_REVISION_UNAVAILABLE'],
+  ['Editorial rating revision could not be recorded.', 'RATING_REVISION_NOT_RECORDED'],
   ['Editorial artwork upload failed.', 'STORAGE_WRITE_FAILED'],
   ['Editorial artwork checksum mismatch.', 'STORAGE_VERIFY_FAILED'],
   ['The full live Studio Original could not be verified.', 'READER_VERIFY_FAILED']
