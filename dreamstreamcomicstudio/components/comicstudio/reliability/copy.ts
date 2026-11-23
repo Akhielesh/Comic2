@@ -258,5 +258,5 @@ export const noLiveStatusSentence = (input: { modelId: string; action?: StudioAc
   return `There's no live status for ${name} right now, so we can't tell whether it's answering again. ${drawn} You can try again now, wait, or switch models. Switching can affect consistency.`;
 };
 
-/** Settings → API keys (App.tsx restores ?view=settings&tab=settings); opened in a new tab so a waiting retry survives. */
+/** The Studio opens API key settings in the current tab. */
 export { API_KEYS_HREF } from '../../usage/links';

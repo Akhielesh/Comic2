@@ -21,7 +21,6 @@ vi.mock('../middleware/limits.js', () => ({
 }));
 vi.mock('../middleware/keys.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../middleware/keys.js')>()),
-  requireGeminiKey: () => 'gemini-key',
   requirePixazoKey: () => 'pixazo-key',
   requireOpenRouterKey: () => 'or-key',
   requireNvidiaKey: () => 'nv-key',
@@ -141,7 +140,7 @@ app.use((req, _res, next) => {
   next();
 });
 app.use((req, _res, next) => {
-  req.user = { id: 'tester-1', email: 'tester@example.com' };
+  req.user = { id: req.header('X-Fixture-Owner') || 'tester-1', email: 'tester@example.com' };
   next();
 });
 app.use('/api/image', imageRouter);
@@ -705,6 +704,127 @@ describe('standalone images', () => {
     expect(providers.openrouter).toHaveBeenCalledTimes(2);
     expect(meter.releaseReservedOperation).not.toHaveBeenCalled();
     expect(providers.gemini).not.toHaveBeenCalled();
+  });
+
+  describe('generation-time Gemini refusals after both personal keys pass metadata', () => {
+    const alternate = { provider: 'openrouter', payer: 'personal', model: 'google/gemini-2.5-flash-image' };
+    const pinned = '?expectedProvider=openrouter&expectedPayer=personal';
+    const headers = (id: string) => ({ 'X-Gemini-Key': 'direct-' + id, 'X-OpenRouter-Key': 'sk-or-' + id });
+    const render = (id: string, keys: Record<string, string>, query = '') => fetch(base + '/api/image/standalone' + query, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': 'second-route-' + id, ...keys },
+      body: JSON.stringify({ prompt: 'Clouds near the lighthouse' })
+    });
+    beforeEach(() => {
+      const network = globalThis.fetch;
+      vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {
+        if (String(url).startsWith(base + '/')) return network(url, options);
+        if (String(url).startsWith('https://generativelanguage.googleapis.com/v1beta/models/')) return Promise.resolve(Response.json({ name: 'models/gemini-2.5-flash-image' }));
+        if (String(url) === 'https://openrouter.ai/api/v1/key') return Promise.resolve(Response.json({ data: { limit_remaining: 10 } }));
+        throw new Error('Unexpected non-local test request');
+      });
+      meter.byok = true;
+    });
+
+    it.each([401, 402, 429, 403])('releases explicit HTTP %i refusal and offers exactly one equivalent personal route', async status => {
+      const id = 'confirmed-' + status;
+      const keys = headers(id);
+      const detail = { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', domain: 'googleapis.com', reason: 'QUOTA_EXCEEDED' };
+      providers.gemini.mockRejectedValueOnce(Object.assign(new Error(JSON.stringify({ error: { code: status, details: [detail] } })), { status }));
+      const rejected = await render(id, keys);
+      expect(rejected.status).toBe(409);
+      expect((await rejected.json()).error).toMatchObject({ code: 'IMAGE_ROUTE_RESELECT', details: alternate });
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      expect(meter.releaseReservedOperation).toHaveBeenCalledOnce();
+      expect(meter.settleReservedOperation).not.toHaveBeenCalled();
+      // An attempted change to the suggested payer fails before a purchase.
+      const changed = await render(id, keys, '?expectedProvider=openrouter&expectedPayer=platform');
+      expect((await changed.json()).error.code).toBe('IMAGE_ROUTE_CHANGED');
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      const alternateImage = await render(id, keys, pinned);
+      expect(await alternateImage.json()).toMatchObject(alternate);
+      const duplicate = await render(id, keys, pinned);
+      expect(duplicate.headers.get('Idempotency-Replayed')).toBe('true');
+      expect(providers.openrouter).toHaveBeenCalledOnce();
+      expect(meter.settleReservedOperation).toHaveBeenCalledOnce();
+      expect(providers.gemini).toHaveBeenCalledOnce();
+      const otherOwner = await fetch(base + '/api/image/standalone/route', { headers: { ...keys, 'X-Fixture-Owner': 'another-member' } });
+      expect(await otherOwner.json()).toMatchObject({ provider: 'gemini', payer: 'personal' });
+    });
+
+    it('rechecks a pinned personal router on a fresh worker even when that worker still considers Gemini ready', async () => {
+      const id = 'independent-worker';
+      const keys = headers(id);
+      const preview = await fetch(base + '/api/image/standalone/route', { headers: keys });
+      expect(await preview.json()).toMatchObject({ provider: 'gemini', payer: 'personal' });
+      const result = await render(id, keys, pinned);
+      expect(await result.json()).toMatchObject(alternate);
+      expect(providers.gemini).not.toHaveBeenCalled();
+      expect(providers.openrouter).toHaveBeenCalledOnce();
+    });
+
+    it('respects free-only after Gemini declines and routes only following an explicit single-image consent', async () => {
+      const id = 'free-after-refusal';
+      const keys = headers(id);
+      providers.gemini.mockRejectedValueOnce(Object.assign(new Error('Rate limited'), { status: 429 }));
+      const noConsent = await render(id, { ...keys, 'X-Free-Only': 'true' });
+      expect(noConsent.status).toBe(402);
+      expect((await noConsent.json()).error).toMatchObject({ code: 'NO_FREE_MODEL_AVAILABLE', details: alternate });
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      expect(await (await render(id, keys, pinned)).json()).toMatchObject(alternate);
+      expect(providers.gemini).toHaveBeenCalledOnce();
+      expect(providers.openrouter).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a lone rejected credential unavailable without having to resubmit a paid request', async () => {
+      const id = 'no-alternative';
+      const keys = { 'X-Gemini-Key': 'direct-' + id };
+      providers.gemini.mockRejectedValueOnce(Object.assign(new Error('Refused'), { status: 429 }));
+      for (let n = 0; n < 2; n++) {
+        expect((await (await render(id, keys)).json()).error.code).toBe('IMAGE_KEY_EXHAUSTED');
+      }
+      expect(providers.gemini).toHaveBeenCalledOnce();
+      expect(providers.openrouter).not.toHaveBeenCalled();
+    });
+
+    it('leaves provider selection unchanged when a local reservation or the release of a refused hold fails', async () => {
+      const id = 'local-failure';
+      const keys = headers(id);
+      meter.reserveForOperation.mockRejectedValueOnce(Object.assign(new Error('Local rate limit'), { status: 429 }));
+      expect((await render(id, keys)).status).toBe(429);
+      expect(providers.gemini).not.toHaveBeenCalled();
+
+      providers.gemini.mockRejectedValueOnce(Object.assign(new Error('Gemini rate limit'), { status: 429 }));
+      meter.releaseReservedOperation.mockRejectedValueOnce(new Error('Local hold could not be released'));
+      expect((await render(id, keys)).status).toBe(500);
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      const unaltered = await fetch(base + '/api/image/standalone/route', { headers: keys });
+      expect(await unaltered.json()).toMatchObject({ provider: 'gemini', payer: 'personal' });
+    });
+
+    it('replays an ambiguous Gemini timeout without dispatching either provider again', async () => {
+      const id = 'direct-lost';
+      const keys = headers(id);
+      providers.gemini.mockRejectedValueOnce(Object.assign(new Error('Connection lost'), { status: 504 }));
+      for (const query of ['', pinned]) {
+        expect((await (await render(id, keys, query)).json()).error.code).toBe('IMAGE_RESULT_UNCONFIRMED');
+      }
+      expect(providers.gemini).toHaveBeenCalledOnce();
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      expect(meter.releaseReservedOperation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['safety', Object.assign(new Error('Safety refusal: output is prohibited'), { status: 403 })],
+      ['untrusted reason', Object.assign(new Error(JSON.stringify({ error: { code: 403, details: [{ reason: 'QUOTA_EXCEEDED' }] } })), { status: 403 })],
+      ['returned no image', new Error('Image generation returned no image. finishReason=SAFETY')],
+    ])('does not switch on %s or infer quota from provider prose', async (id, error) => {
+      const keys = headers(String(id));
+      providers.gemini.mockRejectedValueOnce(error);
+      const issue = (await (await render(String(id), keys)).json()).error;
+      expect(issue.code).not.toBe('IMAGE_ROUTE_RESELECT');
+      expect(providers.openrouter).not.toHaveBeenCalled();
+      expect(await (await fetch(base + '/api/image/standalone/route', { headers: keys })).json()).toMatchObject({ provider: 'gemini' });
+    });
   });
 
   it('replays a completed standalone generation when the same client action is retried', async () => {

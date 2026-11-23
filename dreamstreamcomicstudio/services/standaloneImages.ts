@@ -20,12 +20,15 @@ export function loadStandaloneRoute(owner: string, quality: WorkspaceQuality, si
 }
 
 export async function renderStandalone(
-  owner: string, prompt: string, aspectRatio: ImageFormatChoice, referenceImages: string[], requestId: string, quality: WorkspaceQuality = 'native', options: { signal?: AbortSignal; allowPaidImage?: boolean } = {}
+  owner: string, prompt: string, aspectRatio: ImageFormatChoice, referenceImages: string[], requestId: string, quality: WorkspaceQuality = 'native', options: { signal?: AbortSignal; allowPaidImage?: boolean; expectedRoute?: StandaloneRoute } = {}
 ): Promise<SavedStandaloneImage> {
   const model = quality === 'native' ? STANDALONE_MODEL : NATIVE_REFERENCE_MODEL;
-  const result = await post<Omit<ImageGenerateRequest, 'aspectRatio'> & { aspectRatio: ImageFormatChoice }, ImageGenerateResponse>(endpoint, {
+  const target = options.expectedRoute ? endpoint + '?' + new URLSearchParams({
+    expectedProvider: options.expectedRoute.provider, expectedPayer: options.expectedRoute.payer
+  }) : endpoint;
+  const result = await post<Omit<ImageGenerateRequest, 'aspectRatio'> & { aspectRatio: ImageFormatChoice }, ImageGenerateResponse>(target, {
     prompt: prompt.trim(), aspectRatio, resolution: quality === 'native' ? '1K' : quality, model, referenceImages
-  }, { expectedAccountId: owner, idempotencyKey: requestId, ...options, apiKey: getModelSpecificKey(model) || undefined });
+  }, { expectedAccountId: owner, idempotencyKey: requestId, signal: options.signal, allowPaidImage: options.allowPaidImage, apiKey: getModelSpecificKey(model) || undefined });
   if (!result.imageId || !result.imageUrl) throw new Error('Your image could not be opened. Refresh your saved images before trying again.');
   emitBillingSummaryRefresh();
   return { imageId: result.imageId, imageUrl: result.imageUrl, createdAt: new Date().toISOString(), model: result.model, provider: result.provider, byok: result.payer ? result.payer === 'personal' : result.billing?.byokBypass, apiMs: result.timings?.apiMs, saveMs: result.timings?.saveMs };

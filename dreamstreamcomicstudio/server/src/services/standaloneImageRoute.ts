@@ -7,13 +7,23 @@ import { TtlCache } from '../lib/cache.js';
 import { recentOpenRouterCreditExhaustion } from './providerBalances.js';
 
 type Provider = 'gemini' | 'openrouter';
-type Availability = 'ready' | 'unavailable' | 'invalid' | 'exhausted';
+type Availability = 'ready' | 'unavailable' | 'invalid' | 'exhausted' | 'model_denied';
 export interface WorkspaceImageRoute { provider: Provider; payer: 'personal' | 'platform'; model: string }
 
 const credentialId = (owner: string, provider: Provider, key: string) =>
   createHash('sha256').update(JSON.stringify([owner, provider, key])).digest('hex');
 const validated = new TtlCache<Availability>(60_000, 1000);
 const probes = new TtlCache<Availability>(30_000, 1000);
+type DefiniteRefusal = 'invalid' | 'exhausted' | 'model_denied';
+// Metadata can succeed while the image endpoint refuses this exact model. Keep that result
+// separate from read-only probes and from other members who use the same platform credential.
+const refused = new TtlCache<DefiniteRefusal>(60_000, 1000);
+const refusalId = (owner: string, route: WorkspaceImageRoute, key: string) =>
+  credentialId(owner, route.provider, key) + ':' + route.payer + ':' + route.model;
+
+export function reportImageRouteRefusal(owner: string, route: WorkspaceImageRoute, actualKey: string, reason: DefiniteRefusal) {
+  refused.set(refusalId(owner, route, actualKey), reason);
+}
 
 // A Settings validation belongs only to this exact account and credential. Unknown
 // responses don't erase a concrete rejection. A replacement key has a new identity.
@@ -42,8 +52,16 @@ async function credentialReadiness(owner: string, provider: Provider, key: strin
       const headers: Record<string, string> = google ? { 'x-goog-api-key': key } : { Authorization: 'Bearer ' + key };
       const response = await fetch(url, { headers, redirect: 'error', signal: AbortSignal.timeout(1800) });
       if (!response.ok) {
+        // A Google model lookup can deny the model even when the credential itself is valid.
+        if (google && response.status === 400) {
+          const body = await response.json().catch(() => null) as { error?: { details?: { reason?: string }[] } } | null;
+          return body?.error?.details?.some(detail => detail.reason === 'API_KEY_INVALID') ? 'invalid' : 'unavailable';
+        }
         await response.body?.cancel();
-        return [400, 401, 403, 404].includes(response.status) ? 'invalid' : 'unavailable';
+        if (!google && response.status === 402) return 'exhausted';
+        if (response.status === 401 || (!google && response.status === 403)) return 'invalid';
+        if (google && (response.status === 403 || response.status === 404)) return 'model_denied';
+        return 'unavailable';
       }
       if (google) {
         await response.body?.cancel();
@@ -76,9 +94,13 @@ export async function selectStandaloneRoute(owner: string, keys: StudioKeys, mod
   const eligible = candidates.filter(x => x.credential.byok === personal);
   if (!eligible.length) throw unavailable(422, 'IMAGE_KEY_MISSING', 'No enabled Gemini or OpenRouter key is available for this model.');
   const statuses = await Promise.all(eligible.map(async candidate => {
+    const id = refusalId(owner, {provider:candidate.provider, model:candidate.model, payer:personal ? 'personal' : 'platform'}, candidate.credential.key);
+    const rejection = refused.get(id);
+    if (rejection) return rejection;
     if (deps.circuit(candidate.provider, candidate.model).state === 'down') return 'unavailable';
     if (!personal) return 'ready'; // platform credentials never enter a member-key probe
-    return deps.readiness(owner, candidate.provider, candidate.credential.key, candidate.model);
+    const status = await deps.readiness(owner, candidate.provider, candidate.credential.key, candidate.model);
+    return refused.get(id) || status;
   }));
   const chosen = eligible.find((option, index) => statuses[index] === 'ready' && !(freeOnly && option.provider === 'openrouter'));
   if (!chosen && eligible.some((option, index) => option.provider === 'openrouter' && statuses[index] === 'ready' && freeOnly)) {
@@ -87,8 +109,25 @@ export async function selectStandaloneRoute(owner: string, keys: StudioKeys, mod
     });
   }
   if (!chosen) {
-    throw unavailable(statuses.includes('unavailable') ? 503 : 422, 'IMAGE_ROUTE_UNAVAILABLE',
-      'No enabled ' + (personal ? 'personal ' : '') + 'image provider can use this model right now. Check your keys or retry shortly.');
+    const waiting = statuses.includes('unavailable');
+    const retryNote = waiting ? ' Another provider is temporarily unavailable.' : '';
+    if (!personal) throw unavailable(503, 'IMAGE_ROUTE_UNAVAILABLE', 'The account-funded image provider is temporarily unavailable. Check again in a moment.');
+    if (statuses.includes('exhausted')) {
+      const providers = eligible.filter((_, index) => statuses[index] === 'exhausted').map(c => c.provider === 'gemini' ? 'Gemini' : 'OpenRouter').join(' and ');
+      const message = providers === 'OpenRouter'
+        ? 'Your OpenRouter key has no spending capacity available. Review its spending limit and available credits in Settings.'
+        : `${providers} reported an exhausted quota or credit limit. Check your provider quota, reset time and billing status in Settings.`;
+      throw unavailable(402, 'IMAGE_KEY_EXHAUSTED', message + retryNote);
+    }
+    if (statuses.includes('invalid')) {
+      const rejected = eligible.filter((_, index) => statuses[index] === 'invalid')
+        .map(candidate => candidate.provider === 'gemini' ? 'Gemini' : 'OpenRouter').join(' and ');
+      throw unavailable(422, 'IMAGE_KEY_INVALID', `${rejected} rejected the configured credential. Validate or replace the key in Settings.` + retryNote);
+    }
+    if (statuses.includes('model_denied')) {
+      throw unavailable(422, 'IMAGE_MODEL_ACCESS_DENIED', 'Your Gemini key does not have access to the selected image model. Check its model access in Settings or choose another rendering option.' + retryNote);
+    }
+    throw unavailable(503, 'IMAGE_ROUTE_UNAVAILABLE', 'The image provider could not be reached or is temporarily unavailable. Check again in a moment.');
   }
   return { provider: chosen.provider, payer: personal ? 'personal' : 'platform', model: chosen.model };
 }

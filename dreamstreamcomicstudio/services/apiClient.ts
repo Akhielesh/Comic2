@@ -169,7 +169,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
 export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string; useSarvamKey?: boolean; idempotencyKey?: string; allowPaidImage?: boolean }): Promise<TRes> => {
   const attempt = async (): Promise<TRes> => {
     const headers = await buildRequestHeaders(options);
-    if (options?.allowPaidImage && path === '/api/image/standalone') delete headers['X-Free-Only'];
+    if (options?.allowPaidImage && path.split('?')[0] === '/api/image/standalone') delete headers['X-Free-Only'];
     if (options?.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
     const res = await safeFetch(buildApiUrl(path), {
       method: 'POST',

@@ -1,4 +1,4 @@
-import { Request, Response, Router } from 'express';
+import { type NextFunction, Request, Response, Router } from 'express';
 import crypto from 'node:crypto';
 import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey, requireNvidiaKey, requireIdeogramKey } from '../middleware/keys.js';
 import { checkLimits } from '../middleware/limits.js';
@@ -6,7 +6,7 @@ import { BILLING_ENABLED, FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_
 import { comicImageCapacity } from '../comic/generationCapacity.js';
 import { StudioError } from '../comic/types.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
-import { selectStandaloneRoute } from '../services/standaloneImageRoute.js';
+import { reportImageRouteRefusal, selectStandaloneRoute, type WorkspaceImageRoute } from '../services/standaloneImageRoute.js';
 import { NATIVE_REFERENCE_MODEL, STANDALONE_MODEL } from '../../../shared/standaloneImage.js';
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
@@ -164,6 +164,41 @@ const uncertainImageDelivery = (error: unknown): boolean => {
   return status === 408 || (typeof status === 'number' && status >= 500) ||
     /timeout|timed out|abort|network|fetch failed|load failed|socket|ECONNRESET|EPIPE|ENETUNREACH|\b50[0234]\b/i.test(String(e?.code ?? '') + ' ' + String(e?.message ?? ''));
 };
+
+// Only classify errors raised by the provider call itself. Never infer an unpaid
+// refusal from a human message, generated text, a local hold, or an unknown 403.
+function confirmedGeminiRefusal(error: unknown): 'invalid' | 'exhausted' | 'model_denied' | undefined {
+  if (!(error instanceof Error)) return;
+  const status = (error as Error & { status?: number }).status;
+  if (status === 401) return 'invalid';
+  if (status === 402 || status === 429) return 'exhausted';
+  if (status !== 403 || error.message.length > 65_536) return;
+
+  // @google/genai's ApiError serializes the Google error envelope into message.
+  try {
+    const body = JSON.parse(error.message)?.error;
+    if (body?.code !== 403 || !Array.isArray(body.details)) return;
+    for (const detail of body.details) {
+      if (detail?.['@type'] === 'type.googleapis.com/google.rpc.QuotaFailure' && Array.isArray(detail.violations) && detail.violations.length) return 'exhausted';
+      if (detail?.['@type'] !== 'type.googleapis.com/google.rpc.ErrorInfo' || detail.domain !== 'googleapis.com') continue;
+      switch (detail.reason) {
+        case 'QUOTA_EXCEEDED': case 'RATE_LIMIT_EXCEEDED': case 'DAILY_LIMIT_EXCEEDED': case 'BILLING_DISABLED': return 'exhausted';
+        case 'API_KEY_INVALID': case 'API_KEY_EXPIRED': return 'invalid';
+        case 'API_KEY_SERVICE_BLOCKED': case 'API_KEY_HTTP_REFERRER_BLOCKED': case 'API_KEY_IP_ADDRESS_BLOCKED': case 'ACCESS_TOKEN_SCOPE_INSUFFICIENT': return 'model_denied';
+      }
+    }
+  } catch { /* Unstructured 403 responses are never eligible for a second transport. */ }
+}
+
+class ImageRouteReselect extends Error {
+  constructor(readonly route: WorkspaceImageRoute) {
+    super('Gemini declined this request before generation. OpenRouter can run the same model.');
+  }
+}
+
+const changedImageRoute = () => Object.assign(new Error('The available image provider or funding source changed. Check the provider again before generating.'), {
+  status: 409, publicCode: 'IMAGE_ROUTE_CHANGED'
+});
 
 const unconfirmedImage = () => Object.assign(new Error('Your provider may already have generated this image. Check your saved images before starting a new generation.'), {
   status: 409, publicCode: 'IMAGE_RESULT_UNCONFIRMED'
@@ -523,7 +558,18 @@ imageRouter.post(['/gemini', '/standalone'], async (req, res, next) => {
       if (replay) return void res.json(await replay);
     }
     const keys = studioKeysFromRequest(req);
-    const selected = await selectStandaloneRoute(req.user!.id, keys, req.body.model, !!req.freeOnly);
+    const { expectedProvider, expectedPayer } = req.query;
+    let selected: WorkspaceImageRoute;
+    if (expectedProvider !== undefined || expectedPayer !== undefined) {
+      // The retry can hit a worker without the first worker's refusal cache. Check the
+      // exact alternate again and enforce the current personal-first funding policy.
+      const payer = keys.gemini?.byok || keys.openrouter?.byok ? 'personal' : 'platform';
+      if (expectedProvider !== 'openrouter' || expectedPayer !== payer ||
+          !keys.openrouter || keys.openrouter.byok !== (payer === 'personal')) throw changedImageRoute();
+      selected = await selectStandaloneRoute(req.user!.id, { openrouter: keys.openrouter }, req.body.model, !!req.freeOnly);
+    } else {
+      selected = await selectStandaloneRoute(req.user!.id, keys, req.body.model, !!req.freeOnly);
+    }
     res.locals.imageRoute = selected;
     if (selected.provider === 'openrouter') {
       const credential = keys.openrouter!;
@@ -585,18 +631,17 @@ imageRouter.post(['/gemini', '/standalone'], async (req, res, next) => {
         throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
       }
 
-      const releaseHold = (reason: string) =>
-        releaseQuietly('image.gemini.generate', () =>
-          releaseReservedOperation({
-            req,
-            operation: 'image.gemini.generate',
-            provider: 'gemini',
-            model: effectiveModel,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            reason,
-            metadata: { route: '/api/image/gemini', storage }
-          })
-        );
+      const release = (reason: string) =>
+        releaseReservedOperation({
+          req,
+          operation: 'image.gemini.generate',
+          provider: 'gemini',
+          model: effectiveModel,
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          reason,
+          metadata: { route: '/api/image/gemini', storage }
+        });
+      const releaseHold = (reason: string) => releaseQuietly('image.gemini.generate', () => release(reason));
 
       if (signal.aborted) {
         await releaseHold('cancelled_before_dispatch');
@@ -635,6 +680,16 @@ imageRouter.post(['/gemini', '/standalone'], async (req, res, next) => {
           ? await generateGeminiImage(apiKey, prompt, providerRatio, resolution, referenceImages || [], effectiveModel, { singleRequest: true })
           : await generateGeminiImage(apiKey, prompt, providerRatio, resolution, referenceImages || [], effectiveModel);
       } catch (error) {
+        const refusal = standalone && confirmedGeminiRefusal(error);
+        if (refusal) {
+          // A failed release must never be followed by another reservation.
+          await release('provider_refused_' + refusal);
+          const first: WorkspaceImageRoute = res.locals.imageRoute;
+          reportImageRouteRefusal(req.user!.id, first, apiKey, refusal);
+          const alternate = await selectStandaloneRoute(req.user!.id, studioKeysFromRequest(req), effectiveModel, !!req.freeOnly);
+          if (alternate.provider === 'openrouter' && alternate.payer === first.payer) throw new ImageRouteReselect(alternate);
+          throw changedImageRoute();
+        }
         if (standalone && uncertainImageDelivery(error)) {
           res.locals.imageResultUnconfirmed = true;
           throw error; // leave a platform hold for the existing reconciliation sweep
@@ -1438,4 +1493,12 @@ imageRouter.post('/nvidia', async (req, res, next) => {
     }
     next(err);
   }
+});
+
+// This structured public suggestion is also returned to a concurrent caller that
+// joined the same action. Serialize only the transport, payer and public model.
+imageRouter.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+  if (!(err instanceof ImageRouteReselect)) return next(err);
+  const { provider, payer, model } = err.route;
+  res.status(409).json({ error: { code: 'IMAGE_ROUTE_RESELECT', message: err.message, details: { provider, payer, model }, requestId: req.requestId } });
 });

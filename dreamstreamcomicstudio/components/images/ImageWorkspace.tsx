@@ -1,7 +1,8 @@
 import { API_KEYS_CHANGED } from '../../services/apiKeys';
 import type { ApiError } from '../../services/apiClient';
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '../ds/Dialog';
-import { WORKSPACE_QUALITIES, type WorkspaceQuality } from '../../shared/standaloneImage';
+import { isFreeOnly } from '../../services/freeOnlyMode';
+import { NATIVE_REFERENCE_MODEL, STANDALONE_MODEL, WORKSPACE_QUALITIES, type WorkspaceQuality } from '../../shared/standaloneImage';
 import { openApiKeysLink } from '../account/accountNav';
 import { readAttachmentBatch } from '../../services/attachmentBatch';
 import { MAX_INLINE_ATTACHMENT_CHARS } from '../../shared/attachmentLimits';
@@ -50,17 +51,44 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
   const [checkHistory, setCheckHistory] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const pending = useRef<AbortController | undefined>(undefined);
+  const preflight = useRef<AbortController | undefined>(undefined);
   const consent = useRef(false);
   const routeLabel = route ? `${route.provider === 'openrouter' ? 'OpenRouter' : 'Gemini'} · ${route.payer === 'personal' ? 'your key' : 'account allowance'}` : '';
+  function showRouteIssue(issue: ApiError) {
+    const code = issue?.code;
+    if (!code || !['IMAGE_KEY_MISSING', 'IMAGE_KEY_INVALID', 'IMAGE_KEY_EXHAUSTED', 'IMAGE_MODEL_ACCESS_DENIED', 'IMAGE_ROUTE_UNAVAILABLE', 'IMAGE_ROUTE_CHANGED', 'NO_FREE_MODEL_AVAILABLE'].includes(code)) return false;
+    setRoute(null);
+    setRouteError('');
+    setSetupHint('');
+    setPaidRequired(code === 'NO_FREE_MODEL_AVAILABLE');
+    if (code === 'NO_FREE_MODEL_AVAILABLE') {
+      const detail = issue.details as Partial<StandaloneRoute> | undefined;
+      if (detail?.provider === 'openrouter' && (detail.payer === 'personal' || detail.payer === 'platform') && detail.model) setRoute(detail as StandaloneRoute);
+    } else if (code === 'IMAGE_ROUTE_UNAVAILABLE' || code === 'IMAGE_ROUTE_CHANGED') {
+      const message = code === 'IMAGE_ROUTE_CHANGED' ? 'The available image provider or funding source changed. Check the provider again before generating.'
+        : 'The image provider is temporarily unavailable. Check again in a moment.';
+      setRouteError(userFacingErrorMessage(issue, message));
+    } else {
+      const fallback = code === 'IMAGE_KEY_EXHAUSTED' ? 'Review your OpenRouter spending limit and available credits in Settings.'
+        : code === 'IMAGE_KEY_INVALID' ? 'Validate or replace the rejected image key in Settings.'
+        : code === 'IMAGE_MODEL_ACCESS_DENIED' ? 'Check the model permissions for your image key in Settings.'
+        : 'Connect a Gemini or OpenRouter key in Settings. Your prompt and references stay here.';
+      setSetupHint(code === 'IMAGE_KEY_MISSING' ? fallback : userFacingErrorMessage(issue, fallback));
+    }
+    return true;
+  }
   useEffect(() => {
     const refresh = () => setRouteVersion(v => v + 1);
     for (const event of [API_KEYS_CHANGED, 'dreamstream:settings-changed', 'dreamstream:freeOnly:changed', 'focus']) window.addEventListener(event, refresh);
     return () => { for (const event of [API_KEYS_CHANGED, 'dreamstream:settings-changed', 'dreamstream:freeOnly:changed', 'focus']) window.removeEventListener(event, refresh); };
   }, []);
   useEffect(() => {
+    if (pending.current) return;
     const controller = new AbortController();
+    preflight.current = controller;
     setRoute(null);
     setRouteError('');
+    setSetupHint('');
     setPaidRequired(false);
     void loadStandaloneRoute(userId, quality, controller.signal).then(value => {
       if (controller.signal.aborted) return;
@@ -68,13 +96,7 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
       setSetupHint('');
     }).catch((error: ApiError) => {
       if (controller.signal.aborted) return;
-      if (error.code === 'NO_FREE_MODEL_AVAILABLE') {
-        const detail = error.details as Partial<StandaloneRoute> | undefined;
-        if (detail?.provider === 'openrouter' && (detail.payer === 'personal' || detail.payer === 'platform') && detail.model) setRoute(detail as StandaloneRoute);
-        setPaidRequired(true);
-      }
-      else if (error.code === 'IMAGE_KEY_MISSING') setSetupHint('Connect a Gemini or OpenRouter key in Settings. Your prompt and references stay here.');
-      else setRouteError(userFacingErrorMessage(error, 'The provider will be checked again when you generate.'));
+      if (!showRouteIssue(error)) setRouteError(userFacingErrorMessage(error, 'The provider will be checked again when you generate.'));
     });
     return () => controller.abort();
   }, [userId, quality, routeVersion]);
@@ -171,6 +193,8 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
     const allowPaidImage = consent.current;
     consent.current = false;
     if (paidRequired && !allowPaidImage) return;
+    const paidOpenRouterAllowed = allowPaidImage || !isFreeOnly();
+    preflight.current?.abort();
     submitLock.current = true;
     const controller = new AbortController();
     pending.current = controller;
@@ -179,20 +203,36 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
     setElapsed(0); setWorking(true); setError(''); setSetupHint('');
     try {
       retryId.current ??= crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
-      const run = () => renderStandalone(userId, draft.prompt, draft.ratio, refs.map(ref => ref.data), retryId.current!, quality, { signal: controller.signal, allowPaidImage });
+      const initialPin = allowPaidImage && route?.provider === 'openrouter' ? route : undefined;
+      const run = (expectedRoute?: StandaloneRoute) => renderStandalone(userId, draft.prompt, draft.ratio, refs.map(ref => ref.data), retryId.current!, quality, {
+        signal: controller.signal, allowPaidImage, ...(expectedRoute ? {expectedRoute} : {})
+      });
       let image: SavedStandaloneImage;
-      try { image = await run(); }
+      try { image = await run(initialPin); }
       catch (failure) {
         const refusal = failure as ApiError;
-        if (refusal.status !== 429 || refusal.code !== 'GENERATION_BUSY') throw failure;
-        setRetrying(true);
-        await new Promise<void>((resolve, reject) => {
-          const stopped = () => { window.clearTimeout(timer); reject(new DOMException('Stopped', 'AbortError')); };
-          const timer = window.setTimeout(() => { controller.signal.removeEventListener('abort', stopped); resolve(); }, Math.min(30, Math.max(1, refusal.retryAfterSeconds || 10)) * 1000);
-          if (controller.signal.aborted) stopped(); else controller.signal.addEventListener('abort', stopped, { once: true });
-        });
-        setRetrying(false);
-        image = await run();
+        if (refusal.status === 409 && refusal.code === 'IMAGE_ROUTE_RESELECT') {
+          const alternate = refusal.details as Partial<StandaloneRoute> | undefined;
+          const model = quality === 'native' ? STANDALONE_MODEL : NATIVE_REFERENCE_MODEL;
+          if (alternate?.provider !== 'openrouter' || alternate.model !== 'google/' + model ||
+              (alternate.payer !== 'personal' && alternate.payer !== 'platform') ||
+              (route && route.payer !== alternate.payer) || initialPin) throw failure;
+          const nextRoute: StandaloneRoute = { provider:'openrouter', model:alternate.model, payer:alternate.payer };
+          setRoute(nextRoute);
+          if (!paidOpenRouterAllowed) { setPaidRequired(true); return; }
+          // Only a confirmed, unpaid rejection reaches this path. Pin provider AND payer, retain
+          // the original request ID/consent, and let any second failure reach the creator.
+          image = await run(nextRoute);
+        } else if (refusal.status === 429 && refusal.code === 'GENERATION_BUSY') {
+          setRetrying(true);
+          await new Promise<void>((resolve, reject) => {
+            const stopped = () => { window.clearTimeout(timer); reject(new DOMException('Stopped', 'AbortError')); };
+            const timer = window.setTimeout(() => { controller.signal.removeEventListener('abort', stopped); resolve(); }, Math.min(30, Math.max(1, refusal.retryAfterSeconds || 10)) * 1000);
+            if (controller.signal.aborted) stopped(); else controller.signal.addEventListener('abort', stopped, { once: true });
+          });
+          setRetrying(false);
+          image = await run(initialPin);
+        } else throw failure;
       }
       if (mounted.current) {
         setSelected(image);
@@ -206,6 +246,7 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
           setCheckHistory(true);
           setError('The provider has not confirmed a finished image. Check your saved images before retrying this request.'); return;
         }
+        if (showRouteIssue(e as ApiError)) return;
         const message = userFacingErrorMessage(e, 'Image generation paused. Try again in a moment.');
         if (/NO_FREE_MODEL_AVAILABLE|free.only|free model/i.test(message) || (e as { code?: string })?.code === 'NO_FREE_MODEL_AVAILABLE') {
           setPaidRequired(true);
@@ -315,7 +356,8 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
           </details>
           <p className="image-usage">{quality === 'native' ? 'Gemini 2.5 Flash Image' : `Nano Banana 2.1 · ${quality}`} · Uses your image allowance or active Gemini or OpenRouter key.</p>
           {routeLabel && <p className="image-usage">Selected route · {routeLabel}</p>}
-          {routeError && !setupHint && <p className="image-usage" role="status">{routeError}</p>}
+          {routeError && !setupHint && <div><p className="image-usage" role="status">{routeError}</p>
+            <Button type="button" size="sm" variant="ghost" disabled={working} onClick={() => setRouteVersion(v => v + 1)}>Check provider again</Button></div>}
           {paidRequired && <p className="image-usage">Your free-only setting blocks this OpenRouter image model. “Generate this paid image” permits this one render{route?.payer === 'personal' ? ' on your OpenRouter key' : ''}. Your free-only setting stays on.</p>}
           {setupHint && <p role="status" className="image-usage">{setupHint} <a href={API_KEYS_HREF} onClick={openApiKeysLink}>Open API keys and usage</a></p>}
           {error && <p role="alert" className="image-workspace-error">{error}</p>}
