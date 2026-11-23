@@ -17,7 +17,13 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/Dreamstrream-v1'
     runs-on: ubuntu-latest
-    timeout-minutes: 115
+    name: Publish ${{ matrix.book }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        book: [tide, orchard, fox, table-nine]
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
@@ -28,5 +34,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - name: Publish the four bundled editions
+      - name: Publish this edition
+        env:
+          ORIGINAL_BOOK: ${{ matrix.book }}
         run: node dreamstreamcomicstudio/scripts/ops/publishStudioOriginals.mjs

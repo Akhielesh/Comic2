@@ -71,7 +71,6 @@ either. Likes are shown to visitors as a count; only a signed-in reader gets the
 count only when it is above zero: a current Comic Studio comic's reads are counted with its publication
 (`comic_publication_stats`), not on the `projects` row, so the row's count stays 0 and is left out rather than shown.
 
-## Not used here
+## Catalog queries
 
-The Discover RPCs (`comic_discover_list`, `comic_discover_shelves`, `server/sql/comic_discovery.sql`, see
-`discovery.md`) are not applied in production, so the Library reads `projects` directly for discovery. The member progress RPC is independent of these catalog functions.
+The Library reads eligible member publications from `projects` and editorial publications from `comic_originals_catalog()`. The production Discover list and shelf RPCs also include published Studio Originals and enforce their rating and visibility filters. Member reading progress uses its own authenticated RPC. See [Discover](discovery.md).
