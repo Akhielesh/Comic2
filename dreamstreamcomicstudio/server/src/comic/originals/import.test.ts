@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import { ORIGINAL_SLUGS } from '../../../../shared/comic/originals.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
 import { cleanAnswer } from '../safety/fakes.js';
 import { installSafetyFakes, resetSafety } from '../safety/testkit.js';
@@ -322,6 +323,29 @@ describe('review of the PG metadata revision', () => {
       expect(JSON.stringify(report)).not.toContain('Provider note');
       expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(status === 'needs_check' ? 0 : 16);
       if (status === 'cleared') expect(report.pages.every((p) => p.status === 'pass' && p.assessed === 'PG')).toBe(true);
+    },
+    40000
+  );
+
+  it.each([
+    ['orchard', 'dbcb04155d5e7db8b818dc1ed20fadd979a249c0d89023d59804ab01bdafd0a3', 'b293c8b66d1b68d397ddbf04'],
+    ['fox', 'b3d967ad9be467d6514cf905e06e9902088b4715b5fc02ecc648c52203c8424a', 'de6ee2218e6d1062d8316b27'],
+    ['table-nine', '3604e39f18cec4934f2d14266d03e3f2d5fddabc141843f0ee47e0409d4e57ea', '25764e0472c44bc160b8defe']
+  ] as const)(
+    'rechecks the individually pinned %s edition before releasing its distinct fifteen pages and cover',
+    async (key, digest, gate) => {
+      const fake = installSafetyFakes();
+      fake.llm.fallback = (req) =>
+        req.jsonSchema?.name === 'comic_safety_image' ? { ...cleanAnswer(req), rating: 'PG' } : cleanAnswer(req);
+      const db = localBackend();
+      Object.assign(db.dbRow, { ...historicalTide, book_key: key, slug: ORIGINAL_SLUGS[key], source_digest: digest, gate_hash: gate });
+      await expect(publishBundledOriginal(key, bundledRoot)).resolves.toEqual({ slug: ORIGINAL_SLUGS[key] });
+      expect(db.revision.priorDigest).toBe(digest);
+      expect(db.dbRow.rating).toBe('PG');
+      const reports = db.revision.report as EditorialReview['report'];
+      expect(reports.pages).toHaveLength(15);
+      expect(reports.cover).toMatchObject({ status: 'pass', assessed: 'PG' });
+      expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(16);
     },
     40000
   );
