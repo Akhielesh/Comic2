@@ -21,6 +21,7 @@ vi.mock('./studioApi', async (importOriginal) => {
   return { ...real, ...api };
 });
 
+import { legacyPagePath, signedLegacyPreview } from './legacyPreview.testkit';
 import { StudioApiError } from './studioApi';
 import { useStudio } from './useStudio';
 
@@ -275,6 +276,31 @@ describe('StudioController.isUnsignable (PF-2 #7)', () => {
 });
 
 describe('five-minute private artwork previews', () => {
+  it('keeps an existing mobile variant available through cutover and hides the original and variant on a revoked session', async () => {
+    const path = legacyPagePath;
+    const small = path.replace('.webp', '_w480.webp');
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const signed = (bucket: string, t: number) => Object.fromEntries([path, small].map((p) => [p, signedLegacyPreview(p, bucket, t)]));
+    const first = signed('comic-assets', now);
+    const next = signed('comic-private', now + 271_000);
+    const { result } = await setup(first);
+    const asset = { path, source: 'generated' as const, at: now, variants: [{ path: small, w: 480, h: 800 }] };
+    expect(result.current.urlFor(path)).toBe(first[path]);
+    expect(result.current.urlFor(asset, { width: 220 })).toBe(first[small]);
+    api.signStudioUrls.mockResolvedValueOnce(next).mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }));
+    now += 271_000;
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(result.current.urlFor(asset, { width: 220 })).toBe(next[small]), { timeout: 2500 });
+    expect(result.current.urlFor(path)).toBe(next[path]);
+    now += 271_000;
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(result.current.urlFor(asset, { width: 220 })).toBeUndefined(), { timeout: 2500 });
+    expect(result.current.urlFor(path)).toBeUndefined();
+    expect(api.signStudioUrls).toHaveBeenCalledTimes(2);
+    expect(api.streamStudio).not.toHaveBeenCalled();
+  });
+
   it('renews a viewed private image before expiry and removes it promptly when the owner signer declines', async () => {
     const path = 'u/member/p/proj_1/img/draft-v1-12345678-1234-4000-8000-123456789abc.webp';
     let now = Date.now();

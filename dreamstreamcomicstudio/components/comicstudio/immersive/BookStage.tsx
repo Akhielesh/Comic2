@@ -165,9 +165,10 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       // Withheld pages have no source (slotImageSource): never fetched, nothing to wait for.
       const source = it ? slotImageSource(it, letterbox(s.w, s.h, s.contentAspect).w, { ...img, original: false }) : undefined;
       if (!it || !source) continue;
-      const alts = source.path === it.asset.path ? [source.path] : [source.path, it.asset.path];
+      const alts = (source.path === it.asset.path ? [source.path] : [source.path, it.asset.path])
+        .map((path) => availableCachedPath(path, img.urlFor)).filter((path): path is string => !!path);
       if (alts.some((p) => pageImageCache.isDecoded(p))) continue;
-      out.push({ item: s.content.index, alts, source, standIn: slotStandIn(it, img, source.path)?.path });
+      out.push({ item: s.content.index, alts, source, standIn: availableCachedPath(slotStandIn(it, img, source.path)?.path, img.urlFor) });
     }
     return out;
   };

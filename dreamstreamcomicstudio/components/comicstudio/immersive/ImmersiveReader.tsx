@@ -30,7 +30,7 @@ import { averagePalette, roomBackground, themeColorFor, type Palette } from './a
 import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
 import { EndCard, type EndCardActions } from './EndCard';
-import { cacheLimitsFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
+import { availableCachedPath, cacheLimitsFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
 import { pageTranscript } from './pageTranscript';
 import { closePaperSound, primePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
@@ -149,10 +149,11 @@ export const retainedPaths = (views: BookView[], view: number, coarse: boolean, 
 };
 
 /** A cached palette for an asset (its original or any variant the cache holds). */
-const paletteOfAsset = (a: AssetRef | undefined): Palette | null => {
+const paletteOfAsset = (a: AssetRef | undefined, urlFor: StudioController['urlFor']): Palette | null => {
   if (!a) return null;
   for (const p of [a.path, ...(a.variants || []).map((v) => v.path)]) {
-    const e = pageImageCache.get(p);
+    const key = availableCachedPath(p, urlFor);
+    const e = key ? pageImageCache.get(key) : undefined;
     if (e?.palette) return e.palette;
   }
   return null;
@@ -383,25 +384,16 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   useCacheVersion();
   const palette: Palette | null = useMemo(() => {
     if (!eff.ambient || low.lowPower) return null;
-    const ps = (views[view]?.items ?? []).map((i) => {
-      const a = items[i]?.asset;
-      if (!a) return null;
-      for (const p of [a.path, ...(a.variants || []).map((v) => v.path)]) {
-        const e = pageImageCache.get(p);
-        if (e?.palette) return e.palette;
-      }
-      return null;
-    });
-    return averagePalette(ps);
+    return averagePalette((views[view]?.items ?? []).map((i) => paletteOfAsset(items[i]?.asset, urlFor)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eff.ambient, low.lowPower, views, view, items, pageImageCache.snapshot()]);
+  }, [eff.ambient, low.lowPower, views, view, items, urlFor, pageImageCache.snapshot()]);
   // A page with no picture yet (an old page: no stand-in variant) stands on the paper toned by the nearest
   // page whose palette is cached (reader.md §8.1) — never white. Follows the ambient switch, not low power
   // (a flat colour costs nothing to paint).
   const standInPaper = useMemo(
-    () => (eff.ambient ? paperTone(nearestPalette(views, view, (i) => paletteOfAsset(items[i]?.asset))) : undefined),
+    () => (eff.ambient ? paperTone(nearestPalette(views, view, (i) => paletteOfAsset(items[i]?.asset, urlFor))) : undefined),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [eff.ambient, views, view, items, pageImageCache.snapshot()]
+    [eff.ambient, views, view, items, urlFor, pageImageCache.snapshot()]
   );
   // iPhone browsers have no element full screen: the reading room fills the viewport, and says once, honestly, what
   // does go edge-to-edge (the mobile-reading hotfix's note, shown as this reader's own toast).
@@ -734,14 +726,16 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const dir = travel.current.dir;
   // Direction-aware preloading (never a withheld page: it has no source and no stand-in).
   useEffect(() => {
-    const keep = retainedPaths(views, view, ff.coarse, sourceOf, standInOf);
+    const keep = retainedPaths(views, view, ff.coarse, sourceOf, standInOf)
+      .map((path) => availableCachedPath(path, urlFor)).filter((path): path is string => !!path);
     const polite = net.saveData || net.slow || ff.saveData;
     const loads: { path: string; url: string; prio: CachePriority }[] = [];
     for (const ask of preloadPlan(views, view, dir, polite, { standIns: state.layout !== 'scroll', fast: net.fast })) {
       const src = ask.kind === 'target' ? sourceOf(ask.item) : standInOf(ask.item);
       // A stand-in is only worth its bytes while the page itself is not decoded.
-      if (ask.kind === 'standIn' && pageImageCache.isDecoded(sourceOf(ask.item)?.path)) continue;
-      if (src?.url) loads.push({ path: src.path, url: src.url, prio: ask.prio });
+      if (ask.kind === 'standIn' && pageImageCache.isDecoded(availableCachedPath(sourceOf(ask.item)?.path, urlFor))) continue;
+      const key = src && availableCachedPath(src.path, () => src.url);
+      if (key && src?.url) loads.push({ path: key, url: src.url, prio: ask.prio });
     }
     // The entry cap never drops below what this view keeps warm (a touch tablet's spreads: ±1 views of two
     // pages plus their preloads), so a preload is never evicted before it is shown.
@@ -750,7 +744,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     const controller = new AbortController();
     for (const l of loads) void pageImageCache.ensure(l.path, l.url, l.prio, l.prio === 'idle' ? controller.signal : undefined);
     return () => controller.abort();
-  }, [view, views, dir, sourceOf, standInOf, net.saveData, net.slow, net.fast, ff.saveData, ff.coarse, state.layout, limits]);
+  }, [view, views, dir, sourceOf, standInOf, urlFor, net.saveData, net.slow, net.fast, ff.saveData, ff.coarse, state.layout, limits]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const title = localized.cover.title || localized.brief.title || 'Untitled comic';

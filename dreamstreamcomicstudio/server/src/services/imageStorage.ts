@@ -4,6 +4,8 @@ import { withSharpSlot, SHARP_INPUT } from '../comic/imageMeasure.js';
 import type { ImageResolution } from '../../../types.js';
 import { COMIC_PRIVATE_BUCKET, STORAGE_BUCKET } from '../config.js';
 import { getSupabaseAdmin } from './supabase.js';
+import { migratedArtPaths } from '../comic/legacyArtLocation.js';
+import { SIGNED_TTL_SEC } from '../comic/storagePaths.js';
 
 type PersistGeneratedImageArgs = {
   userId: string;
@@ -66,7 +68,7 @@ const buildStoragePath = (userId: string, imageId: string, projectId?: string) =
   // project (u/<u>/p/<x>/img/…) that the metadata row nulls out, which breaks the
   // project-scoped access-control + public-sharing checks on read.
   if (projectId && isUuid(projectId)) {
-    return `u/${userSegment}/p/${sanitizeSegment(projectId)}/img/${imageId}.webp`;
+    return `u/${userSegment}/p/${projectId.toLowerCase()}/img/${imageId}.webp`;
   }
   return `u/${userSegment}/tmp/${imageId}.webp`;
 };
@@ -107,7 +109,7 @@ export const persistGeneratedImage = async ({
   resolution,
   cropToRatio,
   standalone = false,
-  bucket = standalone ? COMIC_PRIVATE_BUCKET : STORAGE_BUCKET
+  bucket: requestedBucket = standalone ? COMIC_PRIVATE_BUCKET : STORAGE_BUCKET
 }: PersistGeneratedImageArgs): Promise<PersistGeneratedImageResult> => {
   const start = Date.now();
   const supabaseAdmin = getSupabaseAdmin();
@@ -129,6 +131,9 @@ export const persistGeneratedImage = async ({
 
   const imageId = crypto.randomUUID();
   const path = standalone ? `u/${userId}/standalone/${imageId}.webp` : buildStoragePath(userId, imageId, projectId);
+  const migrated = (await migratedArtPaths(() => supabaseAdmin, [path])).has(path);
+  if (migrated && COMIC_PRIVATE_BUCKET === STORAGE_BUCKET) throw new Error('Private artwork storage is unavailable.');
+  const bucket = migrated ? COMIC_PRIVATE_BUCKET : requestedBucket;
   const mimeType = 'image/webp';
   const uploadBuffer = webp.data;
 
@@ -137,7 +142,7 @@ export const persistGeneratedImage = async ({
     .upload(path, uploadBuffer, {
       upsert: false,
       contentType: mimeType,
-      cacheControl: '31536000'
+      cacheControl: migrated ? '0' : '31536000'
     });
   if (uploadError) throw uploadError;
 
@@ -164,8 +169,8 @@ export const persistGeneratedImage = async ({
   }
 
   let imageUrl: string;
-  if (standalone) {
-    const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUrl(path, 3600);
+  if (standalone || migrated) {
+    const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUrl(path, migrated ? SIGNED_TTL_SEC.private : 3600);
     if (error || !data?.signedUrl) throw new Error('Image saved. Reload your image history to open it.');
     imageUrl = data.signedUrl;
   } else {

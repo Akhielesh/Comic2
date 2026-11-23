@@ -14,7 +14,8 @@ import {
   DataUrlLru,
   isOwnedAssetPath,
   isSafeStoragePath,
-  quarantinePathFor
+  quarantinePathFor,
+  variantPathFor
 } from './assets.js';
 import { StudioError } from './types.js';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
@@ -61,6 +62,7 @@ const makeAdmin = () => {
     return { error: null };
   });
   const client = {
+    rpc: () => ({ abortSignal: async () => ({ data: [], error: null }) }),
     storage: { from: vi.fn(() => bucketApi) },
     from: vi.fn(() => ({ insert }))
   };
@@ -422,7 +424,13 @@ const makeBuckets = () => {
       return { data: null, error: null };
     }
   });
+  const active = new Map<string, string>();
+  const queries: string[][] = [];
   const client = {
+    rpc: (_name: string, args: {p_project_ids: string[]}) => ({ abortSignal: async () => {
+      queries.push(args.p_project_ids);
+      return { data: args.p_project_ids.filter(id => active.has(id)).map(id => ({ project_id: id, owner_id: active.get(id) })), error: null };
+    } }),
     storage: { from: (name: string) => api(name) },
     from: () => ({
       insert: async (row: Record<string, unknown>) => {
@@ -433,7 +441,7 @@ const makeBuckets = () => {
       update: (patch: Record<string, unknown>) => updateIn(patch)
     })
   };
-  return { client: client as unknown as SupabaseClient, bucket, calls, rows, fail };
+  return { client: client as unknown as SupabaseClient, bucket, calls, rows, fail, active, queries };
 };
 
 const PUB = 'comic-assets';
@@ -520,6 +528,51 @@ describe('v5: size variants (480/1080, inline, best-effort)', () => {
       expect(fake.bucket(PUB).has(path)).toBe(false);
     }
     expect([...fake.bucket(PUB).keys()]).toEqual([copy]);
+  });
+
+  it('keeps legacy keys stable through an exact private cutover, stale public signer cache, publication, hold, restore and removal', async () => {
+    const { fake, store } = v5Store();
+    const OTHER = '33333333-3333-4333-8333-333333333333';
+    const original = `u/${USER}/p/${PROJECT}/img/previous.webp`;
+    const paths = [original, variantPathFor(original, 480), variantPathFor(original, 1080)];
+    const verified = await sharp(await solidPng(1600,1200)).webp().toBuffer();
+    for (const path of paths) fake.bucket(PUB).set(path, { data: verified, type: 'image/webp' });
+    expect((await store.signUrls(paths))[original]).toContain('/comic-assets/');
+    for (const path of paths) fake.bucket(PRIV).set(path, { data: verified, type: 'image/webp' });
+    fake.active.set(PROJECT, USER);
+    const urls = await store.signUrls(paths, { ttlSec: 3600 });
+    for (const path of paths) expect(urls[path]).toBe(`https://signed.example/${PRIV}/${path}?ttl=300`);
+    expect(fake.queries).toEqual([[PROJECT], [PROJECT]]);
+    expect(await store.signUrls(paths, { scope: { userId: OTHER, projectId: PROJECT } })).toEqual({});
+    expect(await store.signUrls(paths, { scope: { userId: USER, projectId: OTHER } })).toEqual({});
+
+    for (const path of paths) fake.bucket(PUB).delete(path);
+    await expect(store.loadDataUrl(original)).resolves.toMatch(/^data:image/);
+    expect(fake.calls.download.at(-1)).toEqual({ bucket: PRIV, path: original });
+    const published = `pub/${KEY22}/p1-0123456789ab.webp`;
+    await store.copyObject(original, published);
+    expect(fake.bucket(PUB).get(published)?.data).toEqual(verified);
+    const {quarantinePath} = await store.quarantine(original, 'review');
+    await store.restoreQuarantined!(quarantinePath, original);
+    for (const path of paths) expect(fake.bucket(PRIV).has(path)).toBe(true);
+    await store.remove(paths);
+    for (const path of paths) expect(fake.bucket(PRIV).has(path)).toBe(false);
+    expect([...fake.bucket(PUB).keys()]).toEqual([published]);
+  });
+
+  it('refuses public fallbacks for ambiguous legacy locations, even if its old public bytes still exist', async() => {
+    const {fake,store}=v5Store();
+    const path = `u/${USER}/p/${PROJECT}/img/previous.webp`;
+    const shared = 'library/v1/cover/1.webp';
+    fake.bucket(PUB).set(path,{data:Buffer.from('legacy')});
+    fake.bucket(PUB).set(shared,{data:Buffer.from('shared')});
+    vi.spyOn(fake.client,'rpc').mockImplementation(() => ({abortSignal: async() => ({error:{code:'unavailable'},data:null})}) as never);
+    const urls=await store.signUrls([path,shared]);
+    expect(Object.keys(urls)).toEqual([shared]);
+    await expect(store.remove([path])).rejects.toMatchObject({status:503});
+    await expect(store.loadDataUrl(path)).rejects.toMatchObject({status:503});
+    expect(fake.bucket(PUB).has(path)).toBe(true);
+    expect(fake.calls.download).toEqual([]);
   });
 
   it('never enlarges: an 800 px wide image gets only the 480 variant, a 300 px one none', async () => {

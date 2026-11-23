@@ -53,8 +53,7 @@
 // registry tells alerts when a reply lands or work settles, mounted or not (subscribeStudioMoments), and a sign-out
 // aborts what was left running. The account comes from useAuth (read, never changed).
 
-import { isPrivatePath } from '../../shared/comic/imagePaths';
-import { directDisplayUrl } from './signedAssets';
+import { directDisplayUrl, isProtectedStudioPath, signingAccessDenied } from './signedAssets';
 import { usePrivateUrlRenewal } from './usePrivateUrlRenewal';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -1403,10 +1402,14 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         unsignableRef.current.add(p);
         gaveUp = true;
       });
-    } catch {
+    } catch (err) {
+      if (generation === generationRef.current && signingAccessDenied(err)) {
+        for (const path of paths) if (isProtectedStudioPath(path)) unsignableRef.current.add(path);
+        gaveUp = true;
+      }
       /* the placeholder stays; the next render or image error asks again (bounded) */
       // The last allowed try failed: that path is given up on now.
-      gaveUp = generation === generationRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS);
+      gaveUp ||= generation === generationRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS);
     } finally {
       paths.forEach((p) => signingRef.current.delete(p));
     }
@@ -1469,7 +1472,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       const now = Date.now();
       const display = (key: string) => {
         const entry = urls[key];
-        if (!isPrivatePath(key)) return entry?.url;
+        if (!isProtectedStudioPath(key)) return entry?.url;
         viewedPrivate.current.add(key);
         return entry && entry.expiresAt > now && !unsignableRef.current.has(key) ? entry.url : undefined;
       };

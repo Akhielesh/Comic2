@@ -1,8 +1,10 @@
 // Page image cache (reader.md §9.1): keyed by storage path (a relink never re-downloads), variant-aware,
 // priority order, LRU with retained paths, expired links (400/403), CORS fallback, abort.
 import { describe, expect, it, vi } from 'vitest';
+import { legacyPagePath, signedLegacyPreview } from '../legacyPreview.testkit';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
+  availableCachedPath,
   byteBudgetFor,
   CACHE_BYTE_BUDGET,
   CACHE_ENTRY_CAP,
@@ -56,6 +58,31 @@ describe('PageImageCache', () => {
     await c.ensure('u/p1.webp', 'https://x/p1?sig=a', 'now');
     await c.ensure('u/p1.webp', 'https://x/p1?sig=b', 'now');
     expect(d.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('isolates a pending legacy thumbnail load across physical buckets and masks both cached copies on denial', async () => {
+    const path = legacyPagePath.replace('.webp', '_w480.webp');
+    const t = Date.now();
+    const before = signedLegacyPreview(path, 'comic-assets', t);
+    const after = signedLegacyPreview(path, 'comic-private', t + 1_000);
+    let finish!: (r: Response) => void;
+    const d = deps();
+    const fetch = vi.mocked(d.fetch);
+    fetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const c = new PageImageCache(d);
+    const pending = c.ensure(path, before, 'now');
+    const privateCopy = await c.ensure(path, after, 'now');
+    finish(new Response(new Blob(['earlier'])));
+    const publicCopy = await pending;
+    const key = availableCachedPath(path, () => after)!;
+    expect(c.get(key)?.objectUrl).toBe(privateCopy.objectUrl);
+    expect(privateCopy.objectUrl).not.toBe(publicCopy.objectUrl);
+    expect(availableCachedPath(path, () => undefined)).toBeUndefined();
+    expect(availableCachedPath(key, () => undefined)).toBeUndefined();
+    expect(availableCachedPath(path, () => publicCopy.objectUrl)).toBeUndefined();
+    expect((await c.ensure(key, before, 'now')).state).toBe('error');
+    expect((await c.ensure(path, signedLegacyPreview(path, 'comic-private', t + 250_000), 'now')).objectUrl).toBe(privateCopy.objectUrl);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('variants are separate entries', async () => {

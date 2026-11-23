@@ -13,7 +13,8 @@ import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/wor
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
 import { projectHasComicDoc, createSupabaseDocStore } from '../comic/store.js';
-import { bucketForPath, isPrivateDraftPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
+import { legacyArtScope, migratedArtPaths } from '../comic/legacyArtLocation.js';
+import { PRIVATE_BUCKET, PUBLIC_BUCKET, bucketForPath, isPrivateDraftPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
 import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, showsIn, shownPathsOf } from './publicReaderPaths.js';
 import { BUILD_INFO } from '../buildInfo.js';
 
@@ -252,7 +253,8 @@ const loadProjectAccessRow = async (supabaseAdmin: SupabaseClient, projectId: st
 const canAccessImagePath = async (
   supabaseAdmin: SupabaseClient,
   imagePath: string,
-  requesterId: string | null
+  requesterId: string | null,
+  migrated = false
 ): Promise<AccessCheckResult> => {
   // Quarantine (q/…) is never served here — not even to its owner. Moderators reach it only
   // through the audited moderation route.
@@ -260,7 +262,7 @@ const canAccessImagePath = async (
   // Private lanes (…/ref/… reference photos, wherever the project id is a UUID or not) are
   // owner-only, decided by the path's own namespace — no project, share or public flag can
   // widen them.
-  if (isPrivateDraftPath(imagePath)) {
+  if (isPrivateDraftPath(imagePath) || migrated) {
     const owner = parseProjectScopedPath(imagePath);
     if (!owner || !requesterId || requesterId !== owner.ownerId) return denied(requesterId);
     const doc = await createSupabaseDocStore({ admin: () => supabaseAdmin }).load(owner.projectId, requesterId);
@@ -439,6 +441,16 @@ systemRouter.get('/image-url', async (req, res, next) => {
       return res.status(denied.status).json({ error: { message: denied.message } });
     }
 
+    const migrated = (await migratedArtPaths(() => supabaseAdmin, [imagePath])).has(imagePath);
+    if (migrated) {
+      if (PRIVATE_BUCKET === PUBLIC_BUCKET) return res.status(503).json({ error: { message: 'Private artwork storage is unavailable.' } });
+      const checked = await canAccessImagePath(supabaseAdmin, imagePath, requesterId, true);
+      if (!checked.allowed) {
+        const denied = checked as Exclude<AccessCheckResult, { allowed: true }>;
+        return res.status(denied.status).json({ error: { message: denied.message } });
+      }
+    }
+    const privateImage = (path: string) => (path === imagePath && migrated) || isPrivatePath(path);
     const transform = parseImageTransform(req.query as Record<string, unknown>);
     let finalPath = imagePath;
 
@@ -448,11 +460,12 @@ systemRouter.get('/image-url', async (req, res, next) => {
     // STORAGE_TIMEOUT instead, so the client can retry and the connection is released.
     const SIGN_TIMEOUT_MS = 12_000;
     // Each path signs from the bucket that holds it; private lanes for 5 minutes only.
-    const ttlFor = (p: string) => (isPrivatePath(p) ? PRIVATE_SIGNED_URL_TTL_SECONDS : SIGNED_URL_TTL_SECONDS);
+    const shortGrant = (path: string) => privateImage(path) || (requesterId !== null && legacyArtScope(path)?.owner === requesterId);
+    const ttlFor = (path: string) => (shortGrant(path) ? PRIVATE_SIGNED_URL_TTL_SECONDS : SIGNED_URL_TTL_SECONDS);
     const signUrl = async (p: string) => {
       try {
         return await Promise.race([
-          supabaseAdmin.storage.from(bucketForPath(p)).createSignedUrl(p, ttlFor(p), transform ? { transform } : undefined),
+          supabaseAdmin.storage.from(privateImage(p) ? PRIVATE_BUCKET : bucketForPath(p)).createSignedUrl(p, ttlFor(p), transform ? { transform } : undefined),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(Object.assign(new Error('Storage sign timed out'), { status: 504, publicCode: 'STORAGE_TIMEOUT' })), SIGN_TIMEOUT_MS)
           )
@@ -466,7 +479,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
 
     if (error || !data?.signedUrl) {
       const fallbackPath = buildLegacyFallbackPath(imagePath);
-      if (!fallbackPath || isPrivatePath(fallbackPath)) {
+      if (!fallbackPath || privateImage(imagePath) || isPrivatePath(fallbackPath)) {
         // A 4xx from storage means the object can't be signed (missing/inaccessible)
         // — report that as 404, not the raw 400 Supabase returns. Only re-raise true
         // server-side failures so they surface as 500.
@@ -485,7 +498,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
       return res.status(404).json({ error: { message: 'Image not found.' } });
     }
 
-    if (isPrivatePath(finalPath)) res.setHeader('Cache-Control', 'private, no-store');
+    if (shortGrant(finalPath)) res.setHeader('Cache-Control', 'private, no-store');
     return res.json({
       url: data.signedUrl,
       path: finalPath,

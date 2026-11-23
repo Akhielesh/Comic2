@@ -23,7 +23,7 @@
 //   delay (`retryIn`), so a flaky connection heals by itself and the page can say so honestly.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { isPrivatePath } from '../../../shared/comic/imagePaths';
+import { isProtectedStudioPath, studioBitmapKey } from '../signedAssets';
 import type { AssetRef } from '../../../shared/comic/doc';
 import { paletteFromBlob, type Palette } from './ambient';
 
@@ -275,6 +275,10 @@ export class PageImageCache {
   }
 
   ensure(path: string, url: string, prio: CachePriority, signal?: AbortSignal): Promise<CachedPage> {
+    const separator = path.indexOf('\0');
+    const key = studioBitmapKey(separator < 0 ? path : path.slice(0, separator), url);
+    if (!key || (separator >= 0 && key !== path)) return Promise.resolve({ path, url, objectUrl: '', state: 'error', w: 0, h: 0 });
+    path = key;
     const existing = this.entries.get(path);
     if (existing && existing.state === 'ready' && (!existing.direct || existing.url === url)) {
       this.touch(path);
@@ -571,7 +575,8 @@ export const connectionHints = (): { saveData: boolean; slow: boolean; fast: boo
 
 /** A cached private bitmap is visible only while the viewer has a current display URL for its path. */
 export function availableCachedPath(path: string | undefined, urlFor: (path: string) => string | undefined): string | undefined {
-  return path && isPrivatePath(path) && !urlFor(path) ? undefined : path;
+  if (path?.includes('\0')) return undefined;
+  return path && isProtectedStudioPath(path) ? studioBitmapKey(path, urlFor(path)) : path;
 }
 
 export interface CachedImage {

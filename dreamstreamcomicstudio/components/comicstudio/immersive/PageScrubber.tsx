@@ -25,8 +25,9 @@ const thumbFor = (item: ReaderItem | undefined, urlFor: PageScrubberProps['urlFo
   if (!item || isWithheld(item)) return undefined;
   const paths = [item.asset.path, ...(item.asset.variants || []).map((v) => v.path)];
   for (const p of paths) {
-    const e = pageImageCache.get(p);
-    if (e?.state === 'ready' && e.objectUrl && availableCachedPath(p, urlFor)) return e.objectUrl;
+    const key = availableCachedPath(p, urlFor);
+    const e = key && pageImageCache.get(key);
+    if (e && e.state === 'ready' && e.objectUrl) return e.objectUrl;
   }
   return undefined;
 };

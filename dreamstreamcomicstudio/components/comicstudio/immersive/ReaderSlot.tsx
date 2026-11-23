@@ -12,7 +12,8 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { isWithheld, type ReaderItem } from '../reader/readerModel';
 import { BAND_REACH } from './flipGeometry';
 import { letterbox, type SlotContent, type SlotSide } from './readerLayout';
-import { availableCachedPath, pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
+import { isProtectedStudioPath } from '../signedAssets';
+import { availableCachedPath, pageImageCache, pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
 import type { Palette } from './ambient';
 
 export const CURL_GRADIENT =
@@ -90,7 +91,7 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const sharp = cached.src || fallback.src || fitImage.src;
   const standIn = item && !withheld && !sharp ? slotStandIn(item, img, path) : undefined;
   // A cached stand-in always shows; a fast link fetches one only for the page on screen.
-  const low = useCachedImage(standIn?.path, img.fast && prio !== 'now' ? undefined : standIn?.url, prio);
+  const low = useCachedImage(availableCachedPath(standIn?.path, () => standIn?.url), img.fast && prio !== 'now' ? undefined : standIn?.url, prio);
   const showStandIn = !sharp && !!low.src;
   return {
     src: sharp || low.src,
@@ -188,7 +189,12 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
     if (image.expired) onExpired?.();
   }, [image.expired, onExpired]);
   // Stand-in → page: the stand-in lies under the page while the real image fades in over it.
-  const under = useStandInSwap(image.src, image.standIn, !!reduced, swapMs);
+  const previousStandIn = useStandInSwap(image.src, image.standIn, !!reduced, swapMs);
+  // A cross-fade may be in progress when the owner removes or relocates this page's artwork.
+  const protectedPage = isProtectedStudioPath(item.asset.path);
+  const standInKey = previousStandIn && protectedPage ? availableCachedPath(standInVariant(item.asset)?.path, img.urlFor) : undefined;
+  const currentStandIn = !protectedPage || (standInKey && pageImageCache.get(standInKey)?.objectUrl === previousStandIn);
+  const under = image.src && !image.withheld && currentStandIn ? previousStandIn : undefined;
   const artRef = React.useRef<HTMLDivElement>(null);
   React.useLayoutEffect(() => {
     if (under) fadeInImage(artRef.current, swapMs);
