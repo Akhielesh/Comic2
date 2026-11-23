@@ -384,8 +384,7 @@ describe('POST /api/csp-report (edge only)', () => {
 });
 
 describe('registered Studio Originals use the editorial publication authority', () => {
-  const slug = 'DSOriginalTree001';
-  it('serves all 15 frozen pages anonymously and obtains oEmbed from the same editorial share identity', async () => {
+  it.each(['DSOriginalTree001','DSOriginalPort001'])('serves all 15 frozen pages anonymously and obtains oEmbed from the same editorial share identity for %s', async (slug) => {
     const member = publication();
     const edition = publication({slug,visibility:'public',rating:'G',card:{...member.card,creator:'DreamStream Studio Originals',pageCount:15}});
     const doc = {...snapshot(), pages:Array.from({length:15},(_,i)=>({id:'page'+(i+1),n:i+1,render:{status:'ready',asset:asset('p'+i)}}))};
@@ -397,7 +396,7 @@ describe('registered Studio Originals use the editorial publication authority', 
     expect((await embed.json()).author_name).toBe('DreamStream Studio Originals');
     expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload','comic_originals_share_card']);
   });
-  it('cannot substitute a member or retained payload when an editorial slug is withdrawn',async()=>{
+  it.each(['DSOriginalTide001','DSOriginalPort001'])('returns 404 for held or unpublished %s without falling back to member data',async(slug)=>{
     const backend=stubFetch(name=>name==='comic_public_payload'?{publication:publication({slug}),doc:snapshot()}:null);
     expect((await call('/api/comic/public/s/'+slug)).status).toBe(404);
     expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload']);

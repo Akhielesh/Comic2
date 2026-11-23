@@ -44,7 +44,7 @@ export type EditorialReview = ReturnType<typeof editorialReview>;
  * Only the reviewed, unchanged edition whose original fingerprint exactly matches the witnesses
  * may start a fresh check. This receipt never grants publication.
  */
-const reviewedEditions: Record<OriginalKey, { previousDigest: string; previousHash: string; candidateDigest: string }> = {
+const reviewedEditions: Partial<Record<OriginalKey, { previousDigest: string; previousHash: string; candidateDigest: string }>> = {
   tide: {
     previousDigest: '81fac03b885770c225eb5f169f4243f55e5c9231312b66129ac2c3cfc1fcd9b0',
     previousHash: '395126b9733da1c781857d04',

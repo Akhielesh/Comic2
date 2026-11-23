@@ -35,7 +35,7 @@ const source = {
 let root: string;
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'editorial-edition-'));
-  const folder = join(root, 'tide');
+  const folder = join(root, 'harbor');
   await mkdir(folder);
   await writeFile(join(folder, 'book.json'), JSON.stringify(source));
   for (let i = 0; i <= 15; i++) {
@@ -176,6 +176,15 @@ function localBackend() {
 }
 
 describe('Studio Originals publication', () => {
+  it('keeps the historical Tide record and never opens storage or contacts a reviewer to release it', async () => {
+    const fakes = installSafetyFakes();
+    const db = localBackend();
+    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('held from publication');
+    expect(getSupabaseAdmin).not.toHaveBeenCalled();
+    expect(db.upload).not.toHaveBeenCalled();
+    expect(fakes.llm.calls).toHaveLength(0);
+  });
+
   it.each(['blocked', 'unavailable'] as const)(
     'withholds every public byte on a %s provider assessment',
     async (outcome) => {
@@ -187,7 +196,7 @@ describe('Studio Originals publication', () => {
             : cleanAnswer(req);
       }
       const db = localBackend();
-      await expect(publishBundledOriginal('tide', root)).rejects.toThrow('did not clear');
+      await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('did not clear');
       expect(db.dbRow.status).toBe(outcome === 'blocked' ? 'blocked' : 'staging');
       const report = db.dbRow.review_report as EditorialReview['report'];
       expect(report.pages).toHaveLength(15);
@@ -212,7 +221,7 @@ describe('Studio Originals publication', () => {
     fake.llm.fallback = (req) =>
       req.jsonSchema?.name === 'comic_safety_image' ? { ...cleanAnswer(req), rating: 'G', categories: ['dangerous'] } : cleanAnswer(req);
     const db = localBackend();
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('did not clear');
+    await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('did not clear');
     expect(db.dbRow.status).toBe('blocked');
     const report = db.dbRow.review_report as EditorialReview['report'];
     expect(report.cover).toMatchObject({ assessed: 'G', categories: ['dangerous'] });
@@ -223,7 +232,7 @@ describe('Studio Originals publication', () => {
     const fakes = installSafetyFakes();
     const db = localBackend();
     db.failOnUpload(3);
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('upload failed');
+    await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('upload failed');
     expect(db.dbRow).toMatchObject({ status: 'checked', checked_digest: db.dbRow.source_digest, lease_token: null });
     expect(db.objects.size).toBe(2);
     expect(db.dbRow.snapshot).toBeUndefined();
@@ -237,10 +246,10 @@ describe('Studio Originals publication', () => {
     }
     expect(readText).toContain(source.coverAlt);
     const checks = fakes.llm.calls.length;
-    await expect(publishBundledOriginal('tide', root)).resolves.toEqual({ slug: 'DSOriginalTide001' });
+    await expect(publishBundledOriginal('harbor', root)).resolves.toEqual({ slug: 'DSOriginalPort001' });
     expect(fakes.llm.calls).toHaveLength(checks);
     const doc = db.dbRow.snapshot as ComicDoc;
-    expect(doc.id).toBe('DSOriginalTide001');
+    expect(doc.id).toBe('DSOriginalPort001');
     expect(doc.createdAt).toBe(Date.parse(String(db.dbRow.published_at)));
     expect(doc.pages).toHaveLength(15);
     expect(doc.cover.readerAlt).toBe(source.coverAlt);
@@ -249,7 +258,7 @@ describe('Studio Originals publication', () => {
       const asset = target.render.asset!;
       const file = i ? 'p' + String(i).padStart(2, '0') + '.webp' : 'cover.webp';
       expect(asset.path).toMatch(/^pub\/[A-Za-z0-9]{22}\//);
-      expect(sha256(db.objects.get(asset.path)!)).toBe(sha256(await readFile(join(root, 'tide', file))));
+      expect(sha256(db.objects.get(asset.path)!)).toBe(sha256(await readFile(join(root, 'harbor', file))));
       expect(asset.variants).toHaveLength(1);
       expect((await sharp(db.objects.get(asset.variants![0].path)).metadata()).width).toBe(480);
       if (i) {
@@ -261,7 +270,7 @@ describe('Studio Originals publication', () => {
     expect(db.dbRow.card).toMatchObject({ pageCount: 15, creator: 'DreamStream Studio Originals' });
     expect(JSON.stringify(doc)).not.toContain('library/studio-originals');
     const uploads = db.upload.mock.calls.length;
-    await expect(publishBundledOriginal('tide', root)).resolves.toEqual({ slug: 'DSOriginalTide001' });
+    await expect(publishBundledOriginal('harbor', root)).resolves.toEqual({ slug: 'DSOriginalPort001' });
     expect(db.upload).toHaveBeenCalledTimes(uploads);
     expect(fakes.llm.calls).toHaveLength(checks);
   }, 30000);
@@ -270,24 +279,54 @@ describe('Studio Originals publication', () => {
     installSafetyFakes();
     const db = localBackend();
     db.failOnUpload(2);
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('upload failed');
+    await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('upload failed');
     const [path] = db.objects.keys();
     db.objects.set(path, Buffer.from('corrupt'));
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('checksum mismatch');
+    await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('checksum mismatch');
     expect(db.dbRow.status).toBe('checked');
     expect(db.dbRow.snapshot).toBeUndefined();
   }, 20000);
 });
 
 const bundledRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../assets/originals');
-const historicalTide = {
-  book_key: 'tide',
-  slug: 'DSOriginalTide001',
+it('publishes Harbor from its separate manuscript and sixteen original plates through a first-time gate', async () => {
+  const fake = installSafetyFakes();
+  const db = localBackend();
+  const files = ['cover.webp', ...Array.from({ length: 15 }, (_, i) => 'p' + String(i + 1).padStart(2, '0') + '.webp')];
+  const prior = new Set<string>();
+  for (const key of ['tide', 'orchard', 'fox', 'table-nine']) {
+    for (const file of files) prior.add(sha256(await readFile(join(bundledRoot, key, file))));
+  }
+  const manuscript = JSON.parse(await readFile(join(bundledRoot, 'harbor', 'book.json'), 'utf8')) as typeof source;
+  expect(manuscript.title).toBe('The Harbor That Listened');
+  expect(manuscript.rating).toBe('PG');
+  await expect(publishBundledOriginal('harbor', bundledRoot)).resolves.toEqual({ slug: 'DSOriginalPort001' });
+  const doc = db.dbRow.snapshot as ComicDoc;
+  const locators = [doc.cover.render.asset!, ...doc.pages.map((p) => p.render.asset!)];
+  expect(locators).toHaveLength(files.length);
+  for (const [i, file] of files.entries()) {
+    const digest = sha256(await readFile(join(bundledRoot, 'harbor', file)));
+    expect(prior.has(digest)).toBe(false);
+    expect(sha256(db.objects.get(locators[i].path)!)).toBe(digest);
+    if (i) {
+      expect(doc.pages[i - 1].readerAlt).toBe(manuscript.pages[i - 1].alt);
+      expect(doc.pages[i - 1].panels[0].lines.map(l => l.text)).toEqual(manuscript.pages[i - 1].transcript.split(/\r?\n/).map(line => line.trim()).filter(Boolean));
+    }
+  }
+  expect(doc.cover.readerAlt).toBe(manuscript.coverAlt);
+  expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(16);
+  expect(db.rpc.mock.calls.some(([name]) => name === 'studio_claim_original_revision')).toBe(false);
+  expect(db.dbRow.card).toMatchObject({ title: manuscript.title, pageCount: 15 });
+}, 40000);
+
+const historicalOrchard = {
+  book_key: 'orchard',
+  slug: 'DSOriginalTree001',
   asset_key: 'EditorialTestFixture01',
   status: 'blocked',
   rating: 'G',
-  source_digest: '81fac03b885770c225eb5f169f4243f55e5c9231312b66129ac2c3cfc1fcd9b0',
-  gate_hash: '395126b9733da1c781857d04'
+  source_digest: 'dbcb04155d5e7db8b818dc1ed20fadd979a249c0d89023d59804ab01bdafd0a3',
+  gate_hash: 'b293c8b66d1b68d397ddbf04'
 };
 
 describe('review of the PG metadata revision', () => {
@@ -305,19 +344,19 @@ describe('review of the PG metadata revision', () => {
             }
           : cleanAnswer(req);
       const db = localBackend();
-      Object.assign(db.dbRow, historicalTide);
-      const result = publishBundledOriginal('tide', bundledRoot);
+      Object.assign(db.dbRow, historicalOrchard);
+      const result = publishBundledOriginal('orchard', bundledRoot);
       if (status === 'cleared') {
-        await expect(result).resolves.toEqual({ slug: historicalTide.slug });
+        await expect(result).resolves.toEqual({ slug: historicalOrchard.slug });
         expect(db.dbRow.status).toBe('live');
         expect(db.dbRow.rating).toBe('PG');
         expect(db.objects.size).toBeGreaterThan(16);
       } else {
         await expect(result).rejects.toThrow('did not clear');
-        expect(db.dbRow).toMatchObject(historicalTide);
+        expect(db.dbRow).toMatchObject(historicalOrchard);
         expect(db.objects.size).toBe(0);
       }
-      expect(db.revision).toMatchObject({ status, priorDigest: historicalTide.source_digest });
+      expect(db.revision).toMatchObject({ status, priorDigest: historicalOrchard.source_digest });
       const report = db.revision.report as EditorialReview['report'];
       expect(report.pages).toHaveLength(15);
       expect(JSON.stringify(report)).not.toContain('Provider note');
@@ -328,7 +367,6 @@ describe('review of the PG metadata revision', () => {
   );
 
   it.each([
-    ['orchard', 'dbcb04155d5e7db8b818dc1ed20fadd979a249c0d89023d59804ab01bdafd0a3', 'b293c8b66d1b68d397ddbf04'],
     ['fox', 'b3d967ad9be467d6514cf905e06e9902088b4715b5fc02ecc648c52203c8424a', 'de6ee2218e6d1062d8316b27'],
     ['table-nine', '3604e39f18cec4934f2d14266d03e3f2d5fddabc141843f0ee47e0409d4e57ea', '25764e0472c44bc160b8defe']
   ] as const)(
@@ -338,7 +376,7 @@ describe('review of the PG metadata revision', () => {
       fake.llm.fallback = (req) =>
         req.jsonSchema?.name === 'comic_safety_image' ? { ...cleanAnswer(req), rating: 'PG' } : cleanAnswer(req);
       const db = localBackend();
-      Object.assign(db.dbRow, { ...historicalTide, book_key: key, slug: ORIGINAL_SLUGS[key], source_digest: digest, gate_hash: gate });
+      Object.assign(db.dbRow, { ...historicalOrchard, book_key: key, slug: ORIGINAL_SLUGS[key], source_digest: digest, gate_hash: gate });
       await expect(publishBundledOriginal(key, bundledRoot)).resolves.toEqual({ slug: ORIGINAL_SLUGS[key] });
       expect(db.revision.priorDigest).toBe(digest);
       expect(db.dbRow.rating).toBe('PG');
@@ -353,11 +391,11 @@ describe('review of the PG metadata revision', () => {
   it('never sends a review request for different source art or an unmatched prior decision', async () => {
     const fake = installSafetyFakes();
     const db = localBackend();
-    Object.assign(db.dbRow, historicalTide);
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('or its source changed'); // synthetic manuscript
+    Object.assign(db.dbRow, { ...historicalOrchard, book_key: 'harbor', slug: ORIGINAL_SLUGS.harbor });
+    await expect(publishBundledOriginal('harbor', root)).rejects.toThrow('or its source changed'); // synthetic manuscript
     expect(db.rpc.mock.calls.map((c) => c[0])).toEqual(['studio_claim_original']);
-    db.dbRow.gate_hash = 'ffffffffffffffffffffffff';
-    await expect(publishBundledOriginal('tide', bundledRoot)).rejects.toThrow('revision is unavailable');
+    Object.assign(db.dbRow, historicalOrchard, { gate_hash: 'ffffffffffffffffffffffff' });
+    await expect(publishBundledOriginal('orchard', bundledRoot)).rejects.toThrow('revision is unavailable');
     expect(fake.llm.calls).toHaveLength(0);
     expect(db.objects.size).toBe(0);
     expect(db.dbRow.status).toBe('blocked');

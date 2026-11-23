@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 async function main() {
   const [mode, key, directory, ...rest] = process.argv.slice(2);
   if (!['check', 'publish'].includes(mode) || !ORIGINAL_KEYS.includes(key as OriginalKey) || !directory || rest.length) {
-    throw new Error('Usage: tsx scripts/ops/studioOriginal.ts check|publish tide|orchard|fox|table-nine <source-directory>');
+    throw new Error('Usage: tsx scripts/ops/studioOriginal.ts check|publish ' + ORIGINAL_KEYS.join('|') + ' <source-directory>');
   }
   const root = resolve(directory);
   if (mode === 'check') {

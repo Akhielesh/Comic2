@@ -557,6 +557,13 @@ describe('member reading sync controls', () => {
 describe('first-party editions in the public Library', () => {
   const orchard = { slug:'DSOriginalTree001',title:'The Last Orchard on Six',description:'A pear tree aboard an orbital habitat.',
     creator:'DreamStream Studio Originals',rating:'G',pageCount:15,publishedAt:1780000000000,updatedAt:1780000000000,coverPath:`pub/${KEY}/cover-1080.webp` };
+  it('opens the independently listed Harbor book while its held predecessor is absent',async()=>{
+    const harbor={...orchard,slug:'DSOriginalPort001',title:'The Harbor That Listened',rating:'PG'};
+    originalsRpc.mockResolvedValue({data:[orchard,harbor]});
+    render(<PublicGallery onReadComic={vi.fn()}/>);
+    expect(await screen.findByRole('link',{name:'Read The Harbor That Listened'})).toHaveAttribute('href','/c/DSOriginalPort001');
+    expect(screen.queryByRole('link',{name:/When the Tide Clock Stopped/})).toBeNull();
+  });
   it('discovers a live Original, counts it once, and searches it without a member project or likes', async () => {
     viewer.id = 'reader';
     originalsRpc.mockResolvedValue({ data:[orchard,orchard,{...orchard,slug:SLUG},{...orchard,slug:'DSOriginalFox0001',coverPath:'u/owner/private.webp'}] });

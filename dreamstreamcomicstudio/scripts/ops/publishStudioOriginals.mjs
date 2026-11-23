@@ -1,13 +1,13 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { githubIdentityToken } from './actionsIdentity.mjs';
+import { isPublishableOriginal, ORIGINAL_SLUGS } from '../../shared/comic/originals.ts';
 
 const endpoint = 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/internal/originals/';
-const keys = ['tide', 'orchard', 'fox', 'table-nine'];
 const audience = 'urn:dreamstream:originals-publisher';
 
 export async function publish(key, env = process.env, fetcher = fetch) {
-  if (!keys.includes(key)) throw new Error('Select one registered Studio Original.');
+  if (!isPublishableOriginal(key)) throw new Error('Select a Studio Original currently open for publication.');
   for (let poll = 0; poll < 100; poll++) {
     const token = await githubIdentityToken(audience, env, fetcher);
     const reply = await fetcher(endpoint + key, {
@@ -24,7 +24,7 @@ export async function publish(key, env = process.env, fetcher = fetch) {
       throw new Error('Publishing ' + key + ' returned HTTP ' + reply.status + ' (' + code + ')');
     }
     const result = await reply.json();
-    if (result.state !== 'published' || !/^[a-zA-Z0-9]{17}$/.test(result.slug)) {
+    if (result.state !== 'published' || result.slug !== ORIGINAL_SLUGS[key]) {
       throw new Error('Publishing ' + key + ' returned an incomplete result.');
     }
     return 'https://comics.dreamstreamstudio.ai/c/' + result.slug;
@@ -47,6 +47,6 @@ async function waitForRevision(revision) {
   if (!ready) throw new Error('The reviewed backend revision is not serving yet.');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.env.GITHUB_EVENT_NAME === 'push') await waitForRevision(process.env.GITHUB_SHA);
+  await waitForRevision(process.env.GITHUB_SHA);
   console.log(await publish(process.env.ORIGINAL_BOOK));
 }

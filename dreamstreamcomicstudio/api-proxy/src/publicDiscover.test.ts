@@ -160,7 +160,7 @@ describe('200: the listing', () => {
   });
 
   it('preserves the official editorial byline and never accepts it for a member slug', async () => {
-    const slug = 'DSOriginalTide001';
+    const slug = 'DSOriginalPort001';
     const creator = { username: 'DreamStream Studio Originals' };
     const rpc = fakeRpc(() => listOk([rpcItem({ slug, creator }), rpcItem({ creator })]));
     const res = (await call('/api/comic/public/discover?slugs=' + slug + ',' + SLUG, { rpc: rpc.fn }))!;
