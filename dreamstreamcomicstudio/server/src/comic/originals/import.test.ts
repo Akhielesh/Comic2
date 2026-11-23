@@ -1,6 +1,9 @@
+// @vitest-environment node
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { EditorialReview } from './review.js';
+import { dirname, join } from 'node:path';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
@@ -55,6 +58,7 @@ afterEach(() => {
 function localBackend() {
   const objects = new Map<string, Buffer>();
   const dbRow: Record<string, unknown> = {};
+  const revision: Record<string, unknown> = {};
   let failUploadAt = 0;
   let attempts = 0;
   const rpc = vi.fn(async (name: string, params: Record<string, string>) => {
@@ -67,6 +71,28 @@ function localBackend() {
             : null
       };
     }
+    if (name === 'studio_claim_original_revision') {
+      if (dbRow.status !== 'blocked' || dbRow.gate_hash !== params.p_prior_gate || dbRow.source_digest !== params.p_prior_digest)
+        return { data: null, error: { message: 'Receipt mismatch' } };
+      Object.assign(revision, { token: params.p_token, priorDigest: dbRow.source_digest, rating: params.p_rating });
+      return { data: true, error: null };
+    }
+    if (name === 'studio_finish_original_revision') {
+      expect(dbRow.status).toBe('blocked');
+      expect(dbRow.source_digest).toBe(revision.priorDigest);
+      expect(objects.size).toBe(0);
+      expect(params.p_token).toBe(revision.token);
+      Object.assign(revision, { status: params.p_status, report: params.p_report });
+      if (params.p_status === 'cleared')
+        Object.assign(dbRow, {
+          status: 'checked',
+          rating: revision.rating,
+          source_digest: params.p_digest,
+          checked_digest: params.p_digest,
+          review_report: params.p_report
+        });
+      return { data: true, error: null };
+    }
     expect(name).toBe('studio_claim_original');
     if (!dbRow.book_key)
       Object.assign(dbRow, {
@@ -76,7 +102,9 @@ function localBackend() {
         asset_key: params.p_asset_key,
         status: 'staging'
       });
-    if (dbRow.source_digest !== params.p_digest || dbRow.status === 'blocked') return { data: null, error: { message: 'unavailable' } };
+    if (dbRow.source_digest !== params.p_digest)
+      return { data: null, error: { code: 'P0001', message: 'This source differs from the registered edition' } };
+    if (dbRow.status === 'blocked') return { data: null, error: { message: 'unavailable' } };
     Object.assign(dbRow, { lease_token: params.p_token, lease_until: new Date(Date.now() + 3600000).toISOString() });
     return {
       data: { status: dbRow.status, assetKey: dbRow.asset_key, publishedAt: dbRow.published_at, moderationUsd: dbRow.moderation_usd ?? 0 },
@@ -136,6 +164,8 @@ function localBackend() {
   vi.mocked(getSupabaseAdmin).mockReturnValue({ from, rpc, storage } as unknown as ReturnType<typeof getSupabaseAdmin>);
   return {
     dbRow,
+    revision,
+    rpc,
     objects,
     upload,
     failOnUpload: (at: number) => {
@@ -158,6 +188,15 @@ describe('Studio Originals publication', () => {
       const db = localBackend();
       await expect(publishBundledOriginal('tide', root)).rejects.toThrow('did not clear');
       expect(db.dbRow.status).toBe(outcome === 'blocked' ? 'blocked' : 'staging');
+      const report = db.dbRow.review_report as EditorialReview['report'];
+      expect(report.pages).toHaveLength(15);
+      for (const target of [report.cover, ...report.pages]) {
+        expect(target).toEqual(
+          outcome === 'blocked'
+            ? { status: 'blocked', assessed: 'X', categories: ['graphic_gore'] }
+            : { status: 'unchecked', assessed: null, categories: [] }
+        );
+      }
       expect(db.dbRow.lease_token).toBeNull();
       expect(db.dbRow.snapshot).toBeUndefined();
       expect(db.objects.size).toBe(0);
@@ -166,6 +205,18 @@ describe('Studio Originals publication', () => {
     },
     20000
   );
+
+  it('retains a hard category even if the provider gives the same image an allowed age', async () => {
+    const fake = installSafetyFakes();
+    fake.llm.fallback = (req) =>
+      req.jsonSchema?.name === 'comic_safety_image' ? { ...cleanAnswer(req), rating: 'G', categories: ['dangerous'] } : cleanAnswer(req);
+    const db = localBackend();
+    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('did not clear');
+    expect(db.dbRow.status).toBe('blocked');
+    const report = db.dbRow.review_report as EditorialReview['report'];
+    expect(report.cover).toMatchObject({ assessed: 'G', categories: ['dangerous'] });
+    expect(db.objects.size).toBe(0);
+  }, 20000);
 
   it('resumes a partial upload after the complete real gate, verifies all uploaded bytes and preserves transcripts', async () => {
     const fakes = installSafetyFakes();
@@ -224,5 +275,67 @@ describe('Studio Originals publication', () => {
     await expect(publishBundledOriginal('tide', root)).rejects.toThrow('checksum mismatch');
     expect(db.dbRow.status).toBe('checked');
     expect(db.dbRow.snapshot).toBeUndefined();
+  }, 20000);
+});
+
+const bundledRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../assets/originals');
+const historicalTide = {
+  book_key: 'tide',
+  slug: 'DSOriginalTide001',
+  asset_key: 'EditorialTestFixture01',
+  status: 'blocked',
+  rating: 'G',
+  source_digest: '81fac03b885770c225eb5f169f4243f55e5c9231312b66129ac2c3cfc1fcd9b0',
+  gate_hash: '395126b9733da1c781857d04'
+};
+
+describe('review of the PG metadata revision', () => {
+  it.each(['cleared', 'blocked', 'needs_check'] as const)(
+    'publishes the exact reviewed artwork only when the independent check clears (%s)',
+    async (status) => {
+      const fake = installSafetyFakes(status === 'needs_check' ? { llm: null } : {});
+      fake.llm.fallback = (req) =>
+        req.jsonSchema?.name === 'comic_safety_image'
+          ? {
+              ...cleanAnswer(req),
+              rating: status === 'blocked' ? 'X' : 'PG',
+              categories: status === 'blocked' ? ['graphic_gore'] : [],
+              notes: ['Provider note should stay private']
+            }
+          : cleanAnswer(req);
+      const db = localBackend();
+      Object.assign(db.dbRow, historicalTide);
+      const result = publishBundledOriginal('tide', bundledRoot);
+      if (status === 'cleared') {
+        await expect(result).resolves.toEqual({ slug: historicalTide.slug });
+        expect(db.dbRow.status).toBe('live');
+        expect(db.dbRow.rating).toBe('PG');
+        expect(db.objects.size).toBeGreaterThan(16);
+      } else {
+        await expect(result).rejects.toThrow('did not clear');
+        expect(db.dbRow).toMatchObject(historicalTide);
+        expect(db.objects.size).toBe(0);
+      }
+      expect(db.revision).toMatchObject({ status, priorDigest: historicalTide.source_digest });
+      const report = db.revision.report as EditorialReview['report'];
+      expect(report.pages).toHaveLength(15);
+      expect(JSON.stringify(report)).not.toContain('Provider note');
+      expect(fake.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_image')).toHaveLength(status === 'needs_check' ? 0 : 16);
+      if (status === 'cleared') expect(report.pages.every((p) => p.status === 'pass' && p.assessed === 'PG')).toBe(true);
+    },
+    40000
+  );
+
+  it('never sends a review request for different source art or an unmatched prior decision', async () => {
+    const fake = installSafetyFakes();
+    const db = localBackend();
+    Object.assign(db.dbRow, historicalTide);
+    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('or its source changed'); // synthetic manuscript
+    expect(db.rpc.mock.calls.map((c) => c[0])).toEqual(['studio_claim_original']);
+    db.dbRow.gate_hash = 'ffffffffffffffffffffffff';
+    await expect(publishBundledOriginal('tide', bundledRoot)).rejects.toThrow('revision is unavailable');
+    expect(fake.llm.calls).toHaveLength(0);
+    expect(db.objects.size).toBe(0);
+    expect(db.dbRow.status).toBe('blocked');
   }, 20000);
 });

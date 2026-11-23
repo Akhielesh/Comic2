@@ -11,6 +11,7 @@ import { renderOgCard } from '../publication/ogImage.js';
 import { buildShareCard, buildSnapshot, ogPath, planSnapshot } from '../publication/snapshot.js';
 import { publicObjectUrl } from '../publication/publication.js';
 import { PUBLIC_BUCKET } from '../storagePaths.js';
+import { claimReviewedEdition, editorialReview } from './review.js';
 import { runPublishGateImpl } from '../safety/publishGate.js';
 import { withSharpSlot } from '../imageMeasure.js';
 import { IMPRINT, inspectOriginal, originalDocument, originalPath, sha256, type OriginalBook, type OriginalImage } from './book.js';
@@ -69,7 +70,7 @@ export async function reviewOriginal(book: OriginalBook, source: ComicDoc) {
     doc,
     { pageIds: doc.pages.map((p) => p.id), includeCover: true, languages: ['en'] }
   );
-  return gate;
+  return editorialReview(gate, doc);
 }
 
 export async function publishBundledOriginal(key: OriginalKey, root: string): Promise<{ slug: string }> {
@@ -79,13 +80,20 @@ export async function publishBundledOriginal(key: OriginalKey, root: string): Pr
   if (bucket.error || bucket.data?.public !== true) throw new Error('Public publication storage is unavailable.');
   const token = randomUUID();
   const slug = ORIGINAL_SLUGS[key];
-  const claim = await db.rpc('studio_claim_original', {
-    p_key: key,
-    p_slug: slug,
-    p_digest: book.digest,
-    p_asset_key: newAssetKey(),
-    p_token: token
-  });
+  const doc = originalDocument(book, assetsFor(book), Date.now());
+  const claim = await claimReviewedEdition(
+    db,
+    {
+      p_key: key,
+      p_slug: slug,
+      p_digest: book.digest,
+      p_asset_key: newAssetKey(),
+      p_token: token
+    },
+    book,
+    doc,
+    () => reviewOriginal(book, doc)
+  );
   if (
     claim.error ||
     !claim.data ||
@@ -95,7 +103,6 @@ export async function publishBundledOriginal(key: OriginalKey, root: string): Pr
     throw new Error('Editorial publication is busy, withdrawn, or its source changed.');
   }
   const assetKey = String(claim.data.assetKey);
-  const doc = originalDocument(book, assetsFor(book), Date.now());
   const plan = planSnapshot(doc, {
     assetKey,
     pageIds: doc.pages.map((p) => p.id),
@@ -138,15 +145,11 @@ export async function publishBundledOriginal(key: OriginalKey, root: string): Pr
   try {
     if (claim.data.status !== 'checked') {
       const gate = await reviewOriginal(book, doc);
-      const verified =
-        gate.status === 'cleared' &&
-        gate.rating === book.metadata.rating &&
-        gate.text.status === 'pass' &&
-        gate.cover?.status === 'pass' &&
-        doc.pages.every((p) => gate.pages[p.id]?.status === 'pass');
+      const verified = gate.status === 'cleared';
       await ownedUpdate({
         status: verified ? 'checked' : gate.status === 'blocked' ? 'blocked' : 'staging',
         moderation_status: gate.status,
+        review_report: gate.report,
         moderation_usd: Number(claim.data.moderationUsd ?? 0) + gate.costUsd,
         rating: gate.rating,
         checked_digest: verified ? book.digest : null,
