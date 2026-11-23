@@ -142,11 +142,24 @@ describe('v5 context: caps, rating, spend lock, private signing', () => {
     expect(await ctx.billing.reserve({ operation: 'x', provider: 'gemini', model: 'm', stage: 'cover', imageUnits: 1 })).toMatchObject({ ok: false, message: 'Paused.' });
   });
 
-  it('signs private paths (refs, quarantine) with the 300 s TTL and keeps the lanes independent', async () => {
+  it('signs a draft only for its own owner and project, including the temporary lane of a local project', async () => {
     const assets = fakeAssetStore();
-    const urls = await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp', 'q/a/b/z.webp', 'u/a/p/b/img/x.webp', '']);
-    expect(Object.keys(urls).sort()).toEqual(['q/a/b/z.webp', 'u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp']);
-    expect(assets.signed).toEqual([['u/a/p/b/img/x.webp'], ['u/a/p/b/ref/y.webp', 'q/a/b/z.webp']]);
+    const projectId = '20000000-0000-4000-8000-000000000002';
+    const name = 'draft-v1-12345678-1234-4000-8000-123456789abc.webp';
+    const real = 'u/a/p/' + projectId + '/img/' + name;
+    const tmp = 'u/a/tmp/' + name;
+    const paths = [real, real.replace('u/a/', 'u/b/'), real.replace(projectId, 'another-project'), tmp];
+    expect(Object.keys(await signAssetPaths(assets, paths, { userId: 'a', projectId }))).toEqual([real]);
+    expect(Object.keys(await signAssetPaths(assets, paths, { userId: 'a', projectId: 'local' }))).toEqual([tmp]);
+    expect(assets.signedTtl).toEqual([300, 300]);
+  });
+
+  it('signs owner refs with the 300 s TTL, excludes quarantine, and keeps the lanes independent', async () => {
+    const assets = fakeAssetStore();
+    const scope = { userId: 'a', projectId: 'b' };
+    const urls = await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp', 'q/a/b/z.webp', 'u/a/p/b/img/x.webp', ''], scope);
+    expect(Object.keys(urls).sort()).toEqual(['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp']);
+    expect(assets.signed).toEqual([['u/a/p/b/img/x.webp'], ['u/a/p/b/ref/y.webp']]);
     expect(assets.signedTtl).toEqual([undefined, 300]);
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -155,9 +168,9 @@ describe('v5 context: caps, rating, spend lock, private signing', () => {
       if (opts?.ttlSec) throw new Error('private bucket down');
       return original(paths, opts);
     };
-    expect(await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp'])).toEqual({ 'u/a/p/b/img/x.webp': 'https://signed.test/u/a/p/b/img/x.webp' });
+    expect(await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp'], scope)).toEqual({ 'u/a/p/b/img/x.webp': 'https://signed.test/u/a/p/b/img/x.webp' });
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
-    expect(await signAssetPaths(assets, [])).toEqual({});
+    expect(await signAssetPaths(assets, [], scope)).toEqual({});
   });
 });

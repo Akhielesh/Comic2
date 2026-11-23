@@ -31,59 +31,9 @@ import { add as addNote, edit as editNote, move as moveNote, moveTo as moveNoteT
 
 // ── Signed URLs ──────────────────────────────────────────────────────────────
 
-export interface UrlEntry {
-  url: string;
-  /** Epoch ms after which the URL stops working (Infinity for data:/blob: URLs). */
-  expiresAt: number;
-}
-
-/** The server never hands out a signed URL with less than 10 minutes of validity left. */
-export const URL_FALLBACK_TTL_MS = 10 * 60_000;
-/** Re-sign a URL when less than this much validity remains. */
-export const URL_RESIGN_BEFORE_MS = 5 * 60_000;
-
-const decodeBase64Url = (input: string): string => {
-  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-  if (typeof atob === 'function') return atob(padded);
-  return Buffer.from(padded, 'base64').toString('binary');
-};
-
-/**
- * When a signed storage URL expires. Supabase signed URLs carry a JWT in `?token=` whose
- * `exp` is authoritative; anything else falls back to the server's minimum-validity
- * guarantee so we re-sign early rather than show a broken image.
- */
-export const signedUrlExpiry = (url: string, receivedAt: number): number => {
-  if (/^(data|blob):/i.test(url)) return Number.POSITIVE_INFINITY;
-  try {
-    const token = new URL(url).searchParams.get('token');
-    const payload = token?.split('.')[1];
-    if (payload) {
-      const exp = (JSON.parse(decodeBase64Url(payload)) as { exp?: unknown }).exp;
-      if (typeof exp === 'number' && Number.isFinite(exp)) return exp * 1000;
-    }
-  } catch {
-    /* not a URL / not a JWT — use the fallback */
-  }
-  return receivedAt + URL_FALLBACK_TTL_MS;
-};
-
-export const urlIsFresh = (entry: UrlEntry | undefined, now: number): boolean =>
-  !!entry && entry.expiresAt - now > URL_RESIGN_BEFORE_MS;
-
-export const mergeUrls = (
-  current: Record<string, UrlEntry>,
-  incoming: Record<string, string> | undefined,
-  now: number
-): Record<string, UrlEntry> => {
-  if (!incoming) return current;
-  const entries = Object.entries(incoming).filter(([path, url]) => typeof path === 'string' && typeof url === 'string' && url);
-  if (!entries.length) return current;
-  const next = { ...current };
-  for (const [path, url] of entries) next[path] = { url, expiresAt: signedUrlExpiry(url, now) };
-  return next;
-};
+export { signedUrlExpiry, urlIsFresh, mergeUrls, URL_FALLBACK_TTL_MS, URL_RESIGN_BEFORE_MS } from './signedAssets';
+import { mergeUrls, type UrlEntry } from './signedAssets';
+export type { UrlEntry } from './signedAssets';
 
 /** Storage path for urlFor() inputs (AssetRef, path string, or nothing). */
 export const assetPath = (asset?: AssetRef | string | null): string | undefined => {

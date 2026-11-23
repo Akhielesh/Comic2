@@ -18,6 +18,9 @@
 // published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
+import { directDisplayUrl, mergeUrls, type UrlEntry } from './signedAssets';
+import { isPrivatePath } from '../../shared/comic/imagePaths';
+import { usePrivateUrlRenewal } from './usePrivateUrlRenewal';
 import { createReadingRecorder } from '../../services/libraryReadingSync';
 import { rememberLibraryPage } from '../../services/libraryDiscovery';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -86,7 +89,7 @@ const urlForMap = (urls: Record<string, string> | null) => (asset?: AssetRef | s
   if (!asset || !urls) return undefined;
   const path = typeof asset === 'string' ? asset : asset.path;
   if (!path) return undefined;
-  if (/^(https?:|data:|blob:)/i.test(path)) return path;
+  if (/^(https?:|data:|blob:)/i.test(path)) return directDisplayUrl(path);
   return urls[path];
 };
 
@@ -752,13 +755,14 @@ const SlugReader: React.FC<{ slug: string; embed: boolean; isOwner: boolean; ide
 
 /** `/?view=read&id=` and the owner preview: /api/comic/public/:id with quiet relinking. */
 const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: PublicReaderStart; onClose?: () => void }> = ({ projectId, isOwner, start, onClose }) => {
-  type LoadState = { kind: 'loading' } | { kind: 'ready'; doc: ComicDoc; urls: Record<string, string> } | { kind: 'error'; message: string; notFound: boolean };
+  type LoadState = { kind: 'loading' } | { kind: 'ready'; doc: ComicDoc; urls: Record<string, UrlEntry> } | { kind: 'error'; message: string; notFound: boolean };
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const abortRef = useRef<AbortController | null>(null);
   const lastRelink = useRef(0);
 
   const load = useCallback(
     async (quiet = false) => {
+      if (quiet && abortRef.current) return;
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -766,18 +770,22 @@ const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: Publ
       try {
         const res = await loadPublicComic(projectId, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setState({ kind: 'ready', doc: res.doc, urls: res.urls || {} });
+        setState((prev) => {
+          const next = mergeUrls(prev.kind === 'ready' ? prev.urls : {}, res.urls, Date.now());
+          return { kind: 'ready', doc: res.doc, urls: Object.fromEntries(Object.keys(res.urls || {}).filter((path) => next[path]).map((path) => [path, next[path]])) };
+        });
       } catch (err) {
         if (controller.signal.aborted || (err as { kind?: string })?.kind === 'aborted') return;
-        // A failed quiet refresh keeps the comic on screen.
-        if (quiet) return;
         const e = (err && typeof err === 'object' ? err : {}) as { kind?: string; status?: number; message?: string };
-        const notFound = e.kind === 'not_found' || e.status === 404 || e.kind === 'forbidden' || e.status === 403;
+        const notFound = e.kind === 'not_found' || e.status === 404 || e.kind === 'forbidden' || e.status === 403 || e.status === 401;
+        if (quiet && !notFound) return;
         setState({
           kind: 'error',
           notFound,
           message: notFound ? "This comic isn't published, or its creator made it private." : e.message || 'Couldn’t load this comic. Check your connection and try again.'
         });
+      } finally {
+        if (controller === abortRef.current) abortRef.current = null;
       }
     },
     [projectId]
@@ -796,6 +804,13 @@ const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: Publ
     void load(true);
   }, [load]);
 
+  const [expiryRevision, setExpiryRevision] = useState(0);
+  const links = useMemo(() => state.kind === 'ready' ? state.urls : {}, [state]);
+  usePrivateUrlRenewal(links, () => void load(true), () => setExpiryRevision((n) => n + 1));
+  const displayed = useMemo(() => Object.fromEntries(Object.entries(links)
+    .filter(([path, entry]) => !isPrivatePath(path) || entry.expiresAt > Date.now())
+    .map(([path, entry]) => [path, entry.url])), [links, expiryRevision]);
+
   const status: Status = state.kind === 'loading' ? 'loading' : state.kind === 'ready' ? 'ready' : state.notFound ? 'not_found' : 'error';
   return (
     <ReaderShell
@@ -804,7 +819,7 @@ const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: Publ
       errorMessage={state.kind === 'error' ? state.message : null}
       onRetry={() => void load()}
       doc={state.kind === 'ready' ? state.doc : null}
-      urls={state.kind === 'ready' ? state.urls : null}
+      urls={state.kind === 'ready' ? displayed : null}
       onImageError={onImageError}
       boot={null}
       embed={false}
@@ -823,7 +838,7 @@ export const PublicComicReader: React.FC<PublicComicReaderProps> = ({ source, pr
   if (resolved.kind === 'slug') {
     return <SlugReader key={`${resolved.slug}:${!!resolved.embed}`} slug={resolved.slug} embed={!!resolved.embed} isOwner={isOwner} identityReady={identityReady} libraryReaderId={libraryReaderId} start={startFromUrl} onClose={onClose} />;
   }
-  return <ProjectReader projectId={resolved.projectId} isOwner={isOwner} start={startFromUrl} onClose={onClose} />;
+  return <ProjectReader key={resolved.projectId} projectId={resolved.projectId} isOwner={isOwner} start={startFromUrl} onClose={onClose} />;
 };
 
 export default PublicComicReader;

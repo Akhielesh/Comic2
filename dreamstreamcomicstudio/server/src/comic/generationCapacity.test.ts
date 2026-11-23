@@ -33,10 +33,12 @@ describe('per-instance creator-fair generation admission', () => {
     const queue = new GenerationQueue(1, 1);
     const gate = latch();
     const running = queue.run('a', undefined, () => gate.promise);
+    expect(queue.busy).toBe(true);
     const order: string[] = [];
     const work = ['a1', 'a2', 'b1', 'b2', 'c1'].map(label => queue.run(label[0], undefined, async () => { order.push(label); }));
     gate.release();
     await Promise.all([running, ...work]);
+    expect(queue.busy).toBe(false);
     expect(order).toEqual(['a1', 'b1', 'c1', 'a2', 'b2']);
   });
 

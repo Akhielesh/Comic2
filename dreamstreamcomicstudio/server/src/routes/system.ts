@@ -6,12 +6,14 @@ import { getMissingRequiredEnvVars, STRICT_ENV_VALIDATION } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
+import { collectAssetPaths } from '../../../shared/comic/doc.js';
+import { blockedAssetPaths } from '../comic/ownerAssetVisibility.js';
 import { sanitizeImagePath } from '../../../shared/comic/imagePaths.js';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
-import { projectHasComicDoc } from '../comic/store.js';
-import { bucketForPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
+import { projectHasComicDoc, createSupabaseDocStore } from '../comic/store.js';
+import { bucketForPath, isPrivateDraftPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
 import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, showsIn, shownPathsOf } from './publicReaderPaths.js';
 import { BUILD_INFO } from '../buildInfo.js';
 
@@ -258,6 +260,13 @@ const canAccessImagePath = async (
   // Private lanes (…/ref/… reference photos, wherever the project id is a UUID or not) are
   // owner-only, decided by the path's own namespace — no project, share or public flag can
   // widen them.
+  if (isPrivateDraftPath(imagePath)) {
+    const owner = parseProjectScopedPath(imagePath);
+    if (!owner || !requesterId || requesterId !== owner.ownerId) return denied(requesterId);
+    const doc = await createSupabaseDocStore({ admin: () => supabaseAdmin }).load(owner.projectId, requesterId);
+    return doc && collectAssetPaths(doc).includes(imagePath) && !blockedAssetPaths(doc).has(imagePath)
+      ? { allowed: true } : denied(requesterId);
+  }
   if (isPrivatePath(imagePath)) {
     return requesterId && imagePath.startsWith(`u/${requesterId}/`) ? { allowed: true } : denied(requesterId);
   }
@@ -457,7 +466,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
 
     if (error || !data?.signedUrl) {
       const fallbackPath = buildLegacyFallbackPath(imagePath);
-      if (!fallbackPath) {
+      if (!fallbackPath || isPrivatePath(fallbackPath)) {
         // A 4xx from storage means the object can't be signed (missing/inaccessible)
         // — report that as 404, not the raw 400 Supabase returns. Only re-raise true
         // server-side failures so they surface as 500.

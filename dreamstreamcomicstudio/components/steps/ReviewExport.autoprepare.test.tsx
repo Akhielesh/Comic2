@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppStep, type ComicPanel, type ComicState, type Project } from '../../types';
 
@@ -143,5 +143,22 @@ describe('ReviewExport auto prepare', () => {
     expect(htmlArtifact?.responseText).toContain('<!DOCTYPE html>');
     expect(htmlArtifact?.responseText).toContain('data:image/png;base64,panel-image-1');
     expect(getImageDataUrlMock).toHaveBeenCalledWith('cover-image-1');
+  });
+});
+
+describe('Classic Review/Export artwork entry', () => {
+  it('opens from ordinary review with stored IDs and leaves generation and the project untouched', async () => {
+    const stored = ['a', 'b'].map(id => ({ ...panels[0], id, imageId:id, imageUrl:undefined, imageIdHistory:[] }));
+    const saved = { ...state, panels:stored, agentSettings:{ ...state.agentSettings!, outputTargets:['comic' as const] } };
+    const update = vi.fn();
+    render(<ReviewExport project={{...project,state:saved}} projectId={project.id} projectName={project.name} state={saved} panels={stored}
+      onUpdateProject={update} onUpdatePanel={update} onReturnToPreview={vi.fn()} />);
+    const entry = within(screen.getByRole('region', {name:'Panel artwork'}));
+    expect(entry.getByRole('button', {name:'Compare artwork'})).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(entry.getByRole('button', {name:'Compare artwork'}));
+    await waitFor(() => expect(entry.getByRole('status')).toHaveTextContent('0 of 2 panels were readable.'));
+    expect((await import('../../services/geminiService')).runContinuityAudit).not.toHaveBeenCalled();
+    expect((await import('../../services/generationManager')).regenerateSinglePanel).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

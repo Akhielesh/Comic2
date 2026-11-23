@@ -16,6 +16,7 @@
 // StudioAction — direct UI actions that bypass the LLM (button clicks: approve a
 // spend, pick a style, render pages, edit a page, manual text edits).
 
+import { currentDrawingCheck, sameDrawingCheck, legacyIssueId, legacyIssueDismissed, type DrawingCheck } from './reviewNotes.js';
 import {
   MAX_ARCHIVE,
   MAX_CONVERSATION,
@@ -297,7 +298,7 @@ export type DocOp =
   /** Book-wide consistency settings (null clears a key). */
   | { op: 'consistency'; patch: ConsistencyPatch }
   /** "Looks fine" on a finding of the page's current check (dismissed false/null brings it back). */
-  | { op: 'finding'; pageId: string; id: string; patch: { dismissed: boolean | null } }
+  | { op: 'finding'; pageId: string; id: string; check?: DrawingCheck; issueIndex?: number; patch: { dismissed: boolean | null } }
 
   // --- Pro Edit (master plan §2.3; PE-0): page motion. Free content edits (no spend, no asset). Each has an exact inverse
   //     in undo.ts. Known to every build from PE-0 on (an old tab that receives one refetches); client-patchable only once
@@ -1935,7 +1936,21 @@ const applyFinding = (doc: ComicDoc, op: Extract<DocOp, { op: 'finding' }>): Com
   const page = findPageById(doc, op.pageId);
   const qc = page?.render.qc;
   const findings = qc?.findings;
-  if (!page || !qc || !Array.isArray(findings) || !isObject(op.patch)) return doc;
+  if (!page || !qc || !isObject(op.patch) || (op.check && !sameDrawingCheck(op.check, currentDrawingCheck(page)))) return doc;
+  if (op.issueIndex !== undefined) {
+    const index = op.issueIndex;
+    const issue = qc.issues?.[index];
+    if (!op.check || !Number.isInteger(index) || index < 0 || index >= 32 || typeof issue !== 'string' || legacyIssueId(issue, index) !== op.id) return doc;
+    const dismissed = op.patch.dismissed === true;
+    if (legacyIssueDismissed(qc, op.check.path, index) === dismissed) return doc;
+    const notes = sameDrawingCheck(qc.legacyReview, op.check) ? qc.legacyReview!.notes.filter(n => n.index !== index) : [];
+    if (dismissed) notes.push({ index, text: issue });
+    const nextQc = { ...qc };
+    if (notes.length) nextQc.legacyReview = { ...op.check, notes };
+    else delete nextQc.legacyReview;
+    return setPage(doc, { ...page, render: { ...page.render, qc: nextQc } });
+  }
+  if (!Array.isArray(findings)) return doc;
   const idx = findings.findIndex((f) => f.id === op.id);
   if (idx < 0) return doc;
   const dismissed = op.patch.dismissed === true;

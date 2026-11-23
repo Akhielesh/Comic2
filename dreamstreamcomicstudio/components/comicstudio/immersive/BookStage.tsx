@@ -8,7 +8,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import type { ReaderItem } from '../reader/readerModel';
+import { isWithheld, type ReaderItem } from '../reader/readerModel';
 import { cubicBezier, decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
 import { cameraDuration, IDENTITY_CAMERA, type Camera } from './guidedModel';
@@ -21,7 +21,7 @@ import type { ReaderEvent, ReaderState } from './readerMachine';
 import { gutterFor, ReaderSlot, slotImageSource, slotStandIn, type SlotImage, type SlotRefs } from './ReaderSlot';
 import { contentKey, LAYER_Z, mountWindow, planTurn, roleOf, type TurnPlan, type TurnStyle } from './turnPlan';
 import { useCameraAnimator } from './GuidedCamera';
-import { holdUntilDecoded, pageImageCache, useCachedImage, pickVariant } from './pageImageCache';
+import { availableCachedPath, holdUntilDecoded, pageImageCache, useCachedImage, pickVariant } from './pageImageCache';
 import { READER_TOKEN_DEFAULTS, readReaderTokens, type ReaderMotionTokens } from './readerTokens';
 import type { WidthClass } from '../mobile/formFactor';
 
@@ -975,8 +975,8 @@ function useSlotShowThrough(plan: TurnPlan | null, items: ReaderItem[], img: Omi
   const c = plan?.backExtra === 'paper' ? plan.frontContent : undefined;
   const item = c && c.kind === 'item' ? items[c.index] : undefined;
   const pick = item ? pickVariant(item.asset, W, { dpr: img.dpr, saveData: img.saveData }) : undefined;
-  const cached = useCachedImage(pick?.path, undefined, 'next');
-  const orig = useCachedImage(item?.asset.path, undefined, 'next');
+  const cached = useCachedImage(item && !isWithheld(item) ? availableCachedPath(pick?.path, img.urlFor) : undefined, undefined, 'next');
+  const orig = useCachedImage(item && !isWithheld(item) ? availableCachedPath(item.asset.path, img.urlFor) : undefined, undefined, 'next');
   const src = cached.src || orig.src;
   return { src, box: undefined as { x: number; y: number; w: number; h: number } | undefined };
 }

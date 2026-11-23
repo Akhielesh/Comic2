@@ -504,7 +504,7 @@ export interface ContinuityAnchor {
   pending?: true;
 }
 
-const drawnNow = (p: Page): boolean => p.render.status === 'ready' && !!p.render.asset?.path && visualReferenceQcAllows(p.render.qc) && canServeToOwner(p.render.asset);
+const drawnNow = (p: Page): boolean => p.render.status === 'ready' && !!p.render.asset?.path && visualReferenceQcAllows(p.render.qc, false, p.render.asset?.path) && canServeToOwner(p.render.asset);
 
 /**
  * The page whose drawing a page job attaches for continuity. With a ledger scene: the page right before, when it is in

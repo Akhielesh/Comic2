@@ -198,11 +198,8 @@ describe('backStack (the back gesture closes the top layer first)', () => {
     expect(historyLayers()).toEqual([id]);
     expect(id).not.toBe('reader:c1#1');
     push.mockRestore();
-    await act(async () => {
-      window.history.back();
-      await new Promise((r) => setTimeout(r, 30));
-    });
-    expect(close).toHaveBeenCalledTimes(1); // the first Back closes it
+    window.history.back();
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     expect(window.history.state).toEqual(opening);
   });
 

@@ -18,13 +18,14 @@ import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { PriceBook } from '../../../shared/comic/modelLock.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
-import { createSupabaseAssetStore } from './assets.js';
+import { servablePaths } from './ownerAssetVisibility.js';
+import { createSupabaseAssetStore, pathOwner } from './assets.js';
 import { createBillingHooks } from './billing.js';
 import { createImageGenerator } from './imageClient.js';
 import { studioKeysFromRequest } from './keys.js';
 import { createLlmClient } from './llm.js';
 import { createPriceBook } from './models/index.js';
-import { SIGNED_TTL_SEC, isPrivatePath } from './storagePaths.js';
+import { SIGNED_TTL_SEC, isPrivatePath, isQuarantinePath, isPrivateDraftPath } from './storagePaths.js';
 import type {
   AssetStore,
   BillingHooks,
@@ -66,17 +67,24 @@ export interface StudioContextDeps {
  * quarantine) get the short private TTL, everything else the public TTL. A failure in one
  * lane never drops the other's URLs. Never throws.
  */
-export async function signAssetPaths(assets: AssetStore, paths: string[], log: Record<string, unknown> = {}): Promise<Record<string, string>> {
+export async function signAssetPaths(assets: AssetStore, paths: string[], scope: { userId: string; projectId: string; via?: string }): Promise<Record<string, string>> {
   const unique = [...new Set((paths || []).filter((p): p is string => typeof p === 'string' && !!p))];
   if (!unique.length) return {};
-  const priv = unique.filter(isPrivatePath);
+  const priv = unique.filter((path) => {
+    if (!isPrivatePath(path) || isQuarantinePath(path)) return false;
+    const owner = pathOwner(path);
+    if (!owner || owner.userId !== scope.userId) return false;
+    if (owner.projectId) return owner.projectId === scope.projectId;
+    // Without a database project ID the Director uses the owner's temporary lane.
+    return isPrivateDraftPath(path) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scope.projectId);
+  });
   const pub = unique.filter((p) => !isPrivatePath(p));
   const sign = async (group: string[], ttlSec?: number): Promise<Record<string, string>> => {
     if (!group.length) return {};
     try {
       return (await assets.signUrls(group, ttlSec ? { ttlSec } : undefined)) || {};
     } catch (err) {
-      logger.warn('comic_sign_urls_failed', { ...log, count: group.length, private: !!ttlSec, message: (err as Error)?.message });
+      logger.warn('comic_sign_urls_failed', { projectId: scope.projectId, via: scope.via, count: group.length, private: !!ttlSec, message: (err as Error)?.message });
       return {};
     }
   };
@@ -146,7 +154,7 @@ export function createStudioContext(args: {
 
     async publishUrls(paths: string[]) {
       // The asset is saved either way; on a signing failure the client re-signs on its next load.
-      const urls = await signAssetPaths(assets, paths, { projectId: session.projectId, via: 'publish' });
+      const urls = await signAssetPaths(assets, servablePaths(session.doc, paths), { projectId: session.projectId, userId: session.userId, via: 'publish' });
       if (Object.keys(urls).length) session.emit({ type: 'urls', urls });
     },
 

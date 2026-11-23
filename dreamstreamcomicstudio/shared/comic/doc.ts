@@ -207,6 +207,8 @@ export interface QcReport {
   /** 0..1 — overall confidence the render matches its spec. */
   score: number;
   issues: string[];
+  /** Creator decisions on the issue-list form of this exact image and check. Original observations remain intact. */
+  legacyReview?: { path: string; checkedAt: number; notes: { index: number; text: string }[] };
   /** Panel rectangles in reading order (page renders). */
   panelBoxes?: Box[];
   /** Per drawn panel: a measured rectangular frame, another shape, or unknown. Missing on older checks. */
@@ -2141,7 +2143,7 @@ export const normalizeBalloonShip2 = (b: Balloon): Balloon => {
 };
 
 const hasShip2Meta = (v: unknown): boolean =>
-  isObject(v) && ('cuts' in v || 'parts' in v || 'anchorKeys' in v || (isObject(v.qc) && ('findings' in v.qc || 'checkV' in v.qc)));
+  isObject(v) && ('cuts' in v || 'parts' in v || 'anchorKeys' in v || (isObject(v.qc) && ('findings' in v.qc || 'checkV' in v.qc || 'legacyReview' in v.qc)));
 
 /** Normalize the Ship 2 VersionMeta keys of a render or version IN PLACE (the caller passes a fresh copy). */
 const normalizeShip2Meta = <T extends VersionMeta>(m: T): T => {
@@ -2160,12 +2162,20 @@ const normalizeShip2Meta = <T extends VersionMeta>(m: T): T => {
     if (keys) m.anchorKeys = keys;
     else delete m.anchorKeys;
   }
-  if (isObject(m.qc) && ('findings' in m.qc || 'checkV' in m.qc)) {
+  if (isObject(m.qc) && ('findings' in m.qc || 'checkV' in m.qc || 'legacyReview' in m.qc)) {
     const qc: QcReport = { ...m.qc };
     if ('findings' in qc) {
       const findings = normalizeConsistencyFindings(qc.findings);
       if (findings) qc.findings = findings;
       else delete qc.findings;
+    }
+    if ('legacyReview' in qc) {
+      const review = qc.legacyReview;
+      const notes = Array.isArray(review?.notes) ? review.notes.filter(n => Number.isInteger(n?.index) && n.index >= 0 &&
+        n.index < 32 && typeof n.text === 'string' && n.text.length <= 1200 && qc.issues?.[n.index] === n.text).slice(0, 32) : [];
+      if (notes.length && typeof review?.path === 'string' && review.path.length <= 512 && review.checkedAt === qc.checkedAt) {
+        qc.legacyReview = { path: review.path, checkedAt: review.checkedAt, notes: notes.map(({ index, text }) => ({ index, text })) };
+      } else delete qc.legacyReview;
     }
     if ('checkV' in qc && qc.checkV !== 2) delete qc.checkV;
     m.qc = qc;

@@ -48,6 +48,17 @@ describe('owner Models examples', () => {
     expect(result![0]).not.toHaveProperty('path');
   });
 
+  it('signs the exact private generated source and its own size variant, while rejecting mixed projects or borrowed variants', async () => {
+    const source = path.replace('example', 'draft-v1-12345678-1234-4000-8000-123456789abc');
+    const small = source.replace('.webp', '_w480.webp');
+    const asset = { ...render().asset, path: source, variants: [{ path: small, w: 480, h: 480 }] };
+    const candidates = (current: typeof asset) => ownerShowcaseCandidates([row({ cover: { render: render({ asset: current }) } })], OWNER);
+    expect(candidates(asset)[0]).toMatchObject({ path: source, thumbnailPath: small });
+    expect(candidates({ ...asset, path: source.replace(PROJECT, OWNER) })).toEqual([]);
+    expect(candidates({ ...asset, variants: [{ path: small.replace('123456789abc', '123456789abd'), w: 480, h: 480 }] })[0].thumbnailPath).toBe(source);
+    expect(candidates({ ...asset, path: small })).toEqual([]);
+  });
+
   it('reports an unavailable source when existing artwork could not be signed', async () => {
     expect(await readOwnerModelExamples(OWNER, { docsForUser: async () => [row()], signUrls: async () => ({}) })).toBeNull();
   });

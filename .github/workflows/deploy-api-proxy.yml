@@ -62,6 +62,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          # The first upgrade verifies the actual deployed commit predates readiness reporting.
+          fetch-depth: 0
+          filter: blob:none
 
       # wrangler 4.98+ requires Node >= 22.
       - name: Setup Node
@@ -85,6 +88,13 @@ jobs:
         working-directory: dreamstreamcomicstudio/api-proxy
         run: node scripts/prepareDeploy.mjs
 
+      - name: Test the release readiness gate
+        run: node --test dreamstreamcomicstudio/api-proxy/scripts/waitForReleaseReadiness.node-test.mjs
+
+      - name: Wait for creator generation to finish
+        timeout-minutes: 32
+        run: node dreamstreamcomicstudio/api-proxy/scripts/waitForReleaseReadiness.mjs
+
       - name: Deploy with wrangler (builds + pushes the backend image)
         working-directory: dreamstreamcomicstudio/api-proxy
         env:
@@ -101,7 +111,7 @@ jobs:
           for attempt in $(seq 1 30); do
             health=$(curl --fail -s --max-time 15 https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health || true)
             version=$(curl --fail -s --max-time 15 https://dreamstream-api.akhieleshsrirangam.workers.dev/api/system/version || true)
-            if HEALTH_RESPONSE="$health" VERSION_RESPONSE="$version" node -e 'try { const h = JSON.parse(process.env.HEALTH_RESPONSE); const v = JSON.parse(process.env.VERSION_RESPONSE); process.exit(h.status === "ok" && v.gitSha === process.env.GITHUB_SHA ? 0 : 1); } catch { process.exit(1); }'; then
+            if HEALTH_RESPONSE="$health" VERSION_RESPONSE="$version" node -e 'try { const h = JSON.parse(process.env.HEALTH_RESPONSE); const v = JSON.parse(process.env.VERSION_RESPONSE); process.exit(h.status === "ok" && ["idle", "busy"].includes(h.releaseReadiness) && v.gitSha === process.env.GITHUB_SHA ? 0 : 1); } catch { process.exit(1); }'; then
               echo "Backend healthy at expected commit ${GITHUB_SHA}."
               break
             fi

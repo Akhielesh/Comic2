@@ -65,7 +65,7 @@ export function scheduleRun(doc: ComicDoc, pageIds: readonly string[], opts: Sch
 }
 
 const drawnForReference = (p: Page): boolean => {
-  if (p.render.status !== 'ready' || !p.render.asset?.path || !visualReferenceQcAllows(p.render.qc)) return false;
+  if (p.render.status !== 'ready' || !p.render.asset?.path || !visualReferenceQcAllows(p.render.qc, false, p.render.asset?.path)) return false;
   const safety = safetyStatusOf(p.render.asset.safety, PLATFORM_CEILING);
   return safety === 'pass' || safety === 'unchecked';
 };

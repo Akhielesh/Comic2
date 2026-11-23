@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { currentDrawingCheck } from '../reviewNotes.js';
 import type { ComicDoc, Page } from '../doc.js';
 import type { LetterPlan } from '../lettering/layout.js';
 import { apply, baseDoc, drawnPage, line, pageOf, panel, T0, undrawnPage, withPages } from './__fixtures__/editorDoc.js';
@@ -159,7 +160,7 @@ describe('page checks on fixtures', () => {
     const checks = pageChecks(doc, page);
     expect(byId(checks, 'speakers')).toMatchObject({ state: 'look', detail: "Ravi speaks in panel 1 but isn't drawn" });
     expect(byId(checks, 'characters')).toMatchObject({ state: 'look', detail: "Panel 2: Maya's raincoat is blue here" });
-    expect(byId(checks, 'characters').fixes[0]).toEqual({ key: 'looks_fine', label: 'Looks fine', free: true, findingId: 'f1', ops: [{ op: 'finding', pageId: 'pg_a', id: 'f1', patch: { dismissed: true } }] });
+    expect(byId(checks, 'characters').fixes[0]).toEqual({ key: 'looks_fine', label: 'Looks fine', free: true, findingId: 'f1', ops: [{ op: 'finding', pageId: 'pg_a', id: 'f1', check: currentDrawingCheck(page), patch: { dismissed: true } }] });
     expect(byId(checks, 'plan').state).toBe('ok');
     expect(byId(checks, 'empty').state).toBe('ok');
   });

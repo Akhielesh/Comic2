@@ -11,8 +11,8 @@
 //  - paths are immutable (uuid names, upsert:false), so reference data URLs and signed
 //    URLs are safely cached in-process (bounded) — page N+1 reuses page N without a
 //    round-trip to Storage,
-//  - two buckets (storagePaths.ts): generated art in the public, non-listable `comic-assets`;
-//    reference photos and quarantine in the PRIVATE `comic-private` (5-minute signed URLs),
+//  - two buckets (storagePaths.ts): older art, publication copies and the library remain in public `comic-assets`;
+//    new Director drafts, reference photos and quarantine in PRIVATE `comic-private` (5-minute signed URLs),
 //  - one container (1 GiB, 512 MB heap): every sharp pipeline runs through the 3-slot gate in
 //    imageMeasure.ts and decodes with a 50 MP cap; variants are best-effort and never fail a save.
 
@@ -32,6 +32,8 @@ import {
   buildRefPath,
   isLibraryPath,
   isPrivatePath,
+  isReferencePath,
+  PRIVATE_DRAFT_PREFIX,
   isPublicationPath,
   isQuarantinePath
 } from './storagePaths.js';
@@ -754,9 +756,9 @@ const withinBudget = async <T>(work: Promise<T>, ms: number, fallback: T): Promi
 // ── Supabase store ───────────────────────────────────────────────────────────
 
 export interface SupabaseAssetStoreOptions {
-  /** Public bucket (generated art, publication copies, library). Default `comic-assets`. */
+  /** Public bucket (older art, publication copies, library). Default `comic-assets`. */
   bucket?: string;
-  /** Private bucket (refs, quarantine). Default `comic-private`. */
+  /** Private bucket (new Director drafts, refs, quarantine). Default `comic-private`. */
   privateBucket?: string;
   /** Admin client factory (tests inject a fake). */
   admin?: () => SupabaseClient;
@@ -799,7 +801,13 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
   const publicBucket = opts.bucket || PUBLIC_BUCKET;
   const privateBucket = opts.privateBucket || PRIVATE_BUCKET;
   const admin = opts.admin || getSupabaseAdmin;
-  const bucketOf = (path: string) => (isPrivatePath(path) ? privateBucket : publicBucket);
+  const bucketOf = (path: string) => {
+    if (!isPrivatePath(path)) return publicBucket;
+    if (privateBucket === publicBucket) {
+      throw new StudioError('NOT_AVAILABLE', 'Private artwork storage is unavailable.', { status: 503 });
+    }
+    return privateBucket;
+  };
   const cacheKey = (path: string) => `${bucketOf(path)}:${path}`;
 
   const uploadOnce = async (path: string, data: Buffer, contentType: string, cacheControl: string, upsert: boolean) => {
@@ -818,7 +826,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     o: { contentType?: string; cacheControl?: string; upsert?: boolean } = {}
   ): Promise<'stored' | 'exists'> => {
     const contentType = o.contentType || 'image/webp';
-    const cacheControl = o.cacheControl || '31536000';
+    const cacheControl = isPrivatePath(path) ? '0' : o.cacheControl || '31536000';
     const upsert = o.upsert === true;
     try {
       await uploadOnce(path, data, contentType, cacheControl, upsert);
@@ -1031,7 +1039,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
   }): Promise<AssetRef> => {
     if (!args.userId) throw new StudioError('FORBIDDEN', 'Sign in to save images.', { status: 401 });
     const id = crypto.randomUUID();
-    const path = buildAssetPath(args.userId, args.projectId, id);
+    const path = buildAssetPath(args.userId, args.projectId, args.source === 'generated' ? PRIVATE_DRAFT_PREFIX + id : id);
     await upload(path, args.encoded.data);
     await register({
       userId: args.userId,
@@ -1075,7 +1083,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
         cause: err
       });
     }
-    if (lossless && encoded.data.byteLength > MAX_GENERATED_BYTES) {
+    if (encoded.data.byteLength > MAX_GENERATED_BYTES) {
       throw new StudioError('NO_IMAGE', 'The finished image is too large to save.', { status: 502, retryable: true });
     }
     return store({
@@ -1097,7 +1105,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     userId: string;
     projectId: string;
     encoded: EncodedImage;
-    privateLane: boolean;
+    reference: boolean;
     registrySource: string;
   }): Promise<{ path: string; variants: AssetVariant[] }> => {
     if (!args.userId) throw new StudioError('FORBIDDEN', 'Sign in to save images.', { status: 401 });
@@ -1105,7 +1113,8 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       throw new StudioError('BAD_REQUEST', 'That image is empty.', { status: 400 });
     }
     const id = crypto.randomUUID();
-    const path = args.privateLane ? buildRefPath(args.userId, args.projectId, id) : buildAssetPath(args.userId, args.projectId, id);
+    const path = args.reference ? buildRefPath(args.userId, args.projectId, id) :
+      buildAssetPath(args.userId, args.projectId, PRIVATE_DRAFT_PREFIX + id);
     await upload(path, args.encoded.buffer);
     await register({
       userId: args.userId,
@@ -1193,7 +1202,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
   // ── v5 (contract §12.5) ──
 
   const saveRef: AssetStore['saveRef'] = async ({ userId, projectId, encoded }) => {
-    const { path, variants } = await storeEncoded({ userId, projectId, encoded, privateLane: true, registrySource: 'upload' });
+    const { path, variants } = await storeEncoded({ userId, projectId, encoded, reference: true, registrySource: 'upload' });
     const ref: RefAsset = { path, source: 'upload', at: Date.now(), w: encoded.w, h: encoded.h };
     if (variants.length) ref.variants = variants;
     return ref;
@@ -1227,7 +1236,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     assertDerivableSource(path, userId);
     const { buffer } = await readBytes(path);
     const { encoded, crop, srcW, srcH } = await cropImage(buffer, { box, aspect });
-    const stored = await storeEncoded({ userId, projectId, encoded, privateLane: true, registrySource: 'derived' });
+    const stored = await storeEncoded({ userId, projectId, encoded, reference: true, registrySource: 'derived' });
     const ref: RefAsset = {
       path: stored.path,
       source: 'derived',
@@ -1246,8 +1255,8 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     assertDerivableSource(path, userId);
     const { buffer } = await readBytes(path);
     const encoded = await deriveFitToAspect(buffer, aspect as AspectRatio, mode);
-    // A reshaped reference photo stays private; everything else lands in the art lane.
-    const stored = await storeEncoded({ userId, projectId, encoded, privateLane: isPrivatePath(path), registrySource: 'derived' });
+    // Preserve reference lineage; fitted artwork is a new private draft.
+    const stored = await storeEncoded({ userId, projectId, encoded, reference: isReferencePath(path), registrySource: 'derived' });
     const ref: AssetRef = { path: stored.path, source: 'derived', at: Date.now(), w: encoded.w, h: encoded.h, derivedFrom: path };
     if (stored.variants.length) ref.variants = stored.variants;
     return ref;
@@ -1343,7 +1352,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
    *  - guard: the source is a q/ object and the destination is exactly the owner path it was taken
    *    from (quarantinePathFor); anything else is a 400 and nothing moves,
    *  - copy, then delete: the bytes go back to the original path in that path's own bucket (a
-   *    reference photo returns to the PRIVATE bucket, art to the public one — no ACL ever changes, no
+   *    ref or new draft goes back to the private bucket, older art to its original bucket; no
    *    URL is minted here); only after the copy landed is the q/ object deleted, which also marks its
    *    hold row deleted,
    *  - idempotent: a repeat after a finished restore (the hold already gone, the original back)
@@ -1541,9 +1550,11 @@ export function createMemoryAssetStore(): MemoryAssetStore {
   const signedTtl: Record<string, number> = {};
   let counter = 0;
 
-  const nextPath = (userId: string, projectId: string) => {
+  const nextPath = (userId: string, projectId: string, generated = true) => {
     counter += 1;
-    return `u/${sanitizeSegment(userId || 'anon')}/p/${sanitizeSegment(projectId || 'none')}/img/mem-${counter}.webp`;
+    const id = `00000000-0000-4000-8000-${counter.toString(16).padStart(12, '0')}`;
+    const name = generated ? PRIVATE_DRAFT_PREFIX + id : `mem-${counter}`;
+    return `u/${sanitizeSegment(userId || 'anon')}/p/${sanitizeSegment(projectId || 'none')}/img/${name}.webp`;
   };
   const bytesOf = (path: string): Buffer => {
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
@@ -1587,7 +1598,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
       if (buffer.byteLength > MAX_UPLOAD_BYTES) {
         throw new StudioError('BAD_REQUEST', 'That image is larger than 10 MB. Please upload a smaller one.', { status: 413 });
       }
-      const path = nextPath(userId, projectId);
+      const path = nextPath(userId, projectId, false);
       files.set(path, dataUrl);
       return { path, source: 'upload', at: Date.now() };
     },
@@ -1647,7 +1658,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
       assertDerivableSource(path, userId);
       const encoded = await deriveFitToAspect(bytesOf(path), aspect, mode);
       counter += 1;
-      const out = isPrivatePath(path) ? buildRefPath(userId, projectId, `mem-fit-${counter}`) : nextPath(userId, projectId);
+      const out = isReferencePath(path) ? buildRefPath(userId, projectId, `mem-fit-${counter}`) : nextPath(userId, projectId);
       const variants = await storeBuffer(out, encoded.buffer, encoded.w);
       return { path: out, source: 'derived', at: Date.now(), w: encoded.w, h: encoded.h, derivedFrom: path, ...(variants.length ? { variants } : {}) };
     },

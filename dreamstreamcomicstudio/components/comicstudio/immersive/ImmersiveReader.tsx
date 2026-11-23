@@ -926,7 +926,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           onFocusWithin={() => pokeHud(true)}
           scrubber={
             state.layout === 'scroll' ? null : (
-              <PageScrubber views={views} items={items} view={view} rtl={rtl} labelOf={labelOf} onGoto={(v) => dispatch({ type: 'GOTO', view: v })} onActivity={() => pokeHud(true)} />
+              <PageScrubber urlFor={urlFor} views={views} items={items} view={view} rtl={rtl} labelOf={labelOf} onGoto={(v) => dispatch({ type: 'GOTO', view: v })} onActivity={() => pokeHud(true)} />
             )
           }
         />

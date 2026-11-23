@@ -41,5 +41,5 @@ export const withoutAssets = (doc: ComicDoc, missing: ReadonlySet<string>): Comi
 /** The page before this one that a page job attaches for continuity: the nearest earlier page drawn and servable. */
 export const nearestReadyBefore = (doc: ComicDoc, page: Page): Page | undefined =>
   doc.pages
-    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && visualReferenceQcAllows(p.render.qc) && canServeToOwner(p.render.asset))
+    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && visualReferenceQcAllows(p.render.qc, false, p.render.asset?.path) && canServeToOwner(p.render.asset))
     .sort((a, b) => b.n - a.n)[0];

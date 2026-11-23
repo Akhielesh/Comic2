@@ -4,8 +4,7 @@ import type { AssetRef } from '../../../shared/comic/doc.js';
 import { getImageModel } from '../../../shared/comic/models.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { MODEL_SHOWCASE_IDS, type ModelShowcaseExample } from '../../../shared/modelShowcase.js';
-import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
-import { isPrivatePath } from '../comic/storagePaths.js';
+import { createSupabaseAssetStore, isProjectPageArt, variantPathFor } from '../comic/assets.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 
 export const OWNER_SHOWCASE_DOC_LIMIT = 20;
@@ -50,9 +49,9 @@ export function ownerShowcaseCandidates(rows: OwnerShowcaseDocRow[], userId: str
       if (render?.status !== 'ready' || !asset || asset.source !== 'generated' || typeof asset.model !== 'string' || !selected.has(asset.model)) continue;
       const spec = getImageModel(asset.model);
       const path = asset.path;
-      if (!spec || typeof path !== 'string' || !isOwnedAssetPath(path, userId) || isPrivatePath(path) || seen.has(path)) continue;
+      if (!spec || typeof path !== 'string' || !isProjectPageArt(path, userId, row.project_id) || /_w(?:480|1080)\.webp$/.test(path) || seen.has(path)) continue;
       if (!canServeToOwner(asset as unknown as AssetRef) || !positive(asset.w) || !positive(asset.h) || !positive(asset.at)) continue;
-      const variants = array(asset.variants, 4).map(record).filter((v) => v && typeof v.path === 'string' && isOwnedAssetPath(v.path, userId) && !isPrivatePath(v.path));
+      const variants = array(asset.variants, 4).map(record).filter((v) => v && (v.w === 480 || v.w === 1080) && v.path === variantPathFor(path, v.w));
       const thumbnailPath = variants.find((v) => positive(v.w) && v.w >= 480)?.path as string | undefined;
       seen.add(path);
       candidates.push({

@@ -1191,7 +1191,7 @@ export const planPageReferences = (
   const previousAsset = previousPage?.render.asset;
   const previousSafety = safetyStatusOf(previousAsset?.safety, effective);
   const skipped = new Set(doc.consistency?.skip ?? []);
-  const previousAllowed = previousPage && visualReferenceQcAllows(previousPage.render.qc) && !skipped.has('prev:' + previousPage.id) &&
+  const previousAllowed = previousPage && visualReferenceQcAllows(previousPage.render.qc, false, previousPage.render.asset?.path) && !skipped.has('prev:' + previousPage.id) &&
     (!opts.ownsPageArt || (previousAsset?.path && opts.ownsPageArt(previousAsset.path) && !isPageStale(doc, previousPage))) &&
     !skippedPageSubjects(doc, previousPage, skipped) && !conflictsWithPageChange(doc, previousPage, page);
   const continues = !!previousAllowed && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
@@ -2319,7 +2319,7 @@ export const coverTitleBand = (doc: ComicDoc): { side: 'top' | 'bottom'; pct: nu
 const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating, owns?: (path: string) => boolean): PlannedReference[] => {
   if (budget.objects <= 0 || budget.total <= 0) return [];
   const ready = doc.pages
-    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc) && servable(p.render.asset) && (!owns || owns(p.render.asset.path)) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
+    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc, false, p.render.asset?.path) && servable(p.render.asset) && (!owns || owns(p.render.asset.path)) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
     .sort((a, b) => a.n - b.n);
   const page = ready.find((p) => !isPageStale(doc, p)) || ready[0];
   if (!page?.render.asset) return [];

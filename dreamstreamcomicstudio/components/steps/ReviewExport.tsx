@@ -2,6 +2,7 @@ import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { Activity, Check, Download, Edit2, RefreshCw, History, Share2, FileCode, ArrowLeftRight, Terminal } from 'lucide-react';
 import { AgentOutputTarget, ComicExportTarget, ComicPanel, ComicState, ProjectReport, Project } from '../../types';
 import { PanelDialogue } from '../PanelDialogue';
+import { ClassicPanelComparison } from './ClassicPanelComparison';
 import { regenerateSinglePanel } from '../../services/generationManager';
 import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../ds/Button';
@@ -813,6 +814,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         minHeightClassName="min-h-[760px]"
       >
         <div className="space-y-5 p-5">
+          <ClassicPanelComparison key={projectId} panels={panels} />
           <div className={cn('max-h-[65vh] overflow-y-auto bg-[var(--ds-well-strong)] p-3 custom-scrollbar sm:p-5', RADIUS_PANEL, HAIRLINE)}>
             {/* The page itself is comic paper (white, captured into the PDF); only its frame is chrome. */}
             <div id="comic-render-area" className={cn('mx-auto max-w-5xl bg-white p-4 sm:p-6', RADIUS_PANEL, SHADOW_SOFT)}>

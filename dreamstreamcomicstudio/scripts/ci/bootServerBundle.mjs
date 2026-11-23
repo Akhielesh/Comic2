@@ -251,7 +251,7 @@ export async function main(argv = process.argv.slice(2)) {
       try {
         const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) });
         const body = await res.json().catch(() => null);
-        if (res.ok && body?.status === 'ok') {
+        if (res.ok && body?.status === 'ok' && body.releaseReadiness === 'idle') {
           health = body;
           break;
         }

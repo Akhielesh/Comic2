@@ -959,6 +959,9 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
  * cached session. flush() never throws; the outer race keeps a hung store from blocking exit.
  */
 export const hasActiveStudioWork = (): boolean => [...sessions.values()].some(session => session.busy);
+/** A completed render still needs its final database save before a planned replacement. */
+export const studioSessionsReadyForRelease = (): boolean =>
+  [...sessions.values()].every(session => !session.busy && session.persisted);
 
 export const drainStudioSessions = async (timeoutMs = 25_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;

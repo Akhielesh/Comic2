@@ -74,7 +74,7 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 |---|---|
 | Active project | **"Comic"** ref `bdjfmxfmhqhzvgrhbbzm`, region `us-west-2`, `ACTIVE_HEALTHY` |
 | Tables | ~90 (public schema), all RLS-enabled. Heaviest rows: `token_ledger_entries` 2392, `artifacts` 1000, `connector_items` 987, `image_assets` 602, `model_catalog_cache` 479, `provider_usage_log` 454. |
-| Comic storage | `comic-assets` holds generated artwork. `comic-private` holds private references and quarantine. Both are included in the artwork backup. |
+| Comic storage | New Director originals, previews, reference uploads and quarantine are stored in `comic-private`. Earlier generated art, published copies and the shared library reside in `comic-assets`. Both buckets are backed up. |
 | Artwork backup source | `comic-artwork-backup-source` requires a project JWT and a scoped reader secret. It signs short-lived reads in the two Comic buckets. |
 | Other projects | 9 more, all `INACTIVE` (free-tier auto-pause) — D&D, NovaPDF, Desk, Data Profiler, Global Financial, Sudoku, Budget, **AtlasD**, Comic. |
 
@@ -195,6 +195,8 @@ follows a path on the same site or, with the switch on, Stream Studio's address
 
 ## 3. The backend — Cloudflare Container (since 2026-10-19)
 
+- Before a planned API deployment, CI polls the existing no-store health endpoint every 15 seconds. It requires a minute of consecutive idle observations on the same running build. The aggregate covers active Director sessions, unsaved Studio edits and renders, and active or queued image and text generation. It exposes neither user identities nor project counts. A busy or unverifiable backend for 30 minutes stops the workflow before deployment. Retry after current work finishes. On first adoption, CI allows a running build without the field only if its commit is a verified ancestor predating the readiness gate.
+- This check observes current work. New work may arrive between the last check and Cloudflare’s container handoff. Unexpected process termination can also interrupt a batch. The creator can retry the identified unfinished pages in the render card. CI never resubmits an image request.
 - **Image** (`Dockerfile.cloudflare`, built and pushed by `wrangler deploy` in
   `.github/workflows/deploy-api-proxy.yml`): the Express server is **bundled with esbuild into
   one `server.mjs`**; only `sharp`, `pyodide` and `sql.js` (native / WASM assets) are installed

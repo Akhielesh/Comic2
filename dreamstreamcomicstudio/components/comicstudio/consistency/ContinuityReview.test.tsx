@@ -133,3 +133,39 @@ it('keeps a rejected edit visible and never tells the creator it was saved', asy
   expect(screen.queryByText('Correction saved to this comic.')).toBeNull();
   expect(studio.act).not.toHaveBeenCalled();
 });
+
+
+it('dismisses and restores a saved legacy observation on the same drawing without starting a render', async () => {
+  const doc = makeSampleDoc();
+  doc.pages[0].render.qc = { score: 0.86, checkedAt: 44, issues: ['The tower palette is wrong.'] };
+  const studio = makeFakeStudio({doc});
+  const view = (d: typeof doc) => <ContinuityReview studio={studio} doc={d} page={d.pages[0]} onClose={vi.fn()} />;
+  const {rerender} = render(view(doc));
+  const dismiss = screen.getByRole('button',{name:'Dismiss finding'});
+  expect(dismiss).toHaveAccessibleDescription('The tower palette is wrong.');
+  fireEvent.click(dismiss);
+  await screen.findByText('Finding dismissed for this drawing.');
+  let updated = applyOp(doc, studio.patch.mock.calls[0][0][0]);
+  rerender(view(updated));
+  fireEvent.click(screen.getByText('Dismissed findings (1)'));
+  const restore = screen.getByRole('button',{name:'Restore finding'});
+  expect(restore).toHaveAccessibleDescription('The tower palette is wrong.');
+  fireEvent.click(restore);
+  await screen.findByText('Finding restored for this drawing.');
+  updated = applyOp(updated, studio.patch.mock.calls[1][0][0]);
+  rerender(view(updated));
+  expect(screen.getByRole('button',{name:'Dismiss finding'})).toBeVisible();
+  expect(studio.act).not.toHaveBeenCalled();
+});
+
+it('keeps the finding visible after an unconfirmed dismissal', async () => {
+  const doc = makeSampleDoc();
+  doc.pages[0].render.qc = { score: 0.8, checkedAt: 3, issues: ['The shield shape is incorrect.'] };
+  const studio = makeFakeStudio({doc});
+  studio.patch.mockImplementation(async (_ops, options) => { options.onFailed(false); });
+  render(<ContinuityReview studio={studio} doc={doc} page={doc.pages[0]} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', {name:'Dismiss finding'}));
+  await screen.findByText(/change could not be confirmed/i);
+  expect(screen.getByRole('button',{name:'Dismiss finding'})).toBeVisible();
+  expect(screen.queryByRole('button',{name:'Restore finding'})).toBeNull();
+});

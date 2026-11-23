@@ -23,9 +23,11 @@ import {
   type PanelDirection,
   type Scene
 } from '../../../../shared/comic/doc.js';
+import { currentDrawingCheck, sameDrawingCheck, savedReviewNotes } from '../../../../shared/comic/reviewNotes.js';
+import { isProjectPageArt } from '../assets.js';
 import { SAFE_ID_RE, type ConsistencyPatch, type ContinuityPatch, type DocOp, type ScenePatch } from '../../../../shared/comic/ops.js';
 import { CONSISTENCY_LIMITS, PRO_PAGE_LIMITS } from '../../../../shared/comic/limits.js';
-import { PLATFORM_CEILING, softenAction, type ContentRating } from '../../../../shared/comic/safety.js';
+import { PLATFORM_CEILING, safetyStatusOf, softenAction, type ContentRating } from '../../../../shared/comic/safety.js';
 import type { OpSanitizer, SanitizeCtx } from '../extensions.js';
 import { StudioError } from '../types.js';
 import { enteredText } from './text.js';
@@ -353,18 +355,25 @@ const consistency: OpSanitizer<Op<'consistency'>> = {
 
 const finding: OpSanitizer<Op<'finding'>> = {
   op: 'finding',
-  sanitize(doc, op) {
+  sanitize(doc, op, ctx) {
     const page = pageOf(doc, op.pageId);
     const id = safeIdOf(op.id, 'check');
-    const findings = page.render.qc?.findings;
-    if (!Array.isArray(findings) || !findings.some((f) => f.id === id)) throw bad("That check isn't on this page's current drawing any more.");
+    const current = currentDrawingCheck(page);
+    const row = savedReviewNotes(doc, page).find(row => row.id === id && row.issueIndex === op.issueIndex);
+    if (!row || row.readOnly) throw bad("That check isn't on this page's current drawing any more.");
     if (!isObject(op.patch)) throw bad('Invalid check change.');
     // Only `dismissed` can change: a finding's text, kind and fix come from the server's check.
     const keys = Object.keys(op.patch).filter((k) => (op.patch as Record<string, unknown>)[k] !== undefined);
     if (keys.some((k) => k !== 'dismissed')) throw bad('Only “Looks fine” can change on a check.');
     const d = (op.patch as Record<string, unknown>).dismissed;
     if (d !== true && d !== false && d !== null) throw bad('Invalid check change.');
-    return { op: 'finding', pageId: page.id, id, patch: { dismissed: d as boolean } };
+    if (!current || !sameDrawingCheck(current, op.check)) {
+      throw new StudioError('CONFLICT', 'This drawing or its check changed. Reopen the current finding before saving.', { status: 409 });
+    }
+    if (!isProjectPageArt(current.path, ctx.userId, doc.id) || safetyStatusOf(page.render.asset?.safety, ctx.rating) === 'over_rating') {
+      throw bad('This drawing is unavailable for review.');
+    }
+    return { op: 'finding', pageId: page.id, id, check: current, ...(row.issueIndex !== undefined ? { issueIndex: row.issueIndex } : {}), patch: { dismissed: d as boolean | null } };
   }
 };
 

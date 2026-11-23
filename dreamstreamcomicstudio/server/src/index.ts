@@ -79,7 +79,8 @@ import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
 import { comicPublicRouter, comicRouter } from './routes/comic.js';
 import { mountComicOwnerRoutes, mountComicPublicRoutes, type ComicRateLimits } from './routes/comicMounts.js';
-import { drainStudioSessions, hasActiveStudioWork } from './comic/session.js';
+import { drainStudioSessions, studioSessionsReadyForRelease } from './comic/session.js';
+import { comicImageCapacity, comicTextCapacity } from './comic/generationCapacity.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
 
@@ -191,9 +192,10 @@ const comicRateLimits: ComicRateLimits = {
 };
 
 app.get('/api/health', (req, res) => {
+  const generationBusy = !studioSessionsReadyForRelease() || comicImageCapacity.busy || comicTextCapacity.busy;
   // The edge strips this header from all public traffic. A direct idle probe has no payload or side effects.
   if (req.method === 'HEAD' && req.get('X-Studio-Idle-Probe') === '1') {
-    return void res.set('Cache-Control', 'no-store').status(hasActiveStudioWork() ? 204 : 200).end();
+    return void res.set('Cache-Control', 'no-store').status(generationBusy ? 204 : 200).end();
   }
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
   // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
@@ -202,7 +204,8 @@ app.get('/api/health', (req, res) => {
   // fix deployed?" is answerable from outside without container logs.
   const build = BUILD_INFO.gitSha === 'unknown' ? undefined : BUILD_INFO.gitSha.slice(0, 12);
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: BUILD_INFO.buildTimestamp } : {}) });
+  res.json({ status: 'ok', releaseReadiness: generationBusy ? 'busy' : 'idle',
+    email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: BUILD_INFO.buildTimestamp } : {}) });
 });
 
 // Public routes
