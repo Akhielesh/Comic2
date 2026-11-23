@@ -18,7 +18,7 @@
     const packet = new Uint8Array(await response.arrayBuffer());
     const clear = await crypto.subtle.decrypt({name:'AES-GCM',iv:packet.slice(0,12),additionalData:new TextEncoder().encode('dreamstream-standard-studio-review-v1')}, key, packet.slice(12));
     const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', clear))].map(b => b.toString(16).padStart(2,'0')).join('');
-    if (digest !== 'fdd7ee06756739f8e385d568b0b32cecf565ee739a974bf806799aefd591d20f') throw new Error();
+    if (digest !== '2fabe1cecc73d20adcbf24aab14e7faadacb5a56a03b580ba936f7ddc6dc268c') throw new Error();
     const source = new TextDecoder('utf-8', {fatal:true}).decode(clear);
     document.open(); document.write(source); document.close();
   } catch { status.textContent = 'This review link could not be unlocked.'; }
