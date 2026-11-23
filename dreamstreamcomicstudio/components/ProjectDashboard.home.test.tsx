@@ -73,6 +73,14 @@ beforeEach(() => {
 });
 
 describe('ProjectDashboard in Comic Studio: the brand opens your comics', () => {
+  it('appends the selected public format to an existing private idea without creating or sending', () => {
+    sessionStorage.setItem('comicstudio.new-idea.author-home', JSON.stringify({ name: 'My train story', idea: 'My mother drove a train.' }));
+    const { props } = renderDashboard([], { comicWorkspace: true, openNewComic: true, initialLookBrief: 'Use a landscape woodcut format.' });
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('My mother drove a train.\n\nUse a landscape woodcut format.');
+    expect(props.onCreateProject).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'My own version' } });
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('My own version');
+  });
   it('from the idea form, the brand shows All comics when comics exist and never leaves for the landing', () => {
     const { props } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true, openNewComic: true });
     expect(screen.getByLabelText('Your comic idea or script')).toBeInTheDocument();

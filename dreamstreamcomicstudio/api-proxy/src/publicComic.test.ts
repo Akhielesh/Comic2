@@ -384,17 +384,23 @@ describe('POST /api/csp-report (edge only)', () => {
 });
 
 describe('registered Studio Originals use the editorial publication authority', () => {
-  it.each(['DSOriginalTree001','DSOriginalPort001'])('serves all 15 frozen pages anonymously and obtains oEmbed from the same editorial share identity for %s', async (slug) => {
+  it.each([
+    ['DSOriginalTree001', 15, '2:3'], ['DSOriginalPort001', 15, '2:3'],
+    ['DSOriginalMarg001', 30, '2:3'], ['DSOriginalWest001', 20, '3:2']
+  ] as const)('serves the full frozen reading copy and matching editorial oEmbed for %s', async (slug, count, aspect) => {
     const member = publication();
-    const edition = publication({slug,visibility:'public',rating:'G',card:{...member.card,creator:'DreamStream Studio Originals',pageCount:15}});
-    const doc = {...snapshot(), pages:Array.from({length:15},(_,i)=>({id:'page'+(i+1),n:i+1,render:{status:'ready',asset:asset('p'+i)}}))};
-    const backend = stubFetch(name=>name==='comic_originals_public_payload'?{publication:edition,doc}:name==='comic_originals_share_card'?edition:null);
-    const res = await call('/api/comic/public/s/'+slug);
+    const edition = publication({ slug, visibility: 'public', rating: 'PG',
+      card: { ...member.card, creator: 'DreamStream Studio Originals', pageCount: count, aspect } });
+    const doc = { ...snapshot(), pages: Array.from({ length: count }, (_, i) => ({ id: 'page' + (i + 1), n: i + 1, render: { status: 'ready', asset: asset('p' + i) } })) };
+    const backend = stubFetch(name => name === 'comic_originals_public_payload' ? { publication: edition, doc } : name === 'comic_originals_share_card' ? edition : null);
+    const res = await call('/api/comic/public/s/' + slug);
     expect(res.status).toBe(200);
-    expect((await res.json()).doc.pages).toHaveLength(15);
-    const embed=await call('/api/comic/oembed?url='+encodeURIComponent('https://comic.dreamstreamstudio.ai/c/'+slug));
-    expect((await embed.json()).author_name).toBe('DreamStream Studio Originals');
-    expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload','comic_originals_share_card']);
+    expect((await res.json()).doc.pages).toHaveLength(count);
+    const embed = await call('/api/comic/oembed?url=' + encodeURIComponent('https://comic.dreamstreamstudio.ai/c/' + slug));
+    const frame = await embed.json();
+    expect(frame.author_name).toBe('DreamStream Studio Originals');
+    if (aspect === '3:2') expect(frame.width).toBeGreaterThan(frame.height);
+    expect(backend.calls.map(c => c.url.split('/').pop())).toEqual(['comic_originals_public_payload','comic_originals_share_card']);
   });
   it.each(['DSOriginalTide001','DSOriginalPort001'])('returns 404 for held or unpublished %s without falling back to member data',async(slug)=>{
     const backend=stubFetch(name=>name==='comic_public_payload'?{publication:publication({slug}),doc:snapshot()}:null);

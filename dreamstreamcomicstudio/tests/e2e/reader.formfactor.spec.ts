@@ -1,6 +1,6 @@
 // reader.formfactor.spec.ts (mobile.md §7.1/§10.4; P1-READER): the immersive reader picks the right
 // default per device — phones and tablet portrait: one page; tablet landscape and desktop: a spread;
-// a dual-screen foldable: one page per segment, none crossing the fold; a webtoon: vertical scroll —
+// a dual-screen foldable: one page per segment, none crossing the fold; a multi-page webtoon: turn or scroll —
 // the page sits inside the viewport, `page=5` opens on page 5, a swipe turns the page (RTL turns
 // the other way), the phone HUD auto-hides and comes back with a centre tap, and a hidden HUD never
 // takes a tap. (mobile.md's "double-tap → zoom 2.5" is superseded by reader.md: a double-tap opens
@@ -189,8 +189,16 @@ test.describe('immersive reader per form factor', () => {
     });
   }
 
-  test('a webtoon scrolls vertically on every device', async ({ qa, page }) => {
+  test('a multi-page webtoon opens in Page turn and can switch to Scroll', async ({ qa, page }) => {
     await qa.open({ surface: 'reader', fixture: 'webtoon-20p' }, { settle: 700 });
+    expect((await readerState(page)).layout).toBe('single');
+    await page.getByRole('button', { name: 'Reader settings' }).click();
+    const settings = page.getByRole('dialog', { name: 'Reader settings' });
+    await expect(settings.getByRole('radio', { name: 'Page turn' })).toBeChecked();
+    await settings.getByText('Scroll', { exact: true }).click();
+    await expect(settings.getByRole('radio', { name: 'Scroll' })).toBeChecked();
+    await settings.getByRole('button', { name: 'Close settings' }).click();
+    await expect(page.getByTestId('webtoon-stage')).toBeVisible();
     expect((await readerState(page)).layout).toBe('scroll');
     await qa.check('reader', 'webtoon', { checks: ['overflow', 'offscreen', 'popover', 'collision'] });
   });

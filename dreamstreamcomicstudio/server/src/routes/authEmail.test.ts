@@ -553,6 +553,20 @@ describe('no enumeration, no account creation', () => {
     expect(link.searchParams.get('next')).toBe(nextPath);
   });
 
+  it.each(['/signup', '/resend', '/magiclink'])('returns a confirmed creator to the public look in a fresh tab (%s)', async path => {
+    if (path !== '/signup') addUser('ada@example.com', path === '/magiclink');
+    const body = signupBody({ returnToOriginal: 'DSOriginalMarg001', next: '/somewhere-else' });
+    const origin = 'https://comics.dreamstreamstudio.ai';
+    expect((await post(path, body, { origin })).status).toBe(200);
+    expect(new URL(lastSend().params.actionUrl).searchParams.get('next')).toBe('/?view=dashboard&look=DSOriginalMarg001');
+    expect(new URL(lastSend().params.actionUrl).origin).toBe(origin);
+  });
+
+  it.each(['https://example.test', 'DSOriginalTide001', 'my private draft'])('drops an unknown or held style destination', async returnToOriginal => {
+    expect((await post('/signup', signupBody({ returnToOriginal }))).status).toBe(200);
+    expect(new URL(lastSend().params.actionUrl).searchParams.has('next')).toBe(false);
+  });
+
   it('keeps a comic magic link and its browser nonce on the trusted comic host', async () => {
     const comic = 'https://comics.dreamstreamstudio.ai';
     addUser('ada@example.com', true);

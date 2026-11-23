@@ -52,11 +52,15 @@ An unfinished comic opens directly at its saved page. Older reads beyond the fir
 
 The Library combines the approved editorial editions from `comic_originals_catalog()` with member results. Each editorial card carries the DreamStream Studio Originals byline, published cover and story-page count. Title search, rating filters, local guest reading history and recommendations include these books. Member project pagination, likes, profile grids and account reading history keep their existing scope.
 
+Readers can search by art style, format, reading direction or page count. **Start a comic like this** opens an editable brief in the same tab, including after sign-up or sign-in. A sign-up verification link opened in another browser can restore the selection through its registered public edition identifier. The brief carries over the public art technique and reading format. The Director plans the new story and shows a quote before any drawing begins.
+
 Each registered editorial slug uses its own published share-card and frozen-payload RPC on the ordinary `/c/<slug>`, embed and oEmbed routes. Withdrawing the publication removes its Library entry and makes its reader unavailable. Editorial feedback opens the shared report form with the title and current page editable before submission.
 
 ### Registering and publishing an edition
 
-The publisher processes `orchard`, `fox`, `table-nine` and `harbor` independently. Apply `server/sql/studio_original_harbor.sql` after `studio_original_editions.sql` to register Harbor’s independent identifier. The migration checks for member slug collisions. Harbor first appears at `/c/DSOriginalPort001` once the deployed publisher has checked its manuscript, cover and fifteen page illustrations and verified the uploaded bytes. The normal publication workflow waits for the deployed backend to match the selected Git revision.
+The publisher runs each registered current edition independently. Apply `server/sql/studio_original_harbor.sql` after `studio_original_editions.sql` to register Harbor’s independent identifier. The migration checks for member slug collisions. Harbor first appears at `/c/DSOriginalPort001` once the deployed publisher has checked its manuscript, cover and fifteen page illustrations and verified the uploaded bytes. The normal publication workflow waits for the deployed backend to match the selected Git revision.
+
+Apply `server/sql/studio_original_collection.sql` after the Harbor, rating-review and Discover migrations. The collection registers `margin`, `parrots`, `bubble`, `glass-hills` and `night-atlas`. Their source manifests include the title, reading direction, comic kind and orientation. The publisher verifies physical dimensions on the cover and every story page, plus the exact number of numbered pages assigned in `shared/comic/originals.ts`. Each edition’s first publication requires text, cover and all its illustrations to pass the ordinary gate. The frozen reader keeps its reading direction and derives its supported aspect ratio from the artwork.
 
 Tide’s identifier is reserved for its historical record. Operators can inspect its bundled files offline with `npx tsx scripts/ops/studioOriginal.ts check tide server/assets/originals`. The publisher rejects a release request for the held edition.
 

@@ -1,6 +1,7 @@
 import { lookupHandles } from '../services/usernames.js';
 import { dobProblem, USERNAME_REGEX } from '../services/signupValidation.js';
 export { dobProblem } from '../services/signupValidation.js';
+import { originalKeyForSlug, isPublishableOriginal } from '../../../shared/comic/originals.js';
 import { AUTH_WORKSPACE_PATHS, authWorkspace, type AuthWorkspace } from '../../../shared/authWorkspace.js';
 import { COMICS_ORIGIN } from '../../../services/productHost.js';
 import crypto from 'crypto';
@@ -358,14 +359,20 @@ const lookupAccount = async (admin: SupabaseClient, email: string): Promise<Acco
 type LinkError = { status?: number; code?: string; message?: string };
 type LinkProps = { hashed_token?: string; verification_type?: string };
 
-const requestedWorkspace = (body: Body): AuthWorkspace | undefined =>
-  authWorkspace(body.returnToWorkspace) ?? (body.returnToImages === true ? 'images' : undefined);
+type ReturnPath = (typeof AUTH_WORKSPACE_PATHS)[AuthWorkspace] | `/?view=dashboard&look=${string}`;
+const requestedDestination = (body: Body): ReturnPath | undefined => {
+  const workspace = authWorkspace(body.returnToWorkspace) ?? (body.returnToImages === true ? 'images' : undefined);
+  if (workspace) return AUTH_WORKSPACE_PATHS[workspace];
+  const slug = body.returnToOriginal;
+  const key = typeof slug === 'string' ? originalKeyForSlug(slug) : undefined;
+  if (key && isPublishableOriginal(key)) return `/?view=dashboard&look=${slug}`;
+};
 
 /** Build the link from what GoTrue actually issued and mail it. Never throws. */
 const deliver = async (
   req: Request,
   route: string,
-  opts: { email: string; app: AuthApp; after?: string; origin: string; props: LinkProps | undefined; userId?: string | null; workspace?: AuthWorkspace }
+  opts: { email: string; app: AuthApp; after?: string; origin: string; props: LinkProps | undefined; userId?: string | null; returnPath?: ReturnPath }
 ): Promise<boolean> => {
   const type = opts.props?.verification_type || '';
   let actionUrl: string;
@@ -379,9 +386,9 @@ const deliver = async (
       // The requesting browser's nonce: in that browser the link completes without a confirm step.
       signInNonce: parseSignInNonce(bodyOf(req).sn)
     });
-    if (opts.app === 'main' && opts.workspace && (type === 'magiclink' || type === 'signup')) {
+    if (opts.app === 'main' && opts.returnPath && (type === 'magiclink' || type === 'signup')) {
       const destination = new URL(actionUrl);
-      destination.searchParams.set('next', AUTH_WORKSPACE_PATHS[opts.workspace]);
+      destination.searchParams.set('next', opts.returnPath);
       actionUrl = destination.href;
     }
   } catch (err) {
@@ -402,10 +409,10 @@ const deliver = async (
   return result.ok;
 };
 
-const linkTarget = (req: Request, workspace?: AuthWorkspace) => {
+const linkTarget = (req: Request, returnPath?: ReturnPath) => {
   const origin = pickLinkOrigin(req.get('origin'));
   const callback = new URL('/auth/callback', origin);
-  if (workspace) callback.searchParams.set('next', AUTH_WORKSPACE_PATHS[workspace]);
+  if (returnPath) callback.searchParams.set('next', returnPath);
   return { origin, redirectTo: callback.href };
 };
 
@@ -476,8 +483,8 @@ authEmailRouter.post('/signup', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status === 'confirmed') return existingEmail();
 
-    const workspace = input.app === 'main' ? requestedWorkspace(body) : undefined;
-    const { origin, redirectTo } = linkTarget(req, workspace);
+    const returnPath = input.app === 'main' ? requestedDestination(body) : undefined;
+    const { origin, redirectTo } = linkTarget(req, returnPath);
     // An existing UNCONFIRMED account gets a fresh confirmation, nothing else: GoTrue would
     // merge new metadata into it (Supabase's own signUp deliberately doesn't), and it never
     // changes an existing password.
@@ -509,7 +516,7 @@ authEmailRouter.post('/signup', async (req, res, next) => {
       email,
       app: input.app,
       after: input.after,
-      workspace,
+      returnPath,
       origin,
       props: data?.properties,
       userId: data?.user?.id ?? (account.status === 'none' ? null : account.userId)
@@ -556,8 +563,8 @@ authEmailRouter.post('/resend', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status !== 'unconfirmed') return res.json({ ok: true });
 
-    const workspace = app === 'main' ? requestedWorkspace(body) : undefined;
-    const { origin, redirectTo } = linkTarget(req, workspace);
+    const returnPath = app === 'main' ? requestedDestination(body) : undefined;
+    const { origin, redirectTo } = linkTarget(req, returnPath);
     const { data, error } = await admin.auth.admin.generateLink({
       type: 'signup',
       email,
@@ -570,7 +577,7 @@ authEmailRouter.post('/resend', async (req, res, next) => {
       console.error(`[auth-email] resend → ${maskEmail(email)}: generateLink failed (${(error as LinkError).status ?? '?'})`);
       return fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
     }
-    const sent = await deliver(req, 'resend', { email, app, after, origin, workspace, props: data?.properties, userId: account.userId });
+    const sent = await deliver(req, 'resend', { email, app, after, origin, returnPath, props: data?.properties, userId: account.userId });
     return sent ? res.json({ ok: true }) : fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
   } catch (err) {
     next(err);
@@ -628,14 +635,14 @@ authEmailRouter.post('/magiclink', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status === 'none') return res.json({ ok: true });
 
-    const workspace = requestedWorkspace(bodyOf(req));
-    const { origin, redirectTo } = linkTarget(req, workspace);
+    const returnPath = requestedDestination(bodyOf(req));
+    const { origin, redirectTo } = linkTarget(req, returnPath);
     const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email, options: { redirectTo } });
     if (error) {
       console.error(`[auth-email] magiclink → ${maskEmail(email)}: generateLink failed (${(error as LinkError).status ?? '?'})`);
       return fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
     }
-    const sent = await deliver(req, 'magiclink', { email, app: 'main', origin, props: data?.properties, userId: account.userId, workspace });
+    const sent = await deliver(req, 'magiclink', { email, app: 'main', origin, props: data?.properties, userId: account.userId, returnPath });
     return sent ? res.json({ ok: true }) : fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
   } catch (err) {
     next(err);

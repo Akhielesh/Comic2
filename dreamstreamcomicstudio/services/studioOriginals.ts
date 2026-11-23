@@ -1,4 +1,4 @@
-import { isOriginalSlug } from '../shared/comic/originals';
+import { originalKeyForSlug, originalStoryPages } from '../shared/comic/originals';
 import { isContentRating, type ContentRating } from '../shared/comic/safety';
 import { supabase } from './supabase';
 
@@ -27,10 +27,11 @@ export function originalCatalogCards(value: unknown): StudioOriginalCard[] {
   const cards: StudioOriginalCard[] = [];
   const seen = new Set<string>();
   for (const row of value) {
-    if (!row || typeof row.slug !== 'string' || !isOriginalSlug(row.slug) || seen.has(row.slug) ||
+    const key = typeof row?.slug === 'string' ? originalKeyForSlug(row.slug) : undefined;
+    if (!key || seen.has(row.slug) ||
         typeof row.title !== 'string' || !row.title.trim() || typeof row.description !== 'string' ||
         row.creator !== 'DreamStream Studio Originals' || !isContentRating(row.rating) ||
-        !Number.isInteger(row.pageCount) || row.pageCount < 15 || row.pageCount > 500 ||
+        row.pageCount !== originalStoryPages(key) ||
         !Number.isSafeInteger(row.publishedAt) || row.publishedAt <= 0 ||
         !Number.isSafeInteger(row.updatedAt) || row.updatedAt < row.publishedAt ||
         typeof row.coverPath !== 'string' || !/^pub\/[A-Za-z0-9]{22}\/[a-zA-Z0-9_-]+\.webp$/.test(row.coverPath)) continue;

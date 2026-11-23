@@ -15,6 +15,13 @@ async function main() {
         digest: book.digest,
         pages: book.metadata.pages.length,
         images: book.images.length,
+        ...(book.metadata.orientation && {
+          kind: book.metadata.kind,
+          readingDirection: book.metadata.readingDirection,
+          orientation: book.metadata.orientation,
+          ...(book.metadata.colorMode && { colorMode: book.metadata.colorMode }),
+          firstStoryPage: { width: book.images[1].width, height: book.images[1].height }
+        }),
         bytes: book.images.reduce((n, i) => n + i.bytes, 0)
       })
     );
