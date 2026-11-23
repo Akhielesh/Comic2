@@ -15,6 +15,7 @@ import { letterbox, type SlotContent, type SlotSide } from './readerLayout';
 import { isProtectedStudioPath } from '../signedAssets';
 import { availableCachedPath, pageImageCache, pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
 import type { Palette } from './ambient';
+import { sanitizeImagePath } from '../../../shared/comic/imagePaths';
 
 export const CURL_GRADIENT =
   'linear-gradient(to right, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.10) 3%, rgba(255,255,255,0.16) 7%, rgba(0,0,0,0.06) 14%, rgba(0,0,0,0) 32%)';
@@ -45,6 +46,14 @@ export interface SlotImage {
   fast?: boolean;
 }
 
+/** Compositions contain storage keys. Only the host's authorized URL resolver may translate one to a URL. */
+export function useReaderFrameUrl(urlFor: SlotImage['urlFor']) {
+  return React.useCallback((path: string, width?: number) => {
+    if (!/^(?:u|pub|library)\//.test(path) || sanitizeImagePath(path) !== path) return undefined;
+    return width ? urlFor(path, { width }) : urlFor(path);
+  }, [urlFor]);
+}
+
 /**
  * Which stored image a page drawn `cssWidth` wide uses (cache path + URL): the variant pick, or the
  * original when the variant isn't signed for this viewer. Withheld (blocked) pages have none — they are
@@ -52,7 +61,7 @@ export interface SlotImage {
  * will show (never the original and then a variant: no double download on phones).
  */
 export const slotImageSource = (item: ReaderItem, cssWidth: number, img: SlotImage): { path: string; url?: string } | undefined => {
-  if (isWithheld(item)) return undefined;
+  if (!item.asset || isWithheld(item)) return undefined;
   const pick = pickVariant(item.asset, cssWidth, { dpr: img.dpr, saveData: img.saveData, original: img.original });
   const variantUrl = pick.path !== item.asset.path ? img.urlFor(pick.path) : undefined;
   return variantUrl ? { path: pick.path, url: variantUrl } : { path: item.asset.path, url: img.urlFor(item.asset) };
@@ -63,7 +72,7 @@ export const slotImageSource = (item: ReaderItem, cssWidth: number, img: SlotIma
  * never for a withheld item (its art is never downloaded, at any size), and never the source itself.
  */
 export const slotStandIn = (item: ReaderItem, img: Pick<SlotImage, 'urlFor'>, sourcePath?: string): { path: string; url: string } | undefined => {
-  if (isWithheld(item)) return undefined;
+  if (!item.asset || isWithheld(item)) return undefined;
   const v = standInVariant(item.asset);
   if (!v || v.path === sourcePath) return undefined;
   const url = img.urlFor(v.path);
@@ -84,10 +93,10 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const url = source?.url;
   const cached = useCachedImage(availableCachedPath(path, () => url), url, prio);
   // While a sharper variant loads, keep showing the one already decoded.
-  const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? availableCachedPath(item.asset.path, img.urlFor) : undefined, undefined, prio);
+  const fallback = useCachedImage(item?.asset && !withheld && path !== item.asset.path ? availableCachedPath(item.asset.path, img.urlFor) : undefined, undefined, prio);
   // Guided zoom wants the original: the fit-width variant it showed a moment ago stays up meanwhile.
   const fit = item && !withheld && img.original ? slotImageSource(item, cssWidth, { ...img, original: false }) : undefined;
-  const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset.path ? availableCachedPath(fit.path, () => fit.url) : undefined, undefined, prio);
+  const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset?.path ? availableCachedPath(fit.path, () => fit.url) : undefined, undefined, prio);
   const sharp = cached.src || fallback.src || fitImage.src;
   const standIn = item && !withheld && !sharp ? slotStandIn(item, img, path) : undefined;
   // A cached stand-in always shows; a fast link fetches one only for the page on screen.
@@ -191,8 +200,9 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
   // Stand-in → page: the stand-in lies under the page while the real image fades in over it.
   const previousStandIn = useStandInSwap(image.src, image.standIn, !!reduced, swapMs);
   // A cross-fade may be in progress when the owner removes or relocates this page's artwork.
-  const protectedPage = isProtectedStudioPath(item.asset.path);
-  const standInKey = previousStandIn && protectedPage ? availableCachedPath(standInVariant(item.asset)?.path, img.urlFor) : undefined;
+  const frameUrl = useReaderFrameUrl(img.urlFor);
+  const protectedPage = !!item.asset && isProtectedStudioPath(item.asset.path);
+  const standInKey = previousStandIn && item.asset && protectedPage ? availableCachedPath(standInVariant(item.asset)?.path, img.urlFor) : undefined;
   const currentStandIn = !protectedPage || (standInKey && pageImageCache.get(standInKey)?.objectUrl === previousStandIn);
   const under = image.src && !image.withheld && currentStandIn ? previousStandIn : undefined;
   const artRef = React.useRef<HTMLDivElement>(null);
@@ -227,6 +237,8 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 doc={doc}
                 page={item.page}
                 imageUrl={image.src}
+                urlForPath={frameUrl}
+                onSourceError={onImageError}
                 loading="eager"
                 develop={false}
                 stillLoading
@@ -244,7 +256,7 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 ) : (
                   // Still toned paper, like a page with nothing to show yet: the reader animates transform and opacity
                   // only, and a shimmer repaints the whole cover box every frame (background-position).
-                  <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: bare }} />
+                  <div data-reader-art-loading="" className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: bare }} />
                 )}
                 {paper && image.src && <div className="ds-reader-paper" aria-hidden />}
                 <CoverTitleLayer doc={doc} aspect={contentAspect} />

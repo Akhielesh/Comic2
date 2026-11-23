@@ -116,9 +116,24 @@ describe('ComicReaderView', () => {
     press('ArrowRight');
     press('ArrowRight');
     expect(shownKeys()).toEqual(['pg_2', 'pg_3']);
-    fireEvent.click(screen.getByRole('radio', { name: /Page/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Single page' }));
     expect(shownKeys()).toEqual(['pg_2']);
     expect(window.localStorage.getItem('comicstudio.reader.mode')).toBe('page');
+  });
+
+  it('gives focused reading controls their own keyboard actions before the page shortcuts', () => {
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    const paged = screen.getByRole('radio', { name: 'Page turn' });
+    const scroll = screen.getByRole('radio', { name: 'Scroll' });
+    expect(paged).toHaveAttribute('title', 'Drag a page edge or use the arrows to turn pages.');
+    expect(scroll).toHaveAttribute('title', 'Scroll vertically through the comic.');
+    fireEvent.keyDown(scroll, { key: ' ' });
+    expect(shownKeys()).toEqual(['cover']);
+    fireEvent.keyDown(paged, { key: 'ArrowRight' });
+    expect(screen.getByTestId('reader-scroll')).toBeInTheDocument();
+    fireEvent.keyDown(scroll, { key: 'ArrowLeft' });
+    expect(shownKeys()).toEqual(['cover']);
   });
 
   it('turns pages with swipes', () => {
@@ -161,16 +176,24 @@ describe('ComicReaderView', () => {
     expect(screen.queryAllByTestId('cover-title')).toHaveLength(0);
   });
 
-  it('webtoons always scroll (no mode switch to offer)', () => {
-    render(<ComicReaderView doc={drawnDoc((d) => (d.format.kind = 'webtoon'))} urlFor={fakeUrlFor} initialMode="page" />);
-    expect(reader()).toHaveAttribute('data-layout', 'scroll');
-    expect(screen.queryByRole('radiogroup', { name: 'Reading mode' })).toBeNull();
+  it('starts a paginated webtoon with page turns and restores the reader’s explicit scroll choice', () => {
+    const doc = drawnDoc(d => { d.format.kind = 'webtoon'; });
+    const { unmount } = render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} />);
+    expect(screen.getByRole('radio', { name: 'Page turn' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('reader-book').querySelector('[data-paper-turn-surface]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Scroll' }));
+    expect(screen.getByTestId('reader-scroll')).toBeInTheDocument();
+    unmount();
+    render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} />);
+    expect(screen.getByRole('radio', { name: 'Scroll' })).toHaveAttribute('aria-checked', 'true');
   });
 
   // Review 2026-10-29 (axe scrollable-region-focusable on the studio Read tab): without an End card the
   // scroller holds nothing focusable, so it must be keyboard-reachable itself — a named region.
   it('the scroll-mode scroller is keyboard-reachable on its own: tabindex 0, a named region', () => {
-    const { unmount } = render(<ComicReaderView doc={drawnDoc((d) => (d.format.kind = 'webtoon'))} urlFor={fakeUrlFor} />);
+    const continuous = drawnDoc(d => { d.format.kind = 'webtoon'; d.pages = d.pages.slice(0, 1); });
+    const { unmount } = render(<ComicReaderView doc={continuous} urlFor={fakeUrlFor} />);
+    expect(screen.queryByRole('radiogroup', { name: 'Reading mode' })).toBeNull();
     const scroller = screen.getByTestId('reader-scroll');
     expect(scroller).toHaveAttribute('tabindex', '0');
     expect(scroller).toHaveAttribute('role', 'region');
@@ -286,7 +309,8 @@ describe('ComicReaderView', () => {
     const onReport = vi.fn();
     const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" rating="PG" />);
     expect(screen.getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.queryByRole('menuitem', { name: 'Report this comic' })).toBeNull();
     unmount();
     render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" initialPage={2} onReport={onReport} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
@@ -342,7 +366,9 @@ describe('ComicReaderView', () => {
     const readerDownload = vi.fn(async () => 'Downloaded the PDF.');
     render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" immersiveEntry endCard={{}} readerDownload={readerDownload} />);
     // The host's header carries Download: nothing here duplicates it.
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.queryByRole('menuitem', { name: /Download/ })).toBeNull();
+    press('Escape');
     press('End');
     expect(within(screen.getByTestId('end-card')).getByRole('button', { name: /Download/ })).toBeInTheDocument();
     press('Home');

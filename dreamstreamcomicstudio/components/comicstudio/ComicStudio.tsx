@@ -60,6 +60,7 @@ import { AppearanceSegmented } from '../account/AppearanceControl';
 import { headerShowsQualityChip } from './qualityHome';
 import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
+import { hasReadablePage } from './reader/readerModel';
 import { SPEND_KIND_LABEL, pageProgress } from './board/boardModel';
 import { ConversationPane } from './conversation/ConversationPane';
 import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
@@ -960,7 +961,7 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
 
 /** Nothing drawn yet → why Read is unavailable (undefined when it can open). */
 export const readUnavailableReason = (doc: ComicDoc | null): string | undefined =>
-  doc && pageProgress(doc).ready > 0 ? undefined : 'Read opens once a page is drawn';
+  doc?.pages.some(hasReadablePage) ? undefined : 'Read opens once a page is drawn';
 
 /**
  * Keeps --app-h / --kb / html.kb-open in sync while the studio is open. Its own tiny component: the

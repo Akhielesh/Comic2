@@ -158,14 +158,14 @@ describe('phone reading mode', () => {
     const p = renderReader();
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     const menu = screen.getByRole('menu');
-    for (const label of ['Library', 'Dashboard', 'Story', 'Info', 'Comments', 'Page Flip', 'Sign in']) {
+    for (const label of ['Library', 'Dashboard', 'Story', 'Info', 'Comments', 'Scroll', 'Sign in']) {
       expect(within(menu).getByRole('menuitem', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    expect(within(menu).getByRole('menuitemcheckbox', { name: /FX/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitemcheckbox', { name: /Paper texture/ })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitemcheckbox', { name: /sound/i })).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Page Flip/ }));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /^Scroll$/ }));
     expect(screen.queryByRole('menu')).toBeNull();
-    expect(screen.getByText(/1 \/ 3/)).toBeInTheDocument();
+    expect(screen.queryByTestId('flip-region')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Library/ }));
     // Leaving pops the reader's history entry first (Back closes the reader), then navigates.

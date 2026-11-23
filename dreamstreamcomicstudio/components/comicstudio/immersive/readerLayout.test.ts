@@ -43,9 +43,11 @@ describe('mobile.md §10.1 device table', () => {
     expect(readerLayout(ff(882, 1104, segs), { w: 882, h: 1104 }, A23, 'comic').layout).toBe('single');
   });
 
-  it('webtoon scrolls everywhere; strips use the strip layout', () => {
+  it('continuous webtoons scroll and multi-leaf webtoons can turn real pages', () => {
     for (const [w, h] of [[360, 800], [1180, 820], [1920, 1080]]) {
       expect(readerLayout(ff(w, h), { w, h }, A23, 'webtoon').layout).toBe('scroll');
+      expect(readerLayout(ff(w, h), { w, h }, A23, 'webtoon', 'auto', 6)).toMatchObject({layout: 'single', fit: 'width', allowSpread: false});
+      expect(readerLayout(ff(w, h), { w, h }, A23, 'webtoon', 'scroll', 6).layout).toBe('scroll');
       expect(readerLayout(ff(w, h), { w, h }, A23, 'strip').layout).toBe('strip');
     }
   });

@@ -22,6 +22,11 @@ import {
 } from './flipPhysics';
 import {
   BAND_REACH,
+  apply,
+  bookToLeaf,
+  clipHalfPlane,
+  cssPolygon,
+  pageRect,
   composeAll,
   computeFold,
   cssMatrix,
@@ -62,6 +67,10 @@ export interface EngineConfig {
   /** Spine x in book coordinates. */
   spineX: number;
   bookW: number;
+  /** Inline spreads keep the two current pages in one accessible, full-width element. */
+  wholeSpreadFront?: boolean;
+  /** A single sheet may be inset in the current element (letterboxed Classic pages). */
+  frontOffset?: Vec;
   /** Book x of each incoming/outgoing element (slide origin math). */
   slotX?: Map<HTMLElement, number>;
   durationMs: number;
@@ -419,7 +428,22 @@ export class TurnEngine {
     }
     const st = leafStyles(this.frame, fold);
     const k = Math.sin(Math.PI * fold.progress);
-    if (front?.root) setClip(front.root, fold.progress >= 0.999 ? 'polygon(0 0,0 0,0 0)' : st.frontClip);
+    if (front?.root) {
+      if (this.cfg.wholeSpreadFront) {
+        // The stationary facing page is on the same side of the fold as the spine.
+        const outline = pageRect(this.cfg.bookW, H).map(point => bookToLeaf(this.frame, point));
+        const visible = clipHalfPlane(outline, fold.m, fold.n, 1);
+        setClip(front.root, cssPolygon(visible.map(point => apply(this.frame.S, point))));
+      } else if (this.cfg.frontOffset) {
+        const { x, y } = this.cfg.frontOffset;
+        setClip(front.root, cssPolygon(fold.frontClip.map(point => ({
+          x: x + (this.cfg.plan.mirrored ? W - point.x : point.x),
+          y: y + point.y
+        }))));
+      } else {
+        setClip(front.root, fold.progress >= 0.999 ? 'polygon(0 0,0 0,0 0)' : st.frontClip);
+      }
+    }
     // Single page: the turned leaf lifts away beside the book instead of lying flat on the desk.
     const away = this.cfg.plan.leafSide === 'center' ? 1 - smooth(0.8, 1, fold.progress) : 1;
     if (back?.root) {

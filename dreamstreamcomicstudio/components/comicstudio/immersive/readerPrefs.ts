@@ -155,7 +155,7 @@ export const effectiveReader = (settings: ReaderSettings | undefined, prefs: Rea
   const s = settings ?? DEFAULT_READER;
   const pick = (t: Tri, base: boolean) => (t === 'on' ? true : t === 'off' ? false : base);
   return {
-    turn: prefs.turn === 'auto' ? s.turn : prefs.turn,
+    turn: prefs.turn === 'auto' ? 'paper' : prefs.turn,
     paper: kind === 'webtoon' || kind === 'strip' ? false : pick(prefs.paper, s.paperTexture),
     ambient: pick(prefs.ambient, s.ambient)
   };

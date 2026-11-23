@@ -1,7 +1,8 @@
 import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
+import { Project, ComicPanel, DialogueBlock, TextLayout, PageStudioPage } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles, MoreHorizontal, Library, LayoutDashboard, Info, Rows3, LogIn } from 'lucide-react';
+import { PaperTurnSurface, type PaperTurnDirection, type PaperTurnHandle } from './comicstudio/reader/PaperTurnSurface';
 import { PanelDialogue } from './PanelDialogue';
 import { derivePanelTitle } from '../services/panelDescription';
 import { readerDialogueBlocks } from '../services/dialogueUtils';
@@ -49,6 +50,8 @@ import {
 // Phones read in a "phone reading mode": no site header or footer inside the reader, Close and Full screen pinned
 // as 44 px controls, everything else in one "⋯" menu, chrome that gets out of the way. Coarse pointer covers
 // phones and tablets; the width test covers narrow desktop windows.
+const NO_PANELS: ComicPanel[] = [];
+const NO_STUDIO_PAGES: PageStudioPage[] = [];
 const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
 const CHROME_AUTO_HIDE_MS = 2500;
 // Page Flip on phones: the dialogue goes UNDER the art (never beside it, where it ran off-screen) and the art gets
@@ -59,8 +62,6 @@ const FLIP_DIALOGUE_MAX_SHARE_SHORT = 0.35;
 const FLIP_SHORT_REGION_PX = 480;
 const FLIP_GAP_PX = 8;
 const FLIP_DIALOGUE_MAX_W = 576;
-/** A horizontal drag at least this long (and mostly horizontal) turns a Page Flip page. */
-const SWIPE_MIN_PX = 45;
 /** Pinch-zoomed in: drags pan the page instead of turning it. */
 const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
 const PHONE_BTN = `inline-flex h-11 w-11 shrink-0 items-center justify-center ${RADIUS_CONTROL} text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`;
@@ -146,7 +147,7 @@ const HalftoneOverlay: React.FC = () => (
 );
 
 // Reveals its children with a comic "pop-in" the first time they scroll into view.
-const RevealOnScroll: React.FC<{ className?: string; children: React.ReactNode }> = ({ className, children }) => {
+const RevealOnScroll: React.FC<{ pageIndex: number; className?: string; children: React.ReactNode }> = ({ pageIndex, className, children }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -163,7 +164,7 @@ const RevealOnScroll: React.FC<{ className?: string; children: React.ReactNode }
     return () => io.disconnect();
   }, [visible]);
   return (
-    <div ref={ref} className={`comic-reveal ${visible ? 'is-visible' : ''} ${className || ''}`}>
+    <div ref={ref} data-classic-page={pageIndex} className={`comic-reveal ${visible ? 'is-visible' : ''} ${className || ''}`}>
       {children}
     </div>
   );
@@ -224,7 +225,7 @@ interface ComicReaderProps {
  */
 export const ComicReader: React.FC<ComicReaderProps> = (props) => {
   if (isStudioV4Project(props.project)) return <StudioComicReader projectId={props.project.id} isReadOnly={props.isReadOnly} onClose={props.onClose} />;
-  return <ClassicComicReader {...props} />;
+  return <ClassicComicReader key={props.project.id} {...props} />;
 };
 
 /** The classic reader's full-screen frame, inset by the device safe areas. */
@@ -275,7 +276,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const [showInfo, setShowInfo] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
-  const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('scroll');
+  const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('flip');
   // Comic-feel toggles, remembered across sessions.
   const [soundOn, setSoundOn] = useState<boolean>(() => {
     try { return window.localStorage.getItem('reader_sound') !== 'off'; } catch { return true; }
@@ -317,7 +318,29 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   };
 
   const [pageIndex, setPageIndex] = useState(0);
-  const [flipDirection, setFlipDirection] = useState<'next' | 'prev' | null>(null);
+  const turnSurface = useRef<PaperTurnHandle>(null);
+  const sheetElement = useRef<HTMLDivElement>(null);
+  const restoredProject = useRef<string | null>(null);
+  const modeChosen = useRef(false);
+  const pendingScrollPage = useRef<number | null>(null);
+  const chooseMode = (mode: 'scroll' | 'flip') => {
+    if (mode === readerMode) return;
+    if (mode === 'scroll') pendingScrollPage.current = pageIndex;
+    else if (scrollRef.current) {
+      const viewport = scrollRef.current.getBoundingClientRect();
+      if (viewport.height) {
+        const line = viewport.top + viewport.height * 0.4;
+        const items = Array.from(scrollRef.current.querySelectorAll<HTMLElement>('[data-classic-page]'));
+        const item = items.find(node => node.getBoundingClientRect().bottom > line);
+        if (item) setPageIndex(Number(item.dataset.classicPage));
+      }
+    }
+    modeChosen.current = true;
+    turnSurface.current?.cancel();
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    unsavedScroll.current = null;
+    setReaderMode(mode);
+  };
   // Full screen: native state comes only from fullscreenchange; the reading mode is the fallback when the
   // browser has no API (iPhone) or refuses. Either one counts as "full screen" for the button label.
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
@@ -402,25 +425,48 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const touchMulti = useRef(false);
+  const lastScrollTop = useRef(0);
+  const unsavedScroll = useRef<(() => void) | null>(null);
   const textLayout = project.state.textLayout || 'caption';
-  const panelCount = project.state.panels.length;
-  const panelsWithArtCount = project.state.panels.filter((panel) => !!panel.imageUrl).length;
+  const panels = Array.isArray(project.state.panels) ? project.state.panels : NO_PANELS;
+  const studioPages = project.state.pageStudio?.pages ?? NO_STUDIO_PAGES;
+  const legacyCover = project.coverImage;
+  const cover = project.state.coverImageUrl || (legacyCover && !panels.some(p => p.imageUrl === legacyCover)
+    && !studioPages.some(p => p.imageUrl === legacyCover) ? legacyCover : undefined);
+  const panelCount = panels.length;
+  const panelsWithArtCount = panels.filter((panel) => !!panel.imageUrl).length;
   const allPanelsMissingArt = panelCount > 0 && panelsWithArtCount === 0;
 
   useEffect(() => {
+    let live = true;
+    restoredProject.current = null;
+    modeChosen.current = false;
     loadReaderState(project.id).then((state) => {
-      if (!state) return;
-      setReaderMode(state.mode);
-      if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
-      if (typeof state.scrollTop === 'number') {
-        requestAnimationFrame(() => {
-          if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
-        });
+      if (!live) return;
+      restoredProject.current = project.id;
+      if (!state || modeChosen.current) return;
+      if (state.mode === 'scroll' || state.mode === 'flip') setReaderMode(state.mode);
+      if (Number.isInteger(state.pageIndex)) setPageIndex(Math.max(0, state.pageIndex!));
+      if (typeof state.scrollTop === 'number') lastScrollTop.current = state.scrollTop;
+      if (state.mode === 'scroll' && typeof state.scrollTop === 'number') {
+        requestAnimationFrame(() => { if (live && scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0; });
       }
-    });
+    }).catch(() => { if (live) restoredProject.current = project.id; });
+    return () => { live = false; };
   }, [project.id]);
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    const index = pendingScrollPage.current;
+    if (readerMode !== 'scroll' || !scroll || index === null) return;
+    pendingScrollPage.current = null;
+    const item = scroll.querySelector<HTMLElement>(`[data-classic-page="${index}"]`);
+    if (item) {
+      const offset = item.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+      scroll.scrollTop = index === 0 ? 0 : Math.max(0, scroll.scrollTop + offset);
+      lastScrollTop.current = scroll.scrollTop;
+    }
+  }, [readerMode]);
 
   useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(readerRef.current))), []);
 
@@ -451,24 +497,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     return () => window.clearTimeout(timer);
   }, [phoneUi, chromeVisible, chromePinned, chromeTick, readerMode, pageIndex]);
 
-	  const pages = useMemo(() => {
-	    const list: Array<{ type: 'cover' | 'panel' | 'page'; panel?: ComicPanel; imageUrl?: string }> = [];
-	    if (project.state.coverImageUrl) {
-	      list.push({ type: 'cover', imageUrl: project.state.coverImageUrl });
-	    }
-	    project.state.panels.forEach((panel) => {
-	      list.push({ type: 'panel', panel, imageUrl: panel.imageUrl });
-	    });
-	    project.state.pageStudio?.pages?.forEach((page) => {
-	      list.push({ type: 'page', imageUrl: page.imageUrl });
-	    });
-	    return list;
-	  }, [project.state.coverImageUrl, project.state.panels, project.state.pageStudio?.pages]);
-  const flipHasDialogue = useMemo(() => {
-    const panel = pages[pageIndex]?.panel;
-    return !!panel && textLayout !== 'none' && readerDialogueBlocks(panel).length > 0;
-  }, [pages, pageIndex, textLayout]);
-
+  const pages = useMemo(() => {
+    const list: Array<{ alt: string; panel?: ComicPanel; imageUrl?: string }> = [];
+    if (cover) list.push({ alt: `${project.name} cover`, imageUrl: cover });
+    panels.forEach((panel, ix) => list.push({ panel, alt: derivePanelTitle(panel, ix), imageUrl: panel.imageUrl }));
+    studioPages.forEach((page, ix) => list.push({ alt: `${project.name} page ${ix + 1}`, imageUrl: page.imageUrl }));
+    return list;
+  }, [cover, panels, studioPages, project.name]);
   // Preload nearby page images so a flip (forward OR back) never flashes blank. Scroll mode never preloads the
   // whole comic (reader.md §8.8, RD-7): the lazy <img>s load themselves, and only the next 3 images after the
   // one in view are warmed (an IntersectionObserver on the scroll list; without one, after the first).
@@ -501,26 +536,20 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     return () => io.disconnect();
   }, [pageIndex, readerMode, pages]);
 
-  useEffect(() => {
-    return () => {
-      persistReaderState();
-    };
-  }, []);
-
-  useEffect(() => {
-    persistReaderState({ mode: readerMode, pageIndex });
-  }, [readerMode]);
-
   const persistReaderState = (override?: Partial<{ mode: 'scroll' | 'flip'; pageIndex: number; scrollTop: number }>) => {
-    const payload = {
-      projectId: project.id,
-      mode: override?.mode ?? readerMode,
-      pageIndex: override?.pageIndex ?? pageIndex,
-      scrollTop: override?.scrollTop ?? (scrollRef.current?.scrollTop || 0),
-      updatedAt: Date.now()
-    };
-    saveReaderState(payload);
+    if (restoredProject.current !== project.id && !modeChosen.current) return;
+    void saveReaderState({
+      projectId: project.id, mode: override?.mode ?? readerMode, pageIndex: override?.pageIndex ?? pageIndex,
+      scrollTop: override?.scrollTop ?? lastScrollTop.current, updatedAt: Date.now()
+    }).catch(() => undefined);
   };
+  useEffect(() => {
+    if (modeChosen.current) persistReaderState();
+  }, [readerMode, pageIndex]);
+  useEffect(() => () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    unsavedScroll.current?.();
+  }, [project.id]);
 
   // renderPanelText removed — use <PanelDialogue /> component instead
 
@@ -572,92 +601,74 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     if (pageIndex >= pages.length && pages.length > 0) {
       setPageIndex(pages.length - 1);
     }
-  }, [pages.length]);
+  }, [pages.length, pageIndex]);
 
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    lastScrollTop.current = scrollRef.current?.scrollTop || 0;
+    unsavedScroll.current = () => persistReaderState({scrollTop:lastScrollTop.current});
     saveTimer.current = window.setTimeout(() => {
-      persistReaderState({ scrollTop: scrollRef.current?.scrollTop || 0 });
+      unsavedScroll.current?.();
+      unsavedScroll.current = null;
     }, 400);
   };
 
-  const goNext = () => {
-    if (pageIndex >= pages.length - 1) return;
+  const renderFlipPage = (index: number, preview: boolean) => {
+    const page = pages[index];
+    if (!page) return null;
+    const art = page.imageUrl ? (
+      <img src={page.imageUrl} alt={page.alt}
+        className={`mx-auto block max-h-full max-w-full w-auto h-auto object-contain bg-[var(--ds-surface)] ${ART_FRAME}`}
+        style={phoneUi && flipBox && flipArtMaxH ? { maxWidth: flipBox.w, maxHeight: flipArtMaxH } : undefined} />
+    ) : (
+      <div className={`${phoneUi ? 'min-h-[200px]' : 'min-h-[300px]'} w-[70vw] max-w-md ${RADIUS_CONTROL} ${MISSING_ART}`}>
+        {page.panel ? 'Image missing for this panel' : 'Image missing for this page'}
+      </div>
+    );
+    if (!phoneUi) return (
+      <div key={index} ref={preview ? undefined : sheetElement} className="relative inline-flex max-h-full max-w-full">
+        {art}
+        {page.panel && <PanelDialogue panel={page.panel} layout={textLayout} placement="overlay" reader />}
+        {fxOn && <HalftoneOverlay />}
+      </div>
+    );
+    const showDialogue = page.panel && textLayout !== 'none' && readerDialogueBlocks(page.panel).length > 0;
+    return (
+      <div key={index} ref={preview ? undefined : sheetElement} data-testid={preview ? undefined : 'flip-page'}
+        className="flex max-h-full w-full flex-col items-center" style={{ gap: FLIP_GAP_PX }}>
+        <div data-testid={preview ? undefined : 'flip-art'} className="relative inline-flex max-w-full shrink-0">
+          {art}
+          {fxOn && <HalftoneOverlay />}
+        </div>
+        {showDialogue && page.panel && (
+          <div ref={preview ? undefined : setFlipDialogue} data-testid={preview ? undefined : 'flip-dialogue'}
+            data-no-page-turn="" className="w-full shrink-0 overflow-y-auto overscroll-contain"
+            style={{ maxWidth: FLIP_DIALOGUE_MAX_W, maxHeight: flipDialogueMax ?? `${FLIP_DIALOGUE_MAX_SHARE * 100}%` }}>
+            <PanelDialogue panel={page.panel} layout={textLayout} placement="below" reader />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const goNext = () => turnSurface.current?.turn(1);
+  const goPrev = () => turnSurface.current?.turn(-1);
+  const legacyState = project.state as typeof project.state & {readingDirection?:string; format?:{readingDirection?:string}};
+  const rtl = (legacyState.readingDirection ?? legacyState.format?.readingDirection ?? (project.state.layoutType === 'manga' ? 'rtl' : 'ltr')) === 'rtl';
+  const canTurn = (dir: PaperTurnDirection) => pageIndex + dir >= 0 && pageIndex + dir < pages.length;
+  const commitTurn = (dir: PaperTurnDirection) => {
+    if (!canTurn(dir)) return;
     if (soundOn) playPageTurnSound();
-    setFlipDirection('next');
-    setPageIndex((prev) => {
-      const next = prev + 1;
-      persistReaderState({ pageIndex: next, mode: 'flip' });
-      return next;
-    });
+    modeChosen.current = true;
+    setPageIndex(pageIndex + dir);
   };
 
-  const goPrev = () => {
-    if (pageIndex <= 0) return;
-    if (soundOn) playPageTurnSound();
-    setFlipDirection('prev');
-    setPageIndex((prev) => {
-      const next = prev - 1;
-      persistReaderState({ pageIndex: next, mode: 'flip' });
-      return next;
-    });
-  };
-
-  useEffect(() => {
-    if (!flipDirection) return;
-    // Match the 0.45s page-flip animation so the transform isn't cleared mid-turn.
-    const timer = window.setTimeout(() => setFlipDirection(null), 470);
-    return () => window.clearTimeout(timer);
-  }, [flipDirection]);
-
-  // Touch swipe in flip mode (a horizontal drag turns the page). Safe gestures: a pinch never turns a page, whichever
-  // finger lifts first (once a second finger touched down, the gesture is spent until every finger is up); while the
-  // page is zoomed in (visualViewport.scale > 1.01) drags pan the zoomed page and never turn it; a mostly vertical drag
-  // (scrolling the dialogue under the art) is not a swipe.
-  const onTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length > 1) {
-      touchMulti.current = true;
-      touchStart.current = null;
-      return;
-    }
-    touchMulti.current = false;
-    const t = e.touches[0];
-    touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
-  };
-  const onTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length > 1) {
-      touchMulti.current = true;
-      touchStart.current = null;
-    }
-  };
-  const onTouchEnd = (e: React.TouchEvent) => {
-    const start = touchStart.current;
-    if (touchMulti.current || e.touches.length > 0) {
-      touchStart.current = null;
-      if (e.touches.length === 0) touchMulti.current = false;
-      return;
-    }
-    touchStart.current = null;
-    if (!start || isViewportZoomed()) return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.2) return;
-    if (dx < 0) goNext(); else goPrev();
-  };
-  const onTouchCancel = () => {
-    touchStart.current = null;
-    touchMulti.current = false;
-  };
-
-  // Keyboard navigation: arrows/space/PageUp-Down turn pages (flip) or page-scroll
-  // (scroll), Home/End jump to ends, Esc closes. Ignored while typing in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if ((e.key === ' ' || e.key === 'Enter') && t?.closest('button,a[href],summary,[role="button"],[role="menuitem"]')) return;
       if (e.key === 'Escape') {
         // Esc peels one layer at a time: the menu, then the reading mode, then the comic.
         if (menuOpen) { setMenuOpen(false); return; }
@@ -666,25 +677,26 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         return;
       }
       if (readerMode === 'flip') {
-        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
-        else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
-        else if (e.key === 'Home') { e.preventDefault(); setFlipDirection('prev'); setPageIndex(0); }
-        else if (e.key === 'End') { e.preventDefault(); setFlipDirection('next'); setPageIndex(Math.max(pages.length - 1, 0)); }
+        if (e.key === (rtl ? 'ArrowLeft' : 'ArrowRight') || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
+        else if (e.key === (rtl ? 'ArrowRight' : 'ArrowLeft') || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
+        else if (e.key === 'Home') { e.preventDefault(); turnSurface.current?.cancel(); modeChosen.current = true; setPageIndex(0); }
+        else if (e.key === 'End') { e.preventDefault(); turnSurface.current?.cancel(); modeChosen.current = true; setPageIndex(Math.max(pages.length - 1, 0)); }
       } else {
         const el = scrollRef.current;
         if (!el) return;
         const page = el.clientHeight * 0.9;
-        if (e.key === 'ArrowDown') { e.preventDefault(); el.scrollBy({ top: 140, behavior: 'smooth' }); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); el.scrollBy({ top: -140, behavior: 'smooth' }); }
-        else if (e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); el.scrollBy({ top: page, behavior: 'smooth' }); }
-        else if (e.key === 'PageUp') { e.preventDefault(); el.scrollBy({ top: -page, behavior: 'smooth' }); }
-        else if (e.key === 'Home') { e.preventDefault(); el.scrollTo({ top: 0, behavior: 'smooth' }); }
-        else if (e.key === 'End') { e.preventDefault(); el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }
+        const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+        if (e.key === 'ArrowDown') { e.preventDefault(); el.scrollBy({ top: 140, behavior }); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); el.scrollBy({ top: -140, behavior }); }
+        else if (e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); el.scrollBy({ top: page, behavior }); }
+        else if (e.key === 'PageUp') { e.preventDefault(); el.scrollBy({ top: -page, behavior }); }
+        else if (e.key === 'Home') { e.preventDefault(); el.scrollTo({ top: 0, behavior }); }
+        else if (e.key === 'End') { e.preventDefault(); el.scrollTo({ top: el.scrollHeight, behavior }); }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode]);
+  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode, rtl]);
 
   // The reading mode's Back-stack layer ('fullscreen') comes and goes with readingMode: entering pushes its entry,
   // leaving with a control pops it (useBackLayer above).
@@ -764,7 +776,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       <div className="grid grid-cols-2 gap-2">
         <div className={`${HAIRLINE} ${RADIUS_CONTROL} p-2`}>
           <div className={OVERLINE}>Panels</div>
-          <div>{project.state.panels.length}</div>
+          <div>{panelCount}</div>
         </div>
         <div className={`${HAIRLINE} ${RADIUS_CONTROL} p-2`}>
           <div className={OVERLINE}>Layout</div>
@@ -881,12 +893,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setShowComments(true))}>
             <MessageSquareText className="h-4 w-4 shrink-0" aria-hidden /> Comments
           </button>
-          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll'))}>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => chooseMode(readerMode === 'scroll' ? 'flip' : 'scroll'))}>
             {readerMode === 'scroll' ? <BookOpen className="h-4 w-4 shrink-0" aria-hidden /> : <Rows3 className="h-4 w-4 shrink-0" aria-hidden />}
-            {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
+            {readerMode === 'scroll' ? 'Page turn' : 'Scroll'}
           </button>
           <button type="button" role="menuitemcheckbox" aria-checked={fxOn} className={PHONE_MENU_ITEM} onClick={toggleFx}>
-            <Sparkles className="h-4 w-4 shrink-0" aria-hidden /> FX (halftone texture)
+            <Sparkles className="h-4 w-4 shrink-0" aria-hidden /> Paper texture
             <span className="ml-auto text-[12px] text-[var(--ds-muted)]">{fxOn ? 'On' : 'Off'}</span>
           </button>
           <button type="button" role="menuitemcheckbox" aria-checked={soundOn} className={PHONE_MENU_ITEM} onClick={toggleSound}>
@@ -967,28 +979,19 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           >
             <MessageSquareText className="w-4 h-4" /> Comments
           </button>
-          <button
-            onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
-            className={TOOL_BTN}
-          >
-            {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
-          </button>
-          <button
-            onClick={toggleFx}
-            title="Halftone comic texture"
-            aria-pressed={fxOn}
-            className={fxOn ? TOOL_BTN_ON : TOOL_BTN}
-          >
-            <Sparkles className="w-4 h-4" /> FX
-          </button>
-          <button
-            onClick={toggleSound}
-            title={soundOn ? 'Mute page-turn sound' : 'Unmute page-turn sound'}
-            aria-pressed={soundOn}
-            className={TOOL_BTN}
-          >
-            {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          </button>
+          <div role="group" aria-label="Reading mode" className="inline-flex gap-1">
+            <button type="button" aria-pressed={readerMode==='flip'} onClick={()=>chooseMode('flip')} className={readerMode==='flip' ? TOOL_BTN_ON : TOOL_BTN}>Page turn</button>
+            <button type="button" aria-pressed={readerMode==='scroll'} onClick={()=>chooseMode('scroll')} className={readerMode==='scroll' ? TOOL_BTN_ON : TOOL_BTN}>Scroll</button>
+          </div>
+          <details className="shrink-0">
+            <summary className={TOOL_BTN}>Reading options</summary>
+            <div className="mt-1 flex gap-1">
+              <button type="button" onClick={toggleFx} title="Halftone comic texture" aria-pressed={fxOn} className={TOOL_BTN}><Sparkles className="h-4 w-4" /> Paper texture</button>
+              <button type="button" onClick={toggleSound} aria-pressed={soundOn} className={TOOL_BTN}>
+                {soundOn ? <Volume2 className="h-4 w-4"/> : <VolumeX className="h-4 w-4"/>} Page-turn sound
+              </button>
+            </div>
+          </details>
           <button
             onClick={toggleFullscreen}
             className={TOOL_BTN}
@@ -1023,10 +1026,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-                {project.state.coverImageUrl && (
-                  <div className="border-b border-[var(--ds-hairline)] bg-[var(--ds-well)] p-6">
+                {cover && (
+                  <div data-classic-page={0} className="border-b border-[var(--ds-hairline)] bg-[var(--ds-well)] p-6">
                     <div className={`overflow-hidden ${RADIUS_PANEL} ${ART_FRAME}`}>
-                      <img src={project.state.coverImageUrl} alt={`${project.name} cover`} className="block w-full h-auto animate-fade-in" />
+                      <img src={cover} alt={`${project.name} cover`} className="block w-full h-auto animate-fade-in" />
                     </div>
                   </div>
                 )}
@@ -1036,8 +1039,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                      All panel artwork is currently missing for this comic.
 	                    </div>
 	                  )}
-                  {project.state.panels.map((panel, idx) => (
-                    <RevealOnScroll key={idx} className={getPanelClass(idx)}>
+                  {panels.map((panel, idx) => (
+                    <RevealOnScroll key={idx} pageIndex={idx + Number(!!cover)} className={getPanelClass(idx)}>
                       <div className={`relative bg-[var(--ds-surface)] ${ART_FRAME}`}>
                         {panel.imageUrl ? (
                           <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
@@ -1056,8 +1059,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                      </div>
 	                    </RevealOnScroll>
 	                  ))}
-	                  {project.state.panels.length === 0 && project.state.pageStudio?.pages?.map((page, idx) => (
-	                    <RevealOnScroll key={page.id || idx} className="col-span-full">
+	                  {studioPages.map((page, idx) => (
+	                    <RevealOnScroll key={page.id || idx} pageIndex={idx + panels.length + Number(!!cover)} className="col-span-full">
 	                      {page.imageUrl ? (
 	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" className={`mx-auto block h-auto max-w-full animate-fade-in ${ART_FRAME}`} />
 	                      ) : (
@@ -1067,7 +1070,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                      )}
 	                    </RevealOnScroll>
 	                  ))}
-	                  {project.state.panels.length === 0 && (project.state.pageStudio?.pages?.length || 0) === 0 && (
+	                  {panels.length === 0 && studioPages.length === 0 && (
 	                    <div className={`col-span-full py-20 text-center font-semibold ${TEXT_XL} ${MUTED}`}>
 	                      This comic hasn't been drawn yet!
 	                    </div>
@@ -1086,81 +1089,24 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-                {pages.length > 0 && phoneUi ? (
-                  // Phones: the art on top, its dialogue UNDER it (never beside it, off-screen), the art sized to what
-                  // the dialogue leaves; the dialogue scrolls inside itself past its share of the height.
-                  <div
-                    ref={setFlipRegion}
-                    data-testid="flip-region"
-                    className="flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 select-none"
-                    onTouchStart={onTouchStart}
-                    onTouchMove={onTouchMove}
-                    onTouchEnd={onTouchEnd}
-                    onTouchCancel={onTouchCancel}
-                  >
-                    <div
-                      key={pageIndex}
-                      data-testid="flip-page"
-                      className={`flex max-h-full w-full flex-col items-center ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
-                      style={{ gap: FLIP_GAP_PX }}
-                    >
-                      <div data-testid="flip-art" className="relative inline-flex max-w-full shrink-0">
-                        {pages[pageIndex]?.imageUrl ? (
-                          <img
-                            src={pages[pageIndex].imageUrl}
-                            alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
-                            className={`block max-h-full max-w-full w-auto h-auto object-contain bg-[var(--ds-surface)] ${ART_FRAME}`}
-                            style={flipBox && flipArtMaxH ? { maxWidth: flipBox.w, maxHeight: flipArtMaxH } : undefined}
-                          />
-                        ) : (
-                          <div className={`min-h-[200px] w-[70vw] max-w-md ${RADIUS_CONTROL} ${MISSING_ART}`}>
-                            {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
-                          </div>
-                        )}
-                        {fxOn && <HalftoneOverlay />}
-                      </div>
-                      {flipHasDialogue && (
-                        <div
-                          ref={setFlipDialogue}
-                          data-testid="flip-dialogue"
-                          className="w-full shrink-0 overflow-y-auto overscroll-contain"
-                          style={{ maxWidth: FLIP_DIALOGUE_MAX_W, maxHeight: flipDialogueMax ?? `${FLIP_DIALOGUE_MAX_SHARE * 100}%` }}
-                        >
-                          <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="below" reader />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : pages.length > 0 ? (
-                  // The page region flexes to fill remaining height; the page itself is bounded
-                  // by BOTH max-h-full and max-w-full so it always scales to fit the viewport on
-                  // either axis — never oversized, never leaving dead space.
-                  <div
-                    className={phoneUi ? 'flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 select-none' : 'flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 sm:p-3 select-none'}
-                    onTouchStart={onTouchStart}
-                    onTouchMove={onTouchMove}
-                    onTouchEnd={onTouchEnd}
-                    onTouchCancel={onTouchCancel}
-                  >
-                    <div
-                      key={pageIndex}
-                      className={`relative inline-flex max-h-full max-w-full ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
-                    >
-	                      {pages[pageIndex]?.imageUrl ? (
-	                        <img
-	                          src={pages[pageIndex].imageUrl}
-	                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
-	                          className={`mx-auto block max-h-full max-w-full w-auto h-auto object-contain bg-[var(--ds-surface)] ${ART_FRAME}`}
-	                        />
-                      ) : (
-                        <div className={`min-h-[300px] w-[70vw] max-w-md ${RADIUS_CONTROL} ${MISSING_ART}`}>
-                          {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
-                        </div>
-                      )}
-                      {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="overlay" reader />}
-                      {fxOn && <HalftoneOverlay />}
-                    </div>
-                  </div>
+                {pages.length > 0 ? (
+                  <PaperTurnSurface ref={turnSurface} elementRef={phoneUi ? setFlipRegion : undefined}
+                    data-testid={phoneUi ? 'flip-region' : undefined}
+                    className="classic-paper-stage flex-1 min-h-0 overflow-hidden select-none bg-[var(--ds-well)]"
+                    paperElement={()=>sheetElement.current}
+                    pageKey={project.id+':'+pageIndex} rtl={rtl} isZoomed={isViewportZoomed}
+                    onClick={event => {
+                      if (!event.detail || isViewportZoomed() || menuOpen || (event.target instanceof Element && event.target.closest('button,a,[data-no-page-turn]'))) return;
+                      const box = event.currentTarget.getBoundingClientRect();
+                      if (!box.width) return;
+                      const x = (event.clientX-box.left)/box.width;
+                      if (x>0.24 && x<0.76) return;
+                      const dir = (x>0.5)!==rtl ? 1 : -1;
+                      if (canTurn(dir)) { event.stopPropagation(); turnSurface.current?.turn(dir); }
+                    }}
+                    canTurn={canTurn} onTurn={commitTurn} renderAdjacent={dir=>renderFlipPage(pageIndex+dir,true)}>
+                    {renderFlipPage(pageIndex,false)}
+                  </PaperTurnSurface>
                 ) : (
                   <div className={`flex flex-1 items-center justify-center p-10 text-center font-semibold ${TEXT_XL} ${MUTED}`}>This comic hasn't been drawn yet!</div>
                 )}
@@ -1175,11 +1121,11 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                   <div className="flex items-center justify-between gap-2 p-3">
                     <button onClick={goPrev} disabled={pageIndex <= 0} className={PAGE_BTN}>
-                      <ChevronLeft className="w-4 h-4" /> Prev
+                      {rtl ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />} Prev
                     </button>
                     <div className={`text-xs font-semibold tabular-nums ${INK}`}>{Math.min(pageIndex + 1, Math.max(pages.length, 1))} / {Math.max(pages.length, 1)}</div>
                     <button onClick={goNext} disabled={pageIndex >= pages.length - 1} className={PAGE_BTN}>
-                      Next <ChevronRight className="w-4 h-4" />
+                      Next {rtl ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
@@ -1190,7 +1136,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                 )}
               </div>
-              {!phoneUi && <div className={`mt-1.5 hidden text-[11px] sm:block ${MUTED}`}>← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>}
+              {!phoneUi && <div className={`mt-1.5 hidden text-[11px] sm:block ${MUTED}`}>Drag or click a page edge to turn · ← → or Space · Home/End to jump</div>}
             </div>
           )}
         </div>

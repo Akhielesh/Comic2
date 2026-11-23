@@ -201,7 +201,7 @@ const toastMs = (text: string) => Math.min(9000, Math.max(3600, Math.round(text.
 export const trimAspect = (items: ReaderItem[], fallback: number): number => {
   const counts = new Map<number, number>();
   for (const it of items) {
-    if (it.kind !== 'page' || !it.asset.w || !it.asset.h) continue;
+    if (it.kind !== 'page' || !it.asset?.w || !it.asset.h) continue;
     const a = Math.round((it.asset.w / it.asset.h) * 100) / 100;
     counts.set(a, (counts.get(a) || 0) + 1);
   }
@@ -238,6 +238,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
 
   // ── Device, prefs, motion ─────────────────────────────────────────────────
   const ff = useFormFactor();
+  const storyPages = useMemo(() => items.filter(item => item.kind === 'page').length, [items]);
   const osReduced = usePrefersReducedMotion() || ff.reducedMotion;
   const [prefs, setPrefs] = useState<ReaderPrefs>(() => readPrefs());
   const onPrefs = useCallback((patch: Partial<ReaderPrefs>) => {
@@ -262,8 +263,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     [roomSize.width, roomSize.height]
   );
   const decision = useMemo(
-    () => decideLayout({ vw: size.w, vh: size.h, kind, pref: layoutPref, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: ff.segments }),
-    [size.w, size.h, kind, layoutPref, trim, ff.widthClass, ff.heightClass, ff.segments]
+    () => decideLayout({ vw: size.w, vh: size.h, kind, storyPages, pref: layoutPref, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: ff.segments }),
+    [size.w, size.h, kind, storyPages, layoutPref, trim, ff.widthClass, ff.heightClass, ff.segments]
   );
   const hinge = useMemo(() => {
     const r = ff.segments.rects;
@@ -764,7 +765,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       downloadBusy={downloading}
     />
   );
-  const layoutOptions: LayoutPref[] = kind === 'webtoon' ? [] : kind === 'strip' ? ['auto', 'scroll'] : ['auto', 'single', 'spread', 'scroll'];
+  const canTurnPages = kind !== 'webtoon' || storyPages > 1;
   const fullscreenCursorHidden = immersive.fullscreen && !state.hud;
 
   const content = (
@@ -852,7 +853,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               trim={trim}
               aspectOf={aspectOf}
               rtl={rtl}
-              turnStyle={kind === 'strip' ? 'slide' : eff.turn}
+              turnStyle={eff.turn}
               lowPower={low.lowPower}
               paper={eff.paper && !low.lowPower}
               img={img}
@@ -949,10 +950,9 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
         compact={ff.widthClass === 'compact'}
         prefs={prefs}
         onPrefs={onPrefs}
-        creator={creator}
-        layout={{ pref: layoutPref, allowSpread: decision.allowSpread, options: layoutOptions }}
+        layout={{ pref: layoutPref, canTurnPages }}
         onLayout={onLayout}
-        lowPower={{ on: low.lowPower, measured: low.measured }}
+        lowPower={low.lowPower}
         osReducedMotion={osReduced}
         onShortcuts={() => {
           setSettingsOpen(false);

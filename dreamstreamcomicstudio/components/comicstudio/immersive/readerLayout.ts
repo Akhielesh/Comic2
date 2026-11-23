@@ -2,7 +2,7 @@
 // reader and the immersive reader, plus the book's view grouping and slot geometry.
 //
 // Rules (first match wins):
-//   webtoon → scroll; an explicit "scroll" choice → scroll; strip → strip
+//   single-sheet webtoon or explicit scroll → scroll; multi-page webtoon → width-fit leaves; strip → strip
 //   explicit spread → spread when it fits, else single (silent fallback, as today)
 //   explicit single (old stored 'page' maps here) → single
 //   dual horizontal segments (foldable in book posture) → spread, one page per segment
@@ -38,6 +38,8 @@ export interface LayoutInput {
   vh: number;
   kind: ComicKind;
   pref: LayoutPref;
+  /** Authorized story leaves, excluding the cover. */
+  storyPages?: number;
   /** Page width / height. */
   pageAspect: number;
   widthClass?: WidthClass;
@@ -80,7 +82,8 @@ export const decideLayout = (i: LayoutInput): LayoutDecision => {
   const fits = spreadFits({ ...i, widthClass });
   const allowSpread = dual || (widthClass !== 'compact' && fits);
   const base = { allowSpread, perSegment: false, fit: 'contain' as ReaderFit };
-  if (i.kind === 'webtoon' || i.pref === 'scroll') return { ...base, layout: 'scroll', allowSpread: false };
+  if (i.pref === 'scroll' || (i.kind === 'webtoon' && (i.storyPages ?? 0) < 2)) return { ...base, layout: 'scroll', allowSpread: false };
+  if (i.kind === 'webtoon') return { ...base, layout: 'single', fit: 'width', allowSpread: false };
   if (i.kind === 'strip') return { ...base, layout: 'strip', allowSpread: false };
   const phoneLandscape = heightClass === 'compact' && !dual;
   const single = (): LayoutDecision => ({ ...base, layout: 'single', fit: phoneLandscape ? 'width' : 'contain' });
@@ -101,9 +104,10 @@ export function readerLayout(
   stage: { w: number; h: number },
   pageAspect: number,
   kind: ComicKind,
-  pref: LayoutPref = 'auto'
+  pref: LayoutPref = 'auto',
+  storyPages?: number
 ): LayoutDecision {
-  return decideLayout({ vw: stage.w, vh: stage.h, kind, pref, pageAspect, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: ff.segments });
+  return decideLayout({ vw: stage.w, vh: stage.h, kind, pref, storyPages, pageAspect, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: ff.segments });
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────

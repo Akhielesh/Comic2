@@ -9,7 +9,7 @@
 // and sets `render.withheld = 'safety'`. Such a page stays in the reading order as a WITHHELD item
 // (a neutral tile, never fetched) instead of vanishing — the page count and numbering stay true.
 
-import type { AssetRef, ComicDoc, Page, RenderState } from '../../../shared/comic/doc';
+import { artModeOf, type AssetRef, type ComicDoc, type Page, type RenderState } from '../../../shared/comic/doc';
 import { canServeToOwner } from '../../../shared/comic/safety';
 
 export type ReaderMode = 'scroll' | 'page' | 'spread';
@@ -18,8 +18,8 @@ export interface ReaderItem {
   key: string;
   kind: 'cover' | 'page';
   label: string;
-  /** For a withheld item: a path-less placeholder that no reader ever fetches (see isWithheld). */
-  asset: AssetRef;
+  /** A flattened drawing, when present. Fully composed pages render their own frame sources. */
+  asset?: AssetRef;
   page?: Page;
   /** The art is withheld by the safety check (public-snapshot `render.withheld`). */
   withheld?: true;
@@ -34,6 +34,10 @@ const artOf = (render: RenderState): { asset: AssetRef; withheld?: true } | null
   return render.asset?.path ? { asset: render.asset } : null;
 };
 
+/** A readable position may contain a flattened page, a complete panel composition, or a withheld tile. */
+export const hasReadablePage = (page: Page): boolean =>
+  !!page.render.asset?.path || page.render.withheld === 'safety' || artModeOf(page) === 'panels';
+
 export const readerItems = (doc: ComicDoc): ReaderItem[] => {
   const items: ReaderItem[] = [];
   const cover = artOf(doc.cover.render);
@@ -41,8 +45,9 @@ export const readerItems = (doc: ComicDoc): ReaderItem[] => {
   [...doc.pages]
     .sort((a, b) => a.n - b.n)
     .forEach((page) => {
-      const art = artOf(page.render);
-      if (art) items.push({ key: page.id, kind: 'page', label: `Page ${page.n}`, page, ...art });
+      if (hasReadablePage(page)) {
+        items.push({ key: page.id, kind: 'page', label: `Page ${page.n}`, page, ...artOf(page.render) });
+      }
     });
   return items;
 };
@@ -86,9 +91,6 @@ export const tapDelta = (fraction: number, rtl: boolean): -1 | 0 | 1 => {
   if (fraction > 0.7) return rtl ? -1 : 1;
   return 0;
 };
-
-/** Sensible starting mode: webtoons scroll; everything else reads a page at a time. */
-export const defaultReaderMode = (doc: ComicDoc): ReaderMode => (doc.format.kind === 'webtoon' ? 'scroll' : 'page');
 
 /** Resolve a 1-based page number (0 = cover) to an item. An undrawn page falls back to the nearest
  *  drawn one (earlier first), and says so via `exact: false` and the page number actually shown. */
@@ -137,4 +139,5 @@ export const chapterStarts = (items: ReaderItem[]): { index: number; title: stri
   });
 
 /** A blocked or withheld image is never shown or fetched: the reader draws a neutral "withheld" tile instead. */
-export const isWithheld = (item: ReaderItem): boolean => !!item.withheld || !item.asset.path || !canServeToOwner(item.asset);
+export const isWithheld = (item: ReaderItem): boolean =>
+  !!item.withheld || (item.asset ? !item.asset.path || !canServeToOwner(item.asset) : artModeOf(item.page) !== 'panels');

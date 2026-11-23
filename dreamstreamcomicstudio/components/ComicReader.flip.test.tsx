@@ -1,9 +1,9 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project, TextLayout } from '../types';
 import { ComicReader } from './ComicReader';
 import { resetBackStack } from './comicstudio/mobile/backStack';
-import { loadReaderState } from '../services/db';
+import { loadReaderState, saveReaderState } from '../services/db';
 
 // Page Flip on phones (mobile-reading hotfix): chat-bubble dialogue used to sit BESIDE the art in an inline-flex row,
 // completely off-screen to the right on a phone, and in landscape the art shrank to a 13-30 px strip. On phones the
@@ -205,7 +205,7 @@ describe('every classic reader surface opts in to the reader dialogue', () => {
   for (const phone of [true, false]) {
     it(`Scroll mode (${phone ? 'phone' : 'desktop'}): placement "auto" (phones stack narrow panels), description filter on`, async () => {
       setPhone(phone);
-      vi.mocked(loadReaderState).mockResolvedValueOnce(undefined);
+      vi.mocked(loadReaderState).mockResolvedValueOnce({projectId:'flip-project',mode:'scroll',updatedAt:0});
       render(<ComicReader project={makeProject('speech_bubbles')} {...props()} />);
       await act(async () => {
         await Promise.resolve();
@@ -226,5 +226,56 @@ describe('every classic reader surface opts in to the reader dialogue', () => {
     setPhone(false);
     await openFlip('speech_bubbles');
     expectReader('overlay', 1);
+  });
+});
+
+describe('historical Classic projects', () => {
+  const mixed = () => {
+    const p = makeProject();
+    p.state.coverImageUrl = '/real-cover';
+    p.state.pageStudio = { pages: [{ id: 'composed', imageUrl: '/composed', edits: [], prompt: '', createdAt: 1 }] } as typeof p.state.pageStudio;
+    return p;
+  };
+
+  it('keeps authored cover, both panels and a later composed page in both reading modes', async () => {
+    setPhone(false);
+    vi.mocked(loadReaderState).mockResolvedValueOnce(null);
+    const p = mixed();
+    render(<ComicReader project={p} {...props()} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Page turn' })).toHaveAttribute('aria-pressed','true');
+    const sources = [p.state.coverImageUrl!, ...p.state.panels.map(panel => panel.imageUrl!), '/composed'];
+    for (let i = 0; i < sources.length; i++) {
+      expect(screen.getByRole('img')).toHaveAttribute('src',sources[i]);
+      if (i < sources.length - 1) fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    }
+    fireEvent.click(screen.getByRole('button', {name:'Scroll'}));
+    expect(screen.getAllByRole('img').map(img => img.getAttribute('src'))).toEqual(sources);
+  });
+
+  it('opens old Page Studio projects with no panels property or duplicate cover thumbnail', async () => {
+    const p = mixed();
+    Reflect.deleteProperty(p.state,'panels');
+    delete p.state.coverImageUrl;
+    p.coverImage='/composed';
+    render(<ComicReader project={p} {...props()} />);
+    await act(async () => {});
+    expect(screen.getByRole('img')).toHaveAttribute('src','/composed');
+    expect(screen.getByRole('button', {name:'Next'})).toBeDisabled();
+  });
+
+  it('restores an explicitly saved mode and ignores a late restore once the reader chose a new page', async () => {
+    setPhone(false);
+    let resolve!: (value: Awaited<ReturnType<typeof loadReaderState>>) => void;
+    vi.mocked(loadReaderState).mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    vi.mocked(saveReaderState).mockClear();
+    const p = mixed();
+    render(<ComicReader project={p} {...props()} />);
+    expect(saveReaderState).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button',{name:'Next'}));
+    await act(async () => resolve({projectId:p.id,mode:'scroll',scrollTop:200,pageIndex:3,updatedAt:0}));
+    expect(screen.getByRole('button',{name:'Page turn'})).toHaveAttribute('aria-pressed','true');
+    expect(screen.getByRole('img')).toHaveAttribute('src',p.state.panels[0].imageUrl);
+    expect(saveReaderState).toHaveBeenLastCalledWith(expect.objectContaining({projectId:p.id,pageIndex:1,mode:'flip'}));
   });
 });

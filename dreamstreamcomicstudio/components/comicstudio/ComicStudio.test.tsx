@@ -469,6 +469,19 @@ describe('ComicStudio on phones (single)', () => {
     }
   });
 
+  it('Read opens a complete page composed from panel pictures without a flattened drawing', async () => {
+    const doc = makeSampleDoc();
+    const page = doc.pages[0];
+    doc.pages = [page];
+    page.artMode = 'panels';
+    page.render = { status: 'none', history: [] };
+    page.panels = [{ ...page.panels[0], frame: { box: { x: 0, y: 0, w: 1, h: 1 }, src: { path: 'u/owner/p/project/img/frame.webp' } } }];
+    mountAt(PHONE, makeFakeStudio({ doc }));
+    const read = within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Read/ });
+    fireEvent.click(read);
+    expect(await screen.findByRole('dialog', { name: 'Full-screen reader' })).toBeInTheDocument();
+  });
+
   it('Read stays unavailable until a page is drawn (and says why)', () => {
     const doc = makeSampleDoc();
     doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'none' as const, asset: undefined } }));

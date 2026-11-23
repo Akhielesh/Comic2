@@ -4,9 +4,8 @@
 
 import React from 'react';
 import { Download, Keyboard, Share2, X } from 'lucide-react';
-import type { ReaderSettings } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
-import type { ReaderPrefs, RoomLight, Tri } from './readerPrefs';
+import type { ReaderPrefs, RoomLight } from './readerPrefs';
 import { HudButton } from './ReaderHud';
 
 export interface ReaderSettingsSheetProps {
@@ -14,10 +13,9 @@ export interface ReaderSettingsSheetProps {
   compact: boolean;
   prefs: ReaderPrefs;
   onPrefs(patch: Partial<ReaderPrefs>): void;
-  creator: ReaderSettings;
-  layout: { pref: LayoutPref; allowSpread: boolean; options: LayoutPref[] };
+  layout: { pref: LayoutPref; canTurnPages: boolean };
   onLayout(pref: LayoutPref): void;
-  lowPower: { on: boolean; measured: boolean };
+  lowPower: boolean;
   osReducedMotion: boolean;
   onShortcuts(): void;
   onClose(): void;
@@ -31,7 +29,7 @@ export interface ReaderSettingsSheetProps {
 function Choice<T extends string | number>({ label, value, options, onChange, hint }: { label: string; value: T; options: { value: T; label: string; disabled?: boolean; title?: string }[]; onChange(v: T): void; hint?: string }) {
   const name = React.useId();
   return (
-    <fieldset className="min-w-0 space-y-1.5">
+    <fieldset className="min-w-0 space-y-1.5" aria-describedby={hint ? name + '-hint' : undefined}>
       <legend className="mb-1 text-[12px] font-medium text-[var(--ds-reader-hud-muted)]">{label}</legend>
       <div className="flex flex-wrap gap-1 rounded-2xl bg-[var(--ds-reader-hud-wash)] p-1">
         {options.map((o) => (
@@ -47,30 +45,24 @@ function Choice<T extends string | number>({ label, value, options, onChange, hi
           </label>
         ))}
       </div>
-      {hint && <p className="text-[11px] leading-snug text-[var(--ds-reader-hud-muted)]">{hint}</p>}
+      {hint && <p id={name + '-hint'} className="text-[11px] leading-snug text-[var(--ds-reader-hud-muted)]">{hint}</p>}
     </fieldset>
   );
 }
 
-const Toggle: React.FC<{ label: string; checked: boolean; onChange(v: boolean): void; hint?: string }> = ({ label, checked, onChange, hint }) => (
+const Toggle: React.FC<{ label: string; checked: boolean; onChange(v: boolean): void; hint?: string; disabled?: boolean }> = ({ label, checked, onChange, hint, disabled }) => (
   <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3">
     <span className="min-w-0">
       <span className="block text-[13px]">{label}</span>
       {hint && <span className="block text-[11px] leading-snug text-[var(--ds-reader-hud-muted)]">{hint}</span>}
     </span>
     <span className="relative inline-flex shrink-0 items-center">
-      <input type="checkbox" className="peer sr-only" checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} />
+      <input type="checkbox" className="peer sr-only" checked={checked} disabled={disabled} onChange={(e) => onChange(e.currentTarget.checked)} />
       <span className="h-6 w-11 rounded-full bg-[var(--ds-reader-hud-active)] transition-colors peer-checked:bg-[var(--ds-reader-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-reader-hud-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--ds-reader-hud-inverse)]" />
       <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-[var(--ds-reader-hud-ink)] shadow transition-transform peer-checked:translate-x-5 peer-checked:bg-[var(--ds-reader-hud-inverse)] motion-reduce:transition-none" />
     </span>
   </label>
 );
-
-const triFrom = (on: boolean, creator: boolean): Tri => (on === creator ? 'auto' : on ? 'on' : 'off');
-const triValue = (t: Tri, creator: boolean) => (t === 'on' ? true : t === 'off' ? false : creator);
-
-const TURN_LABEL: Record<ReaderSettings['turn'], string> = { paper: 'Paper', slide: 'Slide', fade: 'Fade' };
-const LAYOUT_LABEL: Record<LayoutPref, string> = { auto: 'Auto', single: 'One page', spread: 'Facing', scroll: 'Scroll' };
 
 export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -78,7 +70,12 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
     if (p.open) ref.current?.querySelector<HTMLElement>('button, input')?.focus({ preventScroll: true });
   }, [p.open]);
   if (!p.open) return null;
-  const { prefs, creator } = p;
+  const { prefs } = p;
+  const reduced = prefs.reduceMotion || p.osReducedMotion;
+  let modeHint = 'Drag a page edge or use the arrows to turn the page.';
+  if (p.layout.pref === 'scroll') modeHint = 'Read down the comic.';
+  else if (reduced) modeHint = 'Use the arrows or swipe. Reduced motion is on.';
+  else if (p.lowPower) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
   return (
     <div
       ref={ref}
@@ -101,6 +98,18 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
         </HudButton>
       </div>
       <div className="space-y-4">
+        {p.layout.canTurnPages ? (
+          <Choice<'turn' | 'scroll'>
+            label="Reading mode"
+            value={p.layout.pref === 'scroll' ? 'scroll' : 'turn'}
+            onChange={(mode) => {
+              if (mode === 'turn') p.onPrefs({ turn: 'paper', fancyTurns: 'auto' });
+              p.onLayout(mode === 'scroll' ? 'scroll' : 'auto');
+            }}
+            options={[{ value: 'turn', label: 'Page turn' }, { value: 'scroll', label: 'Scroll' }]}
+            hint={modeHint}
+          />
+        ) : <p className="text-[13px]">Scroll down to read this continuous page.</p>}
         {p.onCopyPageLink && !!p.pageNumber && p.pageNumber > 0 && (
           <button type="button" onClick={() => p.onCopyPageLink?.(p.pageNumber!)} className="press min-h-11 w-full rounded-xl bg-[var(--ds-reader-hud-hover)] text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
             Copy link to page {p.pageNumber}
@@ -120,66 +129,33 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             )}
           </div>
         )}
-        <Choice<RoomLight>
-          label="Room light"
-          value={prefs.room}
-          onChange={(room) => p.onPrefs({ room })}
-          options={[
-            { value: 'night', label: 'Night' },
-            { value: 'day', label: 'Day' }
-          ]}
-        />
-        <Choice<'auto' | ReaderSettings['turn']>
-          label="Page turns"
-          value={prefs.turn}
-          onChange={(turn) => p.onPrefs({ turn })}
-          options={[
-            { value: 'auto', label: `Auto (${TURN_LABEL[creator.turn]})`, title: 'The creator’s choice' },
-            { value: 'paper', label: 'Paper' },
-            { value: 'slide', label: 'Slide' },
-            { value: 'fade', label: 'Fade' }
-          ]}
-          hint={p.lowPower.on && prefs.fancyTurns !== 'on' ? 'Pages slide on this device to keep turns smooth.' : undefined}
-        />
-        {p.layout.options.length > 1 && (
-          <Choice<LayoutPref>
-            label="Layout"
-            value={p.layout.pref}
-            onChange={p.onLayout}
-            options={p.layout.options.map((o) => ({
-              value: o,
-              label: LAYOUT_LABEL[o],
-              disabled: o === 'spread' && !p.layout.allowSpread,
-              title: o === 'spread' && !p.layout.allowSpread ? 'Facing pages need a wider screen' : undefined
-            }))}
-            hint={!p.layout.allowSpread ? 'Facing pages appear on wider screens (turn your tablet sideways).' : undefined}
-          />
-        )}
-        <Choice<Tri>
-          label="Fancy page turns"
-          value={prefs.fancyTurns}
-          onChange={(fancyTurns) => p.onPrefs({ fancyTurns })}
-          options={[
-            { value: 'auto', label: 'Auto' },
-            { value: 'on', label: 'On' },
-            { value: 'off', label: 'Off' }
-          ]}
-          hint={p.lowPower.measured && prefs.fancyTurns === 'auto' ? 'Turned off automatically: the first turn looked slow on this device.' : undefined}
-        />
-        <div className="divide-y divide-[var(--ds-reader-hud-wash)]">
-          <Toggle label="Paper texture" checked={triValue(prefs.paper, creator.paperTexture)} onChange={(v) => p.onPrefs({ paper: triFrom(v, creator.paperTexture) })} />
-          <Toggle label="Room glows with the page’s colours" checked={triValue(prefs.ambient, creator.ambient)} onChange={(v) => p.onPrefs({ ambient: triFrom(v, creator.ambient) })} />
-          <Toggle label="Page-turn sound" checked={prefs.sound} onChange={(sound) => p.onPrefs({ sound })} />
-          <Toggle
-            label="Reduce motion"
-            checked={prefs.reduceMotion || p.osReducedMotion}
-            onChange={(reduceMotion) => p.onPrefs({ reduceMotion })}
-            hint={p.osReducedMotion ? 'On in your device settings: pages crossfade.' : 'Pages crossfade instead of turning.'}
-          />
-        </div>
-        <button type="button" onClick={p.onShortcuts} className="press inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--ds-reader-hud-wash)] text-[13px] outline-none hover:bg-[var(--ds-reader-hud-hover)] focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
-          <Keyboard className="h-4 w-4" aria-hidden /> Keyboard shortcuts
-        </button>
+        <details className="rounded-xl bg-[var(--ds-reader-hud-wash)] px-3">
+          <summary className="min-h-11 cursor-pointer rounded-lg py-3 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">Display and accessibility</summary>
+          <div className="space-y-3 pb-3">
+            <Choice<RoomLight>
+              label="Room light"
+              value={prefs.room}
+              onChange={(room) => p.onPrefs({ room })}
+              options={[
+                { value: 'night', label: 'Night' },
+                { value: 'day', label: 'Day' }
+              ]}
+            />
+            <div className="divide-y divide-[var(--ds-reader-hud-wash)]">
+              <Toggle label="Page-turn sound" checked={prefs.sound} onChange={(sound) => p.onPrefs({ sound })} />
+              <Toggle
+                label="Reduce motion"
+                checked={prefs.reduceMotion || p.osReducedMotion}
+                onChange={(reduceMotion) => p.onPrefs({ reduceMotion })}
+                disabled={p.osReducedMotion}
+                hint={p.osReducedMotion ? 'Enabled in your device settings.' : 'Use a gentle crossfade.'}
+              />
+            </div>
+            <button type="button" onClick={p.onShortcuts} className="press inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--ds-reader-hud-wash)] text-[13px] outline-none hover:bg-[var(--ds-reader-hud-hover)] focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
+              <Keyboard className="h-4 w-4" aria-hidden /> Keyboard shortcuts
+            </button>
+          </div>
+        </details>
       </div>
     </div>
   );

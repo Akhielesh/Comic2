@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ds/Dia
 import { IconButton } from '../ds/IconButton';
 import { useImageReveal } from '../ds/useImageReveal';
 import { samplePageUrl, type SampleLook } from '../comicstudio/library/sampleArt';
+import { PaperTurnSurface, type PaperTurnDirection, type PaperTurnHandle } from '../comicstudio/reader/PaperTurnSurface';
 import './comicsLanding.css';
 
 export type SampleStory = 'paper-boat' | 'last-tram' | 'hello-europa' | 'a-small-giant';
@@ -57,16 +58,16 @@ function SampleArtwork({ look, story, page, active, standalone, fullSize = false
         srcSet={story === 'paper-boat' || fullSize ? undefined : `${path}-480.webp 480w, ${path}-768.webp 768w, ${src} 1200w`}
         sizes={standalone ? '(max-width: 600px) 85vw, 760px' : '(max-width: 719px) 85vw, 48vw'}
         decoding="async"
-        fetchPriority={active ? 'high' : 'low'}
+        fetchPriority={active ? 'high' : 'auto'}
         draggable={false}
-        data-reveal={reveal.fromCache ? 'cached' : reveal.phase}
+        data-reveal={reveal.fromCache || (!active && reveal.phase !== 'error') ? 'cached' : reveal.phase}
       />
       {reveal.phase === 'error' && <span className="comics-sample-error">Artwork could not load. Please refresh to try again.</span>}
     </div>
   );
 }
 
-/** The shelf mounts the current page on demand. The style comparison keeps its two-page filmstrip. */
+/** Each sample loads the visible illustration. A turn requests the adjacent page on demand. */
 export function ComicSampleReader({ look, standalone = false, story = 'paper-boat', reader }: {
   look: SampleLook; standalone?: boolean; story?: SampleStory;
   reader?: {
@@ -81,7 +82,8 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
   const isShelf = !standalone && story !== 'paper-boat';
   const captionId = useId();
   const instructionsId = useId();
-  const gesture = useRef<{ x: number; y: number; pointer: number } | null>(null);
+  const inlineTurn = useRef<PaperTurnHandle>(null);
+  const dialogTurn = useRef<PaperTurnHandle>(null);
   const sample = STORIES[story];
   const goToPage = (index: number) => {
     const next = Math.max(0, Math.min(sample.pages.length - 1, index));
@@ -89,38 +91,47 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
     setPageIndex(next);
     if (pageScroll.current) pageScroll.current.scrollTop = 0;
   };
-  const turn = (delta: number) => goToPage(pageIndex + delta);
-  const onPageKey = (event: React.KeyboardEvent) => {
+  const canTurn = (dir: PaperTurnDirection) => pageIndex + dir >= 0 && pageIndex + dir < sample.pages.length;
+  const onPageKey = (event: React.KeyboardEvent, handle: React.RefObject<PaperTurnHandle | null>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || sample.pages.length < 2) return;
     switch (event.key) {
-      case 'ArrowRight': turn(1); break;
-      case 'ArrowLeft': turn(-1); break;
-      case 'Home': goToPage(0); break;
-      case 'End': goToPage(sample.pages.length - 1); break;
+      case 'ArrowRight': handle.current?.turn(1); break;
+      case 'ArrowLeft': handle.current?.turn(-1); break;
+      case 'Home':
+      case 'End':
+        handle.current?.cancel();
+        goToPage(event.key === 'Home' ? 0 : sample.pages.length - 1);
+        break;
       default: return;
     }
     event.preventDefault();
   };
-  const swipe = {
-    onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-      if (!event.isPrimary || event.button !== 0 || sample.pages.length < 2) return;
-      gesture.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-    },
-    onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
-      const start = gesture.current;
-      gesture.current = null;
-      if (!start || event.pointerId !== start.pointer) return;
-      const dx = event.clientX - start.x;
-      const dy = event.clientY - start.y;
-      if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) turn(dx < 0 ? 1 : -1);
-    },
-    onPointerCancel() { gesture.current = null; }
-  };
-  const pageButtons = sample.pages.length > 1 && <>
-    <IconButton label="Previous sample page" variant="outline" disabled={pageIndex === 0} onClick={() => turn(-1)}><ChevronLeft /></IconButton>
-    <IconButton label="Next sample page" variant="outline" disabled={pageIndex === sample.pages.length - 1} onClick={() => turn(1)}><ChevronRight /></IconButton>
+  const pageButtons = (handle: React.RefObject<PaperTurnHandle | null>) => sample.pages.length > 1 && <>
+    <IconButton label="Previous sample page" variant="outline" disabled={!canTurn(-1)} onClick={() => handle.current?.turn(-1)}><ChevronLeft /></IconButton>
+    <IconButton label="Next sample page" variant="outline" disabled={!canTurn(1)} onClick={() => handle.current?.turn(1)}><ChevronRight /></IconButton>
   </>;
+  const renderArtwork = (index: number, fullSize: boolean) => (
+    <div className={!fullSize && isShelf ? 'comics-shelf-page' : undefined} aria-hidden>
+      <SampleArtwork look={look} story={story} page={index + 1} active={index === pageIndex} standalone={fullSize || standalone} fullSize={fullSize} />
+    </div>
+  );
+  const renderSurface = (fullSize: boolean) => {
+    const current = renderArtwork(pageIndex, fullSize);
+    return (
+      <div className={!fullSize && !isShelf ? 'comics-sample-inset' : undefined}>
+        {sample.pages.length === 1 ? current : (
+          <PaperTurnSurface
+            ref={fullSize ? dialogTurn : inlineTurn}
+            pageKey={`${story}/${look}/${pageIndex}`}
+            enabled={fullSize || !reader?.open}
+            canTurn={canTurn}
+            renderAdjacent={dir => canTurn(dir) ? renderArtwork(pageIndex + dir, fullSize) : null}
+            onTurn={dir => goToPage(pageIndex + dir)}
+          >{current}</PaperTurnSurface>
+        )}
+      </div>
+    );
+  };
   return (
     <figure aria-labelledby={captionId} data-testid="comics-proof" data-story={story} data-standalone={standalone || undefined} className="comics-sample">
       <div
@@ -129,22 +140,9 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
         role="group"
         aria-label={`${sample.title} pages`}
         aria-describedby={instructionsId}
-        onKeyDown={onPageKey}
-        {...swipe}
+        onKeyDown={event => onPageKey(event, inlineTurn)}
       >
-        {isShelf ? (
-          <div key={pageIndex} className="comics-shelf-page" aria-hidden>
-            <SampleArtwork look={look} story={story} page={pageIndex + 1} active standalone={false} />
-          </div>
-        ) : (
-          <div aria-hidden className="comics-sample-track" data-page={pageIndex}>
-            {sample.pages.map((description, index) => (
-              <div key={description} className="comics-sample-page" data-active={index === pageIndex}>
-                <SampleArtwork key={`${story}-${look}`} look={look} story={story} page={index + 1} active={index === pageIndex} standalone={standalone} />
-              </div>
-            ))}
-          </div>
-        )}
+        {renderSurface(false)}
       </div>
       <figcaption className="comics-sample-caption">
         <div className="comics-sample-name">
@@ -157,12 +155,12 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
         </span>
         <div className="comics-sample-controls">
           {isShelf && reader && <IconButton label={`Enlarge ${sample.title}`} variant="outline" aria-haspopup="dialog" onClick={event => reader.show(event.currentTarget)}><Maximize2 /></IconButton>}
-          {pageButtons}
+          {pageButtons(inlineTurn)}
         </div>
       </figcaption>
       {reader?.open && (
         <Dialog open onOpenChange={open => { if (!open) reader.close(); }}>
-          <DialogContent className="comics-expanded-page" closeLabel="Close enlarged page" onKeyDown={onPageKey} onCloseAutoFocus={(event) => {
+          <DialogContent className="comics-expanded-page" closeLabel="Close enlarged page" onKeyDown={event => onPageKey(event, dialogTurn)} onCloseAutoFocus={(event) => {
             event.preventDefault();
             reader.restoreFocus();
           }}>
@@ -170,11 +168,11 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
               <DialogTitle>{sample.title}</DialogTitle>
               <div className="comics-reader-tools">
                 <span role="status" aria-atomic="true">Page {pageIndex + 1} of {sample.pages.length}<span className="sr-only">. {sample.pages[pageIndex]}</span></span>
-                {pageButtons}
+                {pageButtons(dialogTurn)}
               </div>
             </header>
-            <div ref={pageScroll} className="comics-reader-leaf" tabIndex={0} role="region" aria-label="Comic artwork and page description" {...swipe}>
-              <div key={pageIndex} aria-hidden><SampleArtwork look={look} story={story} page={pageIndex + 1} active standalone fullSize /></div>
+            <div ref={pageScroll} className="comics-reader-leaf" tabIndex={0} role="region" aria-label="Comic artwork and page description">
+              {renderSurface(true)}
               <DialogDescription>{sample.pages[pageIndex]}</DialogDescription>
             </div>
           </DialogContent>
