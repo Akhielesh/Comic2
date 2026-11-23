@@ -28,6 +28,8 @@ vi.mock('../services/db', async (importOriginal) => ({
   getProjectLikeMap: vi.fn(async () => ({})),
   toggleProjectLike: vi.fn(async () => ({ liked: true }))
 }));
+const settings = vi.hoisted(() => vi.fn());
+vi.mock('../services/libraryReadingSync', () => ({ readingSettings: settings }));
 const viewer = vi.hoisted(() => ({ id: null as string | null }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: viewer.id ? {id:viewer.id} : null, loading:false }) }));
 // The first candidate SmartImage would try (it preloads before painting), plus the fallbacks it
@@ -64,6 +66,7 @@ const row = (id: string, name: string, state: Record<string, unknown>, extra: Re
 
 beforeEach(() => {
   viewer.id = null;
+  settings.mockReset().mockResolvedValue({ enabled: false, epoch: null, reads: [] });
   localStorage.clear(); sessionStorage.clear();
   window.history.replaceState({}, '', '/?view=gallery');
   fakeSupabase.reset();
@@ -454,7 +457,7 @@ describe('Library discovery from real listed publications', () => {
   };
   it('opens a real page deep link, explains its related pick and removes both when history is cleared',async()=>{
     setLibrary();
-    rememberLibraryPage(null,{slug:seedSlug,visibility:'public'},3,6);
+    rememberLibraryPage({slug:seedSlug,visibility:'public'},3,6);
     render(<PublicGallery onReadComic={vi.fn()}/>);
     const resume = await screen.findByRole('link',{name:'Continue Star Route from page 3'});
     expect(resume).toHaveAttribute('href','/c/'+seedSlug+'?p=3');
@@ -463,7 +466,7 @@ describe('Library discovery from real listed publications', () => {
     expect(screen.getAllByTestId('gallery-card')).toHaveLength(8);
     fireEvent.click(screen.getByRole('button',{name:'Clear reading history'}));
     expect(screen.queryByText('Because you read “Star Route”')).toBeNull();
-    expect(libraryReads(null)).toHaveLength(0);
+    expect(libraryReads()).toHaveLength(0);
   });
   it('ranks after a real like, then discards that member’s recommendations when another account opens the library', async()=>{
     setLibrary();viewer.id='member-a';
@@ -483,7 +486,7 @@ describe('Library discovery from real listed publications', () => {
     rows.value[56].is_forced_private=true;
     rows.value[57].is_public=false;
     const gone='Deleted1234567890';
-    for (const slug of [older.shareSlug,held.shareSlug,unlisted.shareSlug,gone]) rememberLibraryPage(null,{slug,visibility:'public'},2,8);
+    for (const slug of [older.shareSlug,held.shareSlug,unlisted.shareSlug,gone]) rememberLibraryPage({slug,visibility:'public'},2,8);
     render(<PublicGallery onReadComic={vi.fn()}/>);
     expect(await screen.findByRole('link',{name:'Continue Story 055 from page 2'})).toHaveAttribute('href','/c/'+older.shareSlug+'?p=2');
     expect(screen.queryByText('Story 056')).toBeNull();
@@ -491,5 +494,60 @@ describe('Library discovery from real listed publications', () => {
     expect(document.body.textContent).not.toContain(gone);
     const historyQuery=fakeSupabase.queriesOn('projects').find(q=>q.filters.some(f=>f.startsWith('state->>shareSlug=in.')));
     expect(historyQuery?.filters).toEqual(expect.arrayContaining(LISTING_FILTERS));
+  });
+});
+
+describe('member reading sync controls', () => {
+  const slug = 'Slug0000000000001';
+  const existing = { enabled: true, epoch: 'consent-a', reads: [{ slug, page: 2, lastPage: 5, revision: 2, at: Date.now() }] };
+  const openSettings = () => fireEvent.click(screen.getByText('Reading progress', { selector:'summary' }));
+
+  it('restores signed-in positions from a second device, clears them, and can opt out across devices', async () => {
+    viewer.id = 'member-a';
+    rows.value = manyRows(8);
+    settings.mockImplementation(async (owner, action) => {
+      expect(owner).toBe('member-a');
+      if (action === 'clear') return { enabled: true, epoch: 'consent-b', reads: [] };
+      if (action === 'disable') return { enabled: false, epoch: 'consent-c', reads: [] };
+      return existing;
+    });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(await screen.findByRole('link', { name:'Continue Story 001 from page 2' })).toHaveAttribute('href', '/c/'+slug+'?p=2');
+    openSettings();
+    fireEvent.click(screen.getByRole('button',{ name: 'Clear reading history' }));
+    expect(await screen.findByRole('link',{ name: 'Read Story 001', exact: true })).toBeVisible();
+    expect(settings).toHaveBeenCalledWith('member-a','clear','consent-a');
+    fireEvent.click(screen.getByRole('button',{name:'Turn off sync and delete progress'}));
+    expect(await screen.findByRole('button',{name:'Sync my reading progress'})).toBeVisible();
+    expect(settings).toHaveBeenCalledWith('member-a','disable','consent-b');
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('does not save member progress before consent or reuse a previous account’s restored positions', async () => {
+    rows.value = manyRows(8);
+    viewer.id = 'member-a';
+    settings.mockImplementation(async (owner,action) => owner === 'member-a' || action === 'enable' ? { ...existing, reads: owner === 'member-a' ? existing.reads : [] } : {enabled:false,epoch:null,reads:[]});
+    const result=render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByRole('link',{name:'Continue Story 001 from page 2'});
+    viewer.id = 'member-b';
+    result.rerender(<PublicGallery onReadComic={vi.fn()}/>);
+    expect(screen.queryByRole('link',{name:/Continue Story/})).toBeNull();
+    openSettings();
+    await screen.findByRole('button',{name:'Sync my reading progress'});
+    expect(settings.mock.calls.filter(c=>c[0]==='member-b' && c[1]!=='get')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button',{name:'Sync my reading progress'}));
+    expect(await screen.findByText('Sync is on')).toBeVisible();
+    expect(settings).toHaveBeenCalledWith('member-b','enable',null);
+  });
+
+  it('revalidates the public catalog after browser Back when a previously listed story has been removed', async () => {
+    rows.value = manyRows(8);
+    rememberLibraryPage({slug,visibility:'public'},2,5);
+    render(<PublicGallery onReadComic={vi.fn()}/>);
+    await screen.findByRole('link',{name:'Continue Story 001 from page 2'});
+    rows.value[1].is_forced_private=true;
+    act(()=>window.dispatchEvent(Object.assign(new Event('pageshow'),{persisted:true})));
+    await waitFor(()=>expect(screen.getAllByTestId('gallery-card')).toHaveLength(7));
+    expect(screen.queryByText('Story 001')).toBeNull();
   });
 });

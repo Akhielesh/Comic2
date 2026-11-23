@@ -166,9 +166,9 @@ describe('GET /api/comic/public/s/:slug (edge, never the container)', () => {
 });
 
 describe('POST /api/comic/public/s/:slug/event', () => {
-  it('#15 calls the track RPC with a 32-hex viewer hash + HMAC proof (never the raw IP) and answers 204', async () => {
+  it.each(['whatsapp', 'linkedin'])('#15 calls the track RPC with a 32-hex viewer hash + HMAC proof (never the raw IP) and answers 204', async (channel) => {
     const b = stubFetch(() => null);
-    const res = await call(`/api/comic/public/s/${SLUG}/event`, { method: 'POST', body: JSON.stringify({ type: 'view', channel: 'whatsapp', lang: 'hi' }) }, baseEnv({ SHARE_VIEW_SALT: SALT }));
+    const res = await call(`/api/comic/public/s/${SLUG}/event`, { method: 'POST', body: JSON.stringify({ type: 'view', channel, lang: 'hi' }) }, baseEnv({ SHARE_VIEW_SALT: SALT }));
     expect(res.status).toBe(204);
     expect(b.calls).toHaveLength(1);
     const args = b.calls[0].body as Record<string, string>;
@@ -177,7 +177,7 @@ describe('POST /api/comic/public/s/:slug/event', () => {
     expect(JSON.stringify(args)).not.toContain('203.0.113.9');
     const day = new Date().toISOString().slice(0, 10);
     expect(args.p_proof).toBe(createHmac('sha256', SALT).update(`${SLUG}:${args.p_viewer}:${day}`).digest('hex'));
-    expect(args).toMatchObject({ p_slug: SLUG, p_event: 'view', p_channel: 'whatsapp', p_lang: 'hi' });
+    expect(args).toMatchObject({ p_slug: SLUG, p_event: 'view', p_channel: channel, p_lang: 'hi' });
   });
 
   it('invalid type, oversize body, no salt, malformed slug or rate-limited → still 204 and no RPC (no oracle)', async () => {

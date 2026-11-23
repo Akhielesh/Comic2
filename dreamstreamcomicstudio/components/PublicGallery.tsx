@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Baby, BookOpen, Check, Eye, Heart, Search, X } from 'lucide-react';
 import { supabase } from '../services/supabase';
+import { useLibraryReadingProgress } from './useLibraryReadingProgress';
 import { Project } from '../types';
 import { GALLERY_CARD_SELECT, GALLERY_PAGE_SIZE, galleryCardStateOf, getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,7 +17,7 @@ import { Button } from './ds/Button';
 import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
-import { clearLibraryReads, libraryHistoryKey, libraryPicks, libraryReads, LIBRARY_HISTORY_CHANGED, type DiscoveryComic } from '../services/libraryDiscovery';
+import { clearLibraryReads, GUEST_LIBRARY_HISTORY_KEY, libraryPicks, libraryReads, LIBRARY_HISTORY_CHANGED, type DiscoveryComic } from '../services/libraryDiscovery';
 import { filterPublicListing, isPubliclyListed } from '../services/publicListing';
 import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
 import { ComicSampleReader } from './comicshost/ComicSampleReader';
@@ -199,19 +200,27 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const { user, loading: authLoading } = useAuth();
     const owner = user?.id ?? null;
     const [historyVersion, setHistoryVersion] = useState(0);
-    const reads = useMemo(() => authLoading ? [] : libraryReads(owner), [authLoading, owner, historyVersion]);
+    const [catalogVersion, setCatalogVersion] = useState(0);
+    const progress = useLibraryReadingProgress(authLoading ? null : owner);
+    const cloud = progress.current?.data;
+    const reads = useMemo(() => authLoading ? [] : owner ? cloud?.reads ?? [] : libraryReads(),
+        [authLoading, owner, cloud, historyVersion]);
     useEffect(() => {
-        const reload = () => setHistoryVersion(n => n+1);
-        const storageChanged = (e: StorageEvent) => { if (!e.key || e.key === libraryHistoryKey(owner)) reload(); };
-        window.addEventListener('pageshow', reload);
+        const reload = () => setHistoryVersion(n => n + 1);
+        const pageShown = (event: PageTransitionEvent) => {
+            reload();
+            if (event.persisted) setCatalogVersion(n => n + 1);
+        };
+        const storageChanged = (event: StorageEvent) => { if (!event.key || event.key === GUEST_LIBRARY_HISTORY_KEY) reload(); };
+        window.addEventListener('pageshow', pageShown);
         window.addEventListener('storage', storageChanged);
         window.addEventListener(LIBRARY_HISTORY_CHANGED, reload);
         return () => {
-            window.removeEventListener('pageshow', reload);
+            window.removeEventListener('pageshow', pageShown);
             window.removeEventListener('storage', storageChanged);
             window.removeEventListener(LIBRARY_HISTORY_CHANGED, reload);
         };
-    }, [owner]);
+    }, []);
     const { theme } = useComicTheme();
     const [projects, setProjects] = useState<PublicProject[]>([]);
     const [listingOwner, setListingOwner] = useState<string | null | undefined>(undefined);
@@ -349,13 +358,15 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
         setLikeBusy({});
         effectiveSort.current = filter === 'recent' ? 'created_at' : 'likes_count';
         setProjects([]);
+        setListingOwner(undefined);
+        setEarlierReading([]);
         setHasMore(false);
         setNextOffset(0);
         setTotal(null);
         focusNextPage.current = false;
         void fetchPage(0, generation);
         return () => { requestGeneration.current += 1; };
-    }, [filter, fetchPage]);
+    }, [filter, fetchPage, catalogVersion]);
 
     // Older reads may no longer be on the first grid page. Revalidate their slugs through exactly
     // the public listing query; local history never supplies a title, cover or private capability.
@@ -451,7 +462,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const comicsSection = showComics && (
         <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
             <div className="library-section-heading"><h2 id="library-community-title">{showTools && discoveryActive ? 'Find your next read' : 'New comics'}</h2>
-                {discoveryActive && reads.length > 0 ? <button type="button" className={cn('library-reset',FOCUS_RING)} onClick={() => clearLibraryReads(owner)}>Clear reading history</button> : <span>Made in Comic Studio</span>}</div>
+                <span>Made in Comic Studio</span></div>
             {showTools && <>
                 <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
                     <label className="library-search-field"><Search aria-hidden /><span className="sr-only">Search comic titles</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder="Search comic titles" /></label>
@@ -531,6 +542,25 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                         <h1 ref={libraryTitle} tabIndex={-1}>Library</h1>
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
+                    {owner && !authLoading && <details className="library-progress">
+                        <summary className={FOCUS_RING}>Reading progress</summary>
+                        <p>Privately sync your place in up to 24 public comics across your DreamStream devices for 30 days.</p>
+                        {progress.current?.error && <p role="status">{progress.current.error}</p>}
+                        <div className="library-progress-controls" aria-busy={!!progress.current?.working}>
+                            {cloud?.enabled && <>
+                                <span>Sync is on</span>
+                                <button type="button" className={cn('library-reset', FOCUS_RING)} disabled={progress.current?.working} onClick={() => void progress.run('clear', cloud.epoch)}>Clear reading history</button>
+                                <button type="button" className={cn('library-reset', FOCUS_RING)} disabled={progress.current?.working} onClick={() => void progress.run('disable', cloud.epoch)}>Turn off sync and delete progress</button>
+                            </>}
+                            {cloud && !cloud.enabled && <Button variant="outline" disabled={progress.current?.working} onClick={() => void progress.run('enable', cloud.epoch)}>Sync my reading progress</Button>}
+                            {progress.current?.error && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={() => void progress.run()}>Refresh progress</button>}
+                            {!cloud && !progress.current?.error && <span role="status">Checking your sync settings…</span>}
+                        </div>
+                    </details>}
+                    {!owner && !authLoading && reads.length > 0 && <div className="library-guest-progress">
+                        <span>Reading progress stays in this tab.</span>
+                        <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearLibraryReads}>Clear reading history</button>
+                    </div>}
                     {comicsSection}
                     {showSamples && (
                         <section aria-labelledby="library-samples-title" className="library-samples">

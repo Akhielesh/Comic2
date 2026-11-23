@@ -5,7 +5,11 @@ import { getImageModel } from '../../../../shared/comic/models.js';
 import { partsOf } from '../../../../shared/comic/parts.js';
 import { withoutAssets } from '../../../../shared/comic/sendable.js';
 import { isProjectPageArt } from '../assets.js';
-import { compileEdit, compilePage, planPageReferences } from '../prompts.js';
+import { planAnchors } from '../../../../shared/comic/anchors.js';
+import { nearestReadyBefore } from '../../../../shared/comic/sendable.js';
+import { continuityAnchorFor } from '../../../../shared/comic/continuity.js';
+import { previousPageFor } from './schedule.js';
+import { compileCover, compileEdit, compilePage, planPageReferences } from '../prompts.js';
 import { runAction } from '../jobs.js';
 import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
 
@@ -66,6 +70,34 @@ describe('returning to established artwork across a 24-page book', () => {
     expect(j.prompt).not.toContain('Page 23 ended with');
     doc.pages.reverse();
     expect(job(doc).earlierPage).toEqual(j.earlierPage);
+  });
+
+  it('falls back from a polished but visually off-model page in automatic neighbour, additional art, cover and style-key lanes', () => {
+    const doc = book();
+    const target = doc.pages[23];
+    const faulty = draw(doc, 23);
+    faulty.render.qc = { score: 0.92, checkedAt: 12, issues: ['The figures are painted as glossy stone statues rather than the approved cut-paper silhouettes.'] };
+    expect(previousPageFor(doc, target)?.id).toBe('p18');
+    expect(nearestReadyBefore(doc, target)?.id).toBe('p18');
+    // Explicit previous-page and pinned style-key candidates also go through the common QC check.
+    doc.consistency = { styleKeyPageId: faulty.id };
+    const plan = planAnchors(doc, target, undefined, null, { previousPage: faulty, kinds: { styleKey: true } });
+    expect(plan.attached.some(r => r.path === pathAt(23))).toBe(false);
+    expect(compilePage(doc, target, { previousPage: faulty }).references.some(r => r.path === pathAt(23))).toBe(false);
+    expect(job(doc).earlierPage?.id).toBe('p18');
+    doc.pages[17].render.qc = { ...faulty.render.qc, issues: ['The palette and character design fail to match the supplied reference.'] };
+    expect(job(doc).earlierPage?.id).toBe('p15');
+    for (const p of doc.pages) delete p.continuity;
+    expect(continuityAnchorFor(doc, target).page?.id).toBe('p15');
+    doc.pages[1].render.qc = faulty.render.qc;
+    expect(compileCover(doc).references.find(r => r.label === 'STORY PAGE')?.path).toBe(pathAt(6));
+  });
+
+  it('accepts checked artwork with a small lettering issue or a negated defect on the same visual dimensions', () => {
+    const doc = book();
+    doc.pages[17].render.qc!.issues = ['No visual style drift. The last caption is misspelled.'];
+    expect(job(doc).earlierPage?.id).toBe('p18');
+    expect(job(doc).references.some(r => r.path === pathAt(18))).toBe(true);
   });
 
   it('honors a new author outfit or an explicitly cleared prop even when earlier artwork matches every subject', () => {

@@ -102,8 +102,9 @@ describe('ShareSheet', () => {
     render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
     fireEvent.click(screen.getByText('Plan a release post'));
     fireEvent.change(screen.getByLabelText('Where will you share it?'), { target: { value: 'whatsapp' } });
-    const expected = `Published title\n\nPublished hook · Rated PG\n\nhttps://comics.dreamstreamstudio.ai/c/${SLUG}?via=whatsapp`;
-    expect(screen.getByLabelText('Post to copy')).toHaveValue(expected);
+    const body = 'Hey! I made a 3-page comic called “Published title”.\n\nPublished hook\n\nHere’s the link if you want to read it.';
+    const expected = `${body}\n\nRated PG\nhttps://comics.dreamstreamstudio.ai/c/${SLUG}?via=whatsapp`;
+    expect(screen.getByLabelText('Post text')).toHaveValue(body);
     expect(screen.getByText(/preview the version readers get/i)).toBeInTheDocument();
     expect(screen.getByText(/no reader activity figures/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy post' }));

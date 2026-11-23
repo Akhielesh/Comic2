@@ -48,8 +48,9 @@ import {
 } from '../../../shared/comic/doc.js';
 import { letteringPresetOf } from '../../../shared/comic/lettering/style.js';
 import { CONSISTENCY_LIMITS } from '../../../shared/comic/limits.js';
+import { visualReferenceQcAllows } from '../../../shared/comic/visualReferenceQc.js';
 import { conflictsWithPageChange, earlierArtwork, mentionsProp, skippedPageSubjects } from './consistency/earlierArtwork.js';
-import { crossesPageScene, itemMatches, resolveContinuity, sceneIndex } from '../../../shared/comic/continuity.js';
+import { crossesPageScene, itemMatches, resolveContinuity, sceneIndex, type ContinuityState } from '../../../shared/comic/continuity.js';
 import { DIRECTION_DROP_ORDER, directionPhrases } from '../../../shared/comic/directions.js';
 import {
   nearestAspect,
@@ -1163,7 +1164,8 @@ export const planPageReferences = (
   page: Page,
   spec: ImageModelSpec,
   previousPage?: Page,
-  opts: PageCompileOptions = {}
+  opts: PageCompileOptions = {},
+  appearances = pageAppearances(rankPageCast(doc, page), resolveContinuity(doc, page), opts)
 ): PlannedReference[] => {
   const budget = { total: Math.max(0, Math.min(spec.refs.total, doc.consistency?.maxRefs ?? spec.refs.total)), objects: Math.max(0, spec.refs.objects) };
   const guide: PlannedReference[] = [];
@@ -1176,17 +1178,21 @@ export const planPageReferences = (
   }
   const effective = artRatingFor(doc, opts);
   const shotsOf = (id: string) => page.panels.filter((p) => p.castIds.includes(id)).map((p) => p.shot);
-  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }), opts.storyFixes === true);
+  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }), opts.storyFixes === true).map(ref => {
+    const current = ref.characterId && appearances.get(ref.characterId);
+    return current ? currentIdentityReference(ref, current) : ref;
+  });
 
   const style = styleReferences(doc, spec, budget, { effectiveRating: effective });
+  const changedSubjects = [...appearances.values()].map(c => upperName(c.name)).join(', ');
+  const earlierIdentity = changedSubjects ? ` For ${changedSubjects}, use earlier art for stable identity only. Follow the current wardrobe, markings and carried items on this page.` : '';
 
   const previous: PlannedReference[] = [];
   const previousAsset = previousPage?.render.asset;
   const previousSafety = safetyStatusOf(previousAsset?.safety, effective);
   const skipped = new Set(doc.consistency?.skip ?? []);
-  const previousAllowed = previousPage && !skipped.has('prev:' + previousPage.id) &&
-    (!opts.ownsPageArt || (previousAsset?.path && opts.ownsPageArt(previousAsset.path) && !isPageStale(doc, previousPage) &&
-      !previousPage.render.qc?.findings?.some(f => !f.dismissed && f.severity === 'major'))) &&
+  const previousAllowed = previousPage && visualReferenceQcAllows(previousPage.render.qc) && !skipped.has('prev:' + previousPage.id) &&
+    (!opts.ownsPageArt || (previousAsset?.path && opts.ownsPageArt(previousAsset.path) && !isPageStale(doc, previousPage))) &&
     !skippedPageSubjects(doc, previousPage, skipped) && !conflictsWithPageChange(doc, previousPage, page);
   const continues = !!previousAllowed && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
   const addPrevious = () => {
@@ -1198,9 +1204,9 @@ export const planPageReferences = (
       slot: 'object',
       label: 'PREVIOUS PAGE',
       path: previousAsset.path,
-      instruction: continues
+      instruction: (continues
         ? "Use the last panel's established designs, geography and lighting where the script continues them. The current page's actions and changes control the story. Ignore the reference page's panel layout and lettering."
-        : 'Match the rendering style and recurring designs only. This reference does not establish the current scene, action, prop state, layout, or lettering.'
+        : 'Match the rendering style and recurring designs only. This reference does not establish the current scene, action, prop state, layout, or lettering.') + earlierIdentity
     });
     budget.objects -= 1;
     budget.total -= 1;
@@ -1235,13 +1241,15 @@ export const planPageReferences = (
     const names = (items: string[]) => items.slice(0, 3).map(name => clip(safeText(name, opts).replace(/\s+/g, ' '), 32)).filter(Boolean).join(', ');
     const cast = names(evidence.cast);
     const settings = names(evidence.places);
+    const props = names(evidence.props);
     previous.push({
       kind: 'earlier_page', slot: 'object', evidencePageId: evidence.page.id,
       path: evidence.page.render.asset!.path, label: `EARLIER ART — PAGE ${evidence.page.n}`,
       instruction: [
         cast && `Match the established appearance of ${cast} only where named in this script.`,
+        props && `Match the established design of ${props} only when the script shows it.`,
         settings && `Use the permanent geography of ${settings} only where that location is named.`,
-        'Current wardrobe, props and panel directions override this drawing. Do not copy its action, other cast, lighting, layout or text.'
+        'Current wardrobe, props and panel directions override this drawing. Do not copy its action, other cast, lighting, layout or text.' + earlierIdentity
       ].filter(Boolean).join(' ')
     });
   } else if (!continues && !opts.ownsPageArt) {
@@ -1491,6 +1499,7 @@ const detailLine = (rest: string, mood: string): string => {
 
 interface PanelBlockContext {
   names: Map<string, string>;
+  appearances: ReadonlyMap<string, Character>;
   props: ReadonlySet<string>;
   index: Map<string, number[]>;
   boxes: Box[];
@@ -1577,7 +1586,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const things = staged.filter((s) => ctx.props.has(s.id));
   const solo = people.length === 1 && things.length > 0;
   const describe = (id: string): string => {
-    const c = doc.cast.find((x) => x.id === id)!;
+    const c = ctx.appearances.get(id) ?? doc.cast.find((x) => x.id === id)!;
     const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors, storyFixes: ctx.fixes }) : ''].filter(Boolean).join(' — ');
     return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
   };
@@ -1718,6 +1727,56 @@ const indexReferences = (refs: PlannedReference[]): Map<string, number[]> => {
   return index;
 };
 
+/** Build a transient cast guide for this page. Freeform summaries and reference notes can
+ * describe the default outfit, markings or equipment in arbitrary prose. When a field changes,
+ * draw identity from structured facts and the sheet instead of guessing which words to replace.
+ * The saved cast guide remains the source again when the ledger resets the change. */
+function pageAppearances(cast: Character[], state: ContinuityState | undefined, opts: CompileOptions): Map<string, Character> {
+  const changed = new Map<string, Character>();
+  if (!state?.content) return changed;
+  const propStates = [...Object.keys(state.props), ...Object.keys(state.gone)];
+  const words = (value: string) => clip(safeText(value, opts), 120);
+  for (const c of cast) {
+    const update = state.cast[c.id];
+    const look = c.look;
+    const changedProp = (part: string) => propStates.some(name => itemMatches(part, name));
+    const hasChangedProp = !!look.props && changedProp(look.props);
+    const namedProp = isProp(c) && propStates.find(name => itemMatches(c.name, name));
+    if (update?.outfit === undefined && update?.marks === undefined && update?.holding === undefined && !hasChangedProp && !namedProp) continue;
+    const current = { ...look, summary: '' };
+    if (update?.outfit !== undefined) {
+      current.outfit = words(update.outfit);
+      // The cast palette can combine clothing and body colours. Dedicated skin, eye,
+      // hair and species fields still describe the person or creature.
+      delete current.palette;
+    }
+    if (update?.marks !== undefined) {
+      current.marks = update.marks.map(words).join(', ');
+      delete current.markings;
+    }
+    if (update?.holding !== undefined) {
+      current.props = update.holding.filter(item => !Object.keys(state.gone).some(name => itemMatches(item, name))).map(words).join(', ');
+    } else if (hasChangedProp && look.props) {
+      current.props = look.props.split(/[,;]/)
+        .flatMap(part => changedProp(part) ? part.split(/\s+and\s+/i).filter(piece => !changedProp(piece)) : [part])
+        .map(part => part.trim()).filter(Boolean).join(', ');
+    }
+    if (namedProp) {
+      current.summary = state.props[namedProp] ? words(state.props[namedProp].state) : 'Absent unless the current panel explicitly brings it back.';
+      delete current.palette;
+    }
+    changed.set(c.id, { ...c, look: current });
+  }
+  return changed;
+}
+
+/** A sheet or annotated upload may show an old outfit even when the text looks correct. */
+const currentIdentityReference = (ref: PlannedReference, c: Character): PlannedReference => ({
+  ...ref,
+  label: ref.kind === 'author' ? `IDENTITY REFERENCE: ${upperName(c.name)}` : ref.label,
+  instruction: 'Use this image for identity and proportions only. Use the current page for wardrobe, markings and carried items.'
+});
+
 /**
  * CAST (+ PROPS) lock for the page: every being stated once with its look; groups as
  * "DUCKLINGS ×3"; recurring props in their own list; anyone without an attached image is
@@ -1754,8 +1813,7 @@ const storySequence = (doc: ComicDoc, page: Page, opts: CompileOptions): string 
 };
 
 /** Fold the saved continuity ledger into words, using only this page's visible cast. */
-const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, string>, opts: CompileOptions): string => {
-  const state = resolveContinuity(doc, page);
+const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, string>, opts: CompileOptions, state = resolveContinuity(doc, page)): string => {
   if (!state?.content) return '';
   const words = (value?: string) => (value ? clip(safeText(value, opts), 120) : '');
   const named = (label: string, value?: string) => {
@@ -1767,7 +1825,8 @@ const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, s
   const cast = Object.entries(state.cast).flatMap(([id, change]) => {
     const name = names.get(id);
     if (!name) return [];
-    const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', change.holding?.join(', ')), named('position', change.where)].filter(Boolean);
+    const holding = change.holding?.filter(item => !Object.keys(state.gone).some(name => itemMatches(item, name)));
+    const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', holding?.join(', ')), named('position', change.where)].filter(Boolean);
     return details.length ? [`- ${name}: ${details.join('; ')}`] : [];
   });
   // A long book can accumulate hundreds of prop changes. Current directions
@@ -1810,12 +1869,15 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
   const { spec } = resolved;
   const aspect = pageAspectFor(doc, spec, page.panels.length);
   const rating = artRatingFor(doc, opts);
-  const refs = planPageReferences(doc, page, spec, opts.previousPage, opts);
+  const scope = rankPageCast(doc, page);
+  const state = resolveContinuity(doc, page);
+  const appearances = pageAppearances(scope, state, opts);
+  const refs = planPageReferences(doc, page, spec, opts.previousPage, opts, appearances);
   const index = indexReferences(refs);
   const guide = refs.some((r) => r.kind === 'layout');
   const boxes = pageLayoutBoxes(doc, page);
 
-  const cast = rankPageCast(doc, page);
+  const cast = scope.map(c => appearances.get(c.id) ?? c);
   const names = new Map(cast.map((c) => [c.id, castLabel(c)]));
   const props = new Set(cast.filter(isProp).map((c) => c.id));
   const bw = doc.format.colorMode === 'bw';
@@ -1842,9 +1904,9 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     : '';
 
   const handoff = storySequence(doc, page, opts);
-  const continuity = continuityBlock(doc, page, names, opts);
+  const continuity = continuityBlock(doc, page, names, opts, state);
   const build = (anchors: boolean, directionDrop = 0): string => {
-    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw, fixes, directionDrop };
+    const ctx: PanelBlockContext = { names, appearances, props, index, boxes, guide, anchors, colors: !bw, fixes, directionDrop };
     const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
     return [
       header,
@@ -2169,24 +2231,25 @@ export const compileEdit = (
   // Characters involved: the targeted panel's cast (or the page's), plus anyone the
   // instruction names ("add Arjun behind her") even if they aren't on the page yet.
   const named = doc.cast.filter((c) => mentions(args.instruction, c.name));
-  const scope = panel ? new Set([...panel.castIds, ...named.map((c) => c.id)]) : null;
-  const candidates = [...rankPageCast(doc, page), ...named.filter((c) => !page.panels.some((p) => p.castIds.includes(c.id)))];
+  const editPage = panel ? { ...page, panels: [panel] } : page;
+  const ranked = rankPageCast(doc, page);
+  const scope = panel ? new Set([...panel.castIds, ...named.map(c => c.id)]) : undefined;
+  const candidates = [...ranked, ...named.filter(c => !page.panels.some(p => p.castIds.includes(c.id)))]
+    .filter(c => !scope || scope.has(c.id));
+  const state = resolveContinuity(doc, page);
+  const appearances = pageAppearances(candidates, state, args);
+  const editNames = new Map(candidates.map(c => [c.id, castLabel(c)]));
+  const editContinuity = continuityBlock(doc, editPage, editNames, args, state);
   for (const c of candidates) {
     if (characterSlots <= 0 || total <= 0) break;
-    if (scope && !scope.has(c.id)) continue;
     if (c.tier === 'extra' && isProp(c)) continue; // presence, not tier (plan C7), as on pages
     const ref = characterReference(c, { effectiveRating: rating });
     if (!ref) continue;
-    refs.push({ ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
+    refs.push(appearances.has(c.id) ? currentIdentityReference(ref, c) : { ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
     characterSlots -= 1;
     total -= 1;
   }
 
-  // A correction uses the current raster/crop as its visual source. Carry the
-  // recorded story state into only the edited scope, with the new instruction authoritative.
-  const editPage = panel ? { ...page, panels: [panel] } : page;
-  const editNames = new Map(rankPageCast(doc, editPage).map(c => [c.id, castLabel(c)]));
-  const editContinuity = continuityBlock(doc, editPage, editNames, args);
   const where = args.hasRegion
     ? `The area to change is outlined in red in Image 2${panel ? ` (in panel ${panel.n})` : ''}.`
     : panel
@@ -2196,14 +2259,25 @@ export const compileEdit = (
     doc.format.lettering === 'in_art' ? 'lettering' : 'the empty balloon space (the art stays free of any text)';
   const crop = args.panelCrop, target = args.panelBox;
   const bounded = crop && target ? `Only change panel ${args.panelN} inside Image 1: left ${Math.round((target.x - crop.x) / crop.w * 100)}%, top ${Math.round((target.y - crop.y) / crop.h * 100)}%, right ${Math.round((target.x + target.w - crop.x) / crop.w * 100)}%, bottom ${Math.round((target.y + target.h - crop.y) / crop.h * 100)}%. Keep the surrounding context and framing fixed. Image 2 is the full page for continuity only.` : '';
+  if (appearances.size) {
+    const source = refs.find(ref => ref.label === 'CURRENT PAGE');
+    if (source) source.instruction = args.panelCrop
+      ? 'Use the full page for framing, stable identities, surroundings and linework. Apply the requested edit and current appearance inside the crop. Do not output the whole page.'
+      : 'Edit this page in place. Follow the requested correction and current appearance in the edited area.';
+  }
+  const keepAppearance = appearances.size ? "characters' identities and the current appearance in the edited area" : "characters' identities and outfits";
+  const keepColor = appearances.size ? 'unchanged colors and art style' : 'colors and art style';
   const prompt = [
     args.panelCrop ? `Edit Image 1, a bounded comic panel crop. Change only this: ${instruction}` : `Edit Image 1, a finished comic page. Change only this: ${instruction}`,
     bounded,
     where,
     ...(args.panelCrop && panel ? page.panels.filter((other) => Math.abs(other.n - panel.n) === 1).slice(0, 2).map((other) => `Continuity context only — ${other.n < panel.n ? 'previous' : 'next'} panel ${other.n}: ${sentence(clip(safeText(other.action, args), 160))} Do not redraw this neighboring panel.`) : []),
-    `Keep everything else exactly as it is: page layout, panel borders, every other panel, characters' identities and outfits, ${keepLettering}, colors and art style.` +
+    `Keep everything else exactly as it is: page layout, panel borders, every other panel, ${keepAppearance}, ${keepLettering}, ${keepColor}.` +
       `${args.hasRegion ? ' Do not add a red outline to the result.' : ''} ${args.panelCrop ? 'Output only the complete Image 1 crop at the same framing; never output the full page or add panels.' : 'Output the full page at the same framing.'}`,
     frameSentence(aspect, args.panelCrop ? 'panel crop' : 'page'),
+    appearances.size > 0 && [...appearances.values()].map(c =>
+      `Identity and current look for ${castLabel(c)} wherever redrawn, subject to the requested edit: ${describeLook(c, { colors: doc.format.colorMode !== 'bw', storyFixes: args.storyFixes })}`
+    ).join('\n'),
     editContinuity && `For the edited area only, keep the following story state except where this specific change overrides it.\n${editContinuity}`,
     contentParagraph(doc, args),
     referenceLegend(refs)
@@ -2245,7 +2319,7 @@ export const coverTitleBand = (doc: ComicDoc): { side: 'top' | 'bottom'; pct: nu
 const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating): PlannedReference[] => {
   if (budget.objects <= 0 || budget.total <= 0) return [];
   const ready = doc.pages
-    .filter((p) => p.render.status === 'ready' && servable(p.render.asset) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
+    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc) && servable(p.render.asset) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
     .sort((a, b) => a.n - b.n);
   const page = ready.find((p) => !isPageStale(doc, p)) || ready[0];
   if (!page?.render.asset) return [];

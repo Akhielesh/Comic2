@@ -9,6 +9,7 @@ import { GhostButton, PrimaryButton } from '../board/ui';
 import { TimelineDialog } from '../timeline/ui';
 import type { StudioController } from '../types';
 import { CORRECTION_FIELDS, correctionOp, detailAt, pageRanges, pagesUsing, type CorrectionField, type Subject } from '../../../shared/comic/pageCorrection';
+import { savedReviewNotes } from './reviewNotes';
 
 const control = `${FIELD} block min-h-11 w-full min-w-0 px-3 py-2 text-sm`;
 const label = 'grid min-w-0 gap-1 text-sm font-medium';
@@ -42,12 +43,8 @@ export function ContinuityReview({ studio, doc, page, onClose }: { studio: Studi
   const original = asset && (inspect || !thumbnail || failedImages.includes(thumbnail)) ? studio.urlFor(asset) : undefined;
   const image = original && !failedImages.includes(original) ? original : thumbnail;
   const showImage = image && !failedImages.includes(image);
-  const qc = page.render.qc;
-  const sourcePages = doc.pages.filter(p => page.render.anchorKeys?.includes(`prev:${p.id}`)).map(p => p.n).sort((a, b) => a - b);
-  const checks = [...new Set([
-    ...(qc?.findings ?? []).filter(f => !f.dismissed).map(f => f.panel ? `Panel ${f.panel} · ${f.note}` : f.note),
-    ...(qc?.issues ?? [])
-  ])];
+  const sourcePages = doc.pages.filter(p => page.render.anchorKeys?.includes(`prev:${p.id}`)).sort((a, b) => a.n - b.n);
+  const checks = savedReviewNotes(page.render.asset && !asset ? undefined : page.render.qc, new Map(sourcePages.map(p => [p.id, p.n])));
 
   function reset() { setEdit(null); setNotice(''); }
   async function save(action: 'edit' | 'remove' | 'undo') {
@@ -80,14 +77,17 @@ export function ContinuityReview({ studio, doc, page, onClose }: { studio: Studi
   return <TimelineDialog open onClose={onClose} title={`Continuity · Page ${page.n}`}>
     <div className="grid min-w-0 gap-4">
       {(asset || page.summary) && <div className={inspect ? 'grid min-w-0 gap-2' : 'flex min-w-0 items-start gap-3'}>
-        {showImage && <img src={image} alt={`Current drawing of page ${page.n}`} onError={() => setFailedImages(urls => [...urls, image])} className={inspect ? 'mx-auto max-h-[70dvh] max-w-full rounded-md object-contain' : 'h-24 w-20 shrink-0 rounded-md object-contain'} />}
+        {showImage && <img src={image} alt={`Current drawing of page ${page.n}`} onError={() => setFailedImages(urls => [...urls, image])} className={inspect ? 'mx-auto max-h-[70dvh] max-w-full overflow-hidden rounded-md object-contain' : 'h-24 w-20 shrink-0 rounded-md object-contain'} />}
         <div className="min-w-0 space-y-1"><p className="text-xs font-semibold">Page {page.n} of {doc.pages.length}</p>
           {page.summary && <p className={hint}>{page.summary}</p>}
-          {asset && sourcePages.length > 0 && <p className={hint}>This drawing used artwork from {sourcePages.length === 1 ? 'page' : 'pages'} {pageRanges(sourcePages)} as a visual reference.</p>}
+          {asset && sourcePages.length > 0 && <p className={hint}>This drawing used artwork from {sourcePages.length === 1 ? 'page' : 'pages'} {pageRanges(sourcePages.map(p => p.n))} as a visual reference.</p>}
           {showImage && <GhostButton size="xs" aria-expanded={inspect} onClick={() => setInspect(value => !value)}>{inspect ? 'Reduce artwork' : 'Inspect artwork'}</GhostButton>}
           {asset && image && !showImage && <p className={hint}>Artwork preview unavailable.</p>}</div>
       </div>}
-      {!!checks.length && <div><p className="text-sm font-semibold">Review notes on this drawing</p><ul className={`list-disc space-y-1 pl-4 ${hint}`}>{checks.map(note => <li key={note}>{note}</li>)}</ul></div>}
+      {!!checks.length && <section aria-labelledby={`${id}-checks`}>
+        <h3 id={`${id}-checks`} className="text-sm font-semibold">Review notes on this drawing</h3>
+        <ul aria-labelledby={`${id}-checks`} className={`list-disc space-y-1 pl-4 ${hint}`}>{checks.map(note => <li key={note}>{note}</li>)}</ul>
+      </section>}
       <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         <label className={label}>Subject<select className={control} value={subjectId} disabled={pending} onChange={e => { setSubjectId(e.target.value); reset(); }}>
           {cast.map(c => <option key={c.id} value={c.id}>{c.name || 'Unnamed character'}</option>)}<option value="">Prop</option></select></label>

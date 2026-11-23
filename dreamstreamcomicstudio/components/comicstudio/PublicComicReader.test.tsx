@@ -10,6 +10,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
 import { libraryReads } from '../../services/libraryDiscovery';
+const memberSync = vi.hoisted(() => ({ record: vi.fn(), close: vi.fn() }));
+vi.mock('../../services/libraryReadingSync', () => ({ createReadingRecorder: () => memberSync }));
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
 import { pageImageCache } from './immersive/pageImageCache';
 import { readerEntryOnTop } from './immersive/useImmersive';
@@ -716,15 +718,15 @@ describe('PublicComicReader — the End card the host gives', () => {
 
 describe('account-scoped Library history at the reader entry point', () => {
   it.each(['public','unlisted'] as const)('remembers actual page turns only for a public publication (%s)',async visibility=>{
-    localStorage.clear();sessionStorage.clear();
+    localStorage.clear();sessionStorage.clear();memberSync.record.mockClear();
     api.loadPublicComicBySlug.mockResolvedValue(payload({visibility}));
     render(<PublicComicReader source={{kind:'slug',slug:SLUG}} libraryReaderId="member" start={{page:2}}/>);
     await screen.findAllByTestId('reader-page');
     if (visibility==='public') {
-      await waitFor(()=>expect(libraryReads('member')[0]).toMatchObject({slug:SLUG,page:2}));
+      await waitFor(()=>expect(memberSync.record).toHaveBeenCalledWith(2, expect.any(Number)));
     } else {
-      expect(libraryReads('member')).toEqual([]);
+      expect(memberSync.record).not.toHaveBeenCalled();
     }
-    expect(libraryReads(null)).toEqual([]);
+    expect(libraryReads()).toEqual([]);
   });
 });

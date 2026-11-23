@@ -13,6 +13,7 @@
 // is written and nothing about its prompt changes; continuityAnchorFor then picks exactly today's previous page
 // (sendable.ts nearestReadyBefore).
 
+import { visualReferenceQcAllows } from './visualReferenceQc.js';
 import { CONSISTENCY_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { scenesOf, type CastStateChange, type ComicDoc, type Page, type Scene } from './doc.js';
 import { canServeToOwner } from './safety.js';
@@ -503,7 +504,7 @@ export interface ContinuityAnchor {
   pending?: true;
 }
 
-const drawnNow = (p: Page): boolean => p.render.status === 'ready' && !!p.render.asset?.path && canServeToOwner(p.render.asset);
+const drawnNow = (p: Page): boolean => p.render.status === 'ready' && !!p.render.asset?.path && visualReferenceQcAllows(p.render.qc) && canServeToOwner(p.render.asset);
 
 /**
  * The page whose drawing a page job attaches for continuity. With a ledger scene: the page right before, when it is in
@@ -513,7 +514,7 @@ const drawnNow = (p: Page): boolean => p.render.status === 'ready' && !!p.render
  */
 export const continuityAnchorFor = (doc: ComicDoc, page: Page, opts: { assumeDrawn?: ReadonlySet<string> } = {}): ContinuityAnchor => {
   const assume = opts.assumeDrawn;
-  const drawn = (p: Page) => drawnNow(p) || !!assume?.has(p.id);
+  const drawn = (p: Page) => drawnNow(p) || (!!assume?.has(p.id) && !p.render.asset);
   const pick = (p: Page, why: ContinuityAnchorWhy): ContinuityAnchor => ({ page: p, why, ...(!drawnNow(p) ? { pending: true as const } : {}) });
   const scenes = sceneIndex(doc);
   const sceneId = scenes.from === 'ledger' ? scenes.byPage[page.id] : undefined;

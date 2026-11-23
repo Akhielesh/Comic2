@@ -6,6 +6,7 @@
 // runner checks those lazily before their first use (safety.md §3.2). That extra rule lives in lab.ts and builds on
 // blockedPaths below.
 
+import { visualReferenceQcAllows } from './visualReferenceQc.js';
 import { mapAssetRefs, type AssetRef, type ComicDoc, type Page, type RenderState } from './doc.js';
 import { canServeToOwner } from './safety.js';
 
@@ -40,5 +41,5 @@ export const withoutAssets = (doc: ComicDoc, missing: ReadonlySet<string>): Comi
 /** The page before this one that a page job attaches for continuity: the nearest earlier page drawn and servable. */
 export const nearestReadyBefore = (doc: ComicDoc, page: Page): Page | undefined =>
   doc.pages
-    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && canServeToOwner(p.render.asset))
+    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && visualReferenceQcAllows(p.render.qc) && canServeToOwner(p.render.asset))
     .sort((a, b) => b.n - a.n)[0];

@@ -18,6 +18,7 @@ export const CHANNEL_LABEL: Record<ShareChannel, string> = {
   facebook: 'Facebook',
   telegram: 'Telegram',
   email: 'Email',
+  linkedin: 'LinkedIn',
   embed: 'Embed',
   direct: 'Direct'
 };

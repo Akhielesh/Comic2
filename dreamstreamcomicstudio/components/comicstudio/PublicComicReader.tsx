@@ -18,6 +18,7 @@
 // published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
+import { createReadingRecorder } from '../../services/libraryReadingSync';
 import { rememberLibraryPage } from '../../services/libraryDiscovery';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Download, ExternalLink, FileArchive, FileText, Flag, Home, Languages, RotateCcw, X } from 'lucide-react';
@@ -236,20 +237,31 @@ const ReaderShell: React.FC<ShellProps> = ({
     track!('view', lang);
   }, [canTrack, status, chooseBeforeReading, track, lang]);
   const lastPageN = useMemo(() => (doc ? Math.max(0, ...readerItems(doc).map((i) => i.page?.n ?? 0)) : 0), [doc]);
+  const readingSlug = mode === 'slug' && status === 'ready' && !embed && identityReady && !isOwner &&
+    publication?.visibility === 'public' && publication.slug === slug ? slug : undefined;
+  const memberRecorder = useRef<ReturnType<typeof createReadingRecorder> | undefined>(undefined);
+  useEffect(() => {
+    if (!readingSlug || !libraryReaderId) return;
+    const recorder = createReadingRecorder(libraryReaderId, readingSlug);
+    memberRecorder.current = recorder;
+    return () => { recorder.close(); memberRecorder.current = undefined; };
+  }, [readingSlug, libraryReaderId]);
+  useEffect(() => {
+    if (!readingSlug || !page) return;
+    if (libraryReaderId === null) rememberLibraryPage({ slug: readingSlug, visibility: 'public' }, page, lastPageN);
+    else if (libraryReaderId) void memberRecorder.current?.record(page, lastPageN);
+  }, [readingSlug, libraryReaderId, page, lastPageN]);
+
   // "Complete" means read through to the end: a link that opens on the last page (?p=, the author's
   // start page) only counts once the reader has been on an earlier page too.
   const readEarlier = useRef(false);
   const onPageChange = useCallback(
     (n: number) => {
       setPage(n);
-      if (mode === 'slug' && identityReady && !isOwner && !embed && libraryReaderId !== undefined &&
-          publication?.slug === slug && publication && status === 'ready') {
-        rememberLibraryPage(libraryReaderId, publication, n, lastPageN);
-      }
       if (n < lastPageN) readEarlier.current = true;
       else if (canTrack && lastPageN > 0 && readEarlier.current) track!('complete', lang);
     },
-    [canTrack, lastPageN, track, lang, mode, identityReady, isOwner, embed, libraryReaderId, publication, slug, status]
+    [canTrack, lastPageN, track, lang]
   );
 
   // ── The `L` key switches language (not while typing or inside the immersive reader) ──
@@ -355,7 +367,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   // file always comes from downloadPublicComic (pub/ images, published languages only).
   const builtInDownload = allowDownload && (mode === 'project' || readingExportable);
   const onShared = useCallback((channel: ReaderShareChannel) => {
-    if (canTrack) track!('share', lang, channel === 'linkedin' ? undefined : channel);
+    if (canTrack) track!('share', lang, channel);
   }, [canTrack, track, lang]);
   const pageLinkAvailable = !!shareUrl && !!publication && !!slug;
   const copyPageLink = async (n: number): Promise<boolean> => {

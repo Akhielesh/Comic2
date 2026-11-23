@@ -10,14 +10,9 @@ export interface LibraryRead {
 }
 const HISTORY_AGE = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 24;
-const HISTORY_PREFIX = 'ds.library.reads.v1.';
+export const GUEST_LIBRARY_HISTORY_KEY = 'ds.library.reads.v1.guest';
 export const LIBRARY_HISTORY_CHANGED = 'ds:library-history-changed';
 
-export const libraryHistoryKey = (owner: string | null) => HISTORY_PREFIX + (owner ?? 'guest');
-
-function historyStore(owner: string | null) {
-  return { storage: owner ? window.localStorage : window.sessionStorage, key: libraryHistoryKey(owner) };
-}
 function validRead(row: LibraryRead, now: number) {
   return (
     row &&
@@ -33,10 +28,9 @@ function validRead(row: LibraryRead, now: number) {
     now - row.at < HISTORY_AGE
   );
 }
-export function libraryReads(owner: string | null, now = Date.now()): LibraryRead[] {
+export function libraryReads(now = Date.now()): LibraryRead[] {
   try {
-    const { storage, key } = historyStore(owner);
-    const data = JSON.parse(storage.getItem(key) ?? '[]');
+    const data = JSON.parse(window.sessionStorage.getItem(GUEST_LIBRARY_HISTORY_KEY) ?? '[]');
     if (!Array.isArray(data)) return [];
     const seen = new Set<string>();
     return data
@@ -53,7 +47,6 @@ export function libraryReads(owner: string | null, now = Date.now()): LibraryRea
   }
 }
 export function rememberLibraryPage(
-  owner: string | null,
   publication: { slug: string; visibility: 'unlisted' | 'public' },
   page: number,
   lastPage: number
@@ -63,8 +56,7 @@ export function rememberLibraryPage(
   const next = { slug: publication.slug, page, lastPage, at };
   if (!validRead(next, at)) return;
   try {
-    const { storage, key } = historyStore(owner);
-    const old = libraryReads(owner, at);
+    const old = libraryReads(at);
     if (
       old[0]?.slug === next.slug &&
       old[0].page === page &&
@@ -72,8 +64,8 @@ export function rememberLibraryPage(
       at - old[0].at < 60_000
     )
       return;
-    storage.setItem(
-      key,
+    window.sessionStorage.setItem(
+      GUEST_LIBRARY_HISTORY_KEY,
       JSON.stringify([next, ...old.filter((row) => row.slug !== next.slug)].slice(0, HISTORY_LIMIT))
     );
     window.dispatchEvent(new Event(LIBRARY_HISTORY_CHANGED));
@@ -81,10 +73,9 @@ export function rememberLibraryPage(
     /* Storage can be disabled while the reader stays usable. */
   }
 }
-export function clearLibraryReads(owner: string | null) {
+export function clearLibraryReads() {
   try {
-    const { storage, key } = historyStore(owner);
-    storage.removeItem(key);
+    window.sessionStorage.removeItem(GUEST_LIBRARY_HISTORY_KEY);
     window.dispatchEvent(new Event(LIBRARY_HISTORY_CHANGED));
   } catch {
     /* Nothing stored. */
@@ -152,12 +143,9 @@ export function libraryPicks(
     ...new Map(catalog.filter((c) => SLUG_RE.test(c.slug)).map((c) => [c.slug, c])).values()
   ].filter((c) => !positions.has(c.slug) && !c.liked);
   const seeds = [...visible.values()].filter((c) => c.liked || positions.has(c.slug));
-  const keywords = new Map(
-    [...visible.values()].map((c) => [c.slug, words(c.title + ' ' + c.overview)])
-  );
+  const keywords = new Map([...visible.values()].map((c) => [c.slug, words(c.title + ' ' + c.overview)]));
   const docFreq = new Map<string, number>();
-  for (const set of keywords.values())
-    for (const word of set) docFreq.set(word, (docFreq.get(word) ?? 0) + 1);
+  for (const set of keywords.values()) for (const word of set) docFreq.set(word, (docFreq.get(word) ?? 0) + 1);
   const matches = candidates
     .flatMap((item) => {
       let best: { item: DiscoveryComic; score: number; reason: string } | undefined;
@@ -179,10 +167,7 @@ export function libraryPicks(
     .sort((a, b) => b.score - a.score || b.item.likes - a.item.likes);
   for (const match of matches) {
     if (result.length === 3) break;
-    if (
-      !usedOwners.has(match.item.owner ?? '') ||
-      !result.some((r) => r.reason.startsWith('Because you'))
-    )
+    if (!usedOwners.has(match.item.owner ?? '') || !result.some((r) => r.reason.startsWith('Because you')))
       add(match.item, match.reason);
   }
   // Balance a popular pick, a newer publication and other creators when available.

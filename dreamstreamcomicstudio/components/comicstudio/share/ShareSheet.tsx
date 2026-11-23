@@ -19,6 +19,7 @@ import type { StudioController } from '../types';
 import { ACCENT_BG, ACCENT_BG_HOVER, CONTROL_BTN, DANGER_FILL, DANGER_FILL_HOVER, DIALOG_TITLE, FOCUS_RING, FOCUS_RING_FLUSH, ON_ACCENT_TEXT, OVERLINE, RADIUS_CONTROL, SEGMENTED_ACTIVE, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { useBackLayer } from '../mobile/backStack';
+import { useAuth } from '../../../contexts/AuthContext';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
 import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
@@ -83,6 +84,7 @@ const Names: React.FC<{ langs: readonly string[]; short?: boolean }> = ({ langs,
 
 export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose }) => {
   const doc = studio.doc;
+  const { user } = useAuth();
   const view = studio.publication;
   const [layout, setLayout] = useState<Layout>(() => (typeof window === 'undefined' ? 'dialog' : sheetLayout()));
   const [segmentLeft, setSegmentLeft] = useState<number | null>(null);
@@ -599,7 +601,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             </p>
           )}
           {live && view?.allowEmbed && <EmbedSnippet url={url} title={publishedTitle} aspect={doc.format?.pageAspect} />}
-          {live && view && <ReleaseKit key={view.slug} view={view} />}
+          {live && view && <ReleaseKit projectId={doc.id} ownerId={user?.id ?? null} view={view} />}
           {live && (
             <section aria-label="Reader stats" className="min-w-0">
               <div className={cx('mb-1.5', OVERLINE)}>Readers</div>

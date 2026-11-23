@@ -7,6 +7,58 @@ import { PageCard } from '../board/PagesTab';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
 import { ContinuityReview } from './ContinuityReview';
 
+it('reads saved style and panel observations in a named list and resolves only known visual references', () => {
+  const doc = makeSampleDoc();
+  const page = doc.pages[1];
+  page.render.anchorKeys = ['prev:pg_1'];
+  page.render.qc = {
+    score: 0.724,
+    checkedAt: 1,
+    findings: [
+      { id: 'style', kind: 'style', panel: 0, severity: 'minor', note: 'The line weight changes from fine ink to thick outlines.' },
+      { id: 'color', kind: 'continuity', panel: 2, severity: 'minor', note: 'The scarf changes color.' },
+      { id: 'old', kind: 'style', panel: 2, severity: 'minor', note: 'Earlier palette concern.', dismissed: true }
+    ],
+    issues: [
+      'The line weight changes from fine ink to thick outlines.', 'The scarf changes color.', 'Earlier palette concern.',
+      'The shadows differ from prev:pg_1.', 'Check prev:pg_other.', 'Check u/member/p/book/ref/source.webp.',
+      'Open https://example.invalid/art?token=example', '<img src=x>', 'QC score: 0.724'
+    ]
+  };
+  const studio = makeFakeStudio({ doc });
+  render(<ContinuityReview studio={studio} doc={doc} page={page} onClose={vi.fn()} />);
+  const section = within(screen.getByRole('region', { name: 'Review notes on this drawing' }));
+  expect(section.getByRole('heading', { level: 3 })).toBeVisible();
+  const list = within(section.getByRole('list', { name: 'Review notes on this drawing' }));
+  expect(list.getAllByRole('listitem').map(item => item.textContent)).toEqual([
+    'The line weight changes from fine ink to thick outlines.',
+    'Panel 2 · The scarf changes color.',
+    'The shadows differ from reference page 1.'
+  ]);
+  expect(section.queryByRole('link')).toBeNull();
+  expect(studio.act).not.toHaveBeenCalled();
+});
+
+it('does not infer a clean result or print a score when the saved check has no displayable observations', () => {
+  const doc = makeSampleDoc();
+  doc.pages[0].render.qc = { score: 0.948, checkedAt: 1, issues: ['token=private', 'See file:///root/reference.png'] };
+  render(<ContinuityReview studio={makeFakeStudio({doc})} doc={doc} page={doc.pages[0]} onClose={vi.fn()} />);
+  expect(screen.queryByRole('region', { name: 'Review notes on this drawing' })).toBeNull();
+  expect(screen.getByRole('dialog')).not.toHaveTextContent(/0\.948|94\.8|token=|reference\.png|passed the check/i);
+});
+
+it('withholds a quarantined drawing and its review notes together', () => {
+  const doc = makeSampleDoc();
+  const page = doc.pages[0];
+  page.render.asset!.safety = { quarantined:true, at:1 };
+  page.render.qc = { score:0.4, checkedAt:1, issues:['A drawing detail withheld with the image.'] };
+  const studio = makeFakeStudio({doc});
+  render(<ContinuityReview studio={studio} doc={doc} page={page} onClose={vi.fn()} />);
+  expect(screen.queryByRole('img')).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Review notes on this drawing' })).toBeNull();
+  expect(screen.queryByText('A drawing detail withheld with the image.')).toBeNull();
+});
+
 it('shows earlier artwork actually used by the drawing and omits unrecognized project references', () => {
   const doc = makeSampleDoc();
   const page = doc.pages[1];

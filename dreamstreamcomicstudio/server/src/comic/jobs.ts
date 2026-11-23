@@ -2203,6 +2203,8 @@ const GENERATED_REFERENCES: ReadonlySet<string> = new Set([PANEL_REFERENCE_PATH,
 export interface AfterItem {
   id: string;
   after?: string | null;
+  /** An optional source of checked artwork. Wait for its verdict, then proceed even if that drawing failed. */
+  evidenceAfter?: string | null;
 }
 
 /**
@@ -2228,32 +2230,49 @@ export async function runAfter<T extends AfterItem>(items: readonly T[], run: (i
       seen.add(at);
     }
   }
-  const landed = new Map<string, { promise: Promise<void>; resolve: () => void }>();
-  for (const i of items) {
+  const evidence = new Map<string, string>();
+  for (const item of items) {
+    const source = item.evidenceAfter;
+    if (!source || !ids.has(source)) continue;
+    // Never introduce a cycle with an existing ordering edge (including another optional edge).
+    const stack = [source];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const next of [dep.get(id), evidence.get(id)]) if (next) stack.push(next);
+    }
+    if (!seen.has(item.id)) evidence.set(item.id, source);
+  }
+  const signal = () => {
     let resolve!: () => void;
     const promise = new Promise<void>((r) => (resolve = r));
-    landed.set(i.id, { promise, resolve });
-  }
+    return { promise, resolve };
+  };
+  const signals = new Map(items.map(item => [item.id, { landed: signal(), done: signal() }]));
   const threw = new Set<string>();
   const settled = await Promise.allSettled(
     items.map(async (item) => {
       const before = dep.get(item.id);
-      const mine = landed.get(item.id)!;
-      if (before) {
-        await landed.get(before)!.promise;
-        if (threw.has(before)) {
-          threw.add(item.id);
-          mine.resolve();
-          return;
-        }
-      }
+      const source = evidence.get(item.id);
+      const mine = signals.get(item.id)!;
       try {
-        await run(item, settle === 'stored' ? mine.resolve : () => undefined);
+        if (before) {
+          await signals.get(before)!.landed.promise;
+          if (threw.has(before)) {
+            threw.add(item.id);
+            return;
+          }
+        }
+        if (source) await signals.get(source)!.done.promise;
+        await run(item, settle === 'stored' ? mine.landed.resolve : () => undefined);
       } catch (err) {
         threw.add(item.id);
         throw err;
       } finally {
-        mine.resolve();
+        mine.landed.resolve();
+        mine.done.resolve();
       }
     })
   );
@@ -2575,7 +2594,7 @@ class RenderRun {
     const items = [
       ...schedule.order.flatMap((pageId) => {
         const job = jobsByPage.get(pageId);
-        return job ? [{ id: renderTargetKey(job.target), after: pageKey(schedule.after[pageId]), job }] : [];
+        return job ? [{ id: renderTargetKey(job.target), after: pageKey(schedule.after[pageId]), evidenceAfter: pageKey(schedule.evidenceAfter?.[pageId]), job }] : [];
       }),
       ...(coverJob ? [{ id: 'cover', after: pageKey(schedule.coverAfter), job: coverJob }] : [])
     ];
