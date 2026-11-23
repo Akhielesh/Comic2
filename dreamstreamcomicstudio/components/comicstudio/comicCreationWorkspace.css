@@ -21,7 +21,7 @@
 .comic-workspace-header-brand + .comic-workspace-title { padding-inline-start: 8px; border-inline-start: 1px solid var(--ds-hairline); }
 @media (max-width: 359px) {
   .comic-workspace-header { padding-inline: 4px; gap: 2px; }
-  .comic-workspace-header-brand { margin-inline-end: 0; }
+  .comic-workspace-header .comic-workspace-header-brand { margin-inline: 0; }
   .comic-workspace-header-brand + .comic-workspace-title { padding-inline-start: 4px; font-size: var(--ds-text-sm); }
 }
 .comic-project-nav { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--ds-ink); font-size:var(--ds-text-base); }
