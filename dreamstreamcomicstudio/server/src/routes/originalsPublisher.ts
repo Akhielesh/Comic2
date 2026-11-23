@@ -1,9 +1,8 @@
 import { Router } from 'express';
-import { ORIGINAL_KEYS, type OriginalKey } from '../comic/originals/book.js';
+import { ORIGINAL_KEYS, ORIGINAL_SLUGS, isPublishableOriginal, type OriginalKey } from '../../../shared/comic/originals.js';
 import { publishBundledOriginal } from '../comic/originals/import.js';
 import { createRateLimit } from '../middleware/rateLimit.js';
 import { authenticateCatalogMaintenance } from '../services/catalogMaintenanceAuth.js';
-import { SLUG_RE } from '../../../shared/comic/publication.js';
 
 const failureCodes = new Map([
   ['Public publication storage is unavailable.', 'STORAGE_UNAVAILABLE'],
@@ -43,6 +42,9 @@ export function createOriginalsPublisher(
       } catch {
         res.sendStatus(401); return;
       }
+      if (!isPublishableOriginal(key)) {
+        res.status(410).json({state: 'held', code: 'EDITION_HELD'}); return;
+      }
       let job = jobs.get(key);
       if (!job || (job.attempt !== attempt && job.result.state !== 'running')) {
         if (busy()) { res.setHeader('Retry-After', '12'); res.sendStatus(409); return; }
@@ -52,7 +54,7 @@ export function createOriginalsPublisher(
         // The client polls while the regular publication and safety gates complete.
         // A restarted container resumes the persisted edition through the same importer.
         void publish(key, '/app/editorial-originals').then(({slug}) => {
-          if (!SLUG_RE.test(slug)) throw new Error('Invalid published slug');
+          if (slug !== ORIGINAL_SLUGS[key]) throw new Error('Invalid published slug');
           started.result = {state: 'published', slug};
         }).catch((error: unknown) => {
           const code = error instanceof Error ? failureCodes.get(error.message) : undefined;

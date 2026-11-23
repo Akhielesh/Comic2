@@ -73,5 +73,7 @@ test('the production deploy sequence runs the readiness gate before Wrangler and
   const rollout = workflow.indexOf('run: npx wrangler deploy');
   assert.ok(gated > workflow.indexOf('run: node scripts/prepareDeploy.mjs') && gated < rollout);
   assert.match(workflow.slice(0, gated), /fetch-depth: 0/);
+  assert.match(workflow.slice(rollout), /deadline=\$\(\(SECONDS \+ 15 \* 60\)\)/);
+  assert.match(workflow.slice(rollout), /if \(\( SECONDS >= deadline \)\)/);
   assert.match(workflow.slice(rollout), /includes\(h\.releaseReadiness\).*v\.gitSha === process\.env\.GITHUB_SHA/);
 });

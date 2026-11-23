@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
-import { ORIGINAL_SLUGS, type OriginalKey } from '../../../../shared/comic/originals.js';
+import { ORIGINAL_SLUGS, isPublishableOriginal, type OriginalKey } from '../../../../shared/comic/originals.js';
 import { applyOps } from '../../../../shared/comic/ops.js';
 import type { AssetRef, ComicDoc } from '../../../../shared/comic/doc.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
@@ -74,6 +74,7 @@ export async function reviewOriginal(book: OriginalBook, source: ComicDoc) {
 }
 
 export async function publishBundledOriginal(key: OriginalKey, root: string): Promise<{ slug: string }> {
+  if (!isPublishableOriginal(key)) throw new Error('This edition is held from publication.');
   const book = await inspectOriginal(root, key);
   const db = getSupabaseAdmin();
   const bucket = await db.storage.getBucket(PUBLIC_BUCKET);

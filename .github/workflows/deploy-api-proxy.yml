@@ -104,11 +104,13 @@ jobs:
 
       # The first request after a deploy cold-starts the container (image pull + boot;
       # a brand-new container application can also take a few minutes to provision),
-      # so poll for up to 30 attempts. The workers.dev URL is the definitive check — the
+      # so allow 15 minutes for the exact image to start. The workers.dev URL is the definitive check — the
       # custom domain's bot protection challenges GitHub's datacenter IPs.
       - name: Verify the backend container runs the deployed commit
+        timeout-minutes: 16
         run: |
-          for attempt in $(seq 1 30); do
+          deadline=$((SECONDS + 15 * 60))
+          for ((attempt = 1; ; attempt++)); do
             health=$(curl --fail -s --max-time 15 https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health || true)
             version=$(curl --fail -s --max-time 15 https://dreamstream-api.akhieleshsrirangam.workers.dev/api/system/version || true)
             if HEALTH_RESPONSE="$health" VERSION_RESPONSE="$version" node -e 'try { const h = JSON.parse(process.env.HEALTH_RESPONSE); const v = JSON.parse(process.env.VERSION_RESPONSE); process.exit(h.status === "ok" && ["idle", "busy"].includes(h.releaseReadiness) && v.gitSha === process.env.GITHUB_SHA ? 0 : 1); } catch { process.exit(1); }'; then
@@ -116,7 +118,7 @@ jobs:
               break
             fi
             echo "attempt $attempt: waiting for ${GITHUB_SHA}; version=${version:0:200}; health=${health:0:120}"
-            if [ "$attempt" = 30 ]; then
+            if (( SECONDS >= deadline )); then
               echo '::error::the backend did not become healthy at the expected commit; rollout is not verified'
               exit 1
             fi

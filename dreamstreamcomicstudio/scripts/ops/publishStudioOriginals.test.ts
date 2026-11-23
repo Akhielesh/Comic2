@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { ORIGINAL_KEYS, ORIGINAL_SLUGS } from '../../shared/comic/originals';
+import { ORIGINAL_KEYS, ORIGINAL_SLUGS, PUBLISHABLE_ORIGINAL_KEYS, isOriginalSlug } from '../../shared/comic/originals';
 import { publish } from './publishStudioOriginals.mjs';
 
 const env = {
@@ -10,33 +10,39 @@ const env = {
 };
 
 describe('Studio Originals release', () => {
-  it('assigns each registered book a separate job that survives another job failing', () => {
+  it('schedules the four current books independently and preserves all five registered reader identities', () => {
     const workflow = readFileSync(new URL('../../../.github/workflows/publish-studio-originals.yml', import.meta.url), 'utf8');
     expect(workflow).toMatch(/fail-fast:\s*false/);
     expect(workflow).toMatch(/ORIGINAL_BOOK:\s*\$\{\{ matrix.book \}\}/);
-    const titles = workflow.match(/book:\s*\[([^\]]+)\]/)?.[1].split(',').map((title) => title.trim());
-    expect(titles?.sort()).toEqual([...ORIGINAL_KEYS].sort());
+    const titles = workflow
+      .match(/book:\s*\[([^\]]+)\]/)?.[1]
+      .split(',')
+      .map((title) => title.trim());
+    expect(titles?.sort()).toEqual([...PUBLISHABLE_ORIGINAL_KEYS].sort());
+    expect(titles).toContain('harbor');
+    expect(titles).not.toContain('tide');
+    expect(ORIGINAL_KEYS).toHaveLength(5);
+    expect(isOriginalSlug(ORIGINAL_SLUGS.tide)).toBe(true);
   });
 
-  it('reports the held title and gives the reader URL for each independently approved title', async () => {
-    const jobs = ORIGINAL_KEYS.map((key) => {
-      const fetcher = vi.fn()
+  it('returns the exact independent reader URL for each publishable title', async () => {
+    for (const key of PUBLISHABLE_ORIGINAL_KEYS) {
+      const fetcher = vi
+        .fn()
         .mockResolvedValueOnce(Response.json({ value: 'test-workflow-token' }))
-        .mockResolvedValueOnce(key === 'tide'
-          ? Response.json({ code: 'REVIEW_INCOMPLETE' }, { status: 503 })
-          : Response.json({ state: 'published', slug: ORIGINAL_SLUGS[key] }));
-      return publish(key, env, fetcher);
-    });
-    const results = await Promise.allSettled(jobs);
-    for (const [index, key] of ORIGINAL_KEYS.entries()) {
-      if (key === 'tide') expect(results[index]).toMatchObject({ status: 'rejected', reason: new Error('Publishing tide returned HTTP 503 (REVIEW_INCOMPLETE)') });
-      else expect(results[index]).toEqual({ status: 'fulfilled', value: 'https://comics.dreamstreamstudio.ai/c/' + ORIGINAL_SLUGS[key] });
+        .mockResolvedValueOnce(Response.json({ state: 'published', slug: ORIGINAL_SLUGS[key] }));
+      await expect(publish(key, env, fetcher)).resolves.toBe('https://comics.dreamstreamstudio.ai/c/' + ORIGINAL_SLUGS[key]);
     }
+    const wrong = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ value: 'test-token' }))
+      .mockResolvedValueOnce(Response.json({ state: 'published', slug: ORIGINAL_SLUGS.tide }));
+    await expect(publish('harbor', env, wrong)).rejects.toThrow('incomplete result');
   });
 
   it('rejects unregistered books before requesting a workflow credential', async () => {
     const fetcher = vi.fn();
-    await expect(publish('unregistered', env, fetcher)).rejects.toThrow('Select one registered Studio Original');
+    for (const key of ['unregistered', 'tide']) await expect(publish(key, env, fetcher)).rejects.toThrow('currently open for publication');
     expect(fetcher).not.toHaveBeenCalled();
   });
 });

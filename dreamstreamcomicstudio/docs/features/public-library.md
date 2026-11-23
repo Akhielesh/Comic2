@@ -54,6 +54,12 @@ The Library combines the approved editorial editions from `comic_originals_catal
 
 Each registered editorial slug uses its own published share-card and frozen-payload RPC on the ordinary `/c/<slug>`, embed and oEmbed routes. Withdrawing the publication removes its Library entry and makes its reader unavailable. Editorial feedback opens the shared report form with the title and current page editable before submission.
 
+### Registering and publishing an edition
+
+The publisher processes `orchard`, `fox`, `table-nine` and `harbor` independently. Apply `server/sql/studio_original_harbor.sql` after `studio_original_editions.sql` to register Harbor’s independent identifier. The migration checks for member slug collisions. Harbor first appears at `/c/DSOriginalPort001` once the deployed publisher has checked its manuscript, cover and fifteen page illustrations and verified the uploaded bytes. The normal publication workflow waits for the deployed backend to match the selected Git revision.
+
+Tide’s identifier is reserved for its historical record. Operators can inspect its bundled files offline with `npx tsx scripts/ops/studioOriginal.ts check tide server/assets/originals`. The publisher rejects a release request for the held edition.
+
 ## A small Library
 
 With no listed Originals and `LIBRARY_TOOLS_MIN` (6) member comics or fewer the Library shows the comics and nothing else: no search box, sort,

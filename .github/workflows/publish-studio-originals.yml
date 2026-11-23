@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        book: [tide, orchard, fox, table-nine]
+        book: [orchard, fox, table-nine, harbor]
     timeout-minutes: 90
     permissions:
       contents: read

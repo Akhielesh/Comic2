@@ -444,15 +444,14 @@ describe('the rated description', () => {
   });
 });
 
-it('uses the editorial authority for an Original share card, organization attribution and embed page on both comic hosts', async () => {
-  const slug='DSOriginalTree001';
+it.each([['DSOriginalTree001','The Last Orchard on Six'],['DSOriginalPort001','The Harbor That Listened']])('uses the editorial share card, Organization byline and embed page for %s on both comic hosts', async (slug,title) => {
   for (const host of ['comics.dreamstreamstudio.ai','comic.dreamstreamstudio.ai']) {
-    const e=env(card({slug,visibility:'public'}, {title:'The Last Orchard on Six',creator:'DreamStream Studio Originals',pageCount:15,i18n:{}}));
+    const e=env(card({slug,visibility:'public'}, {title,creator:'DreamStream Studio Originals',pageCount:15,i18n:{}}));
     const req=new Request('https://'+host+'/c/'+slug);
     const result=await handleShare(req,e);
     expect(result.status).toBe(200);
     const html=await result.text();
-    expect(html).toContain('The Last Orchard on Six');
+    expect(html).toContain(title);
     expect(html).toContain('"author":{"@type":"Organization","name":"DreamStream Studio Originals"}');
     expect(e.calls[0]).toMatch(/\/comic_originals_share_card$/);
     expect((await handleShare(new Request(req.url+'/embed'),e)).status).toBe(200);
