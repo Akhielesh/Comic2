@@ -789,3 +789,28 @@ describe('account-scoped Library history at the reader entry point', () => {
     expect(libraryReads()).toEqual([]);
   });
 });
+
+it('attributes a direct Original, opens editable editorial feedback and avoids member publication writes', async () => {
+  const slug='DSOriginalTree001';
+  const doc=snapshotDoc(d=>{d.cover.title='The Last Orchard on Six'; d.cover.readerAlt='An apprentice kneels beside a pear tree above a blue planet.';});
+  const edition=payload({slug,visibility:'public'},doc);
+  edition.publication.card.creator='DreamStream Studio Originals';
+  const feedback=vi.fn();
+  window.addEventListener('dreamstream:open-feedback-report',feedback);
+  memberSync.record.mockClear();
+  try {
+    api.loadPublicComicBySlug.mockResolvedValue(edition);
+    const {unmount}=render(<PublicComicReader source={{kind:'slug',slug}} libraryReaderId="member" />);
+    expect(await screen.findByRole('img',{name:doc.cover.readerAlt})).toBeVisible();
+    expect(screen.getByText(/DreamStream Studio Originals/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'More'}));
+    fireEvent.click(screen.getByRole('menuitem',{name:'Report this comic'}));
+    expect(feedback.mock.calls[0][0].detail.editorialContext).toContain('The Last Orchard on Six');
+    expect(screen.queryByRole('heading',{name:'Report this comic'})).toBeNull();
+    unmount();
+    render(<PublicComicReader source={{kind:'slug',slug}} libraryReaderId="member" start={{page:2}} />);
+    await screen.findAllByTestId('reader-page');
+    expect(api.trackPublicEvent).not.toHaveBeenCalled();
+    expect(memberSync.record).not.toHaveBeenCalled();
+  } finally { window.removeEventListener('dreamstream:open-feedback-report',feedback); }
+});

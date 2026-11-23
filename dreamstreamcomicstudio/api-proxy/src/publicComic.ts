@@ -18,9 +18,10 @@
  * Rate limits use Workers Rate Limiting bindings (no secrets in wrangler.jsonc).
  */
 import { comicShareUrl, COMICS_ORIGIN } from '../../services/productHost';
+import { isOriginalSlug } from '../../shared/comic/originals';
 import { SLUG_RE } from '../../shared/comic/publication';
 import { escAttr, validateShareCardRpc, type ShareCardRpc } from '../../functions/_shared/shareHead';
-import { rpc, supabaseOrigin, type SupabaseEnv } from '../../functions/_shared/supabaseRpc';
+import { publicPayloadRpcFor, rpc, shareCardRpcFor, supabaseOrigin, type SupabaseEnv } from '../../functions/_shared/supabaseRpc';
 import { readCappedText } from './readCapped';
 
 export interface RateLimiter {
@@ -146,7 +147,7 @@ async function handlePayload(req: Request, env: PublicComicEnv, slug: string): P
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(req, env, '{"error":{"message":"Method not allowed.","code":"METHOD"}}', 405, { allow: 'GET, HEAD' });
   if (!(await allow(env.PUBLIC_COMIC_RL, `payload:${clientIp(req)}`))) return tooMany(req, env);
   if (!SLUG_RE.test(slug)) return notFound(req, env);
-  const result = await rpc<unknown>(env, 'comic_public_payload', { p_slug: slug }, { timeoutMs: 4000 });
+  const result = await rpc<unknown>(env, publicPayloadRpcFor(slug), { p_slug: slug }, { timeoutMs: 4000 });
   if (!result.ok) return json(req, env, '{"error":{"message":"Comics are taking a moment to load. Try again shortly.","code":"UNAVAILABLE"}}', 503, { 'retry-after': '5' });
   const raw = result.data;
   if (!isRecord(raw) || !isRecord(raw.publication) || !isRecord(raw.doc)) return notFound(req, env);
@@ -196,7 +197,7 @@ async function handleEvent(req: Request, env: PublicComicEnv, ctx: Ctx, slug: st
   const accepted = new Response(null, { status: 204, headers: { ...SECURITY_HEADERS } });
   if (req.method !== 'POST') return json(req, env, '{"error":{"message":"Method not allowed.","code":"METHOD"}}', 405, { allow: 'POST' });
   // Analytics never hold readers up and never answer differently for live vs dead links.
-  if (!SLUG_RE.test(slug) || !env.SHARE_VIEW_SALT || env.SHARE_VIEW_SALT.length < 32) return accepted;
+  if (!SLUG_RE.test(slug) || isOriginalSlug(slug) || !env.SHARE_VIEW_SALT || env.SHARE_VIEW_SALT.length < 32) return accepted;
   if (!(await allow(env.PUBLIC_EVENT_RL, `event:${clientIp(req)}`))) return accepted;
   // Capped read: an unsized (chunked / HTTP-2) body is cancelled past 1 KB, never buffered whole.
   const text = await readCappedText(req, 1024);
@@ -281,7 +282,7 @@ async function handleOembed(req: Request, env: PublicComicEnv, url: URL): Promis
   if (format && format !== 'json') return json(req, env, '{"error":{"message":"Only JSON is supported.","code":"FORMAT"}}', 501);
   const slug = slugFromShareUrl(url.searchParams.get('url'));
   if (!slug) return json(req, env, '{"error":{"message":"Only DreamStream comic links are supported.","code":"BAD_REQUEST"}}', 400);
-  const result = await rpc<unknown>(env, 'comic_share_card', { p_slug: slug });
+  const result = await rpc<unknown>(env, shareCardRpcFor(slug), { p_slug: slug });
   if (!result.ok) return json(req, env, '{"error":{"message":"Try again shortly.","code":"UNAVAILABLE"}}', 503, { 'retry-after': '5' });
   const card = validateShareCardRpc(result.data);
   if (!card || card.slug !== slug) return notFound(req, env);

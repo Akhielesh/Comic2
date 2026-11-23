@@ -53,6 +53,7 @@ RUN fc-cache -f /usr/local/share/fonts/dreamstream \
  && fc-list : family | grep -q "Noto Sans Devanagari" \
  && fc-list : family | grep -q "Bangers" \
  && node --input-type=module -e "const { default: sharp } = await import('sharp'); const { data, info } = await sharp({ text: { text: 'नमस्ते Hello', font: 'Noto Sans Devanagari, Bangers 48px', rgba: true } }).png().toBuffer({ resolveWithObject: true }); if (data.length < 200 || info.width < 120) { console.error('OG font smoke failed', info); process.exit(1); } console.log('OG font smoke ok', info.width + 'x' + info.height);"
+COPY server/assets/originals /app/editorial-originals
 COPY --from=build /out/server.mjs ./server.mjs
 # Pyodide caches packages it downloads next to itself — the app user must own /app.
 RUN chown -R node:node /app

@@ -65,6 +65,21 @@ describe('catalog maintenance GitHub OIDC trust', () => {
   it('accepts the immutable ID subject only with all other trust claims', () => {
     expect(() => validateMaintenanceClaims(claims({ sub: 'repo:Akhielesh@102168504/Comic2@1151761968:ref:refs/heads/Dreamstrream-v1' }), 'refresh', now)).not.toThrow();
   });
+  it('authorizes the Originals workflow only for release pushes and manual runs with its own audience', async () => {
+    const identity = claims({
+      event_name: 'workflow_dispatch', aud: 'urn:dreamstream:originals-publisher',
+      workflow_ref: 'Akhielesh/Comic2/.github/workflows/publish-studio-originals.yml@refs/heads/Dreamstrream-v1'
+    });
+    const auth = createMaintenanceAuthenticator(fetchKeys() as typeof fetch, () => now);
+    await expect(auth(token(identity), 'publish-originals')).resolves.toEqual({ runId: '43521777624', attempt: '1' });
+    const validate = (change: Record<string, unknown>) => validateMaintenanceClaims({...identity, ...change}, 'publish-originals', now);
+    expect(() => validate({event_name: 'schedule'})).toThrow();
+    expect(() => validate({event_name: 'push'})).not.toThrow();
+    expect(() => validate({event_name: 'pull_request'})).toThrow();
+    expect(() => validate({aud: CATALOG_MAINTENANCE_AUDIENCE})).toThrow();
+    expect(() => validate({workflow_ref: claims().workflow_ref})).toThrow();
+    expect(() => validateMaintenanceClaims(identity, 'refresh', now)).toThrow();
+  });
   it('rejects cross-operation tokens and tampered signatures', async () => {
     const authenticate = createMaintenanceAuthenticator(fetchKeys() as typeof fetch, () => now);
     await expect(authenticate(token(), 'probe-nvidia')).rejects.toThrow();

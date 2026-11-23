@@ -513,6 +513,8 @@ export interface Balloon {
 }
 
 export interface Page {
+  /** Written for readers and reviewed at publication. The private planning summary stays separate. */
+  readerAlt?: string;
   id: string;
   /** 1-based page number. */
   n: number;
@@ -793,6 +795,8 @@ export interface CoverTitleStyle {
 export const DEFAULT_COVER_TITLE_BOX: Box = { x: 0.06, y: 0.04, w: 0.88, h: 0.2 };
 
 export interface Cover {
+  /** Author-supplied public visual description of the cover illustration. */
+  readerAlt?: string;
   title?: string;
   tagline?: string;
   direction?: string;

@@ -1,3 +1,4 @@
+import { githubIdentityToken } from './actionsIdentity.mjs';
 import { pathToFileURL } from 'node:url';
 
 export const AUDIENCE = 'urn:dreamstream:catalog-maintenance';
@@ -7,19 +8,7 @@ const ACTIONS = new Set(['refresh', 'probe-nvidia']);
 /** Runs only in the two allow-listed Actions jobs. Never logs identity tokens or credentials. */
 export async function runMaintenance(action, env = process.env, fetcher = fetch) {
   if (!ACTIONS.has(action)) throw new Error('Unsupported maintenance operation');
-  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw new Error('GitHub OIDC permission is unavailable');
-  const identityUrl = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
-  if (identityUrl.protocol !== 'https:' || !identityUrl.hostname.endsWith('.actions.githubusercontent.com')) {
-    throw new Error('Unexpected GitHub OIDC endpoint');
-  }
-  identityUrl.searchParams.set('audience', AUDIENCE);
-  const identity = await fetcher(identityUrl, {
-    headers: { Authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
-    redirect: 'error', signal: AbortSignal.timeout(15_000)
-  });
-  if (!identity.ok) throw new Error(`GitHub OIDC request failed (${identity.status})`);
-  const { value: token } = await identity.json();
-  if (typeof token !== 'string' || token.length > 16_000 || !token) throw new Error('GitHub returned no identity token');
+  const token = await githubIdentityToken(AUDIENCE, env, fetcher);
   const response = await fetcher(`${ORIGIN}/api/internal/catalog/${action}`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     redirect: 'error', signal: AbortSignal.timeout(10 * 60_000)

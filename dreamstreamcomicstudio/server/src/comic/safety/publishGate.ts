@@ -34,6 +34,7 @@ import {
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import {
   publishableText,
+  effectiveRating,
   ratingRank,
   safetyStatusOf,
   type ContentRating,
@@ -45,7 +46,7 @@ import { logger } from '../../lib/logger.js';
 import { StudioError, type StudioContext } from '../types.js';
 import { SAFETY_CHECK_USD, SAFETY_TEXT_USD, checkImage, classifyText } from './check.js';
 import { CLASSIFIER_CHARS, categoryWords, contentHash, prefilterDetail } from './contentPolicy.js';
-import { errorFacts, ratingOf, recordDecision, safetyDeps, sha256Hex } from './deps.js';
+import { errorFacts, recordDecision, safetyDeps, sha256Hex } from './deps.js';
 
 export interface PublishGateResult {
   status: 'cleared' | 'needs_check' | 'blocked';
@@ -142,7 +143,18 @@ export const reasonsFor = (status: SafetyStatus, verdict: SafetyVerdict | undefi
 };
 
 /** The image check for one asset (platform key); no verdict when unavailable. `called`: a check was sent. */
-async function checkAsset(ctx: StudioContext, asset: AssetRef, rating: ContentRating): Promise<{ verdict?: SafetyVerdict; costUsd: number; called: boolean }> {
+export interface PublishGateContext {
+  rating?: StudioContext['rating'];
+  caps?: StudioContext['caps'];
+  signal: AbortSignal;
+  userId: string | null;
+  projectId: string | null;
+  assets: Pick<StudioContext['assets'], 'previewDataUrl' | 'loadDataUrl'>;
+  session: Pick<StudioContext['session'], 'commit'>;
+}
+
+/** The image check for one asset (platform key); no verdict when unavailable. */
+async function checkAsset(ctx: PublishGateContext, asset: AssetRef, rating: ContentRating): Promise<{ verdict?: SafetyVerdict; costUsd: number; called: boolean }> {
   const deps = safetyDeps();
   const llm = deps.platformLlm();
   if (!llm || !deps.classifierOn()) return { costUsd: 0, called: false };
@@ -199,7 +211,7 @@ interface ImageJudgement {
  * every window that answered is reported, even when the text ends up unchecked; `unusable` counts the
  * windows that were sent and came back with no answer.
  */
-async function classifyWindows(ctx: StudioContext, parts: string[], rating: ContentRating): Promise<{ verdict: TextVerdict | null; costUsd: number; unusable: number }> {
+async function classifyWindows(ctx: PublishGateContext, parts: string[], rating: ContentRating): Promise<{ verdict: TextVerdict | null; costUsd: number; unusable: number }> {
   const llm = safetyDeps().platformLlm();
   if (!llm) return { verdict: null, costUsd: 0, unusable: 0 };
   let costUsd = 0;
@@ -224,12 +236,12 @@ async function classifyWindows(ctx: StudioContext, parts: string[], rating: Cont
 
 /** Gate a publish (both visibilities, every published language). */
 export async function runPublishGateImpl(
-  ctx: StudioContext,
+  ctx: PublishGateContext,
   doc: ComicDoc,
   opts: { pageIds: string[]; includeCover: boolean; languages: string[] }
 ): Promise<PublishGateResult> {
   const deps = safetyDeps();
-  const rating = ratingOf(ctx, doc);
+  const rating = ctx.rating ?? effectiveRating(doc, ctx.caps?.ratingCeiling).rating;
   const at = deps.now();
   const ops: DocOp[] = [];
   let costUsd = 0;
@@ -406,7 +418,7 @@ export async function runPublishGateImpl(
     costUsd,
     operation: 'comic.safety.publish'
   });
-  if (status === 'blocked') {
+  if (status === 'blocked' && ctx.projectId && ctx.userId) {
     await deps.store
       .moderationAction({
         projectId: ctx.projectId,

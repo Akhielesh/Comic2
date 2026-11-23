@@ -12,6 +12,7 @@
  * slug/asset key — never echoed from the request. The data itself comes from the anon RPC
  * `comic_share_card` and is shape-validated here (validateShareCardRpc) before use.
  */
+import { isOriginalSlug } from '../../shared/comic/originals';
 import type { AspectRatio } from '../../shared/comic/doc';
 import { SLUG_RE, ratedDescription, type ShareCard } from '../../shared/comic/publication';
 import { COMICS_ORIGIN, comicShareUrl } from '../../services/productHost';
@@ -308,7 +309,7 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
       numberOfPages: pages,
       // schema.org CreativeWork.contentRating: the publish gate's frozen G / PG / PG-13.
       ...(rpc.rating ? { contentRating: rpc.rating } : {}),
-      ...(rpc.card.creator ? { author: { '@type': 'Person', name: rpc.card.creator } } : {}),
+      ...(rpc.card.creator ? { author: { '@type': isOriginalSlug(rpc.slug) ? 'Organization' : 'Person', name: rpc.card.creator } } : {}),
       publisher: { '@type': 'Organization', name: SITE_NAME }
     };
     out.push(`<script type="application/ld+json">${jsonForScript(ld)}</script>`);

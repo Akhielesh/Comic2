@@ -17,7 +17,7 @@
 import { parseShareParams, SLUG_RE } from '../../shared/comic/publication';
 import { buildCsp, inlineHashes } from '../_shared/csp';
 import { injectHead, notFoundHead, publicOrigin, renderShareHead, validateShareCardRpc, type ShareCardRpc } from '../_shared/shareHead';
-import { rpc, supabaseOrigin, type SupabaseEnv } from '../_shared/supabaseRpc';
+import { rpc, shareCardRpcFor, supabaseOrigin, type SupabaseEnv } from '../_shared/supabaseRpc';
 
 export interface ShareEnv extends SupabaseEnv {
   ASSETS: { fetch(input: Request | string | URL, init?: RequestInit): Promise<Response> };
@@ -80,7 +80,7 @@ export async function handleShare(request: Request, env: ShareEnv): Promise<Resp
   const parsed = parseSharePath(url.pathname);
   if (!parsed) return notFound(request, env);
 
-  const result = await rpc<unknown>(env, 'comic_share_card', { p_slug: parsed.slug });
+  const result = await rpc<unknown>(env, shareCardRpcFor(parsed.slug), { p_slug: parsed.slug });
   if (!result.ok) {
     // Database slow/down: people still get the app (it shows its own error if the read fails too).
     const html = await shell(env, request);

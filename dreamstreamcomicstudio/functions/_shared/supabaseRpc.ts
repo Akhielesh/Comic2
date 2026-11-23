@@ -9,6 +9,11 @@
  * Function names are allow-listed too.
  */
 
+import { isOriginalSlug } from '../../shared/comic/originals';
+
+export const shareCardRpcFor = (slug: string) => isOriginalSlug(slug) ? 'comic_originals_share_card' : 'comic_share_card';
+export const publicPayloadRpcFor = (slug: string) => isOriginalSlug(slug) ? 'comic_originals_public_payload' : 'comic_public_payload';
+
 /** Public project constants (identical to api-proxy/wrangler.jsonc vars and the frontend bundle). */
 export const PUBLIC_SUPABASE_URL = 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co';
 export const PUBLIC_SUPABASE_ANON_KEY =
@@ -22,6 +27,8 @@ export interface SupabaseEnv {
 const RPC_NAMES = new Set([
   'comic_share_card',
   'comic_public_payload',
+  'comic_originals_share_card',
+  'comic_originals_public_payload',
   'comic_share_card_by_project',
   'comic_publication_track',
   // Discover's listing (server/sql/comic_discovery.sql; api-proxy/src/publicDiscover.ts): live public comics only.

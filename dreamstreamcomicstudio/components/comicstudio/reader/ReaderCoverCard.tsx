@@ -18,6 +18,7 @@ export interface ReaderCoverCardProps {
   /** Public creator name (only when the author chose to show it). */
   creator?: string;
   coverUrl?: string;
+  coverAlt?: string;
   fallbackCoverUrl?: string;
   /** Cover width / height. */
   aspect?: number;
@@ -61,6 +62,7 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
   logline,
   creator,
   coverUrl,
+  coverAlt,
   fallbackCoverUrl,
   aspect,
   pageCount,
@@ -109,7 +111,7 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
             <img
               ref={coverImage}
               src={visibleCover}
-              alt={`Cover of ${title}`}
+              alt={coverAlt || `Cover of ${title}`}
               className="absolute inset-0 h-full w-full object-cover"
               decoding="async"
               fetchPriority="high"

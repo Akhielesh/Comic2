@@ -159,6 +159,18 @@ describe('200: the listing', () => {
     expect(decodeDiscoverPage(body)).toEqual(body);
   });
 
+  it('preserves the official editorial byline and never accepts it for a member slug', async () => {
+    const slug = 'DSOriginalTide001';
+    const creator = { username: 'DreamStream Studio Originals' };
+    const rpc = fakeRpc(() => listOk([rpcItem({ slug, creator }), rpcItem({ creator })]));
+    const res = (await call('/api/comic/public/discover?slugs=' + slug + ',' + SLUG, { rpc: rpc.fn }))!;
+    expect(rpc.calls[0].args.p_slugs).toEqual([slug, SLUG]);
+    const page = await res.json() as DiscoverPage;
+    expect(page.items[0].creator).toEqual(creator);
+    expect(page.items[1].creator).toBeUndefined();
+    expect(decodeDiscoverPage(page)).toEqual(page);
+  });
+
   it('pages with the opaque cursor: next goes back as cursor and becomes the keyset (the slug only)', async () => {
     const rpc = fakeRpc(() => listOk([rpcItem()], { slug: SLUG }));
     const first = (await (await call('/api/comic/public/discover?sort=new', { rpc: rpc.fn }))!.json()) as DiscoverPage;
