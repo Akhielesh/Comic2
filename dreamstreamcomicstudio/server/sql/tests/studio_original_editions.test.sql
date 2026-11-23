@@ -1,7 +1,5 @@
 \set ON_ERROR_STOP on
-create role anon;
-create role authenticated;
-create role service_role bypassrls;
+-- The shared harness provisions the three Supabase roles before this isolated fixture.
 create table public.comic_publications(slug text,asset_key text);
 grant select on public.comic_publications to service_role;
 alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
@@ -46,3 +44,5 @@ do $$begin
 end$$;
 set role anon;
 select public.comic_originals_catalog();
+reset role;
+\echo STUDIO_ORIGINAL_EDITIONS_OK
