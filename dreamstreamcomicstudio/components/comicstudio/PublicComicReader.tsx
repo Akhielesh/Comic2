@@ -18,10 +18,12 @@
 // published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
+import { createReadingRecorder } from '../../services/libraryReadingSync';
+import { rememberLibraryPage } from '../../services/libraryDiscovery';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Download, ExternalLink, FileArchive, FileText, Flag, Home, Languages, RotateCcw, X } from 'lucide-react';
 import type { AssetRef, ComicDoc } from '../../shared/comic/doc';
-import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo } from '../../shared/comic/publication';
+import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo, type ShareChannel } from '../../shared/comic/publication';
 import { canServeToOwner, isContentRating, type ContentRating } from '../../shared/comic/safety';
 import { languageSpec, sameLanguage } from '../../shared/comic/languages';
 import { COMIC_STUDIO_SKIN, COMICS_ORIGIN, comicsUrl } from '../../services/productHost';
@@ -47,6 +49,8 @@ import { readerItems, resolvePageN } from './reader/readerModel';
 import { RatingBadge } from './safety/RatingBadge';
 import { ReportDialog } from './safety/ReportDialog';
 import { ShareButton } from './share/ShareButton';
+import type { ReaderShareChannel } from './share/ReaderShare';
+import { copyText } from './share/useShareCapabilities';
 import { LIBRARY_HREF } from './share/shareModel';
 import { usePublicComic, type ShareBoot } from './share/usePublicComic';
 import { loadPublicComic } from './studioApi';
@@ -64,6 +68,8 @@ export interface PublicComicReaderProps {
   isOwner?: boolean;
   /** Owner detection has settled (analytics wait for it, so an owner's own view is never counted). */
   identityReady?: boolean;
+  /** A member on this device, or a guest in this tab. Omitted for non-app readers. */
+  libraryReaderId?: string | null;
   /** Where the reader starts (default: read from the address bar: ?p= ?guided=1 ?panel=). */
   start?: PublicReaderStart;
 }
@@ -145,8 +151,9 @@ interface ShellProps {
   start: PublicReaderStart;
   isOwner: boolean;
   identityReady: boolean;
+  libraryReaderId?: string | null;
   onClose?: () => void;
-  track?: (type: 'view' | 'complete' | 'share', lang?: string) => void;
+  track?: (type: 'view' | 'complete' | 'share', lang?: string, channel?: ShareChannel) => void;
 }
 
 const ReaderShell: React.FC<ShellProps> = ({
@@ -164,6 +171,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   start,
   isOwner,
   identityReady,
+  libraryReaderId,
   onClose,
   track
 }) => {
@@ -229,6 +237,21 @@ const ReaderShell: React.FC<ShellProps> = ({
     track!('view', lang);
   }, [canTrack, status, chooseBeforeReading, track, lang]);
   const lastPageN = useMemo(() => (doc ? Math.max(0, ...readerItems(doc).map((i) => i.page?.n ?? 0)) : 0), [doc]);
+  const readingSlug = mode === 'slug' && status === 'ready' && !embed && identityReady && !isOwner &&
+    publication?.visibility === 'public' && publication.slug === slug ? slug : undefined;
+  const memberRecorder = useRef<ReturnType<typeof createReadingRecorder> | undefined>(undefined);
+  useEffect(() => {
+    if (!readingSlug || !libraryReaderId) return;
+    const recorder = createReadingRecorder(libraryReaderId, readingSlug);
+    memberRecorder.current = recorder;
+    return () => { recorder.close(); memberRecorder.current = undefined; };
+  }, [readingSlug, libraryReaderId]);
+  useEffect(() => {
+    if (!readingSlug || !page) return;
+    if (libraryReaderId === null) rememberLibraryPage({ slug: readingSlug, visibility: 'public' }, page, lastPageN);
+    else if (libraryReaderId) void memberRecorder.current?.record(page, lastPageN);
+  }, [readingSlug, libraryReaderId, page, lastPageN]);
+
   // "Complete" means read through to the end: a link that opens on the last page (?p=, the author's
   // start page) only counts once the reader has been on an earlier page too.
   const readEarlier = useRef(false);
@@ -343,10 +366,27 @@ const ReaderShell: React.FC<ShellProps> = ({
   // built-in PDF (which draws from display URLs): they call `download('pdf')` above, so a share link's
   // file always comes from downloadPublicComic (pub/ images, published languages only).
   const builtInDownload = allowDownload && (mode === 'project' || readingExportable);
+  const onShared = useCallback((channel: ReaderShareChannel) => {
+    if (canTrack) track!('share', lang, channel);
+  }, [canTrack, track, lang]);
+  const pageLinkAvailable = !!shareUrl && !!publication && !!slug;
+  const copyPageLink = async (n: number): Promise<boolean> => {
+    if (!pageLinkAvailable || !slug || !publication || !doc?.pages.some((item) => item.n === n)) return false;
+    const publishedLang = publication.languages.find((item) => sameLanguage(item, lang));
+    const link = buildShareUrl(COMICS_ORIGIN, slug, { page: n, lang: publishedLang, via: 'copy' }, { defaultLang: publication.defaultLang });
+    const copied = await copyText(link);
+    if (copied) onShared('copy');
+    return copied;
+  };
   const moreItems: ReaderMenuItem[] = canReport
     ? [{ id: 'report', label: 'Report this comic', icon: <Flag className="h-4 w-4" aria-hidden />, onSelect: () => setReportOpen(true) }]
     : [];
 
+  if (pageLinkAvailable && view === 'inline' && page > 0) {
+    moreItems.unshift({ id: 'page-link', label: `Copy link to page ${page}`, icon: <BookOpen className="h-4 w-4" aria-hidden />, onSelect: async () => {
+      setNotice(await copyPageLink(page) ? 'Page link copied' : 'Couldn’t copy the page link.');
+    } });
+  }
   const endCard = useMemo(
     () => ({
       authorName: boot?.card.creator,
@@ -386,26 +426,24 @@ const ReaderShell: React.FC<ShellProps> = ({
       ...(start.page !== undefined ? { page: start.page === 0 ? 'cover' : start.page } : {})
     });
   };
-  const onShareClick = useCallback(() => {
-    if (canTrack) track!('share', lang);
-  }, [canTrack, track, lang]);
   // Embeds have no header: the reader's own Share (Web Share, else copy the link).
   const shareNow = useCallback(async () => {
     if (!shareUrl) return;
-    onShareClick();
     try {
       const nav = navigator as Navigator & { share?: (d: { title?: string; url?: string }) => Promise<void> };
       if (typeof nav.share === 'function') {
         await nav.share({ title: sharedTitle, url: shareUrl });
+        onShared('native');
         return;
       }
-      await navigator.clipboard.writeText(shareUrl);
+      if (!await copyText(shareUrl)) throw new Error('Copy failed');
+      onShared('copy');
       setNotice('Link copied');
     } catch (err) {
       if ((err as { name?: string })?.name === 'AbortError') return;
       setNotice('Couldn’t share — copy the link from the address bar instead.');
     }
-  }, [shareUrl, onShareClick, sharedTitle]);
+  }, [shareUrl, onShared, sharedTitle]);
 
   // Keep the publication's preloaded cover variant after the snapshot arrives. Only try the
   // original when the variant fails, so an ordinary share never downloads the cover twice.
@@ -453,16 +491,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           {rating && !compact && <RatingBadge rating={rating} />}
           {L.slot && !chooseBeforeReading && <ReaderLanguagePicker {...L.slot} source={source} compact={compact} />}
           {shareUrl && (
-            <div
-              onClickCapture={(e) => {
-                // One share event per share: the trigger (not each item of its fallback menu), and not
-                // again for a click on the trigger while that menu is already open.
-                const trigger = (e.target as HTMLElement).closest?.('button[aria-haspopup]');
-                if (trigger && trigger.getAttribute('aria-expanded') !== 'true') onShareClick();
-              }}
-            >
-              <ShareButton compact target={{ url: shareUrl, title: sharedTitle, text: sharedDescription || undefined, coverUrl: boot?.card.coverUrl }} />
-            </div>
+            <ShareButton compact target={{ url: shareUrl, title: sharedTitle, text: sharedDescription || undefined, onShared }} />
           )}
           {downloadItems.length > 0 && <ReaderMenu label={t('download')} icon={<Download className="h-4 w-4" />} items={downloadItems} />}
           {moreItems.length > 0 && <ReaderMenu label="More" items={moreItems} />}
@@ -569,6 +598,8 @@ const ReaderShell: React.FC<ShellProps> = ({
         urlFor={urlFor}
         initialPage={start.page === 0 ? 'cover' : start.page}
         onPageChange={onPageChange}
+        onCopyPageLink={pageLinkAvailable ? copyPageLink : undefined}
+        onPublicShare={onShared}
         syncUrl={mode === 'slug'}
         syncLanguageInUrl={embed}
         language={L.slot}
@@ -672,6 +703,8 @@ const ReaderShell: React.FC<ShellProps> = ({
           syncLanguageInUrl={embed}
           onImageError={onImageError}
           onPageChange={onPageChange}
+          onCopyPageLink={pageLinkAvailable ? copyPageLink : undefined}
+          onPublicShare={onShared}
           onExit={() => setImmersive(null)}
         />
       )}
@@ -681,11 +714,12 @@ const ReaderShell: React.FC<ShellProps> = ({
 };
 
 /** `/c/<slug>`: the edge snapshot + boot card. */
-const SlugReader: React.FC<{ slug: string; embed: boolean; isOwner: boolean; identityReady: boolean; start: PublicReaderStart; onClose?: () => void }> = ({
+const SlugReader: React.FC<{ slug: string; embed: boolean; isOwner: boolean; identityReady: boolean; libraryReaderId?: string | null; start: PublicReaderStart; onClose?: () => void }> = ({
   slug,
   embed,
   isOwner,
   identityReady,
+  libraryReaderId,
   start,
   onClose
 }) => {
@@ -693,7 +727,7 @@ const SlugReader: React.FC<{ slug: string; embed: boolean; isOwner: boolean; ide
   const embedMode = embed || !!pc.boot?.embed;
   const bootStart = pc.boot?.page !== undefined && start.page === undefined ? { ...start, page: pc.boot.page } : start;
   const { track: rawTrack } = pc;
-  const track = useCallback((type: 'view' | 'complete' | 'share', lang?: string) => rawTrack(type, type === 'share' ? 'native' : undefined, lang), [rawTrack]);
+  const track = useCallback((type: 'view' | 'complete' | 'share', lang?: string, channel?: ShareChannel) => rawTrack(type, channel, lang), [rawTrack]);
   return (
     <ReaderShell
       mode="slug"
@@ -709,6 +743,7 @@ const SlugReader: React.FC<{ slug: string; embed: boolean; isOwner: boolean; ide
       start={bootStart}
       isOwner={isOwner}
       identityReady={identityReady}
+      libraryReaderId={libraryReaderId}
       onClose={onClose}
       track={track}
     />
@@ -781,12 +816,12 @@ const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: Publ
   );
 };
 
-export const PublicComicReader: React.FC<PublicComicReaderProps> = ({ source, projectId, onClose, isOwner = false, identityReady = true, start }) => {
+export const PublicComicReader: React.FC<PublicComicReaderProps> = ({ source, projectId, onClose, isOwner = false, identityReady = true, libraryReaderId, start }) => {
   const resolved: PublicComicSource | null = source ?? (projectId ? { kind: 'project', projectId } : null);
   const [startFromUrl] = useState<PublicReaderStart>(() => start ?? (typeof window !== 'undefined' ? readerStartFromSearch(window.location.search) : {}));
   if (!resolved) return null;
   if (resolved.kind === 'slug') {
-    return <SlugReader key={`${resolved.slug}:${!!resolved.embed}`} slug={resolved.slug} embed={!!resolved.embed} isOwner={isOwner} identityReady={identityReady} start={startFromUrl} onClose={onClose} />;
+    return <SlugReader key={`${resolved.slug}:${!!resolved.embed}`} slug={resolved.slug} embed={!!resolved.embed} isOwner={isOwner} identityReady={identityReady} libraryReaderId={libraryReaderId} start={startFromUrl} onClose={onClose} />;
   }
   return <ProjectReader projectId={resolved.projectId} isOwner={isOwner} start={startFromUrl} onClose={onClose} />;
 };

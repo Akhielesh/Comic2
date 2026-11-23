@@ -47,7 +47,10 @@ import {
   type StyleOption
 } from '../../../shared/comic/doc.js';
 import { letteringPresetOf } from '../../../shared/comic/lettering/style.js';
-import { crossesPageScene, resolveContinuity, sceneIndex } from '../../../shared/comic/continuity.js';
+import { CONSISTENCY_LIMITS } from '../../../shared/comic/limits.js';
+import { visualReferenceQcAllows } from '../../../shared/comic/visualReferenceQc.js';
+import { conflictsWithPageChange, earlierArtwork, mentionsProp, skippedPageSubjects } from './consistency/earlierArtwork.js';
+import { crossesPageScene, itemMatches, resolveContinuity, sceneIndex, type ContinuityState } from '../../../shared/comic/continuity.js';
 import { DIRECTION_DROP_ORDER, directionPhrases } from '../../../shared/comic/directions.js';
 import {
   nearestAspect,
@@ -861,9 +864,10 @@ export { effectiveLayout, harmonizePanelSizes, layoutConflicts };
 
 // ── References ───────────────────────────────────────────────────────────────
 
-export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
+export type ReferenceKind = 'earlier_page' | 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
 
 export interface PlannedReference {
+  evidencePageId?: string;
   kind: ReferenceKind;
   /** Which model cap the image counts against. */
   slot: 'character' | 'object' | 'style';
@@ -1131,6 +1135,8 @@ const styleReferences = (doc: ComicDoc, spec: ImageModelSpec, budget: { total: n
 
 /** Page-render options beyond CompileOptions. */
 export interface PageCompileOptions extends CompileOptions {
+  /** Bound to the authenticated project by the job runner. Earlier page art needs positive ownership. */
+  ownsPageArt?: (path: string) => boolean;
   /**
    * Attach the PAGE LAYOUT GUIDE as Image 1 (plan C9, C19): it takes one object slot before
    * anything else and the panel blocks name their box "in the layout guide". The job runner sets
@@ -1158,9 +1164,10 @@ export const planPageReferences = (
   page: Page,
   spec: ImageModelSpec,
   previousPage?: Page,
-  opts: PageCompileOptions = {}
+  opts: PageCompileOptions = {},
+  appearances = pageAppearances(rankPageCast(doc, page), resolveContinuity(doc, page), opts)
 ): PlannedReference[] => {
-  const budget = { total: Math.max(0, spec.refs.total), objects: Math.max(0, spec.refs.objects) };
+  const budget = { total: Math.max(0, Math.min(spec.refs.total, doc.consistency?.maxRefs ?? spec.refs.total)), objects: Math.max(0, spec.refs.objects) };
   const guide: PlannedReference[] = [];
   // One object slot, first in the legend (C19) — never a model's ONLY object slot (a legacy-locked
   // comic keeps its style anchor; the layout is still stated in words).
@@ -1171,16 +1178,25 @@ export const planPageReferences = (
   }
   const effective = artRatingFor(doc, opts);
   const shotsOf = (id: string) => page.panels.filter((p) => p.castIds.includes(id)).map((p) => p.shot);
-  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }), opts.storyFixes === true);
+  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }), opts.storyFixes === true).map(ref => {
+    const current = ref.characterId && appearances.get(ref.characterId);
+    return current ? currentIdentityReference(ref, current) : ref;
+  });
 
   const style = styleReferences(doc, spec, budget, { effectiveRating: effective });
+  const changedSubjects = [...appearances.values()].map(c => upperName(c.name)).join(', ');
+  const earlierIdentity = changedSubjects ? ` For ${changedSubjects}, use earlier art for stable identity only. Follow the current wardrobe, markings and carried items on this page.` : '';
 
   const previous: PlannedReference[] = [];
   const previousAsset = previousPage?.render.asset;
   const previousSafety = safetyStatusOf(previousAsset?.safety, effective);
-  const continues = !!previousPage && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
+  const skipped = new Set(doc.consistency?.skip ?? []);
+  const previousAllowed = previousPage && visualReferenceQcAllows(previousPage.render.qc) && !skipped.has('prev:' + previousPage.id) &&
+    (!opts.ownsPageArt || (previousAsset?.path && opts.ownsPageArt(previousAsset.path) && !isPageStale(doc, previousPage))) &&
+    !skippedPageSubjects(doc, previousPage, skipped) && !conflictsWithPageChange(doc, previousPage, page);
+  const continues = !!previousAllowed && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
   const addPrevious = () => {
-    if (!previousPage || previousPage.id === page.id || !previousAsset?.path || budget.objects <= 0 || budget.total <= 0) return;
+    if (!previousAllowed || previousPage.id === page.id || !previousAsset?.path || budget.objects <= 0 || budget.total <= 0) return;
     if (previousPage.render.status !== 'ready' && previousPage.render.status !== 'stale') return;
     if (previousSafety !== 'pass' && (previousSafety !== 'unchecked' || opts.safe)) return;
     previous.push({
@@ -1188,9 +1204,9 @@ export const planPageReferences = (
       slot: 'object',
       label: 'PREVIOUS PAGE',
       path: previousAsset.path,
-      instruction: continues
+      instruction: (continues
         ? "Use the last panel's established designs, geography and lighting where the script continues them. The current page's actions and changes control the story. Ignore the reference page's panel layout and lettering."
-        : 'Match the rendering style and recurring designs only. This reference does not establish the current scene, action, prop state, layout, or lettering.'
+        : 'Match the rendering style and recurring designs only. This reference does not establish the current scene, action, prop state, layout, or lettering.') + earlierIdentity
     });
     budget.objects -= 1;
     budget.total -= 1;
@@ -1217,8 +1233,30 @@ export const planPageReferences = (
     budget.total -= 1;
   }
 
-  if (!continues) addPrevious();
-
+  const usedPaths = new Set([...characters, ...places, ...style, ...previous].map(ref => ref.path));
+  const evidence = opts.ownsPageArt && budget.total > 0 && budget.objects > 0
+    ? earlierArtwork(doc, page, effective, opts.ownsPageArt, usedPaths, previous.length ? previousPage : undefined)
+    : undefined;
+  if (evidence) {
+    const names = (items: string[]) => items.slice(0, 3).map(name => clip(safeText(name, opts).replace(/\s+/g, ' '), 32)).filter(Boolean).join(', ');
+    const cast = names(evidence.cast);
+    const settings = names(evidence.places);
+    const props = names(evidence.props);
+    previous.push({
+      kind: 'earlier_page', slot: 'object', evidencePageId: evidence.page.id,
+      path: evidence.page.render.asset!.path, label: `EARLIER ART — PAGE ${evidence.page.n}`,
+      instruction: [
+        cast && `Match the established appearance of ${cast} only where named in this script.`,
+        props && `Match the established design of ${props} only when the script shows it.`,
+        settings && `Use the permanent geography of ${settings} only where that location is named.`,
+        'Current wardrobe, props and panel directions override this drawing. Do not copy its action, other cast, lighting, layout or text.' + earlierIdentity
+      ].filter(Boolean).join(' ')
+    });
+  } else if (!continues && !opts.ownsPageArt) {
+    // Legacy unscoped compiler callers supply their own reference explicitly.
+    // Live jobs use canonical sheets and script when no matching art qualifies.
+    addPrevious();
+  }
   return [...guide, ...characters, ...places, ...style, ...previous];
 };
 
@@ -1228,14 +1266,18 @@ const toJobReferences = (refs: PlannedReference[]) => refs.map((r) => ({ label: 
 const userRefPathsOf = (refs: PlannedReference[]): string[] => [...new Set(refs.filter((r) => r.userRef).map((r) => r.path))];
 
 /** The finished job: model, size, prompt, legend-ordered references and the user ref paths. */
-const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: string, refs: PlannedReference[]): CompiledRenderJob => ({
-  spec: resolved.spec,
-  resolution: resolved.resolution,
-  aspect,
-  prompt,
-  references: toJobReferences(refs),
-  refPaths: userRefPathsOf(refs)
-});
+const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: string, refs: PlannedReference[]): CompiledRenderJob => {
+  const earlier = refs.find(ref => ref.evidencePageId);
+  return {
+    spec: resolved.spec,
+    resolution: resolved.resolution,
+    aspect,
+    prompt,
+    references: toJobReferences(refs),
+    ...(earlier?.evidencePageId ? { earlierPage: { id: earlier.evidencePageId, path: earlier.path } } : {}),
+    refPaths: userRefPathsOf(refs)
+  };
+};
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
@@ -1457,6 +1499,7 @@ const detailLine = (rest: string, mood: string): string => {
 
 interface PanelBlockContext {
   names: Map<string, string>;
+  appearances: ReadonlyMap<string, Character>;
   props: ReadonlySet<string>;
   index: Map<string, number[]>;
   boxes: Box[];
@@ -1543,7 +1586,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const things = staged.filter((s) => ctx.props.has(s.id));
   const solo = people.length === 1 && things.length > 0;
   const describe = (id: string): string => {
-    const c = doc.cast.find((x) => x.id === id)!;
+    const c = ctx.appearances.get(id) ?? doc.cast.find((x) => x.id === id)!;
     const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors, storyFixes: ctx.fixes }) : ''].filter(Boolean).join(' — ');
     return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
   };
@@ -1684,6 +1727,56 @@ const indexReferences = (refs: PlannedReference[]): Map<string, number[]> => {
   return index;
 };
 
+/** Build a transient cast guide for this page. Freeform summaries and reference notes can
+ * describe the default outfit, markings or equipment in arbitrary prose. When a field changes,
+ * draw identity from structured facts and the sheet instead of guessing which words to replace.
+ * The saved cast guide remains the source again when the ledger resets the change. */
+function pageAppearances(cast: Character[], state: ContinuityState | undefined, opts: CompileOptions): Map<string, Character> {
+  const changed = new Map<string, Character>();
+  if (!state?.content) return changed;
+  const propStates = [...Object.keys(state.props), ...Object.keys(state.gone)];
+  const words = (value: string) => clip(safeText(value, opts), 120);
+  for (const c of cast) {
+    const update = state.cast[c.id];
+    const look = c.look;
+    const changedProp = (part: string) => propStates.some(name => itemMatches(part, name));
+    const hasChangedProp = !!look.props && changedProp(look.props);
+    const namedProp = isProp(c) && propStates.find(name => itemMatches(c.name, name));
+    if (update?.outfit === undefined && update?.marks === undefined && update?.holding === undefined && !hasChangedProp && !namedProp) continue;
+    const current = { ...look, summary: '' };
+    if (update?.outfit !== undefined) {
+      current.outfit = words(update.outfit);
+      // The cast palette can combine clothing and body colours. Dedicated skin, eye,
+      // hair and species fields still describe the person or creature.
+      delete current.palette;
+    }
+    if (update?.marks !== undefined) {
+      current.marks = update.marks.map(words).join(', ');
+      delete current.markings;
+    }
+    if (update?.holding !== undefined) {
+      current.props = update.holding.filter(item => !Object.keys(state.gone).some(name => itemMatches(item, name))).map(words).join(', ');
+    } else if (hasChangedProp && look.props) {
+      current.props = look.props.split(/[,;]/)
+        .flatMap(part => changedProp(part) ? part.split(/\s+and\s+/i).filter(piece => !changedProp(piece)) : [part])
+        .map(part => part.trim()).filter(Boolean).join(', ');
+    }
+    if (namedProp) {
+      current.summary = state.props[namedProp] ? words(state.props[namedProp].state) : 'Absent unless the current panel explicitly brings it back.';
+      delete current.palette;
+    }
+    changed.set(c.id, { ...c, look: current });
+  }
+  return changed;
+}
+
+/** A sheet or annotated upload may show an old outfit even when the text looks correct. */
+const currentIdentityReference = (ref: PlannedReference, c: Character): PlannedReference => ({
+  ...ref,
+  label: ref.kind === 'author' ? `IDENTITY REFERENCE: ${upperName(c.name)}` : ref.label,
+  instruction: 'Use this image for identity and proportions only. Use the current page for wardrobe, markings and carried items.'
+});
+
 /**
  * CAST (+ PROPS) lock for the page: every being stated once with its look; groups as
  * "DUCKLINGS ×3"; recurring props in their own list; anyone without an attached image is
@@ -1720,8 +1813,7 @@ const storySequence = (doc: ComicDoc, page: Page, opts: CompileOptions): string 
 };
 
 /** Fold the saved continuity ledger into words, using only this page's visible cast. */
-const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, string>, opts: CompileOptions): string => {
-  const state = resolveContinuity(doc, page);
+const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, string>, opts: CompileOptions, state = resolveContinuity(doc, page)): string => {
   if (!state?.content) return '';
   const words = (value?: string) => (value ? clip(safeText(value, opts), 120) : '');
   const named = (label: string, value?: string) => {
@@ -1733,14 +1825,35 @@ const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, s
   const cast = Object.entries(state.cast).flatMap(([id, change]) => {
     const name = names.get(id);
     if (!name) return [];
-    const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', change.holding?.join(', ')), named('position', change.where)].filter(Boolean);
+    const holding = change.holding?.filter(item => !Object.keys(state.gone).some(name => itemMatches(item, name)));
+    const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', holding?.join(', ')), named('position', change.where)].filter(Boolean);
     return details.length ? [`- ${name}: ${details.join('; ')}`] : [];
   });
-  const props = Object.entries(state.props).map(([name, prop]) => named(words(name), prop.state)).filter(Boolean);
-  const gone = Object.keys(state.gone).map(words).filter(Boolean);
+  // A long book can accumulate hundreds of prop changes. Current directions
+  // come first, followed by props that actually appear or are held on this page.
+  const held = Object.entries(state.cast).flatMap(([id, actor]) => names.has(id) ? actor.holding ?? [] : []);
+  const currentProps = page.continuity?.props ?? {};
+  const relevantProps = new Set(Object.keys(currentProps));
+  const allProps = [...Object.keys(state.props), ...Object.keys(state.gone)];
+  const propsOnCast = doc.cast.filter(c => names.has(c.id)).flatMap(c => c.look.props ? [c.look.props] : []);
+  for (const name of allProps) {
+    if (relevantProps.size >= CONSISTENCY_LIMITS.propChanges) break;
+    if (held.some(item => itemMatches(item, name)) || propsOnCast.some(item => itemMatches(item, name)) || mentionsProp(doc, page, name)) relevantProps.add(name);
+  }
+  // A prop can be a part of a named subject ("racing tyres" on the car) that
+  // successive panels never rename. Keep nearby facts established in this same scene.
+  if (state.sceneSince !== undefined && relevantProps.size < CONSISTENCY_LIMITS.propChanges) {
+    const since = (name: string) => state.props[name]?.since ?? state.gone[name];
+    for (const name of allProps.sort((a, b) => since(b) - since(a))) {
+      if (relevantProps.size >= CONSISTENCY_LIMITS.propChanges || since(name) < state.sceneSince) break;
+      relevantProps.add(name);
+    }
+  }
+  const props = Object.entries(state.props).filter(([name]) => relevantProps.has(name)).map(([name, prop]) => named(words(name), prop.state)).filter(Boolean);
+  const gone = Object.keys(state.gone).filter(name => relevantProps.has(name)).map(words).filter(Boolean);
   const notes = state.notes.map(words).filter(Boolean).map((note) => `- ${note}`);
   const lines = [sceneDetails && `- Scene: ${sceneDetails}`, ...cast, ...props.map((prop) => `- ${prop}`), gone.length && `- No longer present: ${gone.join(', ')}`, ...notes].filter(Boolean);
-  return lines.length ? ['CONTINUITY — keep these details wherever the current panel does not change them. Do not add anyone or anything to a panel just because it is listed here.', ...lines].join('\n') : '';
+  return lines.length ? ['CONTINUITY — keep these details wherever the current panel does not change them. Do not add anyone or anything to a panel just because it is listed here.', ...(cast.length || props.length || gone.length ? ['These recorded changes override earlier artwork and the default outfits or props on model sheets.'] : []), ...lines].join('\n') : '';
 };
 
 /**
@@ -1756,12 +1869,15 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
   const { spec } = resolved;
   const aspect = pageAspectFor(doc, spec, page.panels.length);
   const rating = artRatingFor(doc, opts);
-  const refs = planPageReferences(doc, page, spec, opts.previousPage, opts);
+  const scope = rankPageCast(doc, page);
+  const state = resolveContinuity(doc, page);
+  const appearances = pageAppearances(scope, state, opts);
+  const refs = planPageReferences(doc, page, spec, opts.previousPage, opts, appearances);
   const index = indexReferences(refs);
   const guide = refs.some((r) => r.kind === 'layout');
   const boxes = pageLayoutBoxes(doc, page);
 
-  const cast = rankPageCast(doc, page);
+  const cast = scope.map(c => appearances.get(c.id) ?? c);
   const names = new Map(cast.map((c) => [c.id, castLabel(c)]));
   const props = new Set(cast.filter(isProp).map((c) => c.id));
   const bw = doc.format.colorMode === 'bw';
@@ -1788,9 +1904,9 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     : '';
 
   const handoff = storySequence(doc, page, opts);
-  const continuity = continuityBlock(doc, page, names, opts);
+  const continuity = continuityBlock(doc, page, names, opts, state);
   const build = (anchors: boolean, directionDrop = 0): string => {
-    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw, fixes, directionDrop };
+    const ctx: PanelBlockContext = { names, appearances, props, index, boxes, guide, anchors, colors: !bw, fixes, directionDrop };
     const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
     return [
       header,
@@ -2115,15 +2231,21 @@ export const compileEdit = (
   // Characters involved: the targeted panel's cast (or the page's), plus anyone the
   // instruction names ("add Arjun behind her") even if they aren't on the page yet.
   const named = doc.cast.filter((c) => mentions(args.instruction, c.name));
-  const scope = panel ? new Set([...panel.castIds, ...named.map((c) => c.id)]) : null;
-  const candidates = [...rankPageCast(doc, page), ...named.filter((c) => !page.panels.some((p) => p.castIds.includes(c.id)))];
+  const editPage = panel ? { ...page, panels: [panel] } : page;
+  const ranked = rankPageCast(doc, page);
+  const scope = panel ? new Set([...panel.castIds, ...named.map(c => c.id)]) : undefined;
+  const candidates = [...ranked, ...named.filter(c => !page.panels.some(p => p.castIds.includes(c.id)))]
+    .filter(c => !scope || scope.has(c.id));
+  const state = resolveContinuity(doc, page);
+  const appearances = pageAppearances(candidates, state, args);
+  const editNames = new Map(candidates.map(c => [c.id, castLabel(c)]));
+  const editContinuity = continuityBlock(doc, editPage, editNames, args, state);
   for (const c of candidates) {
     if (characterSlots <= 0 || total <= 0) break;
-    if (scope && !scope.has(c.id)) continue;
     if (c.tier === 'extra' && isProp(c)) continue; // presence, not tier (plan C7), as on pages
     const ref = characterReference(c, { effectiveRating: rating });
     if (!ref) continue;
-    refs.push({ ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
+    refs.push(appearances.has(c.id) ? currentIdentityReference(ref, c) : { ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
     characterSlots -= 1;
     total -= 1;
   }
@@ -2137,14 +2259,26 @@ export const compileEdit = (
     doc.format.lettering === 'in_art' ? 'lettering' : 'the empty balloon space (the art stays free of any text)';
   const crop = args.panelCrop, target = args.panelBox;
   const bounded = crop && target ? `Only change panel ${args.panelN} inside Image 1: left ${Math.round((target.x - crop.x) / crop.w * 100)}%, top ${Math.round((target.y - crop.y) / crop.h * 100)}%, right ${Math.round((target.x + target.w - crop.x) / crop.w * 100)}%, bottom ${Math.round((target.y + target.h - crop.y) / crop.h * 100)}%. Keep the surrounding context and framing fixed. Image 2 is the full page for continuity only.` : '';
+  if (appearances.size) {
+    const source = refs.find(ref => ref.label === 'CURRENT PAGE');
+    if (source) source.instruction = args.panelCrop
+      ? 'Use the full page for framing, stable identities, surroundings and linework. Apply the requested edit and current appearance inside the crop. Do not output the whole page.'
+      : 'Edit this page in place. Follow the requested correction and current appearance in the edited area.';
+  }
+  const keepAppearance = appearances.size ? "characters' identities and the current appearance in the edited area" : "characters' identities and outfits";
+  const keepColor = appearances.size ? 'unchanged colors and art style' : 'colors and art style';
   const prompt = [
     args.panelCrop ? `Edit Image 1, a bounded comic panel crop. Change only this: ${instruction}` : `Edit Image 1, a finished comic page. Change only this: ${instruction}`,
     bounded,
     where,
     ...(args.panelCrop && panel ? page.panels.filter((other) => Math.abs(other.n - panel.n) === 1).slice(0, 2).map((other) => `Continuity context only — ${other.n < panel.n ? 'previous' : 'next'} panel ${other.n}: ${sentence(clip(safeText(other.action, args), 160))} Do not redraw this neighboring panel.`) : []),
-    `Keep everything else exactly as it is: page layout, panel borders, every other panel, characters' identities and outfits, ${keepLettering}, colors and art style.` +
+    `Keep everything else exactly as it is: page layout, panel borders, every other panel, ${keepAppearance}, ${keepLettering}, ${keepColor}.` +
       `${args.hasRegion ? ' Do not add a red outline to the result.' : ''} ${args.panelCrop ? 'Output only the complete Image 1 crop at the same framing; never output the full page or add panels.' : 'Output the full page at the same framing.'}`,
     frameSentence(aspect, args.panelCrop ? 'panel crop' : 'page'),
+    appearances.size > 0 && [...appearances.values()].map(c =>
+      `Identity and current look for ${castLabel(c)} wherever redrawn, subject to the requested edit: ${describeLook(c, { colors: doc.format.colorMode !== 'bw', storyFixes: args.storyFixes })}`
+    ).join('\n'),
+    editContinuity && `For the edited area only, keep the following story state except where this specific change overrides it.\n${editContinuity}`,
     contentParagraph(doc, args),
     referenceLegend(refs)
   ]
@@ -2182,10 +2316,10 @@ export const coverTitleBand = (doc: ComicDoc): { side: 'top' | 'bottom'; pct: nu
  * ready, servable page — preferring one that is not out of date. A page judged above the
  * cover's rating is never the anchor (it would pull the cover over the rating too).
  */
-const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating): PlannedReference[] => {
+const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating, owns?: (path: string) => boolean): PlannedReference[] => {
   if (budget.objects <= 0 || budget.total <= 0) return [];
   const ready = doc.pages
-    .filter((p) => p.render.status === 'ready' && servable(p.render.asset) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
+    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc) && servable(p.render.asset) && (!owns || owns(p.render.asset.path)) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
     .sort((a, b) => a.n - b.n);
   const page = ready.find((p) => !isPageStale(doc, p)) || ready[0];
   if (!page?.render.asset) return [];
@@ -2208,7 +2342,7 @@ const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: num
  * the featured cast (leads + companions, coverCastOf) as the hero image; the style anchor;
  * and, when an object slot remains, the first story page for consistency.
  */
-export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: boolean } = {}): CompiledRenderJob => {
+export const compileCover = (doc: ComicDoc, opts: CompileOptions & Pick<PageCompileOptions, 'ownsPageArt'> & { textless?: boolean } = {}): CompiledRenderJob => {
   const resolved = resolveJob(doc, 'cover');
   const { spec } = resolved;
   const aspect = coverAspectFor(doc, spec);
@@ -2220,7 +2354,7 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
   const fixes = opts.storyFixes === true;
   const characters = castReferences(featured, spec, budget, 'cover', () => ({ effectiveRating: rating }), fixes);
   const style = styleReferences(doc, spec, budget, { effectiveRating: rating });
-  const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating)];
+  const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating, opts.ownsPageArt)];
   const index = indexReferences(refs);
   const bw = doc.format.colorMode === 'bw';
 

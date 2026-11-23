@@ -854,7 +854,7 @@ const decrementLikeCount = async (projectId: string) => {
   await supabase.rpc('decrement_project_like', { p_id: projectId });
 };
 
-export const getProjectLikeMap = async (projectIds: string[]): Promise<Record<string, boolean>> => {
+export const getProjectLikeMap = async (projectIds: string[], expectedOwner?: string): Promise<Record<string, boolean>> => {
   if (!projectIds.length) return {};
   const { data: { user } } = await supabase.auth.getUser();
   const emptyMap = projectIds.reduce<Record<string, boolean>>((acc, projectId) => {
@@ -867,7 +867,7 @@ export const getProjectLikeMap = async (projectIds: string[]): Promise<Record<st
     return acc;
   }, {});
 
-  if (!user) return emptyMap;
+  if (!user || (expectedOwner && expectedOwner !== user.id)) return emptyMap;
   if (projectLikesTableUnavailable) return fallbackMap;
 
   const { data, error } = await supabase
@@ -896,9 +896,10 @@ export const getProjectLikeMap = async (projectIds: string[]): Promise<Record<st
   }, {});
 };
 
-export const toggleProjectLike = async (projectId: string, ownerUserId?: string): Promise<{ liked: boolean; persisted: boolean }> => {
+export const toggleProjectLike = async (projectId: string, ownerUserId?: string, expectedOwner?: string): Promise<{ liked: boolean; persisted: boolean }> => {
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (expectedOwner && user?.id !== expectedOwner) throw new Error('Account changed.');
   if (!user) {
     return { liked: false, persisted: false };
   }

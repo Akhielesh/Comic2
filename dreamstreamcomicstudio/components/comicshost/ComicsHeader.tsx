@@ -8,8 +8,7 @@ import { AccountMenu } from '../account/AccountMenu';
 import { AppHeader } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
-import { BrandLockup } from '../layout/BrandLockup';
-import { ComicsMark } from './ComicsMark';
+import { ComicStudioBrand } from './ComicStudioBrand';
 import './comicsShell.css';
 
 export type ComicsSectionId = 'features' | 'looks' | 'models' | 'pricing';
@@ -121,7 +120,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   ];
 
   const brand = (
-    <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways label="Comic Studio, home" onClick={onGoHome} />
+    <ComicStudioBrand onHome={onGoHome} />
   );
 
   // From lg: the section links on the landing, and the Library on every page (marked when it is the page).

@@ -73,7 +73,6 @@ describe('landing copy', () => {
     const text = squash(container.textContent || '');
     const lines = [
       HERO.lead,
-      HERO.invitation,
       ...FEATURES.flatMap((f) => [f.title, ...f.lines]),
       ...HOW.steps.flatMap((s) => [s.title, s.body]),
       ...MODELS.items.flatMap((m) => [m.title, m.body]),

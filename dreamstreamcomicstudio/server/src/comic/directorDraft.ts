@@ -22,11 +22,21 @@ export function delegatedIdea(doc: ComicDoc, text: string): string {
 
 /** Use an explicit format request when present; leave ordinary narrative numbers alone. */
 function pagesForBrief(idea: string, current: number, maximum: number): number {
-  const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-  const count = '(\\d{1,2}|' + words.join('|') + ')';
-  const format = new RegExp('\\b' + count + '[- ]pages? (?:comic|manga|storybook|story|strip)\\b|\\b(?:in|make it|keep it to|length of) ' + count + ' pages?\\b', 'i').exec(idea);
-  const token = (format?.[1] ?? format?.[2])?.toLowerCase();
-  const requested = token ? Number(token) || words.indexOf(token) + 1 : current;
+  const units = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+  const words = [...units, 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
+    'twenty', ...units.map(unit => 'twenty ' + unit), 'thirty', ...units.map(unit => 'thirty ' + unit), 'forty'];
+  const count = '(\\d{1,3}|' + [...words].reverse().join('|') + ')';
+  const book = '(?:comic(?: book)?|manga|storybook|story|strip|graphic novel|issue|webtoon)';
+  const requirements = [
+    count + ' pages? ' + book,
+    book + ' (?:in|of|with|across) ' + count + ' pages?',
+    '(?:in|make it|keep it to|length of|page count of|aim for) ' + count + ' pages?',
+    '(?:create|write|draw|draft|plan|give me) (?:an? )?' + count + ' pages?'
+  ];
+  const normalized = idea.toLowerCase().replace(/[-‐‑–—]/g, ' ').replace(/[^\S\n]+/g, ' ');
+  const format = new RegExp('\\b(?:' + requirements.join('|') + ')\\b').exec(normalized);
+  const token = format?.slice(1).find(Boolean);
+  const requested = token ? (/^\d/.test(token) ? Number(token) : words.indexOf(token) + 1) : current;
   return Math.min(maximum, Math.max(1, requested));
 }
 

@@ -63,7 +63,7 @@ const renderDashboard = (projects: Project[], overrides: Partial<React.Component
   return { ...utils, props };
 };
 
-const brand = () => screen.getAllByRole('button', { name: 'Comic Studio, home' })[0];
+const brand = () => screen.getAllByRole('button', { name: 'DreamStream Comic Studio, home' })[0];
 
 beforeEach(() => {
   sessionStorage.clear();

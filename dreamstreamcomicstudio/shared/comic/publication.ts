@@ -22,8 +22,8 @@ export const OG_TEMPLATE_VERSION = 1;
 export const PUBLIC_QC_CHECKED_AT = 0;
 /** The only audience a public snapshot carries: the category word, for a children's book that is not a storybook. */
 export const PUBLIC_KIDS_AUDIENCE = 'children';
-export type ShareChannel = 'copy' | 'native' | 'qr' | 'whatsapp' | 'x' | 'facebook' | 'telegram' | 'email' | 'embed' | 'direct';
-export const SHARE_CHANNELS: readonly ShareChannel[] = ['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'embed', 'direct'];
+export type ShareChannel = 'copy' | 'native' | 'qr' | 'whatsapp' | 'x' | 'facebook' | 'telegram' | 'email' | 'linkedin' | 'embed' | 'direct';
+export const SHARE_CHANNELS: readonly ShareChannel[] = ['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'linkedin', 'embed', 'direct'];
 export interface ShareLinkOptions { lang?: string; page?: number; via?: ShareChannel; guided?: boolean }
 
 const MAX_PAGE_PARAM = 500;
@@ -145,7 +145,7 @@ export interface PublicationOwnerView {
    * What link previews actually show (live rows): the FROZEN card's title and description in the
    * default language, and the published cover copy (the og:image fallback). Not the live doc's text.
    */
-  card?: { title: string; description: string; coverUrl?: string };
+  card?: { title: string; description: string; coverUrl?: string; pageCount?: number };
 }
 
 /** The preview text with the rating appended ("… · Rated PG-13"): what every link preview carries. */

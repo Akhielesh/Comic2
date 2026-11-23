@@ -85,8 +85,17 @@ describe('PublishCard', () => {
     await waitFor(() => expect(studio.act).toHaveBeenCalledTimes(2));
   });
 
-  it('done shows the link with Copy / Share… / Open Share sheet; running shows honest progress', () => {
+  it('hides an old conversation link after publication is turned off', () => {
     const studio = makeFakeStudio();
+    render(<PublishCard card={card({ status: 'done', result: { url: `https://comics.dreamstreamstudio.ai/c/${SLUG}` } })} message={msg} studio={studio} />);
+    expect(screen.queryByLabelText('Share link')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check current sharing options' })).toBeInTheDocument();
+  });
+
+  it('done shows the link with Copy / Share… / Open Share sheet; running shows honest progress', () => {
+    const doc = makeSampleDoc();
+    doc.publication = { status: 'live', visibility: 'unlisted', slug: SLUG, publishedRev: 1, publishedAt: 1, languages: ['en'] };
+    const studio = makeFakeStudio({ doc });
     const { rerender } = render(<PublishCard card={card({ status: 'running' })} message={msg} studio={studio} />);
     expect(screen.getByRole('status')).toHaveTextContent('Publishing…');
     rerender(<PublishCard card={card({ status: 'done', result: { url: `https://comics.dreamstreamstudio.ai/c/${SLUG}` } })} message={msg} studio={studio} />);

@@ -47,7 +47,7 @@ const OEMBED_PATH = '/api/comic/oembed';
 const NOT_FOUND_BODY = '{"error":{"message":"This comic isn\'t available.","code":"NOT_FOUND"}}';
 const SITE_HOSTS = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstudio.ai', 'dreamstreamstudio.ai', 'www.dreamstreamstudio.ai']);
 const EVENT_TYPES = new Set(['view', 'complete', 'share']);
-const CHANNELS = new Set(['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'embed', 'direct']);
+const CHANNELS = new Set(['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'linkedin', 'embed', 'direct']);
 const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
 /**
  * The content ratings a publication can carry (= shared/comic/safety.ts CONTENT_RATINGS; kept local

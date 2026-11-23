@@ -89,6 +89,8 @@ export interface ImmersiveReaderProps {
   onImageError?(): void;
   /** Settled on a page (1-based; 0 = cover). */
   onPageChange?(n: number): void;
+  onCopyPageLink?(n: number): Promise<boolean>;
+  onPublicShare?(channel: 'native' | 'copy'): void;
 }
 
 // Reader tokens (ink on paper, the room's accent and focus, motion) live in readerDesigns.css on
@@ -625,16 +627,18 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
         const nav = navigator as Navigator & { share?: (d: { title?: string; url?: string; text?: string }) => Promise<void> };
         if (typeof nav.share === 'function') {
           await nav.share({ title, url });
+          props.onPublicShare?.('native');
           return;
         }
         await navigator.clipboard.writeText(url);
+        props.onPublicShare?.('copy');
         setToast('Link copied');
       } catch (err) {
         if ((err as { name?: string })?.name === 'AbortError') return;
         setToast('Couldn’t share — copy the link from the address bar instead.');
       }
     };
-  }, [endCard?.shareUrl, localized]);
+  }, [endCard?.shareUrl, localized, props.onPublicShare]);
 
   const [downloading, setDownloading] = useState(false);
   const downloadingRef = useRef(false);
@@ -942,6 +946,11 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       )}
 
       <ReaderSettingsSheet
+        pageNumber={pageNOfView(views, items, view)}
+        onCopyPageLink={props.onCopyPageLink && (async (n) => {
+          const copied = await props.onCopyPageLink!(n);
+          setToast(copied ? 'Page link copied' : 'Couldn’t copy the page link.');
+        })}
         open={settingsOpen}
         compact={ff.widthClass === 'compact'}
         prefs={prefs}

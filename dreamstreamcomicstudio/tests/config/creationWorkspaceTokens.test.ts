@@ -82,11 +82,11 @@ describe('comicCreationWorkspace.css: tokens only', () => {
     for (const { selector, value } of z) expect(value, selector).toMatch(/^var\(--ds-z-[a-z]+\)$/);
   });
 
-  it('sets no face of its own: the skin’s IBM Plex Sans applies, and only the heading asks for the display token', () => {
+  it('sets no face of its own: the skin’s IBM Plex Sans applies, and editorial headings and captions use the display token', () => {
     expect(source).not.toContain('--ds-font-ui');
     expect(baseDecls('.comic-creation-workspace').has('font-family')).toBe(false);
     for (const { selector, value } of valuesOf('font-family')) {
-      expect(selector).toBe('.comic-idea-entry h1');
+      expect(['.comic-idea-entry h1', '.comic-starters-heading h2', '.comic-starter-caption']).toContain(selector);
       expect(value).toBe('var(--ds-font-display)');
     }
   });
@@ -206,7 +206,7 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
 
   it('the heading is the studio heading size in the display face, and the error reads in --ds-danger-text', () => {
     const h1 = baseDecls('.comic-idea-entry h1');
-    expect(h1.get('font-size')).toBe('var(--ds-text-3xl)');
+    expect(h1.get('font-size')).toBe(norm('clamp(var(--ds-text-3xl), 4vw, var(--ds-text-5xl))'));
     expect(h1.get('font-family')).toBe('var(--ds-font-display)');
     expect(h1.get('letter-spacing') ?? '').not.toMatch(/px/);
     expect(rulesFor('.comic-idea-entry h1').filter((r) => r.parents.length > 0 && /font-size/.test(r.body))).toEqual([]);

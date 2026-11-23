@@ -48,6 +48,8 @@ import { extractBalancedJson } from '../ai/jsonCoerce.js';
 import { effectiveLayout, harmonizePanelSizes, layoutPanelCount, parseLayout, synthesizeLayout } from './prompts.js';
 import { prefilterText } from './safety/index.js';
 import { StudioError, type LlmClient, type LlmResult, type TextRole } from './types.js';
+import { OUTLINE_CHANGE_FIELDS, outlinePageContinuity, readOutlineChanges, writerHandoff, type OutlineChange } from './outlineContinuity.js';
+import { longStorySource } from './storySource.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
 
@@ -447,12 +449,14 @@ export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): strin
   ].join('\n');
 };
 
-const lookLine = (c: Character): string => {
+const lookLine = (c: Pick<Character, 'look'>): string => {
   const l = c.look || ({ summary: '' } as CharacterLook);
   return [
-    clean(l.summary),
+    clip(clean(l.summary), 170),
     clean(l.species) && `species: ${clean(l.species)}`,
     clean(l.outfit) && `outfit: ${clean(l.outfit)}`,
+    clean(l.palette) && `palette: ${clean(l.palette)}`,
+    clean(l.props) && `props: ${clean(l.props)}`,
     clean(l.marks) && `marks: ${clean(l.marks)}`,
     clean(l.markings) && `markings: ${clean(l.markings)}`
   ]
@@ -488,6 +492,7 @@ export interface OutlinePage {
   turnHook: string;
   characters: string[];
   place: string;
+  changes?: OutlineChange[];
 }
 
 export const writerUserMessage = (
@@ -499,6 +504,8 @@ export const writerUserMessage = (
     outline?: OutlinePage[];
     /** New characters the outline introduced (refer to them by name). */
     outlineCast?: { name: string; role?: string; look?: string }[];
+    /** Original page numbers being adapted together in a long manuscript. */
+    sourcePages?: number[];
     /** Replaces the default TASK line. */
     task?: string;
   }
@@ -556,7 +563,7 @@ export const writerUserMessage = (
   if (opts.outlineCast?.length) {
     parts.push(
       `NEW CAST FROM THE OUTLINE (no ids yet — use their exact names in castIds and speakerId; do not repeat them in newCast)\n${opts.outlineCast
-        .map((c) => compactJson({ name: clean(c.name), role: clean(c.role), look: clip(clean(c.look), 220) }))
+        .map((c) => compactJson({ name: clean(c.name), role: clean(c.role), look: clip(clean(c.look), 420) }))
         .join('\n')}`
     );
   }
@@ -566,7 +573,11 @@ export const writerUserMessage = (
   if (clean(doc.style.name) || clean(doc.style.spec)) parts.push(`STYLE: ${clean(doc.style.name) || clip(clean(doc.style.spec), 160)}`);
 
   const script = doc.source.script || '';
-  if (clean(script)) {
+  if (script.trim().length > WRITER_SOURCE_LIMIT && f.pageCount > 10) {
+    const pages = opts.sourcePages ?? targets?.map(p => p.n);
+    const source = longStorySource(script.trim(), clamp(f.pageCount, 1, MAX_PAGES), WRITER_SOURCE_LIMIT, pages);
+    parts.push(`SOURCE (author's material, chronological excerpts; numbered manuscript pages are exact, unnumbered passages are approximate)\n<<<\n${source}\n>>>`);
+  } else if (clean(script)) {
     const { text, truncated, omitted } = truncateMiddle(script.trim(), WRITER_SOURCE_LIMIT);
     parts.push(
       `SOURCE (the author's material — adapt faithfully)${
@@ -602,6 +613,10 @@ export const writerUserMessage = (
         )
         .join('\n')}`
     );
+    if (opts.sourcePages?.length) {
+      const handoff = writerHandoff(opts.outline, opts.sourcePages[0], opts.sourcePages[opts.sourcePages.length - 1]);
+      if (handoff) parts.push(handoff);
+    }
   }
 
   const instructions = clean(opts.instructions);
@@ -1247,7 +1262,10 @@ const CHUNK_CONCURRENCY = 3;
 const OUTLINE_SCHEMA = obj({
   pages: {
     type: 'array',
-    items: obj({ n: { type: 'integer' }, summary: str, turnHook: str, characters: strArray, place: str })
+    items: obj({
+      n: { type: 'integer' }, summary: str, turnHook: str, characters: strArray, place: str,
+      changes: { type: 'array', items: obj({ subject: str, field: { type: 'string', enum: OUTLINE_CHANGE_FIELDS }, values: strArray, evidence: str }) }
+    })
   },
   newCast: (PAGE_PLAN_SCHEMA.properties as Record<string, unknown>).newCast
 });
@@ -1262,7 +1280,7 @@ interface OutlineResult {
   newCast: Record<string, unknown>[];
 }
 
-const normalizeOutline = (json: unknown, pageCount: number): StructuredCheck<OutlineResult> => {
+const normalizeOutline = (json: unknown, pageCount: number, source: string): StructuredCheck<OutlineResult> => {
   if (!isObject(json) || !Array.isArray(json.pages)) return { problems: ['The reply must be a JSON object with a "pages" array.'] };
   // Use declared chronology just as finished page replies do. Ambiguous (missing/duplicate)
   // labels retain encounter order; valid entries are still renumbered and count-checked below.
@@ -1272,7 +1290,8 @@ const normalizeOutline = (json: unknown, pageCount: number): StructuredCheck<Out
       summary: clean(p.summary),
       turnHook: clean(p.turnHook),
       characters: asArray(p.characters).map(clean).filter(Boolean),
-      place: clean(p.place)
+      place: clean(p.place),
+      changes: readOutlineChanges(p.changes, clean(p.summary), source)
     }))
     .filter((p) => p.summary)
     .map((p, i) => ({ ...p, n: i + 1 }));
@@ -1290,12 +1309,13 @@ const fitOutline = (outline: OutlinePage[], count: number): OutlinePage[] => {
     prev.summary = `${prev.summary} ${last.summary}`.trim();
     prev.turnHook = last.turnHook || prev.turnHook;
     prev.characters = [...new Set([...prev.characters, ...last.characters])];
+    prev.changes = [...(prev.changes || []), ...(last.changes || [])];
   }
   // Stretch the densest beats rather than invent new ones.
   let i = 0;
   while (out.length < count && out.length) {
     const src = out[i % out.length];
-    out.splice((i % out.length) + 1, 0, { ...src, summary: `${src.summary} (continued — let this beat breathe)`, characters: [...src.characters] });
+    out.splice((i % out.length) + 1, 0, { ...src, summary: `${src.summary} (continued — let this beat breathe)`, characters: [...src.characters], changes: [] });
     i += 2;
   }
   return out.map((o, k) => ({ ...o, n: k + 1 }));
@@ -1385,6 +1405,7 @@ export async function writePagePlan(args: {
   };
 
   let normalized: NormalizedPlan;
+  let acceptedOutline: OutlinePage[] | undefined;
   const pagesToWrite = targets ? targets.length : pageCount;
   if (pagesToWrite <= SINGLE_CALL_PAGES) {
     const result = await completeStructured<NormalizedPlan>({
@@ -1431,6 +1452,7 @@ export async function writePagePlan(args: {
     normalized = check.value;
   } else {
     // Long plan: a binding outline first, then the pages in parallel chunks.
+    const sourceForEvidence = clean(doc.source.script).toLowerCase();
     const outlineResult = await completeStructured<OutlineResult>({
       llm: args.llm,
       role: 'writer',
@@ -1440,11 +1462,14 @@ export async function writePagePlan(args: {
         task:
           `Step 1 of 2 — OUTLINE ONLY. Pace the whole story across exactly ${pageCount} pages and return one entry per page (n = 1 to ${pageCount}): ` +
           'summary = the page\'s beats in order (2–3 sentences), turnHook, characters = names of the named characters on the page, place = where it happens. ' +
-          'Introduce any new named character in newCast with a full look. Panels and dialogue are written in step 2.'
+          'Introduce any new named character in newCast with a full look. ' +
+          'For changes, record only a visible, lasting change on this page (up to four). Use the exact character name for outfit, holding or marks, or a prop name for prop. ' +
+          'values is the resulting outfit, held items, distinguishing marks or prop state. Use [] to explicitly clear a prior state. Include a short verbatim evidence quote from the summary or source. ' +
+          'If nothing changes, return changes: []. Do not reveal a future change early. Panels and dialogue are written in step 2.'
       }),
       schemaName: 'comic_page_outline',
       schema: OUTLINE_SCHEMA,
-      validate: (json) => normalizeOutline(json, pageCount),
+      validate: (json) => normalizeOutline(json, pageCount, sourceForEvidence),
       failure,
       temperature: 0.7,
       maxTokens: 2_000 + pageCount * 220,
@@ -1452,9 +1477,10 @@ export async function writePagePlan(args: {
     });
     track(outlineResult);
     const outline = fitOutline(outlineResult.value.pages, pageCount);
+    acceptedOutline = outline;
     const outlineCast = outlineResult.value.newCast
       .filter((c) => clean(c.name))
-      .map((c) => ({ name: clean(c.name), role: clean(c.role), look: isObject(c.look) ? clean(c.look.summary) : '' }));
+      .map((c) => ({ name: clean(c.name), role: clean(c.role), look: lookLine({ look: cleanLook(c.look) }) }));
     const groups = chunk(outline, CHUNK_PAGES);
     const parts = await mapLimit(groups, CHUNK_CONCURRENCY, async (group) => {
       const from = group[0].n;
@@ -1467,6 +1493,7 @@ export async function writePagePlan(args: {
           instructions: args.instructions,
           outline,
           outlineCast,
+          sourcePages: group.map(page => page.n),
           task:
             `Step 2 of 2 — write pages ${from}–${to} in full (panels, layout, dialogue), following the outline for those pages exactly ` +
             `and keeping continuity with the pages around them. Return exactly ${group.length} page${group.length > 1 ? 's' : ''}, n = ${from} to ${to}.`
@@ -1474,9 +1501,17 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
+          if (!isObject(json)) return { problems: ['Return the requested pages as one JSON object.'] };
+          const pages = orderedRawPages(json);
+          // Some providers number each section locally. Accept that unambiguous convention,
+          // but never shift a missing or repeated beat onto a different page of the book.
+          const numbered = pages.length === group.length && (
+            pages.every((page, i) => page.n === from + i) || pages.every((page, i) => page.n === i + 1)
+          );
+          if (!numbered) return { problems: [`Return pages ${from} to ${to}, each exactly once. Keep each page's events on its outline number.`] };
           const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, rating, storyFixes });
-          if (!check.value || !isObject(json)) return { problems: check.problems };
-          return { value: { pages: orderedRawPages(json), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
+          if (!check.value) return { problems: check.problems };
+          return { value: { pages, newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
         failure: `The writer couldn't produce pages ${from}–${to} this time. Please try again.`,
         temperature: 0.7,
@@ -1500,7 +1535,13 @@ export async function writePagePlan(args: {
   const meter = planMeter(doc);
   const fixes = new Map(normalized.layoutFixes);
   const before = new Map((targets ?? []).map((t) => [t.id, t.panels.length]));
-  const pages = softened.map((page) => {
+  const stillUsed = new Set(softened.flatMap(p => p.panels.flatMap(panel => [...panel.castIds, ...panel.lines.map(l => l.speakerId || '')])));
+  const newCast = normalized.newCast.filter(c => stillUsed.has(c.id));
+  const cast = [...doc.cast, ...newCast];
+  const pages = softened.map((original) => {
+    const changes = acceptedOutline?.[original.n - 1]?.changes;
+    const continuity = changes?.length ? outlinePageContinuity(changes, cast) : undefined;
+    const page = continuity && !original.continuity ? { ...original, continuity } : original;
     const prior = fixes.get(page.id);
     if (prior && prior.layout === page.layout) return page;
     fixes.delete(page.id);
@@ -1515,11 +1556,9 @@ export async function writePagePlan(args: {
     ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!)),
     ...(normalized.speakerNotes ?? [])
   ];
-  // Drop new characters that page-count enforcement removed from every page.
-  const stillUsed = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));
   return {
     pages,
-    newCast: normalized.newCast.filter((c) => stillUsed.has(c.id)),
+    newCast,
     ...(costUsd !== undefined ? { costUsd } : {}),
     model,
     ...(notes.length ? { notes } : {})
@@ -1537,7 +1576,9 @@ export const mergeRevisedPages = (oldPages: Page[], revised: Page[]): Page[] => 
     const next = byId.get(old.id);
     if (!next) return old;
     const lineIds = new Set(next.panels.flatMap((p) => p.lines.map((l) => l.id)));
-    return { ...next, n: old.n, render: old.render, balloons: old.balloons.filter((b) => lineIds.has(b.lineId)) };
+    // A script rewrite changes the panels. The creator's visual corrections still apply.
+    const continuity = old.continuity && (old.continuity.by !== 'writer' || !next.continuity) ? old.continuity : next.continuity;
+    return { ...next, ...(continuity ? { continuity } : {}), n: old.n, render: old.render, balloons: old.balloons.filter((b) => lineIds.has(b.lineId)) };
   });
 };
 

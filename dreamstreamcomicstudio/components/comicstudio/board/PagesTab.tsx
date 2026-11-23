@@ -39,6 +39,7 @@ import { ComicPageView } from './ComicPageView';
 import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { EmptyIllustration, FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton, frameSources, variantCssWidth } from './ImageFrame';
 import { PageScript } from './PageScript';
+import { ContinuityReview } from '../consistency/ContinuityReview';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
 import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
@@ -186,6 +187,7 @@ export const PageCard: React.FC<{
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const status = pageVisualStatus(doc, page);
   const [showScript, setShowScript] = useState(false);
+  const [reviewContinuity, setReviewContinuity] = useState(false);
   const { busyKey, fire } = useClickGuard();
   const asset = page.render.asset;
   const blocked = !!asset && !canServeToOwner(asset);
@@ -360,6 +362,7 @@ export const PageCard: React.FC<{
         {!waiting && (status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
         {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={target} label={`Page ${page.n}`} />}
+        <GhostButton size="xs" aria-haspopup="dialog" aria-label={`Review continuity on page ${page.n}`} onClick={() => setReviewContinuity(true)}>Continuity</GhostButton>
         {letteringEntry && (
           <GhostButton size="xs" onClick={openLettering} aria-label={`Edit lettering on page ${page.n}`} className="ml-auto" data-testid="edit-lettering">
             Edit lettering
@@ -369,6 +372,7 @@ export const PageCard: React.FC<{
           {drawn ? 'Edit' : 'Open'}
         </GhostButton>
       </footer>
+      {reviewContinuity && <ContinuityReview key={`${doc.id}/${page.id}`} studio={studio} doc={doc} page={page} onClose={() => setReviewContinuity(false)} />}
     </Surface>
   );
 };

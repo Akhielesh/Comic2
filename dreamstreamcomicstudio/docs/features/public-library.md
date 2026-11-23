@@ -36,6 +36,20 @@ schema change, not part of this release).
 Nothing about them changes, and a direct link (`/?view=read&id=…`, `getPublicProject`) still opens one. Setting the
 constant to true brings back the old rule (public and not held) for every list at once.
 
+## Discover and reading progress
+
+Discover is the default Library order. It recommends up to three comics from the first 48 eligible results. Likes and completed or unfinished reads can match another story through words shared by its published title and synopsis. A recommendation explains which comic prompted it. The remaining entries keep their catalog order. Without a match, Discover mixes popular and newer publications, preferring different creators and rating categories when available. The standard Trending and Recent orders, title search and Kids-friendly filter are also available.
+
+Guests keep up to 24 recent public reading positions in tab session storage. Clearing reading history removes these positions. Guests’ earlier bookmarks stay separate. Neither guest history nor device bookmarks are imported into a member account.
+
+Members can open **Reading progress → Sync my reading progress** in the Library. Sync starts off. An opted-in member’s public reader saves the last actual page displayed, and their Library on another signed-in device can resume at that page. **Clear reading history** erases the saved positions across devices. **Turn off sync and delete progress** also withdraws consent. A tab opened under the old consent or book revision cannot restore a cleared or superseded position. If the account service is unavailable, the catalog and reader remain usable; the control offers a refresh.
+
+The account stores the publication ID, page, database timestamp and revision. The consenting member can retrieve up to 24 positions from the past 30 days. Owner previews, embeds and unlisted links are excluded. Visibility, current publication slug, rating, moderation holds and frozen page bounds are checked in the database. Withdrawals, rotations and moderation holds remove affected saved positions. Discovery also rechecks the public listing before showing a card or using its published title as a recommendation reason.
+
+Apply `server/sql/comic_reader_library.sql` after `comic_publications.sql` and the project content-rating guard. Its authenticated, owner-bound `comic_reader_library` RPC exposes no direct table grants. The migration installs a ten-minute, bounded expiry cleanup when `pg_cron` is enabled. On installations without `pg_cron`, schedule `select comic_reader_private.expire_positions()` as the migration owner for physical expiry of inactive accounts’ rows. Reads always enforce the 30-day boundary. Auth-user deletions cascade. The rollback path is to revert the client, unschedule `comic-reader-expiry` if installed, and withdraw the authenticated execute grants on both the public wrapper and the private implementation. Preserve private records for recovery unless an intentional data deletion has been approved.
+
+An unfinished comic opens directly at its saved page. Older reads beyond the first page and recent likes are revalidated against the same public catalog before use.
+
 ## A small Library
 
 With `LIBRARY_TOOLS_MIN` (6) comics or fewer the Library shows the comics and nothing else: no search box, sort,
@@ -56,4 +70,4 @@ count only when it is above zero: a current Comic Studio comic's reads are count
 ## Not used here
 
 The Discover RPCs (`comic_discover_list`, `comic_discover_shelves`, `server/sql/comic_discovery.sql`, see
-`discovery.md`) are not applied in production, so the Library reads `projects` directly and adds no SQL.
+`discovery.md`) are not applied in production, so the Library reads `projects` directly for discovery. The member progress RPC is independent of these catalog functions.

@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
+import { libraryReads } from '../../services/libraryDiscovery';
+const memberSync = vi.hoisted(() => ({ record: vi.fn(), close: vi.fn() }));
+vi.mock('../../services/libraryReadingSync', () => ({ createReadingRecorder: () => memberSync }));
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
 import { pageImageCache } from './immersive/pageImageCache';
 import { readerEntryOnTop } from './immersive/useImmersive';
@@ -19,7 +22,7 @@ import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 const api = vi.hoisted(() => ({
   loadPublicComic: vi.fn(),
   loadPublicComicBySlug: vi.fn(),
-  trackPublicEvent: vi.fn(async () => undefined),
+  trackPublicEvent: vi.fn<typeof import('./studioApi').trackPublicEvent>().mockResolvedValue(undefined),
   reportPublicComic: vi.fn(async () => undefined)
 }));
 vi.mock('./studioApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./studioApi')>()), ...api }));
@@ -432,16 +435,48 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(screen.queryByRole('menuitem', { name: /Download/ })).toBeNull();
   });
 
-  it('counts one share per share: not again for a click while the copy menu is already open', async () => {
+  it('records a share for the selected action after opening the menu', async () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload());
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, share: undefined, clipboard: { writeText }, userAgent: 'test' });
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady />);
     await screen.findByRole('button', { name: /Start reading/ });
     const share = within(screen.getByTestId('public-reader-header')).getByRole('button', { name: 'Share' });
     fireEvent.click(share);
-    await waitFor(() => expect(share).toHaveAttribute('aria-expanded', 'true'));
-    fireEvent.click(share);
-    const shares = () => api.trackPublicEvent.mock.calls.filter((c) => JSON.stringify(c).includes('"share"')).length;
-    expect(shares()).toBe(1);
+    const copy = await screen.findByRole('menuitem', { name: 'Copy link' });
+    const shares = () => api.trackPublicEvent.mock.calls.filter((c) => c[1].type === 'share');
+    expect(shares()).toHaveLength(0);
+    fireEvent.click(copy);
+    await waitFor(() => expect(shares()).toHaveLength(1));
+    expect(shares()[0][1]).toMatchObject({ channel: 'copy' });
+    fireEvent.click(copy);
+    expect(shares()).toHaveLength(1);
+  });
+
+  it('copies an explicit published page link with no reader identity or private parameters', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, share: undefined, clipboard: { writeText }, userAgent: 'test' });
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady start={{ page: 2 }} />);
+    const more = within(await screen.findByTestId('public-reader-header')).getByRole('button', { name: 'More' });
+    fireEvent.click(more);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy link to page 2' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`https://comics.dreamstreamstudio.ai/c/${SLUG}?p=2&via=copy`));
+    expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({type: 'share', channel: 'copy'}));
+  });
+
+  it('offers a page-specific link from full-screen reading settings', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, share: undefined, clipboard: { writeText }, userAgent: 'test' });
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady isOwner start={{ page: 2 }} />);
+    const inline = await screen.findByTestId('comic-reader');
+    fireEvent.click(within(inline).getByRole('button', { name: 'Full screen' }));
+    const reader = await screen.findByTestId('immersive-reader');
+    fireEvent.click(within(reader).getByRole('button', { name: /Reader settings|Reading settings|^Settings$/i }));
+    fireEvent.click(within(reader).getByRole('button', { name: 'Copy link to page 2' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`https://comics.dreamstreamstudio.ai/c/${SLUG}?p=2&via=copy`));
+    expect(api.trackPublicEvent).not.toHaveBeenCalled();
   });
 
   it('Report waits until the reader is known (never flashes for the owner while identity loads)', async () => {
@@ -678,5 +713,20 @@ describe('PublicComicReader — the End card the host gives', () => {
     expect(within(card).queryByRole('link', { name: 'Make comics like this' })).toBeNull();
     expect(within(card).getByRole('button', { name: /Read again/ })).toHaveAttribute('data-primary');
     expect(card.querySelectorAll('[data-primary]')).toHaveLength(1);
+  });
+});
+
+describe('account-scoped Library history at the reader entry point', () => {
+  it.each(['public','unlisted'] as const)('remembers actual page turns only for a public publication (%s)',async visibility=>{
+    localStorage.clear();sessionStorage.clear();memberSync.record.mockClear();
+    api.loadPublicComicBySlug.mockResolvedValue(payload({visibility}));
+    render(<PublicComicReader source={{kind:'slug',slug:SLUG}} libraryReaderId="member" start={{page:2}}/>);
+    await screen.findAllByTestId('reader-page');
+    if (visibility==='public') {
+      await waitFor(()=>expect(memberSync.record).toHaveBeenCalledWith(2, expect.any(Number)));
+    } else {
+      expect(memberSync.record).not.toHaveBeenCalled();
+    }
+    expect(libraryReads()).toEqual([]);
   });
 });

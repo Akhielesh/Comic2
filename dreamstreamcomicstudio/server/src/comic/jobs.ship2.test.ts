@@ -277,6 +277,39 @@ describe('runAfter: the per-page `after` dependency (promises only)', () => {
     expect(finished).toEqual(['b']);
   });
 
+  it('waits for optional artwork through QC, even under stored ordering, without blocking unrelated work', async () => {
+    const check = deferred();
+    const started: string[] = [];
+    const done = runAfter(
+      [{ id: 'p3' }, { id: 'p12', evidenceAfter: 'p3' }, { id: 'p9' }],
+      async (item, landed) => {
+        started.push(item.id);
+        if (item.id === 'p3') { landed(); await check.promise; }
+      }, 'stored');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(started).toEqual(['p3', 'p9']);
+    check.resolve();
+    await done;
+    expect(started).toEqual(['p3', 'p9', 'p12']);
+  });
+
+  it('a skipped or failed optional source releases the dependent page to use its own canonical references', async () => {
+    const started: string[] = [];
+    const run = runAfter(
+      [{ id: 'broken' }, { id: 'never-drawn', after: 'broken' },
+        { id: 'target', evidenceAfter: 'never-drawn' }, { id: 'target2', evidenceAfter: 'broken' }],
+      async item => { started.push(item.id); if (item.id === 'broken') throw new Error('drawing failed'); });
+    await expect(run).rejects.toThrow('drawing failed');
+    expect(started.sort()).toEqual(['broken', 'target', 'target2']);
+  });
+
+  it('ignores unknown and cyclic optional sources and keeps the existing ordering contract', async () => {
+    const started: string[] = [];
+    await runAfter([{ id: 'p1', evidenceAfter: 'p3' }, { id: 'p2', after: 'p1', evidenceAfter: 'absent' },
+      { id: 'p3', after: 'p2' }], async item => { started.push(item.id); });
+    expect(started).toEqual(['p1', 'p2', 'p3']);
+  });
+
   it('creates no timer: no setTimeout, no setInterval (the backend stays sleepable)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'setImmediate'] });
     const timeout = vi.spyOn(globalThis, 'setTimeout');

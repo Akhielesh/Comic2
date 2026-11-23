@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Baby, BookOpen, Check, Eye, Heart, Search, X } from 'lucide-react';
 import { supabase } from '../services/supabase';
+import { useLibraryReadingProgress } from './useLibraryReadingProgress';
 import { Project } from '../types';
 import { GALLERY_CARD_SELECT, GALLERY_PAGE_SIZE, galleryCardStateOf, getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,6 +17,7 @@ import { Button } from './ds/Button';
 import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
+import { clearLibraryReads, GUEST_LIBRARY_HISTORY_KEY, libraryPicks, libraryReads, LIBRARY_HISTORY_CHANGED, type DiscoveryComic } from '../services/libraryDiscovery';
 import { filterPublicListing, isPubliclyListed } from '../services/publicListing';
 import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
 import { ComicSampleReader } from './comicshost/ComicSampleReader';
@@ -85,6 +87,7 @@ interface PublicProject extends Project {
     isLiked?: boolean;
     /** The rating the publish gate assigned (projects.content_rating, server-set). */
     contentRating?: ContentRating;
+    publicOverview?: string;
 }
 
 const normalizeTimestamp = (value: unknown): number | undefined => {
@@ -98,7 +101,7 @@ const normalizeTimestamp = (value: unknown): number | undefined => {
     return undefined;
 };
 
-type GallerySort = 'trending' | 'recent';
+type GallerySort = 'discovery' | 'trending' | 'recent';
 type SampleStory = 'paper-boat' | 'last-tram';
 const SAMPLES = [
     { id: 'last-tram' as const, title: 'The Last Tram', note: 'One last ride through a city after dark.', image: '/assets/comic-sample/last-tram-page-1-480.webp', detail: 'A city story · 2 pages' },
@@ -162,16 +165,72 @@ async function hydratePreview(project: PublicProject): Promise<PublicProject> {
     return nextProject;
 }
 
+const DISCOVERY_SELECT = GALLERY_CARD_SELECT + ',publishedOverview:state->overview';
+
+function publicCards(received: Record<string, unknown>[], kidsOnly = false): PublicProject[] {
+    // The same rule again on the client (a backstop), then the card's own shape checks.
+    const rows = received.map((row) => ({ ...row, state: galleryCardStateOf(row) }))
+        .filter((row: any) => row && typeof row.id === 'string' && typeof row.name === 'string'
+            && typeof row.created_at === 'string' && typeof row.updated_at === 'string'
+            && isPubliclyListed(row) && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
+    // No maker name on a card: profiles are readable by their owner only, and a publication's "show my
+    // name" choice is not on the listing row, so a name here would be wrong or a stand-in id.
+    return rows.map((row: any): PublicProject => ({
+        id: row.id, name: row.name,
+        publicOverview: typeof row.publishedOverview === 'string' ? row.publishedOverview.slice(0,600) : '',
+        createdAt: new Date(row.created_at).getTime(), updatedAt: new Date(row.updated_at).getTime(),
+        publishedAt: normalizeTimestamp(row.published_at) ?? normalizeTimestamp(row.state.publishedAt) ?? new Date(row.created_at).getTime(),
+        coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
+        state: row.state, isPublic: !!row.is_public,
+        userId: typeof row.user_id === 'string' ? row.user_id : undefined,
+        likesCount: typeof row.likes_count === 'number' ? row.likes_count : 0,
+        viewsCount: typeof row.views_count === 'number' ? row.views_count : 0,
+        contentRating: gateRatingOf(row)
+    }));
+}
+
+function discoveryComic(project: PublicProject): DiscoveryComic | null {
+    const slug = shareSlugOf(project);
+    return slug ? {slug, title:project.name, overview:project.publicOverview ?? '', owner:project.userId,
+        rating:project.contentRating, likes:project.likesCount ?? 0, publishedAt:project.publishedAt || project.createdAt,
+        liked:!!project.isLiked} : null;
+}
+
 export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onRequireAuth }) => {
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
+    const owner = user?.id ?? null;
+    const [historyVersion, setHistoryVersion] = useState(0);
+    const [catalogVersion, setCatalogVersion] = useState(0);
+    const progress = useLibraryReadingProgress(authLoading ? null : owner);
+    const cloud = progress.current?.data;
+    const reads = useMemo(() => authLoading ? [] : owner ? cloud?.reads ?? [] : libraryReads(),
+        [authLoading, owner, cloud, historyVersion]);
+    useEffect(() => {
+        const reload = () => setHistoryVersion(n => n + 1);
+        const pageShown = (event: PageTransitionEvent) => {
+            reload();
+            if (event.persisted) setCatalogVersion(n => n + 1);
+        };
+        const storageChanged = (event: StorageEvent) => { if (!event.key || event.key === GUEST_LIBRARY_HISTORY_KEY) reload(); };
+        window.addEventListener('pageshow', pageShown);
+        window.addEventListener('storage', storageChanged);
+        window.addEventListener(LIBRARY_HISTORY_CHANGED, reload);
+        return () => {
+            window.removeEventListener('pageshow', pageShown);
+            window.removeEventListener('storage', storageChanged);
+            window.removeEventListener(LIBRARY_HISTORY_CHANGED, reload);
+        };
+    }, []);
     const { theme } = useComicTheme();
     const [projects, setProjects] = useState<PublicProject[]>([]);
+    const [listingOwner, setListingOwner] = useState<string | null | undefined>(undefined);
+    const [earlierReading, setEarlierReading] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [loadNotice, setLoadNotice] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(false);
     const [nextOffset, setNextOffset] = useState(0);
-    const [filter, setFilter] = useState<GallerySort>('trending');
+    const [filter, setFilter] = useState<GallerySort>('discovery');
     const [search, setSearch] = useState('');
     const [query, setQuery] = useState('');
     const [kidsOnly, setKidsOnly] = useState(false);
@@ -194,6 +253,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const newResults = useRef<HTMLLIElement | null>(null);
     const focusNextPage = useRef(false);
     const previousLength = useRef(0);
+    const nextFocusId = useRef<string | undefined>(undefined);
 
     useEffect(() => {
         const timeout = window.setTimeout(() => setQuery(search.trim()), 300);
@@ -242,7 +302,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             const cards = (order: 'likes_count' | 'created_at') => {
                 // The listing rule (services/publicListing.ts) runs in the database: hidden comics never download.
                 // The first page also asks for the count, so "N comics" counts every listed comic, not one page.
-                let request = filterPublicListing(supabase.from('projects').select(GALLERY_CARD_SELECT, offset === 0 ? { count: 'exact' } : undefined));
+                let request = filterPublicListing(supabase.from('projects').select(DISCOVERY_SELECT, offset === 0 ? { count: 'exact' } : undefined));
                 if (query) request = request.ilike('name', `%${literalLike(query)}%`);
                 if (kidsOnly) request = request.in('content_rating', ['G', 'PG']);
                 // A deterministic secondary key prevents equal-score/date rows changing pages.
@@ -258,43 +318,28 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             if (result.error) throw result.error;
             if (generation !== requestGeneration.current) return;
             const received = (result.data ?? []) as unknown as Record<string, unknown>[];
-            // The same rule again on the client (a backstop), then the card's own shape checks.
-            const rows = received.map((row) => ({ ...row, state: galleryCardStateOf(row) }))
-                .filter((row: any) => row && typeof row.id === 'string' && typeof row.name === 'string'
-                    && typeof row.created_at === 'string' && typeof row.updated_at === 'string'
-                    && isPubliclyListed(row) && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
-            // No maker name on a card: profiles are readable by their owner only, and a publication's "show my
-            // name" choice is not on the listing row, so a name here would be wrong or a stand-in id.
-            const mapped = rows.map((row: any): PublicProject => ({
-                id: row.id, name: row.name,
-                createdAt: new Date(row.created_at).getTime(), updatedAt: new Date(row.updated_at).getTime(),
-                publishedAt: normalizeTimestamp(row.published_at) ?? normalizeTimestamp(row.state.publishedAt) ?? new Date(row.created_at).getTime(),
-                coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
-                state: row.state, isPublic: !!row.is_public,
-                userId: typeof row.user_id === 'string' ? row.user_id : undefined,
-                likesCount: typeof row.likes_count === 'number' ? row.likes_count : 0,
-                viewsCount: typeof row.views_count === 'number' ? row.views_count : 0,
-                contentRating: gateRatingOf(row)
-            }));
+            const mapped = publicCards(received, kidsOnly);
             const [hydrated, likeMap] = await Promise.all([
                 Promise.all(mapped.map(hydratePreview)),
-                user?.id ? getProjectLikeMap(mapped.map((project) => project.id)).catch(() => ({} as Record<string, boolean>)) : Promise.resolve({} as Record<string, boolean>)
+                user?.id ? getProjectLikeMap(mapped.map((project) => project.id), owner ?? undefined).catch(() => ({} as Record<string, boolean>)) : Promise.resolve({} as Record<string, boolean>)
             ]);
             if (generation !== requestGeneration.current) return;
+            setListingOwner(owner);
+            if (offset > 0) nextFocusId.current = mapped[0]?.id;
             const page = hydrated.map((project) => ({ ...project, isLiked: !!likeMap[project.id] }));
             setProjects((previous) => offset === 0 ? page : [...previous, ...page.filter((project) => !previous.some((p) => p.id === project.id))]);
             setHasMore(received.length === GALLERY_PAGE_SIZE);
             setNextOffset(offset + received.length);
             if (offset === 0) dropped.current = 0;
-            dropped.current += received.length - rows.length;
+            dropped.current += received.length - mapped.length;
             const counted = typeof (result as { count?: unknown }).count === 'number' ? (result as { count: number }).count : null;
             const listed = offset === 0
-                ? (counted !== null ? Math.max(rows.length, counted - dropped.current) : received.length < GALLERY_PAGE_SIZE ? rows.length : null)
+                ? (counted !== null ? Math.max(mapped.length, counted - dropped.current) : received.length < GALLERY_PAGE_SIZE ? mapped.length : null)
                 : undefined;
             if (listed !== undefined) {
                 setTotal(listed);
                 if (!query && !kidsOnly && listed !== null) setLibraryTotal(listed);
-            } else setTotal((previous) => previous === null ? null : Math.max(0, previous - (received.length - rows.length)));
+            } else setTotal((previous) => previous === null ? null : Math.max(0, previous - (received.length - mapped.length)));
         } catch {
             if (generation === requestGeneration.current) setLoadNotice(offset === 0 ? 'The Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
         } finally {
@@ -309,15 +354,49 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     useEffect(() => {
         const generation = ++requestGeneration.current;
         pageBusy.current = false;
-        effectiveSort.current = filter === 'trending' ? 'likes_count' : 'created_at';
+        setLikeError(null);
+        setLikeBusy({});
+        effectiveSort.current = filter === 'recent' ? 'created_at' : 'likes_count';
         setProjects([]);
+        setListingOwner(undefined);
+        setEarlierReading([]);
         setHasMore(false);
         setNextOffset(0);
         setTotal(null);
         focusNextPage.current = false;
         void fetchPage(0, generation);
         return () => { requestGeneration.current += 1; };
-    }, [filter, fetchPage]);
+    }, [filter, fetchPage, catalogVersion]);
+
+    // Older reads may no longer be on the first grid page. Revalidate their slugs through exactly
+    // the public listing query; local history never supplies a title, cover or private capability.
+    useEffect(() => {
+        let cancelled = false;
+        setEarlierReading([]);
+        if (filter !== 'discovery' || query || kidsOnly || !hasMore || (!reads.length && !owner) || listingOwner !== owner) return;
+        const missing = reads.map(row => row.slug).filter(slug => !projects.some(project => shareSlugOf(project) === slug));
+        void (async () => {
+            const publicSeedCards = async (column: 'id' | 'state->>shareSlug', values: string[]) => {
+                if (!values.length) return [];
+                const { data, error } = await filterPublicListing(supabase.from('projects').select(DISCOVERY_SELECT))
+                    .in(column, values).limit(values.length);
+                return !error && data ? publicCards(data as unknown as Record<string,unknown>[]) : [];
+            };
+            try {
+                const memberLikes = async () => {
+                    if (!owner) return [];
+                    const { data } = await supabase.from('project_likes').select('project_id').eq('user_id',owner)
+                        .order('created_at',{ascending:false}).limit(12);
+                    const ids = (data ?? []).map(row => row.project_id).filter((id): id is string =>
+                        typeof id === 'string' && !projects.some(project => project.id === id));
+                    return (await publicSeedCards('id',ids)).map(card => ({...card,isLiked:true}));
+                };
+                const [pastReads, pastLikes] = await Promise.all([publicSeedCards('state->>shareSlug',missing), memberLikes()]);
+                if (!cancelled) setEarlierReading([...pastLikes,...pastReads]);
+            } catch { /* The rest of the Library stays available. */ }
+        })();
+        return () => { cancelled = true; };
+    }, [filter,query,kidsOnly,hasMore,reads,projects,owner,listingOwner]);
 
     useEffect(() => {
         if (!loadingMore && focusNextPage.current && projects.length > previousLength.current) {
@@ -332,7 +411,18 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
         void fetchPage(nextOffset, requestGeneration.current);
     };
     const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
-    const filteredProjects = projects.filter((project) => !kidsOnly || isKidsFriendly(project.contentRating));
+    const discoveryActive = filter === 'discovery' && !query && !search.trim() && !kidsOnly && !authLoading && listingOwner === owner;
+    const ranked = useMemo(() => {
+        if (!discoveryActive) return [];
+        const toComic = (rows: PublicProject[]) => rows.map(discoveryComic).filter((c): c is DiscoveryComic => !!c);
+        return libraryPicks(toComic(projects.slice(0,GALLERY_PAGE_SIZE)),reads,toComic(earlierReading));
+    }, [discoveryActive,projects,reads,earlierReading]);
+    const picks = new Map(ranked.map(pick => [pick.slug,pick]));
+    const catalog = new Map([...earlierReading,...projects].map(project => [shareSlugOf(project),project]));
+    const visibleProjects = listingOwner === owner ? projects : [];
+    const rankedProjects = ranked.flatMap(pick => catalog.get(pick.slug) ?? []);
+    const filteredProjects = [...rankedProjects,...visibleProjects.filter(project => !picks.has(shareSlugOf(project) ?? ''))]
+      .filter(project => !kidsOnly || isKidsFriendly(project.contentRating));
     const isSearching = search.trim() !== query;
     const filtering = !!query || !!search.trim() || kidsOnly;
     const showSamples = !filtering;
@@ -350,15 +440,18 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const toggleLike = async (project: PublicProject) => {
         if (!user) { onRequireAuth?.(); return; }
         if (likeBusy[project.id]) return;
+        const generation = requestGeneration.current;
         setLikeError(null);
         setLikeBusy((previous) => ({ ...previous, [project.id]: true }));
         const currentLiked = !!project.isLiked;
         const originalCount = project.likesCount || 0;
         setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: !currentLiked, likesCount: Math.max(0, originalCount + (currentLiked ? -1 : 1)) } : p));
         try {
-            const result = await toggleProjectLike(project.id, project.userId);
+            const result = await toggleProjectLike(project.id, project.userId, user.id);
+            if (generation !== requestGeneration.current) return;
             setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: result.liked, likesCount: Math.max(0, originalCount + (result.liked === currentLiked ? 0 : result.liked ? 1 : -1)) } : p));
         } catch {
+            if (generation !== requestGeneration.current) return;
             setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: currentLiked, likesCount: originalCount } : p));
             setLikeError(`Your like for “${project.name}” could not be saved. Please try again.`);
         } finally {
@@ -368,7 +461,8 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
 
     const comicsSection = showComics && (
         <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
-            <div className="library-section-heading"><h2 id="library-community-title">New comics</h2><span>Made in Comic Studio</span></div>
+            <div className="library-section-heading"><h2 id="library-community-title">{showTools && discoveryActive ? 'Find your next read' : 'New comics'}</h2>
+                <span>Made in Comic Studio</span></div>
             {showTools && <>
                 <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
                     <label className="library-search-field"><Search aria-hidden /><span className="sr-only">Search comic titles</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder="Search comic titles" /></label>
@@ -376,7 +470,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                     <Button type="submit" variant="outline" className="library-search-submit">Search</Button>
                 </form>
                 <div className="library-toolbar">
-                    <Segmented<GallerySort> className="library-sort" label="Sort the Library" value={filter} onChange={setFilter} options={[{ value: 'trending', label: 'Trending' }, { value: 'recent', label: 'Recent' }]} />
+                    <Segmented<GallerySort> className="library-sort" label="Sort the Library" value={filter} onChange={setFilter} options={[{ value: 'discovery', label: 'Discover' }, { value: 'trending', label: 'Trending' }, { value: 'recent', label: 'Recent' }]} />
                     <Button type="button" variant="outline" aria-pressed={kidsOnly} onClick={() => setKidsOnly((value) => !value)} title="Only published comics rated G or PG by the publish check" className="library-kids">{kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)</Button>
                     {(query || kidsOnly) && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearFilters}>Clear filters</button>}
                 </div>
@@ -388,20 +482,25 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             ) : (
                 <>
                     {filteredProjects.length > 0 && <ul className="library-grid" data-layout={few ? 'few' : undefined}>
-                        {filteredProjects.map((project, index) => {
+                        {filteredProjects.map((project) => {
                             const covers = coverCandidates(project);
                             const slug = shareSlugOf(project);
+                            const pick = slug ? picks.get(slug) : undefined;
+                            const resume = pick?.resumePage;
+                            const why = pick?.reason && (showTools || resume || pick.reason.startsWith('Because you')) ? pick.reason : '';
                             const likes = project.likesCount || 0;
-                            const cover = <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}{!few && <span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span>}</div>;
+                            const cover = <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}{!few && <span className="library-cover-read" aria-hidden>{resume ? 'Continue reading' : 'Read comic'} <ArrowRight /></span>}</div>;
                             const published = <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>;
                             // A wide card keeps one link (cover, title, date and "Read comic"); the likes sit beside it, outside the link.
-                            return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} data-layout={few ? 'wide' : undefined} className="library-card">
-                                <a href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={`Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
+                            return <li key={project.id} ref={project.id === nextFocusId.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} data-layout={few ? 'wide' : undefined} className="library-card">
+                                <a href={slug ? SHARE_PATH(slug)+(resume ? '?p='+resume : '') : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={resume ? `Continue ${project.name} from page ${resume}` : `Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
                                     {cover}
                                     {few
-                                        ? <div className="library-wide-copy"><h3>{project.name}</h3>{published}<span className="library-read-link" aria-hidden>Read comic <ArrowRight /></span></div>
+                                        ? <div className="library-wide-copy"><h3>{project.name}</h3>{why && <p className="library-discovery-reason">{why}</p>}{published}<span className="library-read-link" aria-hidden>{resume ? 'Continue reading' : 'Read comic'} <ArrowRight /></span></div>
                                         : <h3>{project.name}</h3>}
                                 </a>
+                                {why && !few && <p className="library-discovery-reason">{why}</p>}
+                                {pick && !few && project.publicOverview && <p className="library-discovery-summary">{project.publicOverview}</p>}
                                 {!few && published}
                                 <div className="library-card-stats">
                                     {/* Reading needs no account: a visitor sees the likes, a signed-in reader can add one. */}
@@ -443,6 +542,25 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                         <h1 ref={libraryTitle} tabIndex={-1}>Library</h1>
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
+                    {owner && !authLoading && <details className="library-progress">
+                        <summary className={FOCUS_RING}>Reading progress</summary>
+                        <p>Privately sync your place in up to 24 public comics across your DreamStream devices for 30 days.</p>
+                        {progress.current?.error && <p role="status">{progress.current.error}</p>}
+                        <div className="library-progress-controls" aria-busy={!!progress.current?.working}>
+                            {cloud?.enabled && <>
+                                <span>Sync is on</span>
+                                <button type="button" className={cn('library-reset', FOCUS_RING)} disabled={progress.current?.working} onClick={() => void progress.run('clear', cloud.epoch)}>Clear reading history</button>
+                                <button type="button" className={cn('library-reset', FOCUS_RING)} disabled={progress.current?.working} onClick={() => void progress.run('disable', cloud.epoch)}>Turn off sync and delete progress</button>
+                            </>}
+                            {cloud && !cloud.enabled && <Button variant="outline" disabled={progress.current?.working} onClick={() => void progress.run('enable', cloud.epoch)}>Sync my reading progress</Button>}
+                            {progress.current?.error && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={() => void progress.run()}>Refresh progress</button>}
+                            {!cloud && !progress.current?.error && <span role="status">Checking your sync settings…</span>}
+                        </div>
+                    </details>}
+                    {!owner && !authLoading && reads.length > 0 && <div className="library-guest-progress">
+                        <span>Reading progress stays in this tab.</span>
+                        <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearLibraryReads}>Clear reading history</button>
+                    </div>}
                     {comicsSection}
                     {showSamples && (
                         <section aria-labelledby="library-samples-title" className="library-samples">

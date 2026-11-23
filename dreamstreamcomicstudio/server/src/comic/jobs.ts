@@ -168,6 +168,7 @@ import { compileFixPanel, finishFixPanel, fixPanelJobs, fixPanelMeta, fixPanelPr
 import { enrichPagesQuote } from './actions/consistency.js';
 import { boardForCheck, boardImage } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
+import { isProjectPageArt } from './assets.js';
 import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
 import { cropForPanel, cropPanelContext, panelContextBox, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
 import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
@@ -2202,6 +2203,8 @@ const GENERATED_REFERENCES: ReadonlySet<string> = new Set([PANEL_REFERENCE_PATH,
 export interface AfterItem {
   id: string;
   after?: string | null;
+  /** An optional source of checked artwork. Wait for its verdict, then proceed even if that drawing failed. */
+  evidenceAfter?: string | null;
 }
 
 /**
@@ -2227,32 +2230,49 @@ export async function runAfter<T extends AfterItem>(items: readonly T[], run: (i
       seen.add(at);
     }
   }
-  const landed = new Map<string, { promise: Promise<void>; resolve: () => void }>();
-  for (const i of items) {
+  const evidence = new Map<string, string>();
+  for (const item of items) {
+    const source = item.evidenceAfter;
+    if (!source || !ids.has(source)) continue;
+    // Never introduce a cycle with an existing ordering edge (including another optional edge).
+    const stack = [source];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const next of [dep.get(id), evidence.get(id)]) if (next) stack.push(next);
+    }
+    if (!seen.has(item.id)) evidence.set(item.id, source);
+  }
+  const signal = () => {
     let resolve!: () => void;
     const promise = new Promise<void>((r) => (resolve = r));
-    landed.set(i.id, { promise, resolve });
-  }
+    return { promise, resolve };
+  };
+  const signals = new Map(items.map(item => [item.id, { landed: signal(), done: signal() }]));
   const threw = new Set<string>();
   const settled = await Promise.allSettled(
     items.map(async (item) => {
       const before = dep.get(item.id);
-      const mine = landed.get(item.id)!;
-      if (before) {
-        await landed.get(before)!.promise;
-        if (threw.has(before)) {
-          threw.add(item.id);
-          mine.resolve();
-          return;
-        }
-      }
+      const source = evidence.get(item.id);
+      const mine = signals.get(item.id)!;
       try {
-        await run(item, settle === 'stored' ? mine.resolve : () => undefined);
+        if (before) {
+          await signals.get(before)!.landed.promise;
+          if (threw.has(before)) {
+            threw.add(item.id);
+            return;
+          }
+        }
+        if (source) await signals.get(source)!.done.promise;
+        await run(item, settle === 'stored' ? mine.landed.resolve : () => undefined);
       } catch (err) {
         threw.add(item.id);
         throw err;
       } finally {
-        mine.resolve();
+        mine.landed.resolve();
+        mine.done.resolve();
       }
     })
   );
@@ -2574,7 +2594,7 @@ class RenderRun {
     const items = [
       ...schedule.order.flatMap((pageId) => {
         const job = jobsByPage.get(pageId);
-        return job ? [{ id: renderTargetKey(job.target), after: pageKey(schedule.after[pageId]), job }] : [];
+        return job ? [{ id: renderTargetKey(job.target), after: pageKey(schedule.after[pageId]), evidenceAfter: pageKey(schedule.evidenceAfter?.[pageId]), job }] : [];
       }),
       ...(coverJob ? [{ id: 'cover', after: pageKey(schedule.coverAfter), job: coverJob }] : [])
     ];
@@ -2767,7 +2787,12 @@ class RenderRun {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
         // The nearest eligible image is read after the scheduled predecessor has settled.
-        return compilePage(doc, page, { previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
+        return compilePage(doc, page, {
+          ...this.compileOpts(opts),
+          previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }),
+          ownsPageArt: path => isProjectPageArt(path, this.ctx.userId, this.ctx.projectId),
+          ...(opts.layoutGuide ? { layoutGuide: true } : {})
+        });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
       qcPageId: p.id,
@@ -2786,7 +2811,11 @@ class RenderRun {
       label: 'Cover',
       activityLabel: textless ? 'Drawing a textless cover' : 'Drawing the cover',
       // docFor sets cover.lettering='overlay' too, so the spec hash and the TEXTLESS COVER line agree.
-      compile: (doc, opts) => compileCover(doc, { ...this.compileOpts(opts), ...(textless ? { textless: true } : {}) }),
+      compile: (doc, opts) => compileCover(doc, {
+        ...this.compileOpts(opts),
+        ownsPageArt: path => isProjectPageArt(path, this.ctx.userId, this.ctx.projectId),
+        ...(textless ? { textless: true } : {})
+      }),
       prev: this.prevOf({ kind: 'cover' }),
       implicit: !explicit && !textless && !action.safe,
       ...(action.safe ? { safe: true, note: 'Safer take' } : textless ? { note: 'Textless cover' } : explicit ? { note: 'New take' } : {}),
@@ -4215,7 +4244,9 @@ class RenderRun {
         layoutGuide: guide,
         previousPage: previousPage ?? null
       });
-      return plan.attached.filter((a) => (a.source === 'guide' ? guide : !!a.path && attached.has(a.path))).map((a) => a.key).slice(0, CONSISTENCY_LIMITS.anchorKeys);
+      const keys = plan.attached.filter((a) => (a.source === 'guide' ? guide : !!a.path && attached.has(a.path))).map((a) => a.key);
+      if (compiled.earlierPage && attached.has(compiled.earlierPage.path)) keys.unshift('prev:' + compiled.earlierPage.id);
+      return [...new Set(keys)].slice(0, CONSISTENCY_LIMITS.anchorKeys);
     } catch (err) {
       logger.warn('comic_anchor_keys_failed', { projectId: this.ctx.projectId, pageId: page.id, message: (err as Error)?.message });
       return undefined;

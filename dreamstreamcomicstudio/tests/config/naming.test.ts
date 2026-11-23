@@ -73,7 +73,7 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     }
     const landing = uiText('components/comicshost/ComicsLanding.tsx');
     expect(landing).toContain('Library');
-    expect(landing).toContain('Read comics');
+    expect(landing).toContain('Read a sample');
     expect(uiText('components/PublicGallery.tsx')).toContain('Library');
     expect(uiText('components/layout/StaticSiteHeader.tsx').filter((s) => s === 'Library')).toHaveLength(2);
     // Its menu describes the shelf without the old word (DS-R0 note 6).

@@ -93,6 +93,46 @@ describe('ShareSheet', () => {
     expect(wa.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
+  it('prepares a tagged release post from the published edition without sending or publishing', async () => {
+    const writeText = vi.fn(async () => undefined);
+    const share = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText }, share, userAgent: 'test' });
+    const studio = studioWith(view({ behind: true, stats: undefined, rating: 'PG', card: { title: 'Published title', description: 'Published hook', pageCount: 3 } }));
+    studio.doc!.brief.logline = 'Unreleased ending';
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('Plan a release post'));
+    fireEvent.change(screen.getByLabelText('Where will you share it?'), { target: { value: 'whatsapp' } });
+    const body = 'Hey! I made a 3-page comic called “Published title”.\n\nPublished hook\n\nHere’s the link if you want to read it.';
+    const expected = `${body}\n\nRated PG\nhttps://comics.dreamstreamstudio.ai/c/${SLUG}?via=whatsapp`;
+    expect(screen.getByLabelText('Post text')).toHaveValue(body);
+    expect(screen.getByText(/preview the version readers get/i)).toBeInTheDocument();
+    expect(screen.getByText(/no reader activity figures/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy post' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
+    expect(share).not.toHaveBeenCalled();
+    expect(api.publishComic).not.toHaveBeenCalled();
+    expect(api.updatePublication).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^Share…$/ }));
+    await waitFor(() => expect(share).toHaveBeenCalledWith({ title: 'Published title', text: 'Published hook · Rated PG', url: `https://comics.dreamstreamstudio.ai/c/${SLUG}?via=native` }));
+  });
+
+  it.each(['suspended', 'unpublished'] as const)('does not offer a release post or reader activity for a %s publication', (status) => {
+    render(<ShareSheet studio={studioWith(view({ status }))} open onClose={vi.fn()} />);
+    expect(screen.queryByText('Plan a release post')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Reader stats' })).toBeNull();
+  });
+
+  it('reports events and daily reach without inventing a completion percentage', () => {
+    render(<ShareSheet studio={studioWith(view({ stats: { views: 19, completes7d: 5, uniques7d: 2, byChannel7d: { email: 3, direct: 1 }, daily: [] } }))} open onClose={vi.fn()} />);
+    const stats = screen.getByRole('region', { name: 'Reader stats' });
+    expect(stats).toHaveTextContent('Link opens4');
+    expect(stats).toHaveTextContent('Reader-days2');
+    expect(stats).toHaveTextContent('Finishes5');
+    expect(stats).toHaveTextContent('Lifetime reader-days: 19');
+    expect(screen.getByText(/Email links recorded 3 opens in seven days/)).toBeInTheDocument();
+    expect(stats).not.toHaveTextContent('%');
+  });
+
   it('phone → bottom sheet with a drag handle; wide → centred dialog; Esc closes and focus returns to the trigger', async () => {
     setViewport(true);
     const studio = studioWith(view());
@@ -198,7 +238,7 @@ describe('ShareSheet', () => {
     expect(screen.getByText('This is what people see before they tap.')).toBeInTheDocument();
     expect(screen.getByText('Embed on a website')).toBeInTheDocument();
     expect(screen.getByText(/changes since publishing/)).toBeInTheDocument();
-    expect(screen.getByRole('list', { name: /Top channels/ })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: /Link opens by channel/ })).toBeInTheDocument();
     unmount();
     render(<ShareSheet studio={studioWith(view({ allowEmbed: false }))} open onClose={vi.fn()} />);
     expect(screen.queryByText('Embed on a website')).toBeNull();

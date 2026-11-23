@@ -465,7 +465,7 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
 // ── Owner view ───────────────────────────────────────────────────────────────
 
 function summarizeStats(row: PublicationRow, days: StatsRow[], now: number): PublicationOwnerView['stats'] {
-  const since7 = new Date(now - 7 * 86_400_000).toISOString().slice(0, 10);
+  const since7 = new Date(now - 6 * 86_400_000).toISOString().slice(0, 10);
   const recent = days.filter((d) => d.day >= since7);
   const byChannel7d: Record<string, number> = {};
   for (const d of recent) for (const [k, v] of Object.entries(d.byChannel || {})) byChannel7d[k] = (byChannel7d[k] || 0) + (Number(v) || 0);
@@ -515,6 +515,7 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     if (card) {
       const text = (isRecord(card.i18n) && card.i18n[row.defaultLang || row.languages[0]]) || { title: card.title, description: card.description };
       view.card = { title: String(text.title ?? card.title ?? ''), description: String(text.description ?? card.description ?? '') };
+      if (Number.isInteger(card.pageCount) && card.pageCount > 0) view.card.pageCount = card.pageCount;
       // A suspended link's copies are taken down: no broken cover either.
       if (row.status === 'live' && typeof card.coverUrl === 'string' && /^https:\/\//.test(card.coverUrl)) view.card.coverUrl = card.coverUrl;
     }

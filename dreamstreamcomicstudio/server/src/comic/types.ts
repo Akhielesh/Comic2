@@ -182,6 +182,8 @@ export type ImageGenerator = (req: ImageRequest) => Promise<ImageResult>;
 
 /** A compiled image job: the prompt + which stored assets to attach (in order) with labels. */
 export interface CompiledImageJob {
+  /** Historical reference actually selected for this page; record only if its bytes were attached. */
+  earlierPage?: { id: string; path: string };
   spec: ImageModelSpec;
   resolution: Resolution;
   aspect: AspectRatio;

@@ -18,13 +18,12 @@
 
 import type { ComicDoc, Line, Page, Panel, QcReport } from '../../../shared/comic/doc.js';
 import type { DocOp, SpendAction, StudioAction } from '../../../shared/comic/ops.js';
-import { LOW_QC_SCORE } from '../../../shared/comic/plan.js';
+import { LOW_QC_SCORE, QC_NOTICE_SCORE } from '../../../shared/comic/plan.js';
 import { PLATFORM_CEILING, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { upperName } from './prompts.js';
 import { TEXT_RULES_ISSUE, beatProblems, panelSpeakerIds, qcOffPanelSpeakerIds, type MissingSpeaker, type QcPanelChecks, type QcSideFlip, type QcV2Checks } from './vision.js';
 
-/** C14: a page check scoring below this raises a notice even with no structured problem (provisional; one constant). */
-export const QC_NOTICE_SCORE = 0.75;
+export { QC_NOTICE_SCORE };
 /** At most this many fix chips on one notice (free first). */
 export const MAX_NOTICE_FIXES = 4;
 /** At most this many problems of one kind are named in the text (the page's quality list has the rest). */

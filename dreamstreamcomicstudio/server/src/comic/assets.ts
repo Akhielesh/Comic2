@@ -136,6 +136,13 @@ export const isOwnedAssetPath = (path: string, userId: string): boolean => {
   return path.startsWith(`u/${sanitizeSegment(userId)}/`) || new RegExp(`^${userId.replace(/[^a-zA-Z0-9_-]/g, '')}/[^/]+$`).test(path);
 };
 
+/** Page continuity can reuse only a current raster from the same private project image lane. */
+export const isProjectPageArt = (path: string, userId: string, projectId: string): boolean => {
+  if (!isOwnedAssetPath(path, userId) || !projectId) return false;
+  const prefix = 'u/' + userId + '/p/' + projectId + '/img/';
+  return path.startsWith(prefix) && /^[a-zA-Z0-9_-]+\.webp$/.test(path.slice(prefix.length));
+};
+
 /** The owner (and project, when project-scoped) encoded in a user-lane path. */
 export const pathOwner = (path: string): { userId: string; projectId?: string } | null => {
   if (!isSafeStoragePath(path)) return null;

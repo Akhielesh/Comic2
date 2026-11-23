@@ -29,6 +29,12 @@
   --ds-on-accent: #191612;
 }
 
+/* Stack the product name beneath the parent brand so the full lockup fits beside touch targets. */
+.comic-suite-lockup { flex: none; min-height: 44px; }
+.comic-suite-lockup > span { flex-direction: column; align-items: flex-start; gap: 2px; }
+.comic-suite-lockup > span > span:first-child { font-size: var(--ds-text-base); }
+.comic-suite-lockup > span > span:last-child { font-size: var(--ds-text-xs); }
+
 .comics-header {
   --header-h: 64px;
 }

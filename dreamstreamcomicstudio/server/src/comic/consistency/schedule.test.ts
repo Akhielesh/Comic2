@@ -79,6 +79,66 @@ describe('scheduleRun with chains (COMIC_RUN_CHAINS)', () => {
   });
 });
 
+describe('scheduling earlier artwork within an approved batch', () => {
+  const longBook = () => {
+    const doc = loadRamayanaCase();
+    const sample = doc.pages[0];
+    const lead = doc.cast[0].id;
+    doc.pages = Array.from({ length: 20 }, (_, i) => {
+      const n = i + 1;
+      return {
+        ...sample, id: 'p' + n, n, render: emptyRender(), continuity: undefined,
+        panels: [{ ...sample.panels[0], lines: [], placeId: undefined, direction: undefined,
+          action: 'The tide retreats.', castIds: n <= 3 || n >= 12 ? [lead] : [] }]
+      };
+    });
+    pageByN(doc, 3).continuity = { cast: { [lead]: { outfit: 'vermilion oilskin' } }, by: 'writer' };
+    pageByN(doc, 15).continuity = { cast: { [lead]: { outfit: 'cobalt linen' } }, by: 'user' };
+    return doc;
+  };
+
+  it.each([false, true])('waits for the right wardrobe across a long absence while unrelated pages stay free (chains=%s)', chains => {
+    const doc = longBook();
+    const run = scheduleRun(doc, ids(doc), { chains });
+    expect(run.evidenceAfter?.p12).toBe('p3');
+    expect(run.evidenceAfter?.p14).toBe('p3');
+    expect(run.evidenceAfter?.p15).toBeUndefined();
+    expect(run.evidenceAfter?.p20).toBe('p15');
+    expect(run.evidenceAfter?.p8).toBeUndefined();
+    expect(run.order).toHaveLength(20);
+    doc.pages.reverse();
+    expect(scheduleRun(doc, ids(doc), { chains }).evidenceAfter).toEqual(run.evidenceAfter);
+  });
+
+  it('uses a returning cast member even without a ledger and never schedules a skipped or unquoted illustration', () => {
+    const doc = longBook();
+    for (const p of doc.pages) delete p.continuity;
+    expect(scheduleRun(doc, ids(doc)).evidenceAfter).toEqual({ p12: 'p3' });
+    doc.consistency = { skip: ['prev:p3'] };
+    expect(scheduleRun(doc, ids(doc)).evidenceAfter).toEqual({});
+    doc.consistency = { skip: ['char:' + doc.cast[0].id] };
+    expect(scheduleRun(doc, ids(doc)).evidenceAfter).toEqual({});
+    delete doc.consistency;
+    const partial = scheduleRun(doc, ['p12', 'p20']);
+    expect(partial.order).toEqual(['p12', 'p20']);
+    expect(partial.evidenceAfter).toEqual({});
+  });
+
+  it('waits for props visible in the panel and locations revisited after a scene break; suppresses displaced evidence', () => {
+    const doc = longBook();
+    for (const page of doc.pages) { delete page.continuity; page.panels[0].castIds = []; }
+    pageByN(doc, 4).continuity = { props: { compass: 'brass, lid open' } };
+    pageByN(doc, 4).panels[0].action = 'A compass sits on the dock.';
+    pageByN(doc, 12).panels[0].action = 'The compass gleams.';
+    pageByN(doc, 6).panels[0].placeId = doc.places[0].id;
+    pageByN(doc, 16).panels[0].placeId = doc.places[0].id;
+    const run = scheduleRun(doc, ids(doc));
+    expect(run.evidenceAfter).toEqual({ p12: 'p4', p16: 'p6' });
+    pageByN(doc, 11).continuity = { props: { compass: null } };
+    expect(scheduleRun(doc, ids(doc)).evidenceAfter?.p12).toBeUndefined();
+  });
+});
+
 describe('previousPageFor with chains', () => {
   it('is page n−1 of the same scene (today it was the nearest drawn page, whatever the scene)', () => {
     const doc = loadRamayanaCase();
@@ -128,7 +188,7 @@ const wallSeconds = async (schedule: RunSchedule, pageIds: readonly string[]): P
   const sleep = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000));
   const start = Date.now();
   const done = runAfter(
-    pageIds.map((pid) => ({ id: pid, after: schedule.after[pid] })),
+    pageIds.map((pid) => ({ id: pid, after: schedule.after[pid], evidenceAfter: schedule.evidenceAfter?.[pid] })),
     async (_item, landed) => {
       await acquire();
       try {

@@ -6,8 +6,7 @@
 //   is rebuilt from the slug, never copied from the address bar.
 // - editionLinkFor: the explicit "Copy link to the {language} edition" row, offered only after a switch to a
 //   non-default edition (the visitor chooses to pass their pick on).
-// - linkedinShareUrl: LinkedIn's share page for the link, tagged `via=linkedin`. `linkedin` is not one of
-//   SHARE_CHANNELS, so until the discover program counts it, a visit through it counts as direct.
+// - linkedinShareUrl: LinkedIn's share page for the link, tagged `via=linkedin` for the owner’s channel report.
 // - inAppBrowser: the LinkedIn, Facebook and Instagram in-app browsers (and the others shareModel knows), where downloads
 //   often fail and the reader shows the "open it in your browser" hint instead.
 

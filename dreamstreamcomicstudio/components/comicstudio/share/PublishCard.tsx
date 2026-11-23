@@ -12,7 +12,7 @@ import { CardShell, GhostButton, PrimaryButton, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { readinessRows } from './PublishPanel';
 import { ShareSheet } from './ShareSheet';
-import { comicTitle } from './shareModel';
+import { comicTitle, liveShareTarget, shareLinkFor } from './shareModel';
 import { useShareCapabilities } from './useShareCapabilities';
 
 type PublishCardData = Extract<Card, { type: 'publish' }>;
@@ -56,7 +56,8 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
 
   if (!doc) return null;
   const running = card.status === 'running' || isPending('go');
-  const url = card.result?.url;
+  const target = card.result?.url ? liveShareTarget(studio.publication, doc.publication) : null;
+  const url = target?.url;
   const blockers = (card.result?.blockers || []).filter((b) => b.target.kind === 'page');
   const blockedIds = blockers.map((b) => (b.target as { id: string }).id);
   const blockedNs = (doc?.pages || []).filter((p) => blockedIds.includes(p.id)).map((p) => p.n);
@@ -103,14 +104,17 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
             <CheckCircle2 className={cx('h-4 w-4', TONE_TEXT.success)} aria-hidden />
             {card.mode === 'unpublish' ? 'Unpublished.' : card.mode === 'regenerate' ? 'New link ready — the old one no longer works.' : 'Published.'}
           </p>
+          {card.result?.url && !url && (
+            <GhostButton className={big} onClick={() => setSheet(true)}>Check current sharing options</GhostButton>
+          )}
           {url && (
             <>
               <input readOnly value={url} aria-label="Share link" onFocus={(e) => e.currentTarget.select()} className="h-11 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 font-mono text-[12px] text-[var(--ds-ink)]" />
               <div className="flex flex-wrap gap-2">
-                <GhostButton className={big} onClick={async () => setCopied(await caps.copy(url))}>
+                <GhostButton className={big} onClick={async () => setCopied(await caps.copy(shareLinkFor(target, { via: 'copy' }) || url))}>
                   {copied ? 'Copied' : 'Copy'}
                 </GhostButton>
-                <GhostButton className={big} onClick={() => void caps.share({ title, url }).then((r) => r === 'fallback' && setSheet(true))}>
+                <GhostButton className={big} onClick={() => void caps.share({ title: target!.title, url: shareLinkFor(target, { via: 'native' }) || url }).then((r) => r === 'fallback' && setSheet(true))}>
                   <Share2 className="h-4 w-4" aria-hidden /> Share…
                 </GhostButton>
                 <PrimaryButton className={big} onClick={() => setSheet(true)}>

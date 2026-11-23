@@ -23,6 +23,7 @@
 //
 // Also here: partsStale / staleReasons (what changed since a page version was drawn, from VersionMeta.parts).
 
+import { visualReferenceQcAllows } from './visualReferenceQc.js';
 import { continuityAnchorFor } from './continuity.js';
 import { castKindOf, consistencyOf, type AssetRef, type Character, type ComicDoc, type ImageModelLock, type Page, type PanelParts, type Place, type RefAsset, type RenderState, type Resolution, type VersionMeta } from './doc.js';
 import { CONSISTENCY_LIMITS } from './limits.js';
@@ -293,8 +294,8 @@ const styleKeyPageFor = (doc: ComicDoc, page: Page, assumeDrawn?: ReadonlySet<st
   const id = consistencyOf(doc).styleKeyPageId ?? [...doc.pages].sort((a, b) => a.n - b.n)[0]?.id;
   const key = id ? doc.pages.find((p) => p.id === id) : undefined;
   if (!key || key.id === page.id) return undefined;
-  if (key.render.status === 'ready' && servable(key.render.asset)) return { page: key, pending: false };
-  return assumeDrawn?.has(key.id) ? { page: key, pending: true } : undefined;
+  if (key.render.status === 'ready' && visualReferenceQcAllows(key.render.qc) && servable(key.render.asset)) return { page: key, pending: false };
+  return assumeDrawn?.has(key.id) && !key.render.asset ? { page: key, pending: true } : undefined;
 };
 
 interface Group {
@@ -444,7 +445,7 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
         })();
   const prevUsable =
     !!prev &&
-    prev.page.id !== page.id &&
+    prev.page.id !== page.id && visualReferenceQcAllows(prev.page.render.qc) &&
     (prev.pending || ((prev.page.render.status === 'ready' || prev.page.render.status === 'stale') && servable(prev.page.render.asset)));
 
   // 3. Style: the board, else (styleKey) the style key page, else the best user style reference.
