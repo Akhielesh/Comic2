@@ -448,6 +448,8 @@ function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: Readonly
     render: { status: 'ready', asset, history: [], ...(qc ? { qc } : {}) }
   };
   if (typeof page.chapterTitle === 'string' && page.chapterTitle.trim()) out.chapterTitle = page.chapterTitle;
+  const readerAlt = cleanText(page.readerAlt, 1600);
+  if (readerAlt) out.readerAlt = readerAlt;
   // Ship 2 (pro plan §8): how the page is shown, as geometry. Absent on a page without these fields (old snapshots stay
   // deep-equal); readers fall back to the drawing as drawn (artModeOf) whenever anything here is missing.
   if (page.artMode === 'panels') {
@@ -465,6 +467,8 @@ function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: Readonly
 
 function publicCover(cover: Cover | undefined, plan: SnapshotPlan): Cover {
   const out: Cover = { render: { status: 'none', history: [] } };
+  const readerAlt = cleanText(cover?.readerAlt, 1600);
+  if (readerAlt) out.readerAlt = readerAlt;
   if (typeof cover?.title === 'string' && cover.title) out.title = cover.title;
   if (typeof cover?.tagline === 'string' && cover.tagline) out.tagline = cover.tagline;
   if (cover?.lettering === 'overlay' || cover?.lettering === 'in_art') out.lettering = cover.lettering;
@@ -597,6 +601,7 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
   const editions = languages.filter((l) => !sameLanguage(l, source));
   return {
     brief: [doc.brief?.title, doc.brief?.logline],
+    ...(doc.cover?.readerAlt ? { coverAlt: doc.cover.readerAlt } : {}),
     format: [doc.format?.kind, doc.format?.pageAspect, doc.format?.readingDirection, doc.format?.lettering],
     cover: [doc.cover?.title, doc.cover?.tagline, doc.cover?.lettering, doc.cover?.titleStyle, hasPublishableArt(doc.cover?.render) ? doc.cover.render.asset!.path : ''],
     pages: drawnPages(doc).map((p) => {
@@ -612,6 +617,7 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
       // overlays or a frame style keeps the fingerprint it had (no false "changes since publishing").
       const geometry = layoutGeometryOf(p);
       if (geometry) tuple.push(geometry);
+      if (p.readerAlt) tuple.push({ readerAlt: p.readerAlt });
       return tuple;
     }),
     cast: (doc.cast || []).map((c) => [c.id, c.name]),

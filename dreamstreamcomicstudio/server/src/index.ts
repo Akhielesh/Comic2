@@ -52,6 +52,7 @@ import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
+import { originalsPublisherBusy, originalsPublisherRouter } from './routes/originalsPublisher.js';
 import { catalogMaintenanceRouter } from './routes/catalogMaintenance.js';
 import { modelShowcaseRouter } from './routes/modelShowcase.js';
 import { telemetryRouter } from './routes/telemetry.js';
@@ -135,6 +136,7 @@ const imageUploads = imageBodyBudget(Math.max(bytes.parse(MAX_BODY_SIZE), REF_LI
 app.use(['/api/image', '/api/comic/projects/:id/refs', '/api/comic/projects/:id/stream', '/api/telemetry/reports'], imageUploads);
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use('/api/internal/catalog', catalogMaintenanceRouter);
+app.use('/api/internal/originals', originalsPublisherRouter);
 app.use(attachKeys);
 app.use(attachFreeOnly);
 
@@ -192,7 +194,7 @@ const comicRateLimits: ComicRateLimits = {
 };
 
 app.get('/api/health', (req, res) => {
-  const generationBusy = !studioSessionsReadyForRelease() || comicImageCapacity.busy || comicTextCapacity.busy;
+  const generationBusy = originalsPublisherBusy() || !studioSessionsReadyForRelease() || comicImageCapacity.busy || comicTextCapacity.busy;
   // The edge strips this header from all public traffic. A direct idle probe has no payload or side effects.
   if (req.method === 'HEAD' && req.get('X-Studio-Idle-Probe') === '1') {
     return void res.set('Cache-Control', 'no-store').status(generationBusy ? 204 : 200).end();

@@ -100,6 +100,7 @@ revoke all on function public.comic_discover_kind(jsonb) from public, anon, auth
 -- An earlier draft of this file (never applied to production) put the score in the cursor through a p_after_n
 -- argument; that signature must not survive as a second, ambiguous overload where a test database still has it.
 drop function if exists public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text);
+drop function if exists public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text);
 create or replace function public.comic_discover_list(
   p_sort text default 'trending',
   p_q text default null,
@@ -109,7 +110,8 @@ create or replace function public.comic_discover_list(
   p_length text default null,
   p_week boolean default false,
   p_limit integer default 24,
-  p_after_slug text default null
+  p_after_slug text default null,
+  p_slugs text[] default null
 )
 returns jsonb
 language plpgsql
@@ -125,7 +127,17 @@ declare
   v_min_pages integer;
   v_max_pages integer;
   v_out jsonb;
+  v_originals jsonb := '[]'::jsonb;
 begin
+  -- Continue Reading sends a small ordered list and ignores all other filters.
+  if p_slugs is not null then
+    if array_ndims(p_slugs) is distinct from 1 or cardinality(p_slugs) not between 1 and 20
+       or exists (select 1 from unnest(p_slugs) s where s is null or s !~ '^[A-Za-z0-9]{17}$') then
+      return jsonb_build_object('items', '[]'::jsonb, 'next', null);
+    end if;
+    p_sort := 'trending'; p_q := null; p_rating := null; p_lang := null; p_kind := null;
+    p_length := null; v_week := false; p_after_slug := null; v_limit := cardinality(p_slugs);
+  end if;
   -- Fail closed: anything unknown answers an empty page, never an unfiltered one.
   if p_sort is null or p_sort not in ('trending', 'new', 'most_read', 'featured')
      or (p_rating is not null and p_rating not in ('kids', 'G', 'PG', 'PG-13'))
@@ -144,15 +156,21 @@ begin
     v_pattern := '%' || replace(replace(replace(v_pattern, '\', '\\'), '%', '\%'), '_', '\_') || '%';
   end if;
 
+  -- The separate editorial catalog exposes only cleared, live editions. Installations
+  -- without that feature still browse member publications through their ordinary gates.
+  if to_regprocedure('public.comic_originals_catalog()') is not null then
+    v_originals := public.comic_originals_catalog();
+  end if;
+
   -- base: every comic this query lists, with its score n (internal; never returned).
   with base as materialized (
-    select c.id, c.slug,
-           case p_sort
+    select c.id, c.slug, null::jsonb as original,
+           case when p_slugs is not null then -array_position(p_slugs, c.slug)::bigint else case p_sort
              when 'new' then (extract(epoch from coalesce(c.first_published_at, c.published_at, c.updated_at)) * 1000000)::bigint
              when 'most_read' then greatest(coalesce(c.views_count, 0), 0)
              when 'featured' then (10000 - f.rank)::bigint
              else coalesce(t.score, 0)
-           end as n
+           end end as n
       from public.comic_publications c
       join public.projects p on p.id = c.project_id
       left join public.profiles pr on pr.id = c.user_id
@@ -169,6 +187,7 @@ begin
        and coalesce(p.is_forced_private, false) = false
        -- A rating above the PG-13 ceiling (a present one this listing may not show) fails closed; unrated is listed.
        and (c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('G', 'PG', 'PG-13'))
+       and (p_slugs is null or (c.slug = any(p_slugs) and c.safety ->> 'rating' in ('G','PG','PG-13')))
        and (p_sort <> 'featured' or f.publication_id is not null)
        and (v_pattern is null
             or c.card ->> 'title' ilike v_pattern escape '\'
@@ -189,18 +208,43 @@ begin
             or (p_sort = 'new' and coalesce(c.first_published_at, c.published_at, c.updated_at) >= now() - interval '7 days')
             or (p_sort = 'trending' and coalesce(t.score, 0) > 0)
             or p_sort not in ('new', 'trending'))
+    union all
+    select null::uuid, e->>'slug',
+           jsonb_build_object(
+             'slug', e->>'slug', 'title', e->>'title', 'description', e->>'description',
+             'kind', 'comic', 'pageCount', e->'pageCount', 'aspect', e->>'aspectRatio',
+             'cover', jsonb_build_object('w480', e->>'coverPath','w1080', e->>'coverPath'),
+             'rating', e->>'rating', 'languages', jsonb_build_array(e->>'language'),
+             'publishedAt', e->'updatedAt', 'firstPublishedAt', e->'publishedAt', 'likes', 0,
+             'creator', jsonb_build_object('username', e->>'creator')),
+           case when p_slugs is not null then -array_position(p_slugs, e->>'slug')::bigint
+                when p_sort = 'new' then (e->>'publishedAt')::bigint * 1000
+                else 0::bigint end
+      from jsonb_array_elements(v_originals) e
+     where e->>'rating' in ('G','PG','PG-13')
+       and (p_slugs is null or e->>'slug' = any(p_slugs))
+       and p_sort <> 'featured'
+       and (v_pattern is null or e->>'title' ilike v_pattern escape '\'
+            or e->>'description' ilike v_pattern escape '\' or e->>'creator' ilike v_pattern escape '\')
+       and (p_rating is null or (p_rating='kids' and e->>'rating' in ('G','PG')) or e->>'rating'=p_rating)
+       and (v_lang is null or lower(e->>'language')=v_lang)
+       and (p_kind is null or p_kind='comic')
+       and (v_min_pages is null or (e->>'pageCount')::integer between v_min_pages and v_max_pages)
+       -- Editorial books have no member read counters or staff ranks.
+       and (not v_week or p_sort='most_read' or
+            (p_sort='new' and to_timestamp((e->>'publishedAt')::bigint / 1000.0) >= now() - interval '7 days'))
   ),
   -- ranked: the page (plus one row, only to know there is a next page) after the cursor's comic, by its current score.
   -- When that slug is not in base (unpublished, held, filtered out) the comparison is null and the page is empty.
   ranked as materialized (
-    select x.id, x.slug, x.n
+    select x.id, x.slug, x.n, x.original
       from base x
      where p_after_slug is null or (x.n, x.slug) < ((select b.n from base b where b.slug = p_after_slug), p_after_slug)
      order by x.n desc, x.slug desc
      limit v_limit + 1
   )
   select jsonb_build_object(
-           'items', coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+           'items', coalesce(jsonb_agg(coalesce(r.original, jsonb_strip_nulls(jsonb_build_object(
               'slug', c.slug,
               'title', coalesce((select c.card -> 'i18n' -> l ->> 'title' from unnest(c.languages) l where lower(l) = v_lang limit 1),
                                 c.card ->> 'title'),
@@ -230,13 +274,13 @@ begin
                                                         and pr.avatar_url ~ '^https://bdjfmxfmhqhzvgrhbbzm\.supabase\.co/storage/v1/object/public/[a-z0-9-]{3,63}/[A-Za-z0-9._/-]+$'
                                                        then pr.avatar_url end)
                          end
-            )) order by r.n desc, r.slug desc) filter (where r.rn <= v_limit), '[]'::jsonb),
+            ))) order by r.n desc, r.slug desc) filter (where r.rn <= v_limit), '[]'::jsonb),
            'next', case when max(r.rn) > v_limit
                         then (array_agg(jsonb_build_object('slug', r.slug)) filter (where r.rn = v_limit))[1] end)
     into v_out
     from (select ranked.*, row_number() over (order by ranked.n desc, ranked.slug desc) as rn from ranked) r
-    join public.comic_publications c on c.id = r.id
-    join public.projects p on p.id = c.project_id
+    left join public.comic_publications c on c.id = r.id
+    left join public.projects p on p.id = c.project_id
     left join public.profiles pr on pr.id = c.user_id
     -- The cover: the published cover's copies (else page 1's), only under this publication's own pub/<key>/ prefix.
     left join lateral (
@@ -251,10 +295,10 @@ begin
                        where e ->> 'w' = '1080' limit 1) as w1080
                 from (select coalesce(c.snapshot #> '{cover,render,asset}', c.snapshot #> '{pages,0,render,asset}') as a) asset) v
     ) art on true
-   where c.status = 'live'
+   where r.original is not null or (c.status = 'live'
      and c.visibility = 'public'
      and coalesce(p.is_forced_private, false) = false
-     and (c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('G', 'PG', 'PG-13'));
+     and (c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('G', 'PG', 'PG-13')));
 
   return coalesce(v_out, jsonb_build_object('items', '[]'::jsonb, 'next', null));
 end;
@@ -293,9 +337,9 @@ begin
 end;
 $$;
 
-revoke all on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text) from public;
+revoke all on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text, text[]) from public;
 revoke all on function public.comic_discover_shelves(text, text, text, text) from public;
-grant execute on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text) to anon, authenticated, service_role;
+grant execute on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text, text[]) to anon, authenticated, service_role;
 grant execute on function public.comic_discover_shelves(text, text, text, text) to anon, authenticated, service_role;
 
 -- ── Post-apply assertions (fail the migration rather than ship a hole) ────────────────────────────────────────

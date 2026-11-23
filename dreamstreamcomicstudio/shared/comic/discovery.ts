@@ -18,6 +18,7 @@
 import type { AspectRatio, ComicKind } from './doc.js';
 import type { ContentRating } from './safety.js';
 import { SLUG_RE } from './publication.js';
+import { isOriginalSlug } from './originals.js';
 
 // ── Limits (server/sql/comic_discovery.sql repeats each one; tests/config/discoveryListingGuard.test.ts pins both) ──
 
@@ -553,7 +554,9 @@ function buildItem(raw: unknown, readCover: CoverReader, avatarOrigin?: string):
   if (cover) item.cover = cover;
   if (typeof raw.rating === 'string' && RATING_SET.has(raw.rating)) item.rating = raw.rating as ContentRating;
   if (typeof raw.themeColor === 'string' && HEX_RE.test(raw.themeColor)) item.themeColor = raw.themeColor;
-  if (isRecord(raw.creator) && typeof raw.creator.username === 'string' && USERNAME_RE.test(raw.creator.username)) {
+  if (isOriginalSlug(item.slug) && isRecord(raw.creator) && raw.creator.username === 'DreamStream Studio Originals') {
+    item.creator = { username: 'DreamStream Studio Originals' };
+  } else if (isRecord(raw.creator) && typeof raw.creator.username === 'string' && USERNAME_RE.test(raw.creator.username)) {
     item.creator = { username: raw.creator.username };
     if (isPublicAvatarUrl(raw.creator.avatarUrl, avatarOrigin)) item.creator.avatarUrl = raw.creator.avatarUrl;
   }

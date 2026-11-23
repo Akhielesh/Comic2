@@ -18,6 +18,8 @@ import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
 import { clearLibraryReads, GUEST_LIBRARY_HISTORY_KEY, libraryPicks, libraryReads, LIBRARY_HISTORY_CHANGED, type DiscoveryComic } from '../services/libraryDiscovery';
+import { loadStudioOriginals, type StudioOriginalCard } from '../services/studioOriginals';
+import { isOriginalSlug } from '../shared/comic/originals';
 import { filterPublicListing, isPubliclyListed } from '../services/publicListing';
 import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
 import { ComicSampleReader } from './comicshost/ComicSampleReader';
@@ -82,6 +84,7 @@ interface PublicGalleryProps {
 }
 
 interface PublicProject extends Project {
+    editorial?: false;
     average_rating?: number;
     review_count?: number;
     isLiked?: boolean;
@@ -89,6 +92,9 @@ interface PublicProject extends Project {
     contentRating?: ContentRating;
     publicOverview?: string;
 }
+
+type LibraryCard = PublicProject | StudioOriginalCard;
+const librarySlug = (card: LibraryCard) => 'state' in card ? shareSlugOf(card) : card.slug;
 
 const normalizeTimestamp = (value: unknown): number | undefined => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -172,7 +178,7 @@ function publicCards(received: Record<string, unknown>[], kidsOnly = false): Pub
     const rows = received.map((row) => ({ ...row, state: galleryCardStateOf(row) }))
         .filter((row: any) => row && typeof row.id === 'string' && typeof row.name === 'string'
             && typeof row.created_at === 'string' && typeof row.updated_at === 'string'
-            && isPubliclyListed(row) && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
+            && isPubliclyListed(row) && !isOriginalSlug(row.state.shareSlug) && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
     // No maker name on a card: profiles are readable by their owner only, and a publication's "show my
     // name" choice is not on the listing row, so a name here would be wrong or a stand-in id.
     return rows.map((row: any): PublicProject => ({
@@ -189,8 +195,8 @@ function publicCards(received: Record<string, unknown>[], kidsOnly = false): Pub
     }));
 }
 
-function discoveryComic(project: PublicProject): DiscoveryComic | null {
-    const slug = shareSlugOf(project);
+function discoveryComic(project: LibraryCard): DiscoveryComic | null {
+    const slug = librarySlug(project);
     return slug ? {slug, title:project.name, overview:project.publicOverview ?? '', owner:project.userId,
         rating:project.contentRating, likes:project.likesCount ?? 0, publishedAt:project.publishedAt || project.createdAt,
         liked:!!project.isLiked} : null;
@@ -223,6 +229,17 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     }, []);
     const { theme } = useComicTheme();
     const [projects, setProjects] = useState<PublicProject[]>([]);
+    const [originals, setOriginals] = useState<StudioOriginalCard[]>([]);
+    const [originalsFailed, setOriginalsFailed] = useState(false);
+    const [originalsRefresh, setOriginalsRefresh] = useState(0);
+    useEffect(() => {
+        let active = true;
+        setOriginals([]);
+        setOriginalsFailed(false);
+        void loadStudioOriginals().then(cards => { if (active) setOriginals(cards); })
+          .catch(() => { if (active) setOriginalsFailed(true); });
+        return () => { active = false; };
+    }, [catalogVersion, originalsRefresh]);
     const [listingOwner, setListingOwner] = useState<string | null | undefined>(undefined);
     const [earlierReading, setEarlierReading] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
@@ -374,7 +391,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
         let cancelled = false;
         setEarlierReading([]);
         if (filter !== 'discovery' || query || kidsOnly || !hasMore || (!reads.length && !owner) || listingOwner !== owner) return;
-        const missing = reads.map(row => row.slug).filter(slug => !projects.some(project => shareSlugOf(project) === slug));
+        const missing = reads.map(row => row.slug).filter(slug => !isOriginalSlug(slug) && !projects.some(project => shareSlugOf(project) === slug));
         void (async () => {
             const publicSeedCards = async (column: 'id' | 'state->>shareSlug', values: string[]) => {
                 if (!values.length) return [];
@@ -412,29 +429,34 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     };
     const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
     const discoveryActive = filter === 'discovery' && !query && !search.trim() && !kidsOnly && !authLoading && listingOwner === owner;
+    const visibleOriginals = useMemo(() => originals.filter(card => (!kidsOnly || isKidsFriendly(card.contentRating)) &&
+        (!query || card.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))), [originals, query, kidsOnly]);
     const ranked = useMemo(() => {
         if (!discoveryActive) return [];
-        const toComic = (rows: PublicProject[]) => rows.map(discoveryComic).filter((c): c is DiscoveryComic => !!c);
-        return libraryPicks(toComic(projects.slice(0,GALLERY_PAGE_SIZE)),reads,toComic(earlierReading));
-    }, [discoveryActive,projects,reads,earlierReading]);
+        const toComic = (rows: LibraryCard[]) => rows.map(discoveryComic).filter((c): c is DiscoveryComic => !!c);
+        return libraryPicks(toComic([...originals, ...projects.slice(0,GALLERY_PAGE_SIZE)]),reads,toComic(earlierReading));
+    }, [discoveryActive,originals,projects,reads,earlierReading]);
     const picks = new Map(ranked.map(pick => [pick.slug,pick]));
-    const catalog = new Map([...earlierReading,...projects].map(project => [shareSlugOf(project),project]));
+    const catalog = new Map([...earlierReading,...projects,...originals].map(project => [librarySlug(project),project]));
     const visibleProjects = listingOwner === owner ? projects : [];
     const rankedProjects = ranked.flatMap(pick => catalog.get(pick.slug) ?? []);
-    const filteredProjects = [...rankedProjects,...visibleProjects.filter(project => !picks.has(shareSlugOf(project) ?? ''))]
+    const merged: LibraryCard[] = [...visibleOriginals, ...visibleProjects];
+    if (filter === 'recent') merged.sort((a,b) => b.createdAt-a.createdAt);
+    if (filter === 'trending') merged.sort((a,b) => (b.likesCount ?? 0)-(a.likesCount ?? 0));
+    const filteredProjects = [...rankedProjects,...merged.filter(project => !picks.has(librarySlug(project) ?? ''))]
       .filter(project => !kidsOnly || isKidsFriendly(project.contentRating));
     const isSearching = search.trim() !== query;
     const filtering = !!query || !!search.trim() || kidsOnly;
     const showSamples = !filtering;
     // A small Library shows its comics and nothing else: no search box, sort or filter until it has enough
     // comics for them to help (and never while the size is unknown, so the tools do not flash in and out).
-    const showTools = filtering || (libraryTotal !== null && libraryTotal > LIBRARY_TOOLS_MIN);
+    const showTools = filtering || originals.length > 0 || (libraryTotal !== null && libraryTotal > LIBRARY_TOOLS_MIN);
     // An empty Library shows no comics section at all (no empty shelf, no "0 comics"): the samples stay.
-    const showComics = loading || loadingMore || filtering || hasMore || !!loadNotice || filteredProjects.length > 0;
-    const shownCount = total ?? filteredProjects.length;
+    const showComics = loading || loadingMore || filtering || hasMore || !!loadNotice || originalsFailed || filteredProjects.length > 0;
+    const shownCount = total === null ? filteredProjects.length : total + visibleOriginals.length;
     const few = !showTools && !hasMore && filteredProjects.length > 0 && filteredProjects.length <= LIBRARY_FEW_MAX;
     const countText = loading || isSearching ? 'Finding your next read…'
-        : loadNotice && projects.length === 0 ? 'Comics are temporarily unavailable.'
+        : loadNotice && filteredProjects.length === 0 ? 'Comics are temporarily unavailable.'
         : `${shownCount} ${shownCount === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}`;
 
     const toggleLike = async (project: PublicProject) => {
@@ -476,6 +498,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 </div>
             </>}
             <p className={cn('library-results-count', !showTools && 'sr-only')} role="status" aria-live="polite">{countText}</p>
+            {originalsFailed && <p role="status" className="library-inline-error">Studio Originals could not be loaded. <button type="button" className={FOCUS_RING} onClick={() => setOriginalsRefresh(n => n + 1)}>Try Originals again</button></p>}
             {likeError && <p className="library-inline-error" role="alert">{likeError}</p>}
             {loading ? (
                 <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: showTools ? 8 : 2 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
@@ -483,8 +506,8 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 <>
                     {filteredProjects.length > 0 && <ul className="library-grid" data-layout={few ? 'few' : undefined}>
                         {filteredProjects.map((project) => {
-                            const covers = coverCandidates(project);
-                            const slug = shareSlugOf(project);
+                            const covers = project.editorial ? [project.coverImage] : coverCandidates(project);
+                            const slug = librarySlug(project);
                             const pick = slug ? picks.get(slug) : undefined;
                             const resume = pick?.resumePage;
                             const why = pick?.reason && (showTools || resume || pick.reason.startsWith('Because you')) ? pick.reason : '';
@@ -502,6 +525,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                                 {why && !few && <p className="library-discovery-reason">{why}</p>}
                                 {pick && !few && project.publicOverview && <p className="library-discovery-summary">{project.publicOverview}</p>}
                                 {!few && published}
+                                {project.editorial ? <p className="library-published">{project.authorName} · {project.pageCount} pages</p> :
                                 <div className="library-card-stats">
                                     {/* Reading needs no account: a visitor sees the likes, a signed-in reader can add one. */}
                                     {user
@@ -510,7 +534,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                                     {/* A current-studio comic's reads are counted with its publication, not on this row (whose count stays
                                         0), so a zero is left out rather than shown as if nobody had read it. */}
                                     {(project.viewsCount || 0) > 0 && <span><Eye aria-hidden /><span className="sr-only">Views: </span>{project.viewsCount}</span>}
-                                </div>
+                                </div>}
                             </li>;
                         })}
                     </ul>}

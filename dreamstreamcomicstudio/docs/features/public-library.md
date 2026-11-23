@@ -6,9 +6,7 @@ Code: `services/publicListing.ts` (the rule), `components/PublicGallery.tsx` (th
 
 ## The rule
 
-Every public list a signed-out visitor can reach (the Library grid, its search and its count, a public profile's grid
-and its count, and the studio counts in `services/stats.ts` `getStudioStats`) shows the same comics: the current Comic Studio publications that passed the publish check. On a
-`projects` row that is all of:
+Member publications use the same listing rule in the Library, profile grids and studio counts. A member comic must pass the publish check and satisfy every condition below on its `projects` row.
 
 | Part | Who writes it |
 |---|---|
@@ -50,9 +48,15 @@ Apply `server/sql/comic_reader_library.sql` after `comic_publications.sql` and t
 
 An unfinished comic opens directly at its saved page. Older reads beyond the first page and recent likes are revalidated against the same public catalog before use.
 
+## Studio Originals
+
+The Library combines the approved editorial editions from `comic_originals_catalog()` with member results. Each editorial card carries the DreamStream Studio Originals byline, published cover and story-page count. Title search, rating filters, local guest reading history and recommendations include these books. Member project pagination, likes, profile grids and account reading history keep their existing scope.
+
+Each registered editorial slug uses its own published share-card and frozen-payload RPC on the ordinary `/c/<slug>`, embed and oEmbed routes. Withdrawing the publication removes its Library entry and makes its reader unavailable. Editorial feedback opens the shared report form with the title and current page editable before submission.
+
 ## A small Library
 
-With `LIBRARY_TOOLS_MIN` (6) comics or fewer the Library shows the comics and nothing else: no search box, sort,
+With no listed Originals and `LIBRARY_TOOLS_MIN` (6) member comics or fewer the Library shows the comics and nothing else: no search box, sort,
 Kids-friendly toggle or visible count (the count stays in a screen-reader status). With none it shows the Studio samples
 alone, never an empty shelf. With one or two (`LIBRARY_FEW_MAX`) a cover grid would leave most of its row empty, so
 each comic is a wide card the shape of the Studio samples below it: the cover on the left; title, date and "Read

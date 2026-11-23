@@ -133,19 +133,24 @@ export const FeedbackWidget: React.FC<{ showLauncher?: boolean; surface?: string
     later(reset, 200);
   };
 
-  const launch = (newKind: ReportKind, trigger?: HTMLElement) => {
+  const launch = (newKind: ReportKind, trigger?: HTMLElement, editorialContext?: string) => {
     if (request.current) return;
     generation.current++;
     timers.current.forEach(clearTimeout);
     timers.current = [];
     reset();
     setKind(newKind);
+    if (editorialContext) setComment(editorialContext.slice(0, 240));
     returnFocus.current =
       trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setOpen(true);
   };
   useEffect(() => {
-    const handler = (event: Event) => launch((event as CustomEvent).detail?.kind === 'bug' ? 'bug' : 'feedback');
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      launch(detail?.kind === 'bug' ? 'bug' : 'feedback', undefined,
+        typeof detail?.editorialContext === 'string' ? detail.editorialContext : undefined);
+    };
     window.addEventListener('dreamstream:open-feedback-report', handler);
     return () => window.removeEventListener('dreamstream:open-feedback-report', handler);
   }, []);

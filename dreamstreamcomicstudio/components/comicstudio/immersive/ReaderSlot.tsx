@@ -240,7 +240,7 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
           : veil(
               <div className={under ? 'relative h-full w-full' : 'relative h-full w-full bg-[var(--ds-reader-paper-back)]'} style={bare ? { background: bare } : undefined} data-testid="reader-cover">
                 {image.src ? (
-                  <img src={image.src} alt={`Cover of ${doc.brief.title}`} draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" onError={onImageError} />
+                  <img src={image.src} alt={doc.cover.readerAlt || `Cover of ${doc.brief.title}`} draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" onError={onImageError} />
                 ) : (
                   // Still toned paper, like a page with nothing to show yet: the reader animates transform and opacity
                   // only, and a shimmer repaints the whole cover box every frame (background-position).

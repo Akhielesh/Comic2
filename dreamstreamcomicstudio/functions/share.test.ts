@@ -443,3 +443,18 @@ describe('the rated description', () => {
     expect(ratedDescription('No rating')).toBe('No rating');
   });
 });
+
+it('uses the editorial authority for an Original share card, organization attribution and embed page on both comic hosts', async () => {
+  const slug='DSOriginalTree001';
+  for (const host of ['comics.dreamstreamstudio.ai','comic.dreamstreamstudio.ai']) {
+    const e=env(card({slug,visibility:'public'}, {title:'The Last Orchard on Six',creator:'DreamStream Studio Originals',pageCount:15,i18n:{}}));
+    const req=new Request('https://'+host+'/c/'+slug);
+    const result=await handleShare(req,e);
+    expect(result.status).toBe(200);
+    const html=await result.text();
+    expect(html).toContain('The Last Orchard on Six');
+    expect(html).toContain('"author":{"@type":"Organization","name":"DreamStream Studio Originals"}');
+    expect(e.calls[0]).toMatch(/\/comic_originals_share_card$/);
+    expect((await handleShare(new Request(req.url+'/embed'),e)).status).toBe(200);
+  }
+});

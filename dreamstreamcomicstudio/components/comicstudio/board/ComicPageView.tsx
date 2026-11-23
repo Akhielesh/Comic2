@@ -401,7 +401,8 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
     () => (safety && composition ? veilAssetOf(doc, page, composition, safety.rating) : page.render.asset),
     [safety, composition, doc, page]
   );
-  const pageLabel = alt || `Page ${page.n}${page.summary ? ` — ${page.summary}` : ''}`;
+  const description = page.readerAlt || page.summary;
+  const pageLabel = alt || `Page ${page.n}${description ? ` — ${description}` : ''}`;
   const onDrawingError = () => {
     if (pickedUrl && src === pickedUrl && pickedUrl !== imageUrl) {
       setVariantFailed(pickedUrl);

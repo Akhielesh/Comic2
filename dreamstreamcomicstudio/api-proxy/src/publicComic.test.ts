@@ -382,3 +382,24 @@ describe('POST /api/csp-report (edge only)', () => {
     expect(maskedPath('https://dreamstreamstudio.ai/share/0123456789abcdef0123456789abcdef')).toBe('/share/:token');
   });
 });
+
+describe('registered Studio Originals use the editorial publication authority', () => {
+  const slug = 'DSOriginalTree001';
+  it('serves all 15 frozen pages anonymously and obtains oEmbed from the same editorial share identity', async () => {
+    const member = publication();
+    const edition = publication({slug,visibility:'public',rating:'G',card:{...member.card,creator:'DreamStream Studio Originals',pageCount:15}});
+    const doc = {...snapshot(), pages:Array.from({length:15},(_,i)=>({id:'page'+(i+1),n:i+1,render:{status:'ready',asset:asset('p'+i)}}))};
+    const backend = stubFetch(name=>name==='comic_originals_public_payload'?{publication:edition,doc}:name==='comic_originals_share_card'?edition:null);
+    const res = await call('/api/comic/public/s/'+slug);
+    expect(res.status).toBe(200);
+    expect((await res.json()).doc.pages).toHaveLength(15);
+    const embed=await call('/api/comic/oembed?url='+encodeURIComponent('https://comic.dreamstreamstudio.ai/c/'+slug));
+    expect((await embed.json()).author_name).toBe('DreamStream Studio Originals');
+    expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload','comic_originals_share_card']);
+  });
+  it('cannot substitute a member or retained payload when an editorial slug is withdrawn',async()=>{
+    const backend=stubFetch(name=>name==='comic_public_payload'?{publication:publication({slug}),doc:snapshot()}:null);
+    expect((await call('/api/comic/public/s/'+slug)).status).toBe(404);
+    expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload']);
+  });
+});

@@ -8,20 +8,26 @@ export const CATALOG_MAINTENANCE_WORKFLOWS = {
   'probe-nvidia': 'probe-nvidia-availability.yml'
 } as const;
 export type CatalogMaintenanceAction = keyof typeof CATALOG_MAINTENANCE_WORKFLOWS;
+export const ORIGINALS_AUDIENCE = 'urn:dreamstream:originals-publisher';
+type MaintenanceAction = CatalogMaintenanceAction | 'publish-originals';
 type SigningKey = JsonWebKey & { kid?: string; alg?: string; use?: string };
 type Claims = Record<string, unknown>;
 const JWKS_URL = `${CATALOG_MAINTENANCE_ISSUER}/.well-known/jwks`;
 
 /** Fixed GitHub trust policy: no caller-controlled issuer, URL, repository, or workflow. */
-export function validateMaintenanceClaims(claims: Claims, action: CatalogMaintenanceAction, now = Date.now()): void {
+export function validateMaintenanceClaims(claims: Claims, action: MaintenanceAction, now = Date.now()): void {
   const seconds = Math.floor(now / 1000);
   const { iat, nbf, exp, jti } = claims;
-  const expectedWorkflowRef = `Akhielesh/Comic2/.github/workflows/${CATALOG_MAINTENANCE_WORKFLOWS[action]}@${CATALOG_MAINTENANCE_REF}`;
+  const originals = action === 'publish-originals';
+  const workflow = originals ? 'publish-studio-originals.yml' : CATALOG_MAINTENANCE_WORKFLOWS[action];
+  const allowedEvent = claims.event_name === 'workflow_dispatch' || claims.event_name === (originals ? 'push' : 'schedule');
+  const audience = originals ? ORIGINALS_AUDIENCE : CATALOG_MAINTENANCE_AUDIENCE;
+  const expectedWorkflowRef = `Akhielesh/Comic2/.github/workflows/${workflow}@${CATALOG_MAINTENANCE_REF}`;
   const subjects = [
     `repo:Akhielesh/Comic2:ref:${CATALOG_MAINTENANCE_REF}`,
     `repo:Akhielesh@102168504/Comic2@1151761968:ref:${CATALOG_MAINTENANCE_REF}`
   ];
-  if (claims.iss !== CATALOG_MAINTENANCE_ISSUER || claims.aud !== CATALOG_MAINTENANCE_AUDIENCE
+  if (claims.iss !== CATALOG_MAINTENANCE_ISSUER || claims.aud !== audience
     || claims.repository !== 'Akhielesh/Comic2' || claims.repository_id !== '1151761968'
     || claims.repository_owner !== 'Akhielesh' || claims.repository_owner_id !== '102168504'
     || claims.ref !== CATALOG_MAINTENANCE_REF || claims.ref_type !== 'branch'
@@ -30,7 +36,7 @@ export function validateMaintenanceClaims(claims: Claims, action: CatalogMainten
     // diagnostic). A different called workflow, repository, or branch is never trusted.
     || !subjects.includes(String(claims.sub))
     || (claims.job_workflow_ref !== undefined && claims.job_workflow_ref !== expectedWorkflowRef)
-    || !['schedule', 'workflow_dispatch'].includes(String(claims.event_name))
+    || !allowedEvent
     || claims.runner_environment !== 'github-hosted'
     || typeof jti !== 'string' || jti.length < 8 || jti.length > 200
     || typeof iat !== 'number' || typeof exp !== 'number' || typeof nbf !== 'number'
@@ -67,7 +73,7 @@ export function createMaintenanceAuthenticator(fetcher: typeof fetch = fetch, no
     return inflightKeys;
   }
 
-  return async (token: string, action: CatalogMaintenanceAction): Promise<{ runId: string; attempt: string }> => {
+  return async (token: string, action: MaintenanceAction): Promise<{ runId: string; attempt: string }> => {
     try {
       if (token.length > 16_000 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) throw new Error();
       const [headerPart, payloadPart, signaturePart] = token.split('.');

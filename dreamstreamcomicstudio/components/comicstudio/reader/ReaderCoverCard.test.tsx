@@ -52,3 +52,9 @@ describe('ReaderCoverCard call to action', () => {
     expect(cta).not.toMatch(/make your own|DreamStream/i);
   });
 });
+
+it('describes an editorial cover using its published description', () => {
+  render(<ReaderCoverCard title="The Last Orchard on Six" coverUrl="/cover.webp" coverAlt="A young grafter holds a cutting beside an orbital pear tree." creator="DreamStream Studio Originals" onRead={vi.fn()} />);
+  expect(screen.getByRole('img',{name:'A young grafter holds a cutting beside an orbital pear tree.'})).toBeVisible();
+  expect(screen.getByText(/DreamStream Studio Originals/)).toBeVisible();
+});

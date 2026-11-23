@@ -62,12 +62,12 @@ export const pageTranscript = (doc: ComicDoc, item: ReaderItem | undefined): str
   if (item.kind === 'cover' || !item.page) {
     const title = clean(doc.cover.title) || clean(doc.brief.title);
     const tagline = clean(doc.cover.tagline) || clean(doc.brief.logline);
-    return [[`Cover.`, title ? sentence(title) : '', tagline ? sentence(tagline) : ''].filter(Boolean).join(' ')];
+    return [[`Cover.`, title ? sentence(title) : '', tagline ? sentence(tagline) : '', clean(doc.cover.readerAlt)].filter(Boolean).join(' ')];
   }
   const page = item.page;
   const head = [`Page ${page.n}.`];
   if (page.chapterTitle) head.push(sentence(clean(page.chapterTitle)));
-  const summary = clean(page.summary);
+  const summary = clean(page.readerAlt) || clean(page.summary);
   if (summary) head.push(sentence(summary));
   const order = panelOrder(doc, page);
   return [head.join(' '), ...order.map((idx, i) => panelTranscript(doc, page, idx, i + 1)).filter(Boolean)];

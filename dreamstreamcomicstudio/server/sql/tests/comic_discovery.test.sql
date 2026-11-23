@@ -156,7 +156,7 @@ $$;
 -- ── Catalogue: grants, attributes, RLS ─────────────────────────────────────────────────────────────────────────
 do $$
 begin
-  assert has_function_privilege('anon', 'public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text)', 'execute'),
+  assert has_function_privilege('anon', 'public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text, text[])', 'execute'),
     'anon can list';
   assert to_regprocedure('public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text)') is null,
     'the score-bearing draft signature is gone';
@@ -416,5 +416,58 @@ do $$
 begin
   assert (select count(*) from public.comic_featured) = 6, 'featured picks survive a re-apply';
 end $$;
+
+-- Editorial editions enter the same filter and cursor before LIMIT. Member fixtures
+-- above also prove that Discover continues to work before the editorial schema exists.
+\ir ../studio_original_editions.sql
+insert into public.studio_original_editions(book_key,slug,source_digest,asset_key,status,checked_digest,gate_hash,checked_at,
+ moderation_status,rating,snapshot,card,cover_path,published_at)
+select k, slug, repeat('a',64), asset, status, repeat('a',64), repeat('c',24), now(), 'cleared', rating,
+ jsonb_build_object('pages',(select jsonb_agg(i) from generate_series(1,15)i),'format',jsonb_build_object('pageAspect','2:3')),
+ jsonb_build_object('title',title,'description','Published in the synthetic library','creator','DreamStream Studio Originals','pageCount',15),
+ 'pub/'||asset||'/cover.webp',now()-age
+from (values
+ ('tide','DSOriginalTide001','D000000000000000000001','live','G','Alpha Journal',interval '2 hours'),
+ ('orchard','DSOriginalTree001','D000000000000000000002','live','PG','Beta Journal',interval '9 days'),
+ ('fox','DSOriginalFox0001','D000000000000000000003','checked','G','Hidden Journal',interval '1 hour'),
+ ('table-nine','DSOriginalNine001','D000000000000000000004','withdrawn','G','Withdrawn Journal',interval '1 hour')
+) edition(k,slug,asset,status,rating,title,age);
+select pg_temp.mk('tMemberStory00003','00000000-0000-4000-8000-00000000000a','Gamma Journal',p_first=>now()-interval '1 day',p_views=>8);
+set role anon;
+do $$
+declare
+ p jsonb;
+ shelf jsonb;
+begin
+ p := public.comic_discover_list(p_sort=>'new',p_q=>'Journal',p_limit=>1);
+ assert public.t_slugs(p)=array['DSOriginalTide001'] and p#>>'{next,slug}'='DSOriginalTide001';
+ assert p#>>'{items,0,creator,username}'='DreamStream Studio Originals' and p#>>'{items,0,cover,w480}'='pub/D000000000000000000001/cover.webp';
+ p := public.comic_discover_list(p_sort=>'new',p_q=>'Journal',p_limit=>1,p_after_slug=>p#>>'{next,slug}');
+ assert public.t_slugs(p)=array['tMemberStory00003'] and p#>>'{next,slug}'='tMemberStory00003';
+ p := public.comic_discover_list(p_sort=>'new',p_q=>'Journal',p_limit=>1,p_after_slug=>p#>>'{next,slug}');
+ assert public.t_slugs(p)=array['DSOriginalTree001'] and p->>'next' is null;
+ assert public.comic_discover_list(p_q=>'Journal',p_sort=>'most_read')#>>'{items,0,slug}'='tMemberStory00003';
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_kind=>'comic',p_lang=>'en',p_rating=>'G',p_length=>'medium'))=array['DSOriginalTide001'];
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_kind=>'manga'))='{}';
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_lang=>'es'))='{}';
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_length=>'short'))='{}';
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_sort=>'new',p_week=>true))=array['DSOriginalTide001'];
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_sort=>'trending',p_week=>true))='{}';
+ assert public.t_slugs(public.comic_discover_list(p_q=>'Studio Originals',p_sort=>'featured'))='{}';
+ p := public.comic_discover_list(p_slugs=>array['DSOriginalTree001','dUnlisted00000004','tMemberStory00003','gNoRating00000007','DSOriginalTide001','DSOriginalFox0001','DSOriginalNine001','DSOriginalTide001']);
+ assert jsonb_path_query_array(p, '$.items[*].slug')='["DSOriginalTree001","tMemberStory00003","DSOriginalTide001"]'::jsonb;
+ shelf:=public.comic_discover_shelves(p_lang=>'en',p_rating=>'G',p_kind=>'comic');
+ assert 'DSOriginalTide001'=any(public.t_slugs(jsonb_build_object('items',shelf->'new')));
+ assert not ('DSOriginalTree001'=any(public.t_slugs(jsonb_build_object('items',shelf->'new'))));
+ assert not has_table_privilege('anon','public.studio_original_editions','select');
+end $$;
+reset role;
+-- A withdrawn cursor no longer belongs to the filtered ranking.
+update public.studio_original_editions set status='withdrawn' where book_key='tide';
+set role anon;
+do $$begin
+ assert public.t_slugs(public.comic_discover_list(p_sort=>'new',p_q=>'Journal',p_after_slug=>'DSOriginalTide001'))='{}';
+end $$;
+reset role;
 
 \echo COMIC_DISCOVERY_OK

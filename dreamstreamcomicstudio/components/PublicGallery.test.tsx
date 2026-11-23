@@ -21,7 +21,8 @@ const rows = {
   }
 };
 
-vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
+const originalsRpc = vi.hoisted(() => vi.fn());
+vi.mock('../services/supabase', async () => ({ supabase: { ...(await import('../services/projectRows.testkit')).fakeSupabase.client, rpc: originalsRpc } }));
 vi.mock('../services/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/db')>()),
   getImageUrl: vi.fn(async () => undefined),
@@ -66,6 +67,7 @@ const row = (id: string, name: string, state: Record<string, unknown>, extra: Re
 
 beforeEach(() => {
   viewer.id = null;
+  originalsRpc.mockReset().mockResolvedValue({ data: [], error: null });
   settings.mockReset().mockResolvedValue({ enabled: false, epoch: null, reads: [] });
   localStorage.clear(); sessionStorage.clear();
   window.history.replaceState({}, '', '/?view=gallery');
@@ -549,5 +551,37 @@ describe('member reading sync controls', () => {
     act(()=>window.dispatchEvent(Object.assign(new Event('pageshow'),{persisted:true})));
     await waitFor(()=>expect(screen.getAllByTestId('gallery-card')).toHaveLength(7));
     expect(screen.queryByText('Story 001')).toBeNull();
+  });
+});
+
+describe('first-party editions in the public Library', () => {
+  const orchard = { slug:'DSOriginalTree001',title:'The Last Orchard on Six',description:'A pear tree aboard an orbital habitat.',
+    creator:'DreamStream Studio Originals',rating:'G',pageCount:15,publishedAt:1780000000000,updatedAt:1780000000000,coverPath:`pub/${KEY}/cover-1080.webp` };
+  it('discovers a live Original, counts it once, and searches it without a member project or likes', async () => {
+    viewer.id = 'reader';
+    originalsRpc.mockResolvedValue({ data:[orchard,orchard,{...orchard,slug:SLUG},{...orchard,slug:'DSOriginalFox0001',coverPath:'u/owner/private.webp'}] });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    const link = await screen.findByRole('link',{name:'Read The Last Orchard on Six'});
+    expect(link).toHaveAttribute('href','/c/DSOriginalTree001');
+    const card = link.closest('li')!;
+    expect(within(card).getByText('DreamStream Studio Originals · 15 pages')).toBeVisible();
+    expect(within(card).queryByRole('button',{name:/Like/})).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(/^3 comics$/);
+    submitSearch('ORCHARD');
+    await waitFor(()=>expect(screen.getByRole('status')).toHaveTextContent('1 comic for “ORCHARD”'));
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    expect(screen.getByRole('link',{name:'Read The Last Orchard on Six'})).toHaveAttribute('href','/c/DSOriginalTree001');
+    expect(originalsRpc).toHaveBeenCalledWith('comic_originals_catalog');
+  });
+  it('revalidates an Original for guest recommendations and removes it if the public catalog withdraws it', async () => {
+    rememberLibraryPage({slug:orchard.slug,visibility:'public'},6,15);
+    originalsRpc.mockResolvedValue({ data:[orchard] });
+    const {unmount}=render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(await screen.findByRole('link',{name:'Continue The Last Orchard on Six from page 6'})).toHaveAttribute('href','/c/DSOriginalTree001?p=6');
+    unmount();
+    originalsRpc.mockResolvedValue({data:[]});
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(await screen.findByRole('link',{name:'Read The Lake'})).toBeVisible();
+    expect(screen.queryByRole('link',{name:/Orchard/})).toBeNull();
   });
 });

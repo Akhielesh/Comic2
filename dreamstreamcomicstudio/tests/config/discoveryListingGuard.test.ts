@@ -103,9 +103,9 @@ describe('comic_discovery.sql: the two anonymous RPCs', () => {
   });
 
   it('are revoked from public and granted to the API roles only; the kind helper is never client-callable', () => {
-    expect(SQL).toContain('revoke all on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text) from public;');
+    expect(SQL).toContain('revoke all on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text, text[]) from public;');
     expect(SQL).toContain('revoke all on function public.comic_discover_shelves(text, text, text, text) from public;');
-    expect(SQL).toContain('grant execute on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text) to anon, authenticated, service_role;');
+    expect(SQL).toContain('grant execute on function public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text, text[]) to anon, authenticated, service_role;');
     expect(SQL).toContain('grant execute on function public.comic_discover_shelves(text, text, text, text) to anon, authenticated, service_role;');
     expect(SQL).toContain('revoke all on function public.comic_discover_kind(jsonb) from public, anon, authenticated;');
     expect(SQL).not.toMatch(/grant [a-z, ]+ on function public\.comic_discover_kind/);
@@ -113,8 +113,8 @@ describe('comic_discovery.sql: the two anonymous RPCs', () => {
   });
 
   it('take exactly the arguments the shared codec sends, in order', () => {
-    const names = (header: string) => [...header.matchAll(/(p_[a-z_]+) [a-z]+ default/g)].map((m) => m[1]);
-    expect(names(LIST.header)).toEqual(Object.keys(discoverListRpcArgs({ sort: 'trending', limit: DISCOVER_LIMIT_MAX })));
+    const names = (header: string) => [...header.matchAll(/(p_[a-z_]+) [a-z]+(?:\[\])? default/g)].map((m) => m[1]);
+    expect(names(LIST.header)).toEqual(Object.keys(discoverListRpcArgs({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, slugs: ['ABCdef00000000001'] })));
     expect(names(SHELVES.header)).toEqual(Object.keys(discoverShelvesRpcArgs({})));
   });
 });
@@ -270,7 +270,8 @@ describe('inputs: the limit, the search, fail-closed filters', () => {
   });
 
   it('an unknown sort, rating, kind, length, language or a malformed cursor returns an empty page, never an unfiltered one', () => {
-    const guard = LIST.body.slice(0, LIST.body.indexOf("return jsonb_build_object('items', '[]'::jsonb, 'next', null);"));
+    const start = LIST.body.indexOf("if p_sort is null");
+    const guard = LIST.body.slice(start, LIST.body.indexOf("return jsonb_build_object('items', '[]'::jsonb, 'next', null);", start));
     const list = (xs: readonly string[]) => xs.map((x) => `'${x.toLowerCase()}'`).join(', ');
     expect(guard).toContain(`p_sort is null or p_sort not in (${list([...DISCOVER_SORTS, 'featured'])})`);
     expect(guard).toContain(`(p_rating is not null and p_rating not in (${list(['kids', ...DISCOVER_RATINGS])}))`);
@@ -297,8 +298,8 @@ describe('inputs: the limit, the search, fail-closed filters', () => {
       'from base x where p_after_slug is null or (x.n, x.slug) < ((select b.n from base b where b.slug = p_after_slug), p_after_slug) order by x.n desc, x.slug desc limit v_limit + 1'
     );
     // base is the one query that ranks; the page is cut from it, so a cursor slug outside it (held, filtered) is empty.
-    expect(LIST.body).toContain('with base as materialized ( select c.id, c.slug, case p_sort');
-    expect(LIST.body).toContain('ranked as materialized ( select x.id, x.slug, x.n from base x');
+    expect(LIST.body).toContain('with base as materialized ( select c.id, c.slug, null::jsonb as original, case when p_slugs is not null then -array_position(p_slugs, c.slug)::bigint else case p_sort');
+    expect(LIST.body).toContain('ranked as materialized ( select x.id, x.slug, x.n, x.original from base x');
   });
 });
 
@@ -334,7 +335,8 @@ describe('comic_featured is service-only; the stats index; idempotence', () => {
     expect(SQL).not.toMatch(/\b(drop table|truncate|delete from|update public\.)/);
     // The one drop is the earlier draft's score-bearing signature, so no ambiguous overload survives a re-apply.
     expect(SQL.match(/\bdrop function\b[^;]*;/g)).toEqual([
-      'drop function if exists public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text);'
+      'drop function if exists public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text);',
+      'drop function if exists public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text);'
     ]);
   });
 

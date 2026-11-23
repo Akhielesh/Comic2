@@ -240,7 +240,7 @@ const ScrollPage: React.FC<{
   return (
     <div data-testid="reader-page" data-key={item.key} className={cx('relative w-full overflow-hidden bg-white', PAGE_SHADOW)} style={{ aspectRatio: String(aspect) }}>
       {url ? (
-        <img src={url} alt={`Cover of ${doc.cover.title || doc.brief.title}`} loading={eager ? 'eager' : 'lazy'} className="absolute inset-0 h-full w-full object-contain" onError={onImageError} />
+        <img src={url} alt={doc.cover.readerAlt || `Cover of ${doc.cover.title || doc.brief.title}`} loading={eager ? 'eager' : 'lazy'} className="absolute inset-0 h-full w-full object-contain" onError={onImageError} />
       ) : (
         // Still paper, never a shimmer: the reader animates transform and opacity only.
         <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: 'var(--ds-reader-paper-back)' }} />

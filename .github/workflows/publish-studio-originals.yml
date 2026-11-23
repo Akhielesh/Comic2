@@ -1,0 +1,32 @@
+name: Publish Studio Originals
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/server/assets/originals/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-studio-originals
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/Dreamstrream-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Publish the four bundled editions
+        run: node dreamstreamcomicstudio/scripts/ops/publishStudioOriginals.mjs

@@ -18,6 +18,8 @@
 // published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
+import { isOriginalSlug } from '../../shared/comic/originals';
+import { openFeedbackReport } from '../../services/openFeedbackReport';
 import { isProtectedStudioPath, directDisplayUrl, mergeUrls, type UrlEntry } from './signedAssets';
 import { usePrivateUrlRenewal } from './usePrivateUrlRenewal';
 import { createReadingRecorder } from '../../services/libraryReadingSync';
@@ -194,6 +196,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   const allowDownload = mode === 'slug' ? !!(publication?.allowDownload ?? boot?.allowDownload) : isOwner;
   const rating = ratingOf(publication, doc);
   // Never offered to the owner — not even for the moment before their identity is known.
+  const editorial = !!slug && isOriginalSlug(slug);
   const canReport = mode === 'slug' && !!slug && SLUG_RE.test(slug) && !isOwner && identityReady;
 
   // ── View: the cover card, the inline reader, or the immersive reader over either ──
@@ -233,7 +236,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   }, [title, status]);
 
   // ── Analytics: never for the owner; only once identity has settled ──
-  const canTrack = mode === 'slug' && identityReady && !isOwner && !!track;
+  const canTrack = mode === 'slug' && !editorial && identityReady && !isOwner && !!track;
   useEffect(() => {
     if (!canTrack || status !== 'ready' || chooseBeforeReading) return;
     track!('view', lang);
@@ -243,11 +246,11 @@ const ReaderShell: React.FC<ShellProps> = ({
     publication?.visibility === 'public' && publication.slug === slug ? slug : undefined;
   const memberRecorder = useRef<ReturnType<typeof createReadingRecorder> | undefined>(undefined);
   useEffect(() => {
-    if (!readingSlug || !libraryReaderId) return;
+    if (!readingSlug || !libraryReaderId || editorial) return;
     const recorder = createReadingRecorder(libraryReaderId, readingSlug);
     memberRecorder.current = recorder;
     return () => { recorder.close(); memberRecorder.current = undefined; };
-  }, [readingSlug, libraryReaderId]);
+  }, [readingSlug, libraryReaderId, editorial]);
   useEffect(() => {
     if (!readingSlug || !page) return;
     if (libraryReaderId === null) rememberLibraryPage({ slug: readingSlug, visibility: 'public' }, page, lastPageN);
@@ -380,8 +383,12 @@ const ReaderShell: React.FC<ShellProps> = ({
     if (copied) onShared('copy');
     return copied;
   };
+  const reportComic = () => {
+    if (editorial) openFeedbackReport('feedback', `About “${title}”${page ? ', page ' + page : ''}: `);
+    else setReportOpen(true);
+  };
   const moreItems: ReaderMenuItem[] = canReport
-    ? [{ id: 'report', label: 'Report this comic', icon: <Flag className="h-4 w-4" aria-hidden />, onSelect: () => setReportOpen(true) }]
+    ? [{ id: 'report', label: 'Report this comic', icon: <Flag className="h-4 w-4" aria-hidden />, onSelect: reportComic }]
     : [];
 
   if (pageLinkAvailable && view === 'inline' && page > 0) {
@@ -570,7 +577,8 @@ const ReaderShell: React.FC<ShellProps> = ({
         <ReaderCoverCard
           title={title}
           logline={logline}
-          creator={boot?.card.creator}
+          creator={publication?.card.creator || boot?.card.creator}
+          coverAlt={localized?.cover.readerAlt || doc?.cover.readerAlt}
           coverUrl={coverUrl}
           fallbackCoverUrl={shareCoverUrl && originalCoverUrl !== shareCoverUrl ? originalCoverUrl : undefined}
           aspect={coverAspect}
@@ -620,7 +628,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           embed && canReport
             ? (n) => {
                 setPage(n);
-                setReportOpen(true);
+                reportComic();
               }
             : undefined
         }
@@ -710,7 +718,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           onExit={() => setImmersive(null)}
         />
       )}
-      {canReport && slug && <ReportDialog slug={slug} page={page || undefined} open={reportOpen} onClose={() => setReportOpen(false)} />}
+      {canReport && !editorial && slug && <ReportDialog slug={slug} page={page || undefined} open={reportOpen} onClose={() => setReportOpen(false)} />}
     </div>
   );
 };

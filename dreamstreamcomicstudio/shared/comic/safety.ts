@@ -193,7 +193,8 @@ export const publishableText = (doc: ComicDoc, langs?: string[]): string => {
   // back-cover blurb, book credits, the End-card credits and dedication, and the style name. Appended after the
   // lines, so docs without them keep their exact text (and their cached text-check hash).
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
-  for (const p of doc.pages) parts.push(str(p.chapterTitle));
+  parts.push(str(doc.cover.readerAlt));
+  for (const p of doc.pages) parts.push(str(p.chapterTitle), str(p.readerAlt));
   parts.push(str(doc.book?.blurb));
   for (const c of Array.isArray(doc.book?.credits) ? doc.book!.credits : []) parts.push(str(c));
   parts.push(str(doc.reader?.credits), str(doc.reader?.dedication), str(doc.style?.name));
