@@ -1074,7 +1074,7 @@ describe('v5 §16.4 op invariants', () => {
 
 describe('v5 §16.5 sets', () => {
   it('server-only ops are never client-patchable', () => {
-    for (const op of ['pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'history_restore'] as const) {
+    for (const op of ['director_draft', 'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'history_restore'] as const) {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
       expect(SERVER_ONLY_OPS).toContain(op);
     }
@@ -1084,6 +1084,7 @@ describe('v5 §16.5 sets', () => {
   it('spend and non-spend action types are disjoint and cover every StudioAction type', () => {
     for (const t of SPEND_ACTION_TYPES) expect(NON_SPEND_ACTION_TYPES.has(t)).toBe(false);
     const all: Record<StudioAction['type'], true> = {
+      start_director_draft: true, take_over_director_draft: true,
       render_style_options: true, render_sheets: true, render_pages: true, edit_page: true, render_cover: true, translate: true, recheck_page: true,
       approve_gate: true, decline_gate: true, pick_style: true, plan_pages: true, approve_plan: true, patch: true, restore_render: true,
       relayout_balloons: true, cancel: true, fit_render: true, show_breakdown: true, use_preset: true, ref_crop: true, publish: true,
@@ -1965,7 +1966,7 @@ describe('Ship 2 contract (K2a)', () => {
     expect(TYPED_META_KEYS).not.toContain('scenes');
     expect(TYPED_META_KEYS).not.toContain('consistency');
     expect(isExtraMetaKey('scenes') && isExtraMetaKey('consistency')).toBe(true);
-    const doc = normalizeDoc({ ...historyV5Doc(), scenes: [{ id: 'sc_1', name: 'Market' }], consistency: { maxRefs: 7 } });
+    const doc = normalizeDoc({ ...historyV5Doc(), directorDraft: { status: 'ready', idea: 'Private idea' }, scenes: [{ id: 'sc_1', name: 'Market' }], consistency: { maxRefs: 7 } });
     expect(unassignedKeys(doc)).toEqual([]);
     expect(Object.keys(doc).sort()).toEqual(Object.keys(TOP_LEVEL_SECTIONS).sort());
     const s = splitSections(doc);

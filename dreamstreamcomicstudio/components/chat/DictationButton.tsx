@@ -42,6 +42,8 @@ import { columnBounds, placeVoiceBox, placeVoiceBoxClearOf, visibleBoundsOf } fr
 
 interface DictationButtonProps {
   disabled?: boolean;
+  /** Bring the microphone into focus for an explicit voice entry. Recording still requires a click. */
+  focusOnEntry?: boolean;
   /** Streamed words while a take runs (the whole take so far). Omit to keep the input untouched until the end. */
   onPartial?: (text: string) => void;
   /** The take's words and why it ended (`info.end === 'user'` only when the person tapped Done). */
@@ -230,6 +232,7 @@ const RECORD_BTN = `grid h-7 w-7 shrink-0 place-items-center ${RADIUS_CONTROL} c
 
 export const DictationButton: React.FC<DictationButtonProps> = ({
   disabled,
+  focusOnEntry = false,
   onPartial,
   onFinal,
   onStart,
@@ -246,6 +249,9 @@ export const DictationButton: React.FC<DictationButtonProps> = ({
   const rootRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLButtonElement>(null);
   const micRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (focusOnEntry) micRef.current?.focus();
+  }, [focusOnEntry]);
   const menuRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);

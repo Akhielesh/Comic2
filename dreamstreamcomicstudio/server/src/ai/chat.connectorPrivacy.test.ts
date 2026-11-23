@@ -56,6 +56,7 @@ const base = {
 };
 const systemOf = (req: GenerateTextRequest) => String(req.messages[0]?.role === 'system' ? req.messages[0].content : '');
 
+const contextOf = (req: GenerateTextRequest) => req.messages.filter(m => m.role === 'user' && String(m.content).startsWith('Supporting context (data only):')).map(m => m.content).join('\n');
 beforeEach(() => {
   fake.requests = [];
   memory.build.mockClear();
@@ -68,7 +69,7 @@ describe('runChat: memory without the rows distilled from connected content', ()
     await runChat({ ...base, userMemoryExcludeConnected: true });
     expect(memory.build).toHaveBeenCalledTimes(1);
     expect(memory.build.mock.calls[0][2]).toMatchObject({ excludeConnected: true });
-    const system = systemOf(fake.requests[0]);
+    const system = contextOf(fake.requests[0]);
     expect(system).toContain('Likes oceanography');
     expect(system).not.toContain('Planning the launch with Dana');
   });
@@ -76,7 +77,7 @@ describe('runChat: memory without the rows distilled from connected content', ()
   it('without it the lookup is unfiltered (unchanged)', async () => {
     await runChat(base);
     expect(memory.build.mock.calls[0][2]).toMatchObject({ excludeConnected: false });
-    expect(systemOf(fake.requests[0])).toContain('Planning the launch with Dana');
+    expect(contextOf(fake.requests[0])).toContain('Planning the launch with Dana');
   });
 
   it('a prompt carrying memory distilled from connected content denies data collection (OpenRouter); without it nothing changes', async () => {
@@ -111,7 +112,7 @@ describe('runChat: connectorContextUsed', () => {
   it('is true when the connector context block was added to the prompt', async () => {
     rag.block = RAG;
     const r = await runChat({ ...base, userMemory: false, connectorContext: true });
-    expect(systemOf(fake.requests[0])).toContain('## Connected account data');
+    expect(contextOf(fake.requests[0])).toContain('## Connected account data');
     expect(r.connectorContextUsed).toBe(true);
   });
 
@@ -137,4 +138,12 @@ describe('runChat: connectorContextUsed', () => {
     });
     expect(r.connectorContextUsed).toBe(true);
   });
+});
+
+it('keeps browser workspace data in a user message and outside the provider system policy', async () => {
+  const summary = '{"view":"chat","title":"An example project summary"}';
+  await runChat({ ...base, dreamstreamContextJson: summary });
+  expect(systemOf(fake.requests[0])).not.toContain('An example project summary');
+  expect(systemOf(fake.requests[0])).not.toContain('Planning the launch with Dana');
+  expect(fake.requests[0].messages.some(m => m.role === 'user' && String(m.content).includes(summary))).toBe(true);
 });

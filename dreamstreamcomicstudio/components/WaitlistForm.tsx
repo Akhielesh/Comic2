@@ -104,9 +104,9 @@ function QuickPicks<T extends string>({
 /**
  * Register interest (kind 'access'): the email, then a few optional questions a visitor can answer without knowing the
  * product (first name; what they would like to make, as quick picks with "Anything else?"; how they heard about us),
- * one unticked box to be kept updated, and one plain line that sign-up is not open yet. Kind 'updates' is the email
+ * one unticked box to be kept updated. Kind 'updates' is the email
  * alone. Built from the ds primitives on the page tokens, so it reads in light and dark; no comic chrome. The
- * thank-you promises no email (a ticked box adds that nothing is sent yet). A bad address is shown at its field
+ * thank-you confirms registration, and a saved preference when the visitor opted in. A bad address is shown at its field
  * (noValidate: the form checks it, not the browser's bubbles); other errors are one alert. On an error everything
  * typed stays, so trying again is one press.
  */
@@ -130,6 +130,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const [captchaToken, setCaptchaToken] = useState('');
   /** A problem with the address itself, shown at the field (the alert under the form is for everything else). */
   const [emailError, setEmailError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
   const doneRef = useRef<HTMLDivElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
 
@@ -140,7 +141,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (status === 'loading') return;
+    if (submittingRef.current) return;
     // The address first, at its field: marked invalid, described, and focused, so the problem is where the person is.
     const problem = checkWaitlistEmail(email);
     if (problem) {
@@ -155,6 +156,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       setMessage('Please complete the verification check first.');
       return;
     }
+    submittingRef.current = true;
     setStatus('loading');
     setMessage(null);
 
@@ -168,6 +170,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
         }
       : {};
     const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined, answers);
+    submittingRef.current = false;
     if (result.ok) {
       setStatus('success');
       setMessage(result.message);
@@ -220,7 +223,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   );
   const submit = (
     <Button type="submit" loading={status === 'loading'} className="w-full shrink-0 sm:w-auto">
-      {label} <ArrowRight aria-hidden />
+      {status === 'loading' ? 'Saving…' : label} <ArrowRight aria-hidden />
     </Button>
   );
   const check = turnstileEnabled() ? (
@@ -241,7 +244,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     // The list (kind 'updates'): one field and the button, side by side from sm. The label is for assistive tech only, as
     // before, so the form also suits a page's own fixed card.
     return (
-      <form noValidate onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-3', className)}>
+      <form noValidate aria-busy={status === 'loading'} onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-3', className)}>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start">
           <Field label="Email address" hideLabel required error={emailError ?? undefined} className="flex-1">
             {emailInput}
@@ -255,7 +258,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   }
 
   return (
-    <form noValidate onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-5', className)}>
+    <form noValidate aria-busy={status === 'loading'} onSubmit={handleSubmit} className={cn('flex w-full min-w-0 flex-col gap-5', className)}>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
         <Field label="Email address" required error={emailError ?? undefined}>
           {emailInput}
@@ -302,7 +305,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       <Checkbox name="keepUpdated" label={INTEREST_UPDATES.label} description={INTEREST_UPDATES.hint} checked={keepUpdated} onCheckedChange={setKeepUpdated} />
 
       <p className="m-0 text-pretty text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
-        Sign-up is not open yet. Your answers shape what we build next.
+        Your answers help us decide what to build next.
       </p>
       {check}
       {alert}

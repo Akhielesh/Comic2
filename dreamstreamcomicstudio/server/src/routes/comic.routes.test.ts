@@ -4,13 +4,16 @@ import express from 'express';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { emptyRender, type Card, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
+import { createEmptyDoc, DIRECTOR_DRAFT_IDEA_LIMIT, emptyRender, type Card, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
 import type { StudioUsage } from '../../../shared/comic/capabilities.js';
 import { SAFE_TAKE_LINE, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { __resetSessionsForTests, peekStudioSession } from '../comic/session.js';
 import { __resetAccessCacheForTests } from '../comic/access.js';
+import { runDirectorDraft } from '../comic/directorDraft.js';
+import { recoveryOps, DIRECTOR_DRAFT_LEASE_MS, StudioSession } from '../comic/session.js';
+import { sanitizePublicDoc } from '../comic/store.js';
 import { runDirectorTurn } from '../comic/director.js';
 import { respondBlocked, screenTurnInput as realScreenTurnInput, type ScreenResult } from '../comic/safety/index.js';
 import { expand, installSafetyFakes, resetSafety, type SafetyFakes } from '../comic/safety/testkit.js';
@@ -64,6 +67,7 @@ vi.mock('../comic/director.js', async (importOriginal) => {
   return { ...mod, runDirectorTurn: vi.fn(mod.runDirectorTurn) };
 });
 
+const draftExecutor = vi.fn<typeof runDirectorDraft>();
 let store: FakeDocStore;
 let assets: FakeAssetStore;
 let llm: ScriptedLlm;
@@ -114,6 +118,7 @@ app.use('/api/comic', (req, res, next) =>
     // A real context (context.ts), so spends run the money-safe preflight and price with the request's PriceBook
     // (M1-LOCK-SERVER): registry prices here, and the process health port is a fake (beforeEach) — no test reaches
     // openrouter.ai, whose live status would otherwise decide whether these spends start.
+    draftExecutor,
     contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling(), prices: async () => registryPriceBook() }),
     qualityAccess: async () => ({ ok: true }),
     capsDeps: {
@@ -157,6 +162,7 @@ afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
 beforeEach(() => {
   JOB_TIMINGS.retryBackoffMs = 0;
+  draftExecutor.mockReset().mockResolvedValue({});
   store = fakeDocStore();
   assets = fakeAssetStore();
   llm = scriptedLlm();
@@ -233,6 +239,123 @@ const refusals = () => infoLines().filter((l) => l.event === 'comic_stream_refus
 
 const BLOCKED: SafetyVerdict = { assessed: 'X', categories: ['graphic_gore'], by: 'qc', at: 1 };
 const ref = (path: string, extra: Partial<RefAsset> = {}): RefAsset => ({ path, source: 'upload', at: Date.now(), ...extra });
+
+describe('owner-selected private director drafts', () => {
+  const create = (body: unknown, user = 'user-1') => api('/api/comic/projects', { user, body });
+  const start = (id: string, idea: string, expectedRev: number) =>
+    stream(id, { kind: 'action', action: { type: 'start_director_draft', idea, expectedRev } });
+  const takeover = (id: string) => stream(id, { kind: 'action', action: { type: 'take_over_director_draft' } });
+  const idea = 'The moon sends postcards to an astronaut.';
+
+  it('persists a private, resumable intent and deduplicates create retries scoped to the owning account', async () => {
+    const creationId = 'deadcafe-aaaa-4bbb-8ddd-0123456789ab';
+    const payload = { title: 'Postcards', directorIdea: idea, creationId };
+    const first = await (await create(payload)).json();
+    expect(first).toMatchObject({ projectId: creationId, doc: { rev: 0, directorDraft: { status: 'ready', idea } } });
+    expect((await (await create(payload)).json()).projectId).toBe(creationId);
+    expect(store.docs.size).toBe(1);
+    expect((await create(payload, 'another')).status).toBe(409);
+    expect((await create({ ...payload, directorIdea: 'A different idea' })).status).toBe(409);
+    expect((await create({ directorIdea: '' })).status).toBe(400);
+    expect((await create({ directorIdea: idea, importFromProjectId: 'other' })).status).toBe(400);
+    expect(sanitizePublicDoc(first.doc).directorDraft).toBeUndefined();
+    expect(draftExecutor).not.toHaveBeenCalled();
+    expect((await (await create({ title: 'Manual' })).json()).doc.directorDraft).toBeUndefined();
+  });
+
+  it('validates the full script boundary without truncating the creator’s input', () => {
+    const parse = (text: string, rev: number) => parseStreamRequest({ kind: 'action',
+      action: { type: 'start_director_draft', idea: text, expectedRev: rev } });
+    const idea = 'x'.repeat(DIRECTOR_DRAFT_IDEA_LIMIT);
+    expect(parse(idea, 0)).toMatchObject({ action: { idea } });
+    expect(() => parse(idea + 'x', 0)).toThrow();
+    expect(() => parse('story', -1)).toThrow();
+  });
+
+  it('accepts delegation in the ordinary composer and carries forward the creator’s previous idea', async () => {
+    const doc = seed(createEmptyDoc('delegated-message'));
+    doc.conversation.push({ id: 'm1', role: 'user', text: idea, at: 10 });
+    const response = await stream(doc.id, { kind: 'message', text: 'U decide the rest.' });
+    expect(response.events.filter(e => e.type === 'error')).toEqual([]);
+    expect(draftExecutor).toHaveBeenCalledTimes(1);
+    expect(draftExecutor.mock.calls[0][1]).toContain(idea);
+    expect(store.docs.get(doc.id)?.doc.directorDraft?.status).toBe('review');
+  });
+
+  it('claims before planning, screens once, rejects a replay, and allows hands-on return', async () => {
+    const doc = seed(createEmptyDoc('p-director'));
+    screen = async () => ({ ...ALLOW, decision: 'adapt', note: 'Choose a gentle, original depiction.' });
+    draftExecutor.mockImplementationOnce(async (ctx, source, guidance) => {
+      expect((await store.load(doc.id, 'user-1'))?.directorDraft?.status).toBe('planning');
+      expect(ctx.session.doc.directorDraft?.idea).toBe(idea);
+      expect(source).toBe(idea);
+      expect(guidance).toBe('Choose a gentle, original depiction.');
+      return { pageId: 'page-one' };
+    });
+    const first = await start(doc.id, idea, 0);
+    expect(first.events.some(e => e.type === 'error')).toBe(false);
+    expect(screenCalls[0].text).toBe(idea);
+    expect(store.docs.get(doc.id)?.doc.directorDraft).toMatchObject({ status: 'review', pageId: 'page-one' });
+    expect((await start(doc.id, idea, 0)).res.status).toBe(409);
+    expect(draftExecutor).toHaveBeenCalledTimes(1);
+    await takeover(doc.id);
+    expect(store.docs.get(doc.id)?.doc.directorDraft?.status).toBe('hands_on');
+  });
+
+  it('a concurrent request cannot run another plan; taking over during planning cancels the first run', async () => {
+    const doc = seed(createEmptyDoc('p-busy-draft'));
+    let started!: () => void;
+    const startedOnce = new Promise<void>(resolve => { started = resolve; });
+    draftExecutor.mockImplementationOnce(async (ctx) => {
+      started();
+      await new Promise<void>(resolve => ctx.signal.addEventListener('abort', () => resolve(), { once: true }));
+      return {};
+    });
+    const first = start(doc.id, idea, 0);
+    await startedOnce;
+    expect((await start(doc.id, idea, 0)).res.status).toBe(409);
+    await takeover(doc.id);
+    await first;
+    expect(draftExecutor).toHaveBeenCalledTimes(1);
+    expect(store.docs.get(doc.id)?.doc.directorDraft?.status).toBe('hands_on');
+  });
+
+  it('a refused or failed claim cannot start provider work or overwrite existing pages', async () => {
+    const doc = seed(createEmptyDoc('p-draft-refuse'));
+    moderation = 'restricted';
+    expect((await start(doc.id, idea, 0)).events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'error', code: 'FORBIDDEN' })]));
+    moderation = 'active';
+    screen = async () => ({ ...ALLOW, decision: 'block', categories: ['graphic_gore'], strike: 1 });
+    expect((await start(doc.id, idea, 0)).events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'error', code: 'CONTENT_POLICY' })]));
+    screen = async () => ALLOW;
+    store.failSaves = 1;
+    expect((await start(doc.id, idea, 0)).events.some(e => e.type === 'error')).toBe(true);
+    expect(store.docs.get(doc.id)?.doc.directorDraft).toBeUndefined();
+    const planned = seed(plannedDoc());
+    expect((await start(planned.id, idea, planned.rev)).res.status).toBe(409);
+    expect(draftExecutor).not.toHaveBeenCalled();
+  });
+
+  it('two independent sessions at the same revision can claim only one paid planning turn', async () => {
+    const doc = seed(createEmptyDoc('two-process-claim'));
+    const session = () => new StudioSession({ userId: 'user-1', projectId: doc.id, doc: structuredClone(doc), store });
+    const first = session(), second = session();
+    try {
+      const claims = await Promise.allSettled([first.claimDirectorDraft(0, idea), second.claimDirectorDraft(0, idea)]);
+      expect(claims.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+      expect(claims.filter(r => r.status === 'rejected')).toHaveLength(1);
+      expect(store.docs.get(doc.id)?.doc).toMatchObject({ rev: 1, directorDraft: { status: 'planning', idea } });
+    } finally { first.dispose(); second.dispose(); }
+  });
+
+  it('a fresh process respects another instance’s lease and never automatically re-runs a stale plan', () => {
+    const doc = createEmptyDoc('lease');
+    doc.directorDraft = { status: 'planning', idea, startedAt: 1000 };
+    expect(recoveryOps(doc, { now: 1100, allInFlight: true })).toEqual([]);
+    expect(recoveryOps(doc, { now: 1000 + DIRECTOR_DRAFT_LEASE_MS, allInFlight: true }))
+      .toEqual([{ op: 'director_draft', draft: { ...doc.directorDraft, status: 'interrupted' } }]);
+  });
+});
 
 describe('auth and ownership', () => {
   it('requires a user', async () => {
@@ -1389,7 +1512,8 @@ describe('allowance notices', () => {
     local.use('/api/comic', createComicRouter({
       store,
       assets,
-      contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling(), prices: async () => registryPriceBook() }),
+      draftExecutor,
+    contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling(), prices: async () => registryPriceBook() }),
       qualityAccess: async () => ({ ok: true }),
       capsDeps: { billingEnabled: false, isAdminFor: async () => false, accountCeilingFor: async () => 'PG-13' },
       requireActive: (_req, _res, next) => next(),

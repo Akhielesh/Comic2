@@ -57,14 +57,14 @@ describe('WaitlistForm: register interest', () => {
     ]);
     const updates = screen.getByRole('checkbox', { name: UPDATES_LABEL });
     expect(updates).not.toBeChecked();
-    expect(updates).toHaveAccessibleDescription(/Nothing is sent yet/);
+    expect(updates).toHaveAccessibleDescription(/future releases/);
     // Exactly these controls, every one optional but the email.
     const controls = [...container.querySelectorAll('input, select, textarea')];
     expect(controls).toHaveLength(10);
     for (const c of controls) if (c !== emailField()) expect(c).not.toBeRequired();
     // Nothing about other studios, and no vague "something else".
     expect(container.textContent).not.toMatch(/Other studios|Chat Studio|Stream Studio|Dashboards|Something else|What would you use/);
-    expect(screen.getByText('Sign-up is not open yet. Your answers shape what we build next.')).toBeInTheDocument();
+    expect(screen.getByText('Your answers help us decide what to build next.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Register interest' })).toHaveAttribute('type', 'submit');
   });
 
@@ -138,7 +138,7 @@ describe('WaitlistForm: register interest', () => {
     expect(onJoined).toHaveBeenCalledWith('reader@example.com');
   });
 
-  it('ticking the box sends it as true, and the thank-you says nothing is sent yet', async () => {
+  it('ticking the box sends it as true, and the thank-you confirms the saved preference', async () => {
     submit.mockResolvedValue({ ok: true, status: 'registered', message: `${INTEREST_THANKS.access} ${INTEREST_THANKS.keptUpdated}` });
     render(<WaitlistForm kind="access" source="landing" />);
     fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
@@ -147,8 +147,7 @@ describe('WaitlistForm: register interest', () => {
     await settle();
     expect(submit).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, { keepUpdated: true });
     const done = screen.getByRole('status');
-    expect(done).toHaveTextContent(/Nothing is sent yet/);
-    expect(done).toHaveTextContent(/when updates start/);
+    expect(done).toHaveTextContent(/preference for updates is saved/i);
     expect(done.textContent).not.toMatch(/email|inbox|account|invite/i);
   });
 
@@ -196,6 +195,23 @@ describe('WaitlistForm: register interest', () => {
     submitForm();
     await settle();
     expect(screen.getByRole('status')).toHaveTextContent('Thank you');
+  });
+
+  it('shows a pending submission and accepts only one request while it is saving', async () => {
+    let finish!: (result: { ok: true; message: string }) => void;
+    submit.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<WaitlistForm kind="access" source="landing" />);
+    fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
+    const form = emailField().closest('form')!;
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    expect(form).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Saving…' })).toHaveAttribute('aria-disabled', 'true');
+    expect(submit).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ok: true, message: NEUTRAL_SUCCESS.access }));
+    expect(screen.getByRole('status')).toHaveFocus();
   });
 
   it('kind "updates" is the email alone, with no questions', async () => {

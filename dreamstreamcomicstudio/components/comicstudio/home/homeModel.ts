@@ -11,7 +11,7 @@ export const CONTINUE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
  * The help line under Start. The idea form (ComicCreationWorkspace) and Home's composer both read it from here, so a
  * change to what Start does is one edit.
  */
-export const HOME_START_HELP = 'Start prepares the conversation. Send submits your idea.';
+export const HOME_START_HELP = 'The Director uses your writing allowance to plan the story and choose a look. Approve one drawing estimate, then read your private comic.';
 
 /** A comic's studio status as the organize data layer records it (only `phase` is read here). */
 export type ContinuePhase = 'idle' | 'drawing' | 'waiting' | 'attention' | 'published';

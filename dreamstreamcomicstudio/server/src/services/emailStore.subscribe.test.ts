@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Result = { data: unknown; error: { code?: string; message?: string } | null };
 interface Op {
-  kind: 'select' | 'insert' | 'update';
+  kind: 'select' | 'insert' | 'update' | 'upsert';
   payload?: unknown;
 }
 
@@ -17,6 +17,7 @@ const db = {
   selectResult: { data: null, error: null } as Result,
   insertResult: { data: null, error: null } as Result,
   updateResult: { data: null, error: null } as Result,
+  filters: [] as unknown[][],
   ops: [] as Op[]
 };
 
@@ -28,26 +29,30 @@ vi.mock('./supabase.js', () => ({
         const chain: Record<string, unknown> = {};
         let pending: Op | null = null;
         chain.select = () => {
-          pending = { kind: 'select' };
+          pending ??= { kind: 'select' };
           return chain;
         };
-        for (const k of ['eq', 'limit']) chain[k] = () => chain;
-        chain.maybeSingle = async () => {
-          db.ops.push(pending ?? { kind: 'select' });
-          return db.selectResult;
+        for (const k of ['eq', 'is', 'gte', 'limit']) chain[k] = (...args: unknown[]) => {
+          db.filters.push([k, ...args]);
+          return chain;
         };
+        const result = () => {
+          db.ops.push(pending ?? { kind: 'select' });
+          return pending?.kind === 'update' ? db.updateResult : db.selectResult;
+        };
+        chain.maybeSingle = async () => result();
+        chain.then = (resolve: (r: Result) => unknown) => resolve(result());
         chain.insert = async (payload: unknown) => {
           db.ops.push({ kind: 'insert', payload });
           return db.insertResult;
         };
+        chain.upsert = async (payload: unknown) => {
+          db.ops.push({ kind: 'upsert', payload });
+          return db.insertResult;
+        };
         chain.update = (payload: unknown) => {
-          const op: Op = { kind: 'update', payload };
-          return {
-            eq: async () => {
-              db.ops.push(op);
-              return db.updateResult;
-            }
-          };
+          pending = { kind: 'update', payload };
+          return chain;
         };
         return chain;
       }
@@ -55,7 +60,7 @@ vi.mock('./supabase.js', () => ({
   }
 }));
 
-const { upsertSubscriber } = await import('./emailStore.js');
+const { upsertSubscriber, confirmSubscriber, markUnsubscribed, hasConfirmedUpdates } = await import('./emailStore.js');
 
 const DOWN = { code: '57P01', message: 'terminating connection' };
 const WORDING = 'Keep me updated about Comic Studio news and new DreamStream studios.';
@@ -69,6 +74,7 @@ beforeEach(() => {
   db.insertResult = { data: null, error: null };
   db.updateResult = { data: null, error: null };
   db.ops = [];
+  db.filters = [];
 });
 
 describe('upsertSubscriber never reports a save that did not happen', () => {
@@ -128,6 +134,7 @@ describe('an address already on the list: its row is left as it is', () => {
 
   it('updates, unconfirmed, emails on: only a fresh confirm token is written (never the answers)', async () => {
     db.selectResult = { data: { id: 'row-1', confirmed: false }, error: null };
+    db.updateResult = { data: { id: 'row-1' }, error: null };
     await expect(upsertSubscriber('someone@example.com', 'updates', 'fresh', {}, { feedback: 'x' }, { reissueToken: true })).resolves.toEqual({
       outcome: 'pending'
     });
@@ -201,5 +208,67 @@ describe('register interest, already on the list: a later yes to updates is reco
     db.selectResult = { data: { id: 'row-1', confirmed: false, metadata: STORED }, error: null };
     db.updateResult = { data: null, error: DOWN };
     await expect(upsertSubscriber('someone@example.com', 'access', 't', { consent: YES })).rejects.toThrow();
+  });
+});
+
+describe('double opt-in and unsubscribe', () => {
+  it('reuses an unexpired pending link and never revives an unsubscribed row', async () => {
+    const row = { id: 'r', confirmed: false, confirm_token: 'original', confirm_sent_at: new Date().toISOString(), mail_requested_at: new Date().toISOString() };
+    db.selectResult.data = row;
+    const subscribe = () => upsertSubscriber('a@example.com', 'updates', 'replacement', {}, {}, { reissueToken: true });
+    await expect(subscribe()).resolves.toEqual({ outcome: 'pending', confirmToken: 'original' });
+    db.selectResult.data = { ...row, unsubscribed_at: row.confirm_sent_at };
+    await expect(subscribe()).resolves.toEqual({ outcome: 'already_registered' });
+    expect(db.ops.every(op => op.kind === 'select')).toBe(true);
+  });
+
+  it('only sends a renewed link when the previous token and ownership state still match', async () => {
+    db.selectResult.data = { id: 'r', confirmed: false, confirm_token: 'old', confirm_sent_at: '2000-01-01T00:00:00Z' };
+    await expect(upsertSubscriber('a@example.com', 'updates', 'replacement', {}, {}, { reissueToken: true }))
+      .resolves.toEqual({ outcome: 'already_registered' });
+    expect(db.filters).toEqual(expect.arrayContaining([['eq', 'confirm_token', 'old'], ['eq', 'confirmed', false], ['is', 'unsubscribed_at', null]]));
+  });
+
+  it('consumes only a matching, unexpired, unused token, and reports whether it won the update', async () => {
+    db.updateResult.data = { id: 'r' };
+    await expect(confirmSubscriber('A@example.com', 'token')).resolves.toBe(true);
+    expect(db.filters).toEqual(expect.arrayContaining([
+      ['eq', 'email', 'a@example.com'], ['eq', 'kind', 'updates'], ['eq', 'confirmed', false],
+      ['eq', 'confirm_token', 'token'], ['is', 'unsubscribed_at', null], ['gte', 'confirm_sent_at', expect.any(String)]
+    ]));
+    db.updateResult.data = null;
+    await expect(confirmSubscriber('a@example.com', 'token')).resolves.toBe(false);
+    db.updateResult.error = DOWN;
+    await expect(confirmSubscriber('a@example.com', 'token')).rejects.toThrow('confirmation');
+  });
+
+  it('requires a durable suppression and unsubscribe update before success', async () => {
+    db.insertResult.error = DOWN;
+    await expect(markUnsubscribed('A@example.com')).rejects.toThrow('suppression');
+    expect(db.ops.map(op => op.kind)).toEqual(['upsert']);
+    db.insertResult.error = null;
+    db.updateResult.error = DOWN;
+    await expect(markUnsubscribed('A@example.com')).rejects.toThrow('unsubscribe');
+    db.updateResult.error = null;
+    await expect(markUnsubscribed('A@example.com')).resolves.toBeUndefined();
+    expect(db.ops.at(-1)?.payload).toMatchObject({ confirm_token: null, unsubscribed_at: expect.any(String) });
+  });
+});
+
+describe('campaign audience eligibility', () => {
+  it('requires a confirmed updates row with no unsubscribe date for this exact recipient', async () => {
+    db.selectResult = { data: { id: 'confirmed-row' }, error: null };
+    expect(await hasConfirmedUpdates(' Reader@Example.com ')).toBe(true);
+    expect(db.filters).toEqual([
+      ['eq', 'email', 'reader@example.com'], ['eq', 'kind', 'updates'],
+      ['eq', 'confirmed', true], ['is', 'unsubscribed_at', null]
+    ]);
+  });
+  it('denies delivery when the row is absent or the database cannot verify consent', async () => {
+    expect(await hasConfirmedUpdates('a@example.com')).toBe(false);
+    db.selectResult = { data: { id: 'partial' }, error: DOWN };
+    expect(await hasConfirmedUpdates('a@example.com')).toBe(false);
+    db.available = false;
+    expect(await hasConfirmedUpdates('a@example.com')).toBe(false);
   });
 });

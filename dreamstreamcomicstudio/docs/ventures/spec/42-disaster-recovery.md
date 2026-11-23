@@ -92,7 +92,7 @@ cannot regenerate gets the tightest RPO; the data we can regenerate gets a loose
 | **`audit_log` + `venture_events`** (append-only) | forensic + activity record | **0 (no loss tolerated within retention)** | ≤ 2 h (in Postgres) + cold archive in R2 | append-only + R2 cold copy (§26.14) |
 | **Token ledger / billing** | `token_ledger_entries`, wallets, cost events | **≤ 1 min** (financial — tightest) | ≤ 2 h | PITR; reconciled vs Stripe (§42.6) |
 | **R2** (`autopilot-artifacts`, `app-assets`) | code spill, snapshots, app/user assets | **snapshots/assets: ~24 h** (cross-account copy); **logs/artifacts: regenerable, n/a** | spill/snapshots ≤ 4 h; artifacts = rebuild time | 11-nines durability + daily cross-account copy |
-| **Supabase Storage** (`comic-assets`) | generated images (SHIPPED pipeline) | **~24 h** | ≤ 4 h | project backup; re-derivable from generation if needed |
+| **Supabase Storage** (`comic-assets`, `comic-private`) | generated artwork and uploaded references | **six-hour scan interval plus scan duration** | ≤ 4 h design target | private versioned R2 archive |
 | **Nango** (BYO secrets) | OAuth tokens / PATs for deploy adapters | **n/a — we never hold them** | re-authorize ≈ minutes per connection | vault is Nango's; recovery = re-auth (§42.4.4) |
 | **Config / IaC** (git) | wrangler/migrations/env schema/deploy config | **0 (in git history)** | minutes (redeploy from a SHA) | git is the source of truth; pinned SHAs (deploy-runbook) |
 | **Durable Objects** (Cloudflare) | per-user/venture coordination state | seconds (DO storage durable) | seconds (rehydrate from Postgres) | Cloudflare-managed durability |
@@ -157,12 +157,7 @@ hash to its key, so integrity verification is free (§32.10, §42.4.6).
 
 ### 42.4.3 Supabase Storage — durability + export (image pipeline)
 
-The SHIPPED image pipeline (`comic-assets`, §32.6) is durable object storage backed up with
-the Supabase project. Its DR posture: the **reference rows** (`image_assets`) are covered by
-Postgres PITR (§42.4.1); the **bytes** are durable in Supabase Storage and, for the
-un-regenerable subset, included in the same daily export discipline as R2's assets. Generated
-images are partly *re-derivable* (re-run generation from the stored prompt/params), so they sit
-between "irreplaceable" and "regenerable" and get backup but not the tightest RPO.
+Comic Studio keeps image metadata in Postgres. Supabase database backups cover that metadata. An independent, scheduled Cloudflare R2 archive stores the object bytes from `comic-assets` and `comic-private`. Each complete scan verifies a recovery copy against its SHA-256 checksum. See the [production artwork recovery procedure](../../production/comic-artwork-backups.md) and [Supabase backup scope](https://supabase.com/docs/guides/platform/backups).
 
 ### 42.4.4 Nango — secrets "recovery" is re-authorization, not restore
 
@@ -218,7 +213,7 @@ just creation:
 | **Postgres project-level loss** | Restore latest daily base backup + replay WAL to PITR point → new project → repoint `VITE_SUPABASE_URL`/service-role in deploy targets → smoke test | RTO ≤ 2 h |
 | **Supabase-account disaster** | Provision fresh project → apply migrations from git (§26.13) → load latest logical `pg_dump` from R2 → reconcile ledger vs Stripe (§42.6) | RTO hours (rarer, deeper) |
 | **R2 object loss / overwrite** | restore from object **version** (single object) or **cross-account copy** (bucket-level) → verify by sha256 | RTO ≤ 4 h, RPO ~24 h |
-| **Supabase Storage loss** | restore from project backup / export; re-derive regenerable images if needed | RTO ≤ 4 h |
+| **Supabase Storage loss** | recover from a verified private artwork archive version | RTO ≤ 4 h |
 | **Nango connection loss** | owner **re-authorizes** from Integrations UI → update reference row | minutes/connection |
 | **Config drift / bad deploy** | **rollback** to prior deployment (deploy-runbook §Rollback): redeploy previous Pages/Railway image; verify health/ready/version | minutes |
 
@@ -387,7 +382,7 @@ reliability (SLOs, error budgets) to §37 (planned) and the expanded step-by-ste
   marked **illustrative `[design]`** (not contractual SLAs).
 - **Backup strategy is specified per store:** Supabase Postgres (PITR + daily base + logical
   export to an independent vendor); R2 (11-nines + versioning + cross-account copy, tiered by
-  regenerability); Supabase Storage (project backup + export); Nango (no secret backup —
+  regenerability); Supabase Storage (independent versioned artwork archive); Nango (no secret backup —
   recovery = re-authorize); config/IaC (git as source of truth, SHA-pinned redeploy).
 - **Restore procedures** are given for each store/scenario, each ending in a **verification
   checklist**, and **backup verification** (restore drill, integrity checks, schema-build CI)

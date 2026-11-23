@@ -45,6 +45,7 @@ async function openAccountSettings(page: Page, baseURL: string, query = 'view=se
     const json = (status: number, body: unknown) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     const single = /vnd\.pgrst\.object/.test(req.headers()['accept'] || '');
     if (url.pathname.startsWith('/auth/v1/user')) return json(200, SETTINGS_USER);
+    if (url.pathname === '/api/referrals/me') return json(200, { code: '12ab'.repeat(8), verifiedSignups: 0 });
     if (url.pathname.startsWith('/auth/v1/')) return json(200, session);
     if (url.pathname.startsWith('/rest/v1/profiles') && single) return json(200, { id: SETTINGS_USER.id, username: 'settings_reader', avatar_url: null, marketing_consent: false });
     if (url.pathname.startsWith('/rest/v1/profile_private') && req.method() === 'GET') {
@@ -136,7 +137,7 @@ test.describe('accessibility', () => {
     await expect(page.getByLabel(/^Username/)).toHaveValue('settings_reader');
     await expect(page.getByLabel(/^Phone Number$/)).toHaveAttribute('type', 'tel');
     await expect(page.getByLabel(/^Date of Birth/)).toHaveValue('1990-01-01');
-    await expect(page.getByLabel('Your invite link')).toBeAttached();
+    await expect(page.getByLabel('Your referral link')).toBeAttached();
     expect(await unlabelledFields(page), 'every visible field has a label or an aria name').toEqual([]);
 
     // The photo upload is a real button the keyboard reaches.

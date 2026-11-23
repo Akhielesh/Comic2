@@ -41,6 +41,13 @@ const renderLanding = (signedIn = false) =>
   render(
     <ComicsLanding signedIn={signedIn} onSignIn={vi.fn()} onRequestAccess={vi.fn()} onOpenComics={vi.fn()} onBrowseGallery={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />
   );
+const openFeedback = () => {
+  const details = screen.getByText('Tell us what you’d like to make').closest('details')!;
+  act(() => {
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+  });
+};
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** Words the page must never use. */
@@ -78,15 +85,12 @@ describe('landing copy', () => {
     expect(text).not.toMatch(/\{[A-Z_]+\}/);
   });
 
-  it('pricing says only what is certain: invite-only beta, sign-up not open, no prices announced, registering costs nothing', () => {
+  it('explains provider billing and studio limits before signup', () => {
     renderLanding();
-    const pricing = within(document.getElementById('pricing') as HTMLElement);
-    expect(pricing.getAllByRole('listitem').map((li) => squash(li.textContent || ''))).toEqual([
-      'Comic Studio is in an invite-only beta.',
-      'Sign-up is not open yet.',
-      'Prices have not been announced.',
-      'Registering your interest costs nothing.'
-    ]);
+    const pricing = document.getElementById('pricing')!;
+    expect(pricing).toHaveTextContent(/provider bills usage on your key/);
+    expect(pricing).toHaveTextContent(/studio usage limits/i);
+    expect(pricing).not.toHaveTextContent(/invite.only|not open/);
   });
 
   it('names the image models as members see them and says the line-up can change', () => {
@@ -117,6 +121,7 @@ describe('landing copy', () => {
   it('the register section is the app’s own interest form: email, the sensible questions, one submit with source "landing"', async () => {
     waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message: INTEREST_THANKS.access });
     renderLanding();
+    openFeedback();
     const register = document.getElementById('register') as HTMLElement;
     const esc = (s: string) => new RegExp(s.replace(/[?]/g, '\\?'));
     expect(within(register).getByRole('group', { name: esc(INTEREST_MAKES_QUESTION) })).toBeInTheDocument();
@@ -136,8 +141,8 @@ describe('landing copy', () => {
   it('the FAQ says what happens after registering, the box included, and promises no email', () => {
     renderLanding();
     const after = FAQ.find((f) => f.q === 'What happens after I register my interest?')!;
-    expect(after.a).toMatch(/Nobody is emailed for registering/);
-    expect(after.a).toMatch(/kept updated/);
+    expect(after.a).toMatch(/can create an account at any time/);
+    expect(after.a).toMatch(/updates preference/);
     const faq = squash((document.getElementById('faq') as HTMLElement).textContent || '');
     expect(faq).toContain(after.a);
   });
@@ -152,6 +157,7 @@ describe('landing copy', () => {
   ])('after sending, the page shows the form’s thank-you and no banned words (%s)', async (message) => {
     waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message });
     const { container } = renderLanding();
+    openFeedback();
     const register = document.getElementById('register') as HTMLElement;
     const email = within(register).getByRole('textbox', { name: /Email address/ });
     fireEvent.change(email, { target: { value: 'reader@example.com' } });
@@ -170,6 +176,8 @@ describe('landing copy', () => {
     first.unmount();
     build.turnstile = true;
     renderLanding();
+    expect(external()).toEqual([]);
+    openFeedback();
     expect(external().map((el) => new URL(el.src).hostname)).toEqual(['challenges.cloudflare.com']);
   });
 

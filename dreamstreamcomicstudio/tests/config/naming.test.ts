@@ -73,7 +73,7 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     }
     const landing = uiText('components/comicshost/ComicsLanding.tsx');
     expect(landing).toContain('Library');
-    expect(landing.some((s) => /Browse the Library/.test(s))).toBe(true);
+    expect(landing).toContain('Read comics');
     expect(uiText('components/PublicGallery.tsx')).toContain('Library');
     expect(uiText('components/layout/StaticSiteHeader.tsx').filter((s) => s === 'Library')).toHaveLength(2);
     // Its menu describes the shelf without the old word (DS-R0 note 6).
@@ -95,7 +95,7 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     expect(uiText('components/comicstudio/ComicStudio.tsx').filter((s) => s === 'Back to My comics')).toHaveLength(2);
     // The shared header owns navigation; the landing hero starts a new comic.
     expect(uiText('components/comicshost/ComicsHeader.tsx')).toContain('My comics');
-    expect(uiText('components/comicshost/ComicsLanding.tsx')).toContain('Start creating');
+    expect(uiText('components/comicshost/ComicsLanding.tsx')).toContain('Start a comic');
   });
 
   it('publishing reads "Link only" / "Library + link" in the sheet, the card and the status line', () => {

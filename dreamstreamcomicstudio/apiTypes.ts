@@ -430,7 +430,7 @@ export type AssistantLimitInfo = {
 };
 
 export type AssistantPolicyInfo = {
-  scope: 'platform_only';
+  scope: 'conversation' | 'platform_only';
   offTopicBlocked: boolean;
   reason?: 'NON_PLATFORM' | 'SENSITIVE_CONTEXT_REDACTED';
 };

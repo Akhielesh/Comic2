@@ -28,11 +28,11 @@ describe('Comics landing', () => {
   it('lays the page out in order: hero, features, looks, how it works, models, pricing, read, register, questions, then the footer', () => {
     const { container } = renderLanding();
     const main = container.querySelector('main') as HTMLElement;
-    const ids = [...main.querySelectorAll(':scope > section')].map((section) => section.id);
+    const ids = [...main.querySelectorAll('section[id]')].map((section) => section.id);
     expect(ids).toEqual([...LANDING_SECTION_IDS]);
-    expect(ids).toEqual(['top', 'features', 'looks', 'how-it-works', 'models', 'pricing', 'read', 'register', 'faq']);
+    expect(ids).toEqual(['top', 'features', 'workspaces', 'looks', 'how-it-works', 'models', 'pricing', 'read', 'register', 'faq']);
     // Every section is named by its own heading, and the footer comes after the page.
-    for (const section of main.querySelectorAll(':scope > section')) {
+    for (const section of main.querySelectorAll('section[id]')) {
       const label = document.getElementById(section.getAttribute('aria-labelledby') || '');
       expect(label?.textContent?.trim(), section.id).toBeTruthy();
     }
@@ -46,28 +46,27 @@ describe('Comics landing', () => {
       renderLanding();
       const nav = within(screen.getByRole('navigation', { name: 'On this page' }));
       const links = nav.getAllByRole('link');
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(['#features', '#how-it-works', '#models', '#pricing', '#read', '#register', '#faq']);
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(['#features', '#workspaces', '#how-it-works', '#models', '#pricing', '#read', '#register', '#faq']);
       fireEvent.click(nav.getByRole('link', { name: 'Pricing' }));
       expect(scroll.mock.contexts.at(-1)).toBe(document.getElementById('pricing'));
       expect(screen.getByRole('heading', { level: 2, name: 'Pricing' })).toHaveFocus();
       fireEvent.click(nav.getByRole('link', { name: 'FAQ' }));
       expect(screen.getByRole('heading', { level: 2, name: 'Questions and answers' })).toHaveFocus();
       // The join link puts the cursor in the form's first field (whatever fields the form has).
-      fireEvent.click(nav.getByRole('link', { name: 'Register interest' }));
+      fireEvent.click(nav.getByRole('link', { name: 'Sign up' }));
       expect(document.activeElement?.closest('#register')).not.toBeNull();
-      expect(document.activeElement?.tagName).toMatch(/INPUT|TEXTAREA|H2/);
+      expect(document.activeElement?.tagName).toBe('BUTTON');
     } finally {
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }
   });
 
-  it('signed out, "Register your interest" renders the app’s own form on the page; signed in, members get their comics instead', () => {
+  it('signed out, "Create an account" renders the app’s own form on the page; signed in, members get their comics instead', () => {
     const { unmount } = renderLanding();
     const register = within(document.getElementById('register') as HTMLElement);
-    expect(register.getByRole('heading', { level: 2, name: 'Register your interest' })).toBeInTheDocument();
-    // The app's WaitlistForm, as it is (its fields and wording belong to that form); the page writes no form of its own.
-    expect((document.getElementById('register') as HTMLElement).querySelectorAll('form')).toHaveLength(1);
-    expect(document.querySelectorAll('form')).toHaveLength(1);
+    expect(register.getByRole('heading', { level: 2, name: 'Create an account' })).toBeInTheDocument();
+    expect(register.getByRole('button', { name: 'Sign up' })).toBeInTheDocument();
+    expect(document.querySelectorAll('form')).toHaveLength(0);
     expect(register.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
     unmount();
     const onOpenComics = vi.fn();
@@ -79,7 +78,7 @@ describe('Comics landing', () => {
     fireEvent.click(member.getByRole('button', { name: 'Open My comics' }));
     expect(onOpenComics).toHaveBeenCalledTimes(1);
     // No join link for members in the footer.
-    expect(within(screen.getByRole('navigation', { name: 'On this page' })).queryByRole('link', { name: 'Register interest' })).toBeNull();
+    expect(within(screen.getByRole('navigation', { name: 'On this page' })).queryByRole('link', { name: 'Sign up' })).toBeNull();
   });
 
   it('arriving on a section link shows that section once, after the fonts and two frames, with a jump', async () => {
@@ -116,27 +115,45 @@ describe('Comics landing', () => {
     }
   });
 
-  it('the hero’s Register your interest puts the cursor in the form’s email field', () => {
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
-    try {
-      renderLanding();
-      fireEvent.click(screen.getByTestId('comics-hero-cta'));
-      const register = document.getElementById('register') as HTMLElement;
-      expect(document.activeElement).toBe(within(register).getByRole('textbox', { name: /Email address/ }));
-    } finally {
-      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-    }
-  });
-
   it('offers the sample and style choices', () => {
     renderLanding();
-    expect(screen.getByRole('heading', { name: 'Make your story a comic.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Your story in panels.' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Find your look' })).toBeInTheDocument();
     const looks = within(screen.getByRole('region', { name: 'Find your look' }));
     expect(looks.getAllByRole('button')).toHaveLength(6);
     expect(looks.getByRole('button', { name: 'Preview Ligne claire' })).toHaveAttribute('aria-haspopup', 'dialog');
     expect(screen.getByRole('figure', { name: 'The Last Tram' })).toBeInTheDocument();
     expect(looks.getByText('The Paper Boat · six looks')).toBeInTheDocument();
+  });
+
+  it('loads the selected shelf page and restores focus after inspecting the full-size edition', async () => {
+    renderLanding();
+    const shelf = within(screen.getByRole('group', { name: 'Choose a sample comic' }));
+    const choose = (title: string) => fireEvent.click(shelf.getByRole('button', { name: title }));
+    const currentPage = () => screen.getByTestId('comics-proof').querySelector('img');
+    expect(screen.getByTestId('comics-proof').querySelectorAll('img')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Next sample page' }));
+    expect(currentPage()).toHaveAttribute('src', expect.stringContaining('last-tram-page-2'));
+
+    for (const [title, file] of [['Hello, Europa', 'hello-europa'], ['A Small Giant', 'a-small-giant']]) {
+      choose(title);
+      expect(shelf.getByRole('button', { name: title })).toHaveAttribute('aria-pressed', 'true');
+      expect(currentPage()).toHaveAttribute('srcset', expect.stringContaining(file + '-page-1-480.webp'));
+      expect(screen.getByRole('status')).toHaveTextContent('Page 1 of 1');
+      expect(screen.queryByRole('button', { name: 'Next sample page' })).toBeNull();
+      const enlarge = screen.getByRole('button', { name: 'Enlarge ' + title });
+      fireEvent.click(enlarge);
+      const dialog = screen.getByRole('dialog', { name: title });
+      const large = dialog.querySelector('img');
+      expect(large).toHaveAttribute('src', expect.stringContaining(file + '-page-1-1200.webp'));
+      expect(large).not.toHaveAttribute('srcset');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close enlarged page' }));
+      await waitFor(() => expect(enlarge).toHaveFocus());
+    }
+
+    choose('The Last Tram');
+    expect(screen.getByRole('status')).toHaveTextContent('Page 1 of 2');
+    expect(currentPage()).toHaveAttribute('src', expect.stringContaining('last-tram-page-1'));
   });
 
   it('turns the sample page, announces the scene, and preserves the page across look changes', () => {

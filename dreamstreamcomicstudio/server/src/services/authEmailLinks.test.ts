@@ -23,8 +23,9 @@ describe('link origin allowlist', () => {
   const allow = buildLinkOriginAllowlist(`${APP}/`, ['http://localhost:3000', ' http://localhost:7000/ ', 'https://*.dreamstreamstudio.ai', 'ftp://x.test', 'nope']);
 
   it('is APP_PUBLIC_URL’s origin first, then exact extra origins; wildcards and junk are dropped', () => {
-    expect(allow).toEqual([APP, 'http://localhost:3000', 'http://localhost:7000']);
-    expect(buildLinkOriginAllowlist('https://DreamStreamStudio.ai/some/path')).toEqual([APP]);
+    expect(allow).toEqual([APP, 'https://comics.dreamstreamstudio.ai', 'http://localhost:3000', 'http://localhost:7000']);
+    expect(buildLinkOriginAllowlist('https://DreamStreamStudio.ai/some/path')).toEqual([APP, 'https://comics.dreamstreamstudio.ai']);
+    expect(buildLinkOriginAllowlist('https://staging.example.test')).toEqual(['https://staging.example.test']);
   });
 
   it('uses the request Origin only on an exact match', () => {

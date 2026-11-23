@@ -1,6 +1,3 @@
-// The end of the landing: "Register your interest" (the app's own interest form, the same one the sign-in card's Register
-// interest tab shows, with its optional questions and its one thank-you that promises no email) and the questions, each a
-// native <details> that opens without script. Members see their way back to their comics instead of the form. Ink only.
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../../lib/utils';
@@ -16,7 +13,8 @@ import { showSection } from './parts';
 /** A quiet text link: ink, the underline draws in, a 44 px square target at least under a coarse pointer. */
 export const QUIET_LINK = cn('ds-link inline-flex items-center justify-center font-medium text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
 
-export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignIn, onOpenComics }) => {
+export const RegisterSection: React.FC<{ signedIn: boolean; onSignUp: () => void; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignUp, onSignIn, onOpenComics }) => {
+  const [feedbackOpened, setFeedbackOpened] = useState(false);
   return (
     <section id="register" aria-labelledby="landing-register" className="landing-section">
       <div className="landing-register">
@@ -30,13 +28,17 @@ export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void
           </Button>
         ) : (
           <>
-            <WaitlistForm kind="access" source="landing" buttonLabel={JOIN.short} className="landing-register-form" />
+            <Button size="lg" className="landing-register-action" onClick={onSignUp}>{JOIN.short}</Button>
             <p className="landing-member">
               {REGISTER.memberAsk}
               <button type="button" className={QUIET_LINK} onClick={onSignIn}>
                 {REGISTER.signIn}
               </button>
             </p>
+            <details onToggle={(event) => { if (event.currentTarget.open) setFeedbackOpened(true); }}>
+              <summary className={cn('cursor-pointer', QUIET_LINK)}>Tell us what you’d like to make</summary>
+              {feedbackOpened && <WaitlistForm kind="access" source="landing" buttonLabel="Send feedback" className="landing-register-form" />}
+            </details>
           </>
         )}
       </div>

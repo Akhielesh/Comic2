@@ -191,6 +191,7 @@ export const selectionLabel = (
 };
 
 export interface StudioComposerHandle {
+  readDraft?(): string;
   focus(): void;
   addFiles(files: FileList | File[]): void;
   openPanel(panel: ComposerPanel | null): void;
@@ -1157,6 +1158,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     apiRef,
     () => ({
       focus: focusEnd,
+      readDraft: () => textareaRef.current?.value ?? '',
       addFiles: (files) => void addFiles(files),
       openPanel: (p) => setPanel(p)
     }),

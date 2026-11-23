@@ -96,7 +96,7 @@ export function useAuthLinkCallback(options: AuthLinkCallbackOptions): AuthLinkC
         // A link that failed is over: nothing here waits for it any more.
         clearSignInIntents();
         setStatus('error');
-        setMessage(error.message || 'Failed to verify link.');
+        setMessage(error.code === 'otp_expired' ? EXPIRED_LINK_MESSAGE : error.message || 'Failed to verify link.');
         return;
       }
       const dest = link.flow !== 'recovery' ? safeNext(link.next) : null;

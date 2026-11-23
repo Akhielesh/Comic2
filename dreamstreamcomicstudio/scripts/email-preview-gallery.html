@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark"><title>Email library · DreamStream Studio</title>
+<style>
+:root{color-scheme:light dark;--paper:#fff;--bg:#f9f8f5;--ink:#20201e;--muted:#5e5b55;--line:#dcd9d3;--accent:#292823;--selected:#eceae4;--border:#aaa79f;font:15px/1.5 system-ui,sans-serif}
+@media(prefers-color-scheme:dark){:root{--paper:#22211f;--bg:#191817;--ink:#faf8f3;--muted:#cbc6bd;--line:#48443e;--accent:#f6f3ec;--selected:#373530;--border:#8e8a82}}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;color:var(--ink);background:var(--bg)}a{color:var(--accent)}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.mast{display:flex;align-items:center;gap:12px;padding:17px clamp(18px,4vw,60px);border-bottom:1px solid var(--line);background:var(--paper);font-weight:650}.mark{width:30px;height:30px;flex:none}.mast span:last-child{font-weight:450;color:var(--muted);border-left:1px solid var(--line);padding-left:12px}
+main{max-width:1600px;margin:0 auto;display:grid;grid-template-columns:minmax(225px,300px) minmax(0,1fr);gap:clamp(18px,3vw,52px);padding:32px clamp(18px,4vw,60px) 48px}
+aside,article{min-width:0}h1{font-size:clamp(26px,3vw,40px);letter-spacing:-.045em;margin:0 0 6px;line-height:1.1}p{margin:0}aside>p{color:var(--muted);font-size:14px;margin-bottom:16px}
+nav{max-height:calc(100vh - 235px);overflow-y:auto;scrollbar-width:thin;padding-right:8px}nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:24px 8px 5px}nav a{display:block;text-decoration:none;padding:7px 9px;border-radius:5px;color:var(--ink);font-size:14px}nav a:hover{background:var(--paper)}nav a[aria-current]{background:var(--selected);color:var(--accent);font-weight:650}
+.mobile{display:none}article{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--paper);align-self:start}
+header{padding:22px clamp(16px,3vw,38px) 19px}#category{font-size:13px;color:var(--accent);font-weight:650}#subject{font-weight:620;font-size:clamp(21px,2.35vw,34px);letter-spacing:-.038em;line-height:1.2;margin:6px 0 8px}#sender{font-size:13px;color:var(--muted)}
+.tools{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-block:1px solid var(--line);padding:7px clamp(12px,2vw,28px);font-size:13px}.tools div{display:flex;gap:4px}button,select{font:inherit;color:inherit}button{background:transparent;cursor:pointer;border:1px solid transparent;border-radius:5px;padding:7px 12px}button[aria-pressed=true]{border-color:var(--border);color:var(--accent);background:var(--selected);font-weight:650}.tools a{padding:7px;text-underline-offset:3px}
+iframe,pre{display:block;width:100%;height:clamp(510px,65vh,850px);border:0;margin:0}pre{padding:22px clamp(16px,3vw,38px);font:15px/1.65 ui-monospace,monospace;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere}
+@media(max-width:740px){main{display:block;padding:18px 10px 32px}.mast{padding:12px 16px}.mobile{display:block;margin:12px 0 18px}select{width:100%;min-height:44px;padding:8px;border:1px solid var(--border);background:var(--paper);border-radius:6px}.mobile label{display:block;font-size:13px;margin-bottom:4px}aside{padding:0 6px}aside h1{font-size:28px}aside>p{margin:4px 0}nav{display:none}.tools button,.tools a{min-height:44px;display:inline-flex;align-items:center}.tools{padding-block:2px}header{padding:15px}iframe,pre{height:70vh;min-height:450px}}
+</style>
+</head>
+<body>
+<div class="mast"><img class="mark" alt="" src="<!--BRAND_MARK-->" width="30" height="30">DreamStream Studio <span>Communications</span></div>
+<main>
+<aside><h1>Email library</h1><p><!--COUNT--> sample messages</p>
+<div class="mobile"><label for="choose">Choose a message</label><select id="choose"><!--OPTIONS--></select></div>
+<nav aria-label="Sample messages"><!--LINKS--></nav>
+<noscript><style>.mobile{display:none}nav{display:block;max-height:none}article{display:none}</style></noscript></aside>
+<article aria-label="Selected message"><header><p id="category"></p><h2 id="subject"></h2><p id="sender"></p></header>
+<div class="tools"><div role="group" aria-label="Message format"><button type="button" id="html" aria-pressed="true">HTML</button><button type="button" id="text" aria-pressed="false">Plain text</button></div>
+<a id="open" href="#">Open email file</a></div>
+<iframe id="preview" title="Rendered email" sandbox></iframe><pre id="plain" tabindex="0" hidden></pre></article>
+</main>
+<script type="application/json" id="messages"><!--MESSAGES--></script>
+<script>
+const messages = JSON.parse(document.getElementById('messages').textContent);
+const byId = id => document.getElementById(id);
+const links = Array.from(document.querySelectorAll('nav a'));
+function showFormat(text) {
+  byId('html').setAttribute('aria-pressed', String(!text));
+  byId('text').setAttribute('aria-pressed', String(text));
+  byId('plain').hidden = !text;
+  byId('preview').hidden = text;
+}
+function showMessage() {
+  const message = messages.find(item => item.id === location.hash.slice(1)) || messages[0];
+  byId('choose').value = message.id;
+  byId('subject').textContent = message.subject;
+  byId('category').textContent = message.group;
+  byId('sender').textContent = message.sender + ' · ' + message.kind;
+  byId('plain').textContent = message.text;
+  // A fresh frame keeps its navigation out of the library's Back history.
+  const frame = byId('preview').cloneNode(false);
+  frame.title = message.label + ' email';
+  frame.src = message.id + '.html';
+  byId('preview').replaceWith(frame);
+  byId('open').href = message.id + '.html';
+  for (const link of links) {
+    if (link.dataset.id === message.id) link.setAttribute('aria-current', 'true');
+    else link.removeAttribute('aria-current');
+  }
+}
+for (const link of links) link.addEventListener('click', event => {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+  event.preventDefault();
+  location.hash = link.dataset.id;
+});
+byId('choose').addEventListener('change', event => { location.hash = event.target.value; });
+byId('html').addEventListener('click', () => showFormat(false));
+byId('text').addEventListener('click', () => showFormat(true));
+window.addEventListener('hashchange', showMessage);
+showMessage();
+</script>
+</body></html>

@@ -1,0 +1,42 @@
+{
+  "name": "dreamstream-comic-artwork-backup",
+  "main": "worker/index.mjs",
+  "compatibility_date": "2026-11-23",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "SOURCE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkamZteGZtaHFoenZncmhiYnptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MTMzNjgsImV4cCI6MjA4NTk4OTM2OH0.Pvv2PXaWtRt6_o5JIyis7ZZycRRDnxOce-3gciBP5Pk"
+  },
+  "r2_buckets": [
+    {
+      "binding": "BACKUP",
+      "bucket_name": "dreamstream-comic-artwork-backup"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "TASKS",
+        "queue": "dreamstream-comic-artwork-backup"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "dreamstream-comic-artwork-backup",
+        "max_batch_size": 1,
+        "max_batch_timeout": 0,
+        "max_concurrency": 1,
+        "max_retries": 5,
+        "retry_delay": 60
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "7 */6 * * *"
+    ]
+  }
+}

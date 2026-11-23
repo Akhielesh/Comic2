@@ -5,7 +5,7 @@
 //  (b) a provider call that succeeded is SETTLED even when storing the image fails afterwards
 //      (releasing would erase real spend); a provider call that failed releases its hold.
 // No provider, storage or database is ever called: every seam is mocked.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
@@ -508,5 +508,106 @@ describe('resolveImageModelAccess', () => {
     expect(freeDailyCapApplies({ byokBypass: false, governed: false, walletSkipped: true })).toBe(false);
     expect(freeDailyCapApplies({ byokBypass: true, governed: false, walletSkipped: false })).toBe(false);
     expect(freeDailyCapApplies({ byokBypass: false, governed: false, walletSkipped: false })).toBe(true);
+  });
+});
+
+describe('standalone images', () => {
+  const accessRows = vi.fn();
+  beforeEach(async () => {
+    const db = await import('../services/supabase.js');
+    vi.spyOn(db, 'getSupabaseAdmin').mockReturnValue({
+      from: () => ({ select: () => ({ eq: accessRows }) })
+    } as unknown as ReturnType<typeof db.getSupabaseAdmin>);
+    accessRows.mockResolvedValue({ data: [], error: null });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders all provided references without a project and persists private artwork, including on a trailing-slash URL', async () => {
+    const ref = 'data:image/png;base64,AQID';
+    const res = await post('/standalone/', { referenceImages: [ref, ref], projectId: 'ignored', storage: 'test' });
+    expect(res.status).toBe(200);
+    expect(providers.gemini).toHaveBeenCalledWith(expect.any(String), 'a hero on a rooftop', '1:1', '1K', [ref, ref], 'gemini-2.5-flash-image');
+    expect(storage.persistGeneratedImage).toHaveBeenCalledWith(expect.objectContaining({ standalone: true, projectId: undefined, userId: 'tester-1' }));
+    expect(meter.reserveForOperation).toHaveBeenCalledWith(expect.objectContaining({ stage: 'standalone-image' }));
+  });
+
+  it('uses one metered render to choose open-ended details, respects clear format cues, and forwards every reference', async () => {
+    const referenceImages = ['data:image/webp;base64,AQID'];
+    const examples = [
+      { prompt: 'A phone wallpaper of a golden retriever', aspectRatio: 'auto', ratio: '9:16' },
+      { prompt: 'A panoramic beach with calm waves in a 3:4 composition', aspectRatio: 'auto', ratio: '3:4' },
+      { prompt: 'Moonlight on the water', aspectRatio: 'auto', ratio: '' },
+      { prompt: 'Wide banner or portrait format, use your judgment', aspectRatio: 'auto', ratio: '' },
+      { prompt: 'A wide banner showing a garden', aspectRatio: '1:1', ratio: '1:1' }
+    ];
+    for (const { prompt, aspectRatio, ratio } of examples) {
+      const res = await post('/standalone', { prompt, aspectRatio, referenceImages });
+      expect(res.status).toBe(200);
+      expect(providers.gemini).toHaveBeenLastCalledWith(expect.any(String), aspectRatio === 'auto' ? expect.stringContaining(prompt) : prompt,
+        ratio, '1K', referenceImages, 'gemini-2.5-flash-image');
+    }
+    expect(meter.reserveForOperation).toHaveBeenCalledTimes(examples.length);
+    expect(providers.gemini).toHaveBeenCalledTimes(examples.length);
+  });
+
+  it('replays a completed standalone generation when the same client action is retried', async () => {
+    const send = () => fetch(`${base}/api/image/standalone`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'Idempotency-Key': 'workspace-duplicate' },
+      body: JSON.stringify({ prompt: 'A tiny flower', aspectRatio: '1:1' })
+    });
+    expect((await send()).status).toBe(200);
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    expect(retry.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(providers.gemini).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs history and renewed file URLs only from the signed-in account’s private standalone folder', async () => {
+    const db = await import('../services/supabase.js');
+    const { COMIC_PRIVATE_BUCKET } = await import('../config.js');
+    const file = 'c69db4c4-afa4-47f6-8ca1-97a0689a7985.webp';
+    const path = `u/tester-1/standalone/${file}`;
+    const query = { eq: vi.fn(), like: vi.fn(), is: vi.fn(), order: vi.fn(), range: vi.fn() };
+    for (const method of [query.eq, query.like, query.is, query.order]) method.mockReturnValue(query);
+    query.range.mockResolvedValue({ data: [{ path, created_at: '2026-11-23T12:00:00Z' }], error: null });
+    const sign = vi.fn(async () => ({ data: [{ path, signedUrl: 'https://test.invalid/private' }], error: null }));
+    const bucket = vi.fn(() => ({ createSignedUrls: sign }));
+    vi.mocked(db.getSupabaseAdmin).mockReturnValue({
+      from: (table: string) => table === 'product_access' ? { select: () => ({ eq: accessRows }) } : { select: () => query },
+      storage: { from: bucket }
+    } as unknown as ReturnType<typeof db.getSupabaseAdmin>);
+    const res = await fetch(`${base}/api/image/standalone?file=${file}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect((await res.json()).images[0].imageId).toBe(path);
+    expect(query.eq).toHaveBeenCalledWith('user_id', 'tester-1');
+    expect(query.eq).toHaveBeenCalledWith('bucket', COMIC_PRIVATE_BUCKET);
+    expect(query.eq).toHaveBeenCalledWith('path', path);
+    expect(query.like).toHaveBeenCalledWith('path', 'u/tester-1/standalone/%');
+    expect(query.is).toHaveBeenCalledWith('deleted_at', null);
+    expect(bucket).toHaveBeenCalledWith(COMIC_PRIVATE_BUCKET);
+    expect(sign).toHaveBeenCalledWith([path], 3600);
+    expect((await fetch(`${base}/api/image/standalone?file=another-owner%2Fimage.webp`)).status).toBe(400);
+    expect(sign).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses malformed references and oversized or unsupported requests before spending', async () => {
+    for (const body of [{ referenceImages: [{}] }, { referenceImages: ['data:image/svg+xml;base64,AAAA'] },
+      { model: 'different-model' }, { prompt: 'x'.repeat(4001) }, { aspectRatio: '0:0' }]) {
+      expect((await post('/standalone', body)).status).toBe(400);
+    }
+    expect(providers.gemini).not.toHaveBeenCalled();
+    expect(meter.reserveForOperation).not.toHaveBeenCalled();
+  });
+
+  it('requires the account’s comic entitlement and fails closed during entitlement lookup errors', async () => {
+    const rbac = await import('../services/rbac.js');
+    vi.spyOn(rbac, 'resolveAccessProfile').mockResolvedValue({ isAdmin: false } as Awaited<ReturnType<typeof rbac.resolveAccessProfile>>);
+    accessRows.mockResolvedValueOnce({ data: [{ product: 'stream_studio', active: true }], error: null });
+    expect((await post('/standalone', {})).status).toBe(403);
+    accessRows.mockResolvedValueOnce({ data: null, error: new Error('offline') });
+    expect((await post('/standalone', {})).status).toBe(503);
+    expect(providers.gemini).not.toHaveBeenCalled();
   });
 });

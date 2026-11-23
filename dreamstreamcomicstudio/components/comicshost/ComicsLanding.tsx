@@ -1,26 +1,23 @@
-// The front page of comics.dreamstreamstudio.ai: the hero (the sample reader beside it), then what members do, the six
-// looks, how it works, the models, pricing, where to read, "Register your interest", the questions and the footer.
-// Signed out, the hero's filled action takes a visitor to the form on this page (sign-up is closed); signed in, it
-// starts a comic. Everything below the looks lives in ./landing (copy, registries, pictures, sections) and its styles
-// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer; the interest form is the app's
-// own, with its bot check when the build has a site key.
+// Public Comic Studio landing and member entry points.
+import { ArrowRight, BookOpen } from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';
 import { useComicTheme } from '../comicstudio/useComicTheme';
 import { SAMPLE_LOOKS, sampleThumbnailUrl, type SampleLook } from '../comicstudio/library/sampleArt';
-import { Button } from '../ds/Button';
+import { Button, buttonClasses } from '../ds/Button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ds/Dialog';
 import { prefersReducedMotion } from '../ds/useReducedMotion';
 import { CONTACT_HREF } from '../layout/LegalMicroLinks';
 import { getStylePreset } from '../../shared/comic/stylePresets';
 import { ComicsHeader } from './ComicsHeader';
-import { ComicSampleReader } from './ComicSampleReader';
+import { ComicSampleReader, SHELF_EDITIONS, STORIES } from './ComicSampleReader';
 import { FeaturesSection } from './landing/FeaturesSection';
 import { HowItWorks } from './landing/HowItWorks';
 import { FOOTER, HERO, JOIN } from './landing/landingCopy';
 import { ModelsSection, PricingSection } from './landing/ModelsPricing';
 import { arriveAtSection, isLandingSectionId, showRegister, showSection, type LandingSectionId } from './landing/parts';
+import { StudioDirectory } from './landing/StudioDirectory';
 import { ReadSection } from './landing/ReadSection';
 import { FaqSection, RegisterSection } from './landing/RegisterFaq';
 import './comicsLanding.css';
@@ -29,10 +26,6 @@ import './landing/landing.css';
 export interface ComicsLandingProps {
   signedIn: boolean;
   onSignIn: () => void;
-  /**
-   * The app's own access request (the sign-in card's request step). Kept so App's mount stays as it is; the page brings
-   * its own "Register your interest" section, which the hero and the header's join row scroll to instead.
-   */
   onRequestAccess: () => void;
   onOpenComics: () => void;
   onBrowseGallery: () => void;
@@ -50,6 +43,7 @@ const LOOKS = SAMPLE_LOOKS.map((id) => ({ id, name: getStylePreset(id)?.name ?? 
 /** The footer's links to this page's sections (signed in, the join link is left out). */
 const PAGE_LINKS: ReadonlyArray<{ id: LandingSectionId; label: string; signedOutOnly?: boolean }> = [
   { id: 'features', label: FOOTER.features },
+  { id: 'workspaces', label: 'Workspaces' },
   { id: 'how-it-works', label: FOOTER.how },
   { id: 'models', label: FOOTER.models },
   { id: 'pricing', label: FOOTER.pricing },
@@ -66,9 +60,10 @@ function LookArtwork({ look }: { look: SampleLook }) {
   );
 }
 
-export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onStartCreating }: ComicsLandingProps) {
+export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onStartCreating }: ComicsLandingProps) {
   const { theme } = useComicTheme();
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
+  const [edition, setEdition] = useState<(typeof SHELF_EDITIONS)[number]>(SHELF_EDITIONS[0]);
   const [comparing, setComparing] = useState(false);
   const lookTrigger = useRef<HTMLButtonElement | null>(null);
   const goTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), []);
@@ -87,7 +82,7 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
         page="home"
         onGoHome={goTop}
         onSignIn={onSignIn}
-        onRequestAccess={showRegister}
+        onRequestAccess={onRequestAccess}
         onOpenComics={onOpenComics}
         onBrowseGallery={onBrowseGallery}
         onShowSection={showSection}
@@ -95,22 +90,22 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
       <main className="comics-shell-width comics-landing-column">
         <section id="top" aria-labelledby="comics-hero-title" className="comics-hero">
           <div className="comics-hero-copy">
-            <h1 id="comics-hero-title" className={cn('comics-title', FONT_DISPLAY)}><span>Make your story</span>{' '}<span>a comic.</span></h1>
+            <h1 id="comics-hero-title" className={cn('comics-title', FONT_DISPLAY)}><span>Your story</span>{' '}<span>in panels.</span></h1>
             <p className="comics-lead">{HERO.lead}</p>
             <div className="comics-hero-actions">
               {signedIn ? (
                 <>
                   <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={onStartCreating ?? onOpenComics}>
-                    Start creating
+                    Start a comic <ArrowRight aria-hidden />
                   </Button>
-                  <Button variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Browse the Library</Button>
+                  <a href="/?view=images" className={buttonClasses({ variant: 'outline', size: 'lg', className: 'comics-hero-cta' })}>Create an image</a>
                 </>
               ) : (
                 <>
-                  <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={showRegister}>
-                    {JOIN.action}
+                  <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={onRequestAccess}>
+                    {JOIN.action} <ArrowRight aria-hidden />
                   </Button>
-                  <Button data-testid="comics-hero-read" variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Read comics</Button>
+                  <Button data-testid="comics-hero-read" variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}><BookOpen aria-hidden />Read comics</Button>
                 </>
               )}
             </div>
@@ -122,10 +117,23 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
               </p>
             )}
           </div>
-          <ComicSampleReader look={SAMPLE_LOOKS[0]} story="last-tram" />
+          <div className="comics-shelf" data-edition={edition}>
+            <div className="comics-shelf-options" role="group" aria-label="Choose a sample comic">
+              {SHELF_EDITIONS.map((id) => (
+                <button key={id} type="button" aria-pressed={edition === id} className={cn('comics-shelf-option', DENSITY.coarse, FOCUS_RING)} onClick={() => setEdition(id)}>
+                  {STORIES[id].title}
+                </button>
+              ))}
+            </div>
+            <div className="comics-hero-press">
+              <ComicSampleReader key={edition} look={SAMPLE_LOOKS[0]} story={edition} />
+            </div>
+          </div>
         </section>
 
-        <FeaturesSection />
+        <FeaturesSection>
+          <StudioDirectory signedIn={signedIn} onSignIn={onSignIn} onStartCreating={onStartCreating} onOpenComics={onOpenComics} onBrowseGallery={onBrowseGallery} />
+        </FeaturesSection>
 
         <section id="looks" aria-labelledby="comics-looks" className="comics-looks-section">
           <div className="comics-looks-heading">
@@ -158,7 +166,7 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
         <ModelsSection />
         <PricingSection />
         <ReadSection onBrowseGallery={onBrowseGallery} />
-        <RegisterSection signedIn={signedIn} onSignIn={onSignIn} onOpenComics={onOpenComics} />
+        <RegisterSection signedIn={signedIn} onSignUp={onRequestAccess} onSignIn={onSignIn} onOpenComics={onOpenComics} />
         <FaqSection />
       </main>
 

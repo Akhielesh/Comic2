@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
+import { ReadReplyAloud } from './ReadReplyAloud';
 import { ChatMarkdown } from './ChatMarkdown';
 import { MessageBody } from '../MessageBody';
 import { ChatArtifacts } from './artifacts/ChatArtifacts';
@@ -498,6 +499,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               {copied ? <Check className={`w-3 h-3 ${STATUS_INK.healthy}`} /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
+            {turn.content && <ReadReplyAloud text={turn.content} />}
             <button onClick={downloadMarkdown} className="tap-target flex items-center gap-0.5 hover:text-[var(--ds-ink)] font-bold" title="Download answer as Markdown">
               <Download className="w-3 h-3" /> .md
             </button>

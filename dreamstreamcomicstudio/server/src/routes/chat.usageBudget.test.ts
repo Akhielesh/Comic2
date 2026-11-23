@@ -188,6 +188,7 @@ vi.mock('../ai/recipes/runRecipe.js', () => ({
 type Ev = { userId: string; reservationId: string; costUsd: number; status: 'RESERVED' | 'SETTLED' | 'RELEASED'; operation: string; model: string; holdUsd?: number };
 const db = vi.hoisted(() => ({ events: [] as Ev[], budgets: new Map<string, number>(), rpcCalls: 0 }));
 const ledger = vi.hoisted(() => ({
+  recordUnreservedHelperUsage: vi.fn(),
   reserveUsageTokens: vi.fn(),
   settleReservation: vi.fn(),
   releaseReservation: vi.fn(),
@@ -353,6 +354,7 @@ beforeEach(() => {
   images.gemini.mockClear();
   catalog.free = true;
   memory.remembered = [];
+  ledger.recordUnreservedHelperUsage.mockClear();
   ledger.reserveUsageTokens.mockReset().mockImplementation(async (input: { reservationId?: string; estimate: unknown; governed?: boolean; skipWalletLimits?: boolean; byok?: boolean }) => ({
     allowed: true,
     reservation: {
@@ -389,6 +391,7 @@ describe('background chat helpers — governed users are metered', () => {
     expect(ev[0]).toMatchObject({ operation: 'chat.title', status: 'SETTLED', costUsd: 0.002 });
     // The hold covered the paid net too (estimate at the chain's most expensive model, > $0).
     expect(ledger.reserveUsageTokens.mock.calls[0][0]).toMatchObject({ governed: true, operation: 'chat.title' });
+    expect(ledger.recordUnreservedHelperUsage).not.toHaveBeenCalled();
   });
 
   it('enhance, follow-ups and memory are metered the same way', async () => {
@@ -474,6 +477,11 @@ describe('background chat helpers — admins, BYOK and metering off run unchange
     expect(engine.calls).toHaveLength(1);
     expect(db.rpcCalls).toBe(0);
     expect(ledger.reserveUsageTokens).not.toHaveBeenCalled();
+    expect(ledger.recordUnreservedHelperUsage).toHaveBeenCalledTimes(1);
+    expect(ledger.recordUnreservedHelperUsage).toHaveBeenCalledWith(expect.objectContaining({
+      userId: user, byok: true, failed: false, operation: 'chat.followups',
+      usage: expect.objectContaining({ totalTokens: 20 })
+    }));
   });
 
   it('metering off (kill switch): helpers run as before', async () => {

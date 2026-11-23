@@ -16,6 +16,8 @@ const mailer = vi.hoisted(() => ({
   verifyUnsubscribeToken: vi.fn(() => true)
 }));
 vi.mock('../services/mailer.js', () => mailer);
+const wake = vi.hoisted(() => vi.fn());
+vi.mock('../services/lifecycleEmail.js', () => ({ wakeLifecycleEmail: wake }));
 
 const store = vi.hoisted(() => ({
   upsertSubscriber: vi.fn(),
@@ -69,6 +71,7 @@ const ORIGINAL = process.env.INTEREST_EMAILS;
 beforeEach(() => {
   delete process.env.INTEREST_EMAILS;
   for (const fn of Object.values(mailer)) fn.mockClear();
+  wake.mockClear();
   store.upsertSubscriber.mockReset();
   store.upsertSubscriber.mockResolvedValue({ outcome: 'new' });
   invites.resendPendingInvite.mockClear();
@@ -147,44 +150,24 @@ describe('INTEREST_EMAILS=on', () => {
     process.env.INTEREST_EMAILS = 'on';
   });
 
-  it('a new access row gets the access email once; a repeat gets none; never an invite re-send', async () => {
-    await post({ email: 'new@example.com', kind: 'access', firstName: 'Asha' });
-    expect(mailer.sendAccessRequested).toHaveBeenCalledTimes(1);
-    expect(mailer.sendAccessRequested.mock.calls[0]?.[0]).toBe('new@example.com');
-    store.upsertSubscriber.mockResolvedValueOnce({ outcome: 'already_registered' });
-    await post({ email: 'repeat@example.com', kind: 'access' });
-    expect(mailer.sendAccessRequested).toHaveBeenCalledTimes(1);
+  it('asks the store to enqueue the applicable email with the registration and leaves sending to the runner', async () => {
+    for (const c of CASES) {
+      store.upsertSubscriber.mockResolvedValueOnce({ outcome: c.outcome });
+      await post({ email: c.email, kind: 'access', keepUpdated: true });
+    }
+    for (const call of store.upsertSubscriber.mock.calls) expect(call[5]).toEqual({ reissueToken: true });
+    expect(wake).toHaveBeenCalledTimes(CASES.length);
+    expect(sendCount()).toBe(0);
     expect(invites.resendPendingInvite).not.toHaveBeenCalled();
   });
 
-  it('the "keep me updated" box starts no email path of its own (the same mail as an unticked form)', async () => {
-    await post({ email: 'new@example.com', kind: 'access', keepUpdated: false });
-    const unticked = mailer.sendAccessRequested.mock.calls.length + mailer.sendNewsletterConfirm.mock.calls.length + mailer.sendNewsletterWelcome.mock.calls.length;
-    for (const fn of Object.values(mailer)) fn.mockClear();
-    await post({ email: 'new@example.com', kind: 'access', keepUpdated: true });
-    expect(mailer.sendNewsletterConfirm).not.toHaveBeenCalled();
-    expect(mailer.sendNewsletterWelcome).not.toHaveBeenCalled();
-    expect(sendCount()).toBe(unticked);
-  });
-
-  it('an updates row gets the confirm email; the confirm link sends the welcome', async () => {
-    await post({ email: 'new@example.com', kind: 'updates' });
-    expect(mailer.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
-    await fetch(`${base}/api/newsletter/confirm?e=a%40example.com&t=abc`, { redirect: 'manual' });
-    expect(mailer.sendNewsletterWelcome).toHaveBeenCalledTimes(1);
-  });
-
-  it('asks the store to renew a confirm token, and mails one only when the store wrote it', async () => {
-    store.upsertSubscriber.mockResolvedValueOnce({ outcome: 'pending' });
-    await post({ email: 'repeat@example.com', kind: 'updates' });
-    expect((store.upsertSubscriber.mock.calls[0] as unknown[])[5]).toEqual({ reissueToken: true });
-    expect(mailer.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
-    // Already on the list and nothing renewed (or already confirmed): a link would not match the row, so none goes.
-    for (const outcome of ['already_registered', 'already_confirmed']) {
-      store.upsertSubscriber.mockResolvedValueOnce({ outcome });
-      await post({ email: 'repeat@example.com', kind: 'updates' });
-    }
-    expect(mailer.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  it('schedules a welcome only on a successful confirmation', async () => {
+    const url = `${base}/api/newsletter/confirm?e=a%40example.com&t=abc`;
+    await fetch(url, { redirect: 'manual' });
+    expect(store.confirmSubscriber).toHaveBeenCalledWith('a@example.com', 'abc', true);
+    store.confirmSubscriber.mockResolvedValueOnce(false);
+    expect((await fetch(url, { redirect: 'manual' })).headers.get('location')).toContain('newsletter=invalid');
+    expect(wake).toHaveBeenCalledTimes(1);
   });
 });
 

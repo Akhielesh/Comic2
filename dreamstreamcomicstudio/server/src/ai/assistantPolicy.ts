@@ -4,7 +4,6 @@ import type {
   AssistantProjectSummary,
   UniversalAssistantContext
 } from '../../../apiTypes.js';
-import { OFF_TOPIC_REDIRECT_TIPS } from './assistantKnowledge.js';
 
 const MAX_HISTORY_MESSAGES = 24;
 const MAX_MESSAGE_LENGTH = 2000;
@@ -12,80 +11,6 @@ const MAX_TEXT_VALUE = 800;
 const MAX_ARRAY_ITEMS = 24;
 const MAX_OBJECT_KEYS = 48;
 const MAX_DEPTH = 3;
-
-const PLATFORM_SCOPE = 'platform_only' as const;
-
-const PLATFORM_KEYWORDS = [
-  'dreamstream',
-  'comic studio',
-  'assistant',
-  'ai assistant',
-  'universal assistant',
-  'studio',
-  'comic',
-  'script',
-  'scene',
-  'panel',
-  'layout',
-  'style',
-  'world builder',
-  'cover',
-  'generation',
-  'regenerate',
-  'dashboard',
-  'editor',
-  'reader',
-  'gallery',
-  'project',
-  'artifact',
-  'export',
-  'account',
-  'settings',
-  'profile',
-  'billing',
-  'plan',
-  'coupon',
-  'credit',
-  'sign in',
-  'login',
-  'test lab',
-  'privacy',
-  'terms',
-  'faq',
-  'support',
-  'gemini',
-  'flux',
-  'pixazo'
-];
-
-const PLATFORM_HELP_PATTERNS = [
-  /^(hi|hello|hey)\b/i,
-  /^(help|assist)\b/i,
-  /\bwho are you\b/i,
-  /\bwhat (?:can|do) you do\b/i,
-  /\bwhat are your (?:limits|capabilities)\b/i,
-  /\bwhat can i ask\b/i,
-  /\bwhat is this (?:assistant|ai)\b/i,
-  /\bhow can you help\b/i,
-  /\bhow do i\b/i,
-  /\bwhat is wrong\b/i,
-  /\bwhy (?:isn'?t|is not|didn'?t|did not)\b/i,
-  /\bi need help\b/i,
-  /\bcan you help\b/i,
-  /\bwhere (?:is|do)\b/i
-];
-
-const LIKELY_OFF_TOPIC_PATTERNS = [
-  /\bwho is the richest\b/i,
-  /\bweather\b/i,
-  /\bstock(?: market)?\b/i,
-  /\bcrypto\b/i,
-  /\bbtc|bitcoin\b/i,
-  /\bpresident\b/i,
-  /\bprime minister\b/i,
-  /\bsports\b/i,
-  /\bmovie review\b/i
-];
 
 const SENSITIVE_KEY_PATTERN = /(token|secret|password|passcode|authorization|cookie|api[_-]?key|refresh[_-]?token|access[_-]?token|session[_-]?token|encrypted|private_profile|dob|phone|contact_message|billing|payment|card|credit|ssn|pixazo[_-]?key|gemini[_-]?key|flux[_-]?key|email_pref)/i;
 
@@ -150,7 +75,7 @@ const sanitizeLooseValue = (value: unknown, depth = 0): unknown => {
   }
   if (!isRecord(value)) return undefined;
 
-  const next: AssistantMap = {};
+  const next: AssistantMap = Object.create(null);
   const entries = Object.entries(value).slice(0, MAX_OBJECT_KEYS);
   for (const [key, nested] of entries) {
     if (SENSITIVE_KEY_PATTERN.test(key)) continue;
@@ -203,34 +128,8 @@ export const sanitizeAssistantContext = (
 
   if (publicHints) next.publicHints = publicHints;
 
-  if (isRecord(source.account)) {
-    const account: UniversalAssistantContext['account'] = {
-      isAuthenticated: true
-    };
-    const username = sanitizeText(source.account.username, 120);
-    const maskedEmail = sanitizeText(source.account.maskedEmail, 160);
-    const isAdmin = sanitizeBoolean(source.account.isAdmin);
-    const planTier = source.account.planTier === 'free' || source.account.planTier === 'pro' || source.account.planTier === 'admin'
-      ? source.account.planTier
-      : undefined;
-    if (username) account.username = username;
-    if (maskedEmail) account.maskedEmail = maskedEmail;
-    if (isAdmin !== undefined) account.isAdmin = isAdmin;
-    if (planTier) account.planTier = planTier;
-    if (isRecord(source.account.usage)) {
-      const usage: NonNullable<typeof account.usage> = {};
-      const imagesGenerated = sanitizeNumber(source.account.usage.imagesGenerated);
-      const maxImagesAllowed = sanitizeNumber(source.account.usage.maxImagesAllowed);
-      const hasByok = sanitizeBoolean(source.account.usage.hasByok);
-      const isPremium = sanitizeBoolean(source.account.usage.isPremium);
-      if (imagesGenerated !== undefined) usage.imagesGenerated = imagesGenerated;
-      if (maxImagesAllowed !== undefined) usage.maxImagesAllowed = maxImagesAllowed;
-      if (hasByok !== undefined) usage.hasByok = hasByok;
-      if (isPremium !== undefined) usage.isPremium = isPremium;
-      if (Object.keys(usage).length) account.usage = usage;
-    }
-    next.account = account;
-  }
+  // Identity, grants, billing and roles are never accepted from browser context.
+  // The assistant route supplies the account summary from its authenticated request.
 
   if (isRecord(source.systemStatus)) {
     next.systemStatus = {
@@ -310,28 +209,4 @@ export const sanitizeAssistantContext = (
   return next;
 };
 
-export const isPlatformScopedMessage = (input: string): boolean => {
-  const message = input.trim().toLowerCase();
-  if (!message) return false;
-
-  const hasPlatformSignal =
-    PLATFORM_KEYWORDS.some((keyword) => message.includes(keyword)) ||
-    PLATFORM_HELP_PATTERNS.some((pattern) => pattern.test(message));
-  const isClearlyOffTopic = LIKELY_OFF_TOPIC_PATTERNS.some((pattern) => pattern.test(message));
-
-  if (isClearlyOffTopic && !hasPlatformSignal) return false;
-  // Allow broader phrasing by default, while still blocking explicit off-topic patterns above.
-  return true;
-};
-
-export const buildOffTopicResponse = (): string => {
-  const tips = OFF_TOPIC_REDIRECT_TIPS.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
-  return [
-    '**Summary:** I can only help with DreamStream Comic Studio features, projects, account, and workflow questions.',
-    '**Warnings:** I cannot answer unrelated general-knowledge questions.',
-    '**Next:**',
-    tips
-  ].join('\n');
-};
-
-export const ASSISTANT_POLICY_SCOPE = PLATFORM_SCOPE;
+export const ASSISTANT_POLICY_SCOPE = 'conversation' as const;

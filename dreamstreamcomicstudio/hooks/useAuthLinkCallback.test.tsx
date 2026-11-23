@@ -102,6 +102,16 @@ describe('a link this browser asked for (it carries the nonce of a sign-in start
     expect(auth.exchangeCodeForSession).toHaveBeenCalledWith('c0de');
   });
 
+  it.each(['invite', 'email'])('passes the issued %s OTP type through to verification after consent', async (type) => {
+    go('/auth/callback?token_hash=single-use&type=' + type);
+    const { result } = mount();
+    await settle();
+    expect(result.current.status).toBe('confirm');
+    await act(async () => result.current.confirm());
+    expect(auth.verifyOtp).toHaveBeenLastCalledWith({ token_hash: 'single-use', type });
+    expect(result.current.status).toBe('success');
+  });
+
   it('follows a safe ?next= after signing in', async () => {
     const sn = markSignInStarted('handoff');
     go(`/auth/callback?token_hash=h&type=magiclink&sn=${sn}&next=%2Fmodels`);

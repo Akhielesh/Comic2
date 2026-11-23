@@ -45,7 +45,16 @@ describe('email templates', () => {
 
   it('greets generically when no name is provided', () => {
     const out = renderEmail('newsletter-confirm', { confirmUrl: 'https://x.test/c' });
-    expect(out.text).toContain('Hey there,');
+    expect(out.text).toContain('Hello,');
+  });
+
+  it('acknowledges an interest registration and points to public signup', () => {
+    const receipt = renderEmail('access-requested', { firstName: 'Ada' });
+    for (const content of [receipt.html, receipt.text]) {
+      expect(content).toContain('We recorded your interest in Comic Studio.');
+      expect(content).toContain('Choose Sign up on the Comic Studio home page');
+      expect(content).not.toContain('your invite will arrive');
+    }
   });
 
   it('applies brand overrides', () => {
@@ -81,7 +90,20 @@ describe('email templates', () => {
     expect(essential.text).toContain('required');
   });
 
-  it('embeds a read-receipt pixel only when a URL is supplied', () => {
+  it('renders acknowledgement in HTML and text only for eligible messages', () => {
+    const ackUrl = 'https://mail.example.test/api/email/ack/sample';
+    const pixelUrl = 'https://mail.example.test/api/email/o/sample.gif';
+    const receipt = renderEmail('announcement', { ackUrl, pixelUrl });
+    expect(receipt.html).toContain(ackUrl);
+    expect(receipt.text).toContain(ackUrl);
+    expect(receipt.html).toContain('Loading images can record an image request');
+    for (const name of ['auth-confirm-signup','auth-magic-link','auth-recovery','auth-security-notice','signin-alert','product-update','newsletter-confirm'] as const) {
+      const email = renderEmail(name, { ackUrl, pixelUrl });
+      expect(email.html + email.text).not.toContain('mail.example.test');
+    }
+  });
+
+  it('embeds an image-request pixel only when a URL is supplied', () => {
     const withPixel = renderEmail('welcome', { pixelUrl: 'https://x.test/o/abc.gif' });
     expect(withPixel.html).toContain('https://x.test/o/abc.gif');
     expect(withPixel.html).toMatch(/width="1" height="1"/);
@@ -104,23 +126,25 @@ describe('email templates', () => {
       inviteUrl: 'https://dreamstreamstudio.ai/live.html'
     });
     expect(out.subject).toBe('Sam invited you to Stream Studio — DreamStream Studio');
-    expect(out.html).toContain('Go live from any device');
-    expect(out.html).toContain('Stay tuned');
-    expect(out.text).toContain('Stay tuned');
+    expect(out.html).toContain('Host a live broadcast');
+    expect(out.html).toContain('Sign in with the account that received this message.');
+    expect(out.text).toContain('Sign in with the account that received this message.');
   });
 
   it('studio-invite renders per-studio feature sets and deep links', () => {
     const comic = renderEmail('studio-invite', { studio: 'comic_studio', inviterName: 'Sam' });
     expect(comic.subject).toBe('Sam invited you to Comic Studio — DreamStream Studio');
-    expect(comic.html).toContain('Script to panels');
-    expect(comic.html).not.toContain('Go live from any device');
-    expect(comic.html).toContain('https://dreamstreamstudio.ai'); // suite root deep link
-    expect(comic.html).toContain('Stream Studio and Chat Studio');
+    expect(comic.html).toContain('review your page plan');
+    expect(comic.html).not.toContain('Host a live broadcast');
+    expect(comic.html).toContain('https://comics.dreamstreamstudio.ai/');
+    expect(renderEmail('studio-invite', { studio: 'comic_studio', inviteUrl: 'https://preview.test/' }).text).toContain('Open Comic Studio: https://preview.test/');
+    expect(renderEmail('studio-invite', { studio: 'comic_studio', inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-ABC' }).text).toContain('?invite=DS-ABC');
+    expect(comic.html).not.toContain('Stream Studio and Chat Studio');
 
     const chat = renderEmail('studio-invite', { studio: 'chat_studio' });
     expect(chat.subject).toBe("You're invited to Chat Studio");
-    expect(chat.html).toContain('Dashboards that stay live');
-    expect(chat.html).toContain('Stream Studio and Comic Studio');
+    expect(chat.html).toContain('return to your saved chats');
+    expect(chat.html).not.toContain('Stream Studio and Comic Studio');
 
     // No inviteUrl for stream ⇒ the /live.html deep link is derived from the brand URL.
     const stream = renderEmail('studio-invite', { studio: 'stream_studio' });
@@ -129,7 +153,7 @@ describe('email templates', () => {
 
     // Unknown ids fall back to the Stream Studio content (existing calls unchanged).
     const fallback = renderEmail('studio-invite', { studio: 'nope' });
-    expect(fallback.html).toContain('Go live from any device');
+    expect(fallback.html).toContain('Host a live broadcast');
   });
 
   it('renders a beta-invite with inviter, note and link', () => {
@@ -147,7 +171,7 @@ describe('email templates', () => {
     expect(out.html).not.toContain('Coming soon to your account');
   });
 
-  it('beta-invite with studios names them, walks their features, and marks the rest coming soon', () => {
+  it('beta-invite with studios names them, walks their features, without promising ungranted access', () => {
     const out = renderEmail('beta-invite', {
       inviterName: 'Sam',
       inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-AAAA-BBBB',
@@ -158,24 +182,24 @@ describe('email templates', () => {
     expect(out.subject).toBe('Sam invited you to Stream Studio and Chat Studio — DreamStream Studio');
     expect(out.html).toContain('Stream Studio and Chat Studio');
     // Included studios bring their feature tours…
-    expect(out.html).toContain('Go live from any device');
-    expect(out.html).toContain('Dashboards that stay live');
+    expect(out.html).toContain('Host a live broadcast');
+    expect(out.html).toContain('return to your saved chats');
     // …and the studio NOT included is only present as coming soon (no feature cards).
-    expect(out.html).toContain('Coming soon to your account');
-    expect(out.html).toContain('Comic Studio');
-    expect(out.html).not.toContain('Script to panels');
+    expect(out.html).not.toContain('Coming soon to your account');
+    expect(out.html).not.toContain('Comic Studio');
+    expect(out.html).not.toContain('review your page plan');
     // Plain-text mirrors both halves.
     expect(out.text).toContain('Stream Studio');
-    expect(out.text).toContain('Coming soon to your account:');
-    expect(out.text).toContain('Comic Studio');
+    expect(out.text).not.toContain('Coming soon to your account:');
+    expect(out.text).not.toContain('Comic Studio');
   });
 
   it('beta-invite with every studio features all three and skips coming soon', () => {
     const out = renderEmail('beta-invite', { studios: 'stream_studio,comic_studio,chat_studio' });
     expect(out.subject).toBe("You're invited to Stream Studio, Comic Studio and Chat Studio — DreamStream Studio");
-    expect(out.html).toContain('Go live from any device');
-    expect(out.html).toContain('Script to panels');
-    expect(out.html).toContain('Dashboards that stay live');
+    expect(out.html).toContain('Host a live broadcast');
+    expect(out.html).toContain('review your page plan');
+    expect(out.html).toContain('return to your saved chats');
     expect(out.html).not.toContain('Coming soon to your account');
     // Unknown ids are ignored — garbage degrades to the generic invite, never a crash.
     expect(renderEmail('beta-invite', { studios: 'bogus,unknown' }).html).not.toContain('Coming soon to your account');
@@ -184,26 +208,59 @@ describe('email templates', () => {
   it('automated mail is no-reply with a do-not-reply notice; warm mail is not', () => {
     const auto = renderEmail('auth-magic-link', { actionUrl: 'https://dreamstreamstudio.ai/v' });
     expect(auto.html).toContain("isn't monitored");
-    expect(auto.text).toContain("please don't reply");
+    expect(auto.text).toMatch(/please don't reply/i);
     expect(isNoReply('auth-magic-link')).toBe(true);
     expect(isNoReply('welcome')).toBe(false);
     expect(renderEmail('welcome', {}).html).not.toContain("isn't monitored");
   });
 
-  it('welcome email is fuller — shows the feature sections', () => {
+  it('welcomes account holders without promising access to specific studios or tiers', () => {
     const out = renderEmail('welcome', { firstName: 'Akhielesh' });
-    expect(out.html).toContain('Comic Studio');
-    expect(out.html).toContain('AI Chat');
-    expect(out.html).toContain('Rich tools');
     expect(out.subject).toContain('Welcome');
+    for (const body of [out.html, out.text]) {
+      expect(body).toContain('studios available to you');
+      expect(body).toContain('Open your workspace');
+      expect(body).not.toMatch(/100\+ models|Code Studio|three superpowers/);
+    }
   });
 
-  it('welcome email no longer promises the retired Code Studio', () => {
-    const out = renderEmail('welcome', { firstName: 'Akhielesh' });
-    expect(out.html).not.toContain('Code Studio');
-    expect(out.text).not.toContain('Code Studio');
-    // "three superpowers" lists exactly three.
-    expect(out.text.split('\n').filter((l) => l.startsWith('• '))).toHaveLength(3);
+  it('gives recovery instructions when a required credential is missing', () => {
+    for (const body of Object.values(renderEmail('auth-reauthentication', {})).slice(1)) {
+      expect(body).toContain('missing its verification code');
+      expect(body).not.toContain('------');
+    }
+    const expired = renderEmail('auth-recovery', {});
+    for (const body of [expired.html, expired.text]) {
+      expect(body).toContain('missing its action link');
+      expect(body).toContain('Forgot password?');
+    }
+  });
+
+  it('keeps a supplied code out of the subject and preheader and private in both bodies', () => {
+    const mail = renderEmail('auth-magic-link', { codeFirst: '1', token: '234567', actionUrl: 'https://example.com/verify' });
+    expect(mail.subject).not.toContain('234567');
+    expect(mail.html.slice(0, mail.html.indexOf('<body'))).not.toContain('234567');
+    for (const body of [mail.html, mail.text]) {
+      expect(body).toContain('234567');
+      expect(body).toContain('Keep this code private');
+      expect(body).toContain('https://example.com/verify');
+    }
+  });
+
+  it('makes an access receipt independent of a subscription or account grant', () => {
+    const receipt = renderEmail('access-requested');
+    for (const body of [receipt.html, receipt.text]) {
+      expect(body).toContain('this address was submitted');
+      expect(body).not.toContain('required DreamStream Studio account notification');
+      expect(body).not.toContain('Unsubscribe');
+    }
+  });
+
+  it('includes admin text and a readable plain-text alternative for HTML-only updates', () => {
+    const update = renderEmail('product-update', { title: 'Edition export', bodyHtml: '<p>Export is ready.</p><p>Open your book.</p>' });
+    expect(update.text).toContain('Edition export');
+    expect(update.text).toContain('Export is ready.\nOpen your book.');
+    expect(update.text).not.toMatch(/<p>|required DreamStream/);
   });
 
   it('announcement escapes the composed body (no raw HTML) and keeps paragraphs', () => {
@@ -216,6 +273,10 @@ describe('email templates', () => {
     expect(out.html).not.toContain('<b>tags</b>');
     expect(out.html).toContain('&lt;b&gt;tags&lt;/b&gt;');
     expect(out.html).toContain('Para two.');
+    for (const body of [out.html, out.text]) {
+      expect(body).toContain('This service notice was sent by DreamStream Studio.');
+      expect(body).not.toContain('required DreamStream Studio account notification');
+    }
     expect(out.html).toContain('Open');
   });
 
@@ -235,6 +296,20 @@ describe('email templates', () => {
     expect(renderEmail('auth-security-notice', { notice: 'email_changed', oldEmail: '<b>x</b>' }).html).not.toContain('<b>x</b>');
   });
 
+  it('directs security notices to the account security settings when no recovery link is supplied', () => {
+    for (const name of ['signin-alert', 'auth-security-notice'] as const) {
+      for (const [appUrl, origin] of [
+        ['https://comics.dreamstreamstudio.ai', 'https://comics.dreamstreamstudio.ai'],
+        ['https://dreamstreamstudio.ai/live', 'https://dreamstreamstudio.ai'],
+        ['https://stream.dreamstreamstudio.ai', 'https://dreamstreamstudio.ai']
+      ]) {
+        const rendered = renderEmail(name, {}, { appUrl });
+        expect(rendered.text).toContain(`${origin}/?view=settings&tab=security`);
+        expect(rendered.html).toContain(`${origin}/?view=settings&amp;tab=security`);
+      }
+    }
+  });
+
   it('auth-email-change has a distinct approve-from-current-address variant', () => {
     const current = renderEmail('auth-email-change', {
       emailChangeStep: 'current',
@@ -248,5 +323,51 @@ describe('email templates', () => {
     const next = renderEmail('auth-email-change', { newEmail: 'new@example.com', actionUrl: 'https://x.supabase.co/v' });
     expect(next.subject).toContain('Confirm your new email');
     expect(next.text).not.toContain('both links');
+  });
+});
+
+describe('Comic Studio creative mail', () => {
+  const comicBrand = { productName: 'Comic Studio', appUrl: 'https://comics.dreamstreamstudio.ai' };
+  const reader = 'https://comics.dreamstreamstudio.ai/?view=gallery&sample=last-tram';
+
+  it('takes readers straight into the public two-page comic in HTML and plain text', () => {
+    for (const message of [
+      renderEmail('access-requested'), renderEmail('welcome'),
+      renderEmail('newsletter-confirm', { confirmUrl: 'https://example.test/confirm' }, comicBrand),
+      renderEmail('newsletter-welcome', {}, comicBrand),
+      renderEmail('auth-confirm-signup', { actionUrl: 'https://example.test/verify' }, comicBrand)
+    ]) {
+      const doc = new DOMParser().parseFromString(message.html, 'text/html');
+      const sampleLink = Array.from(doc.querySelectorAll('a')).find(a => a.textContent?.includes('Read both pages'));
+      expect(sampleLink?.getAttribute('href')).toBe(reader);
+      expect(message.text).toContain(reader);
+      expect(doc.querySelector('.ds-comic-still')?.getAttribute('src')).toMatch(/last-tram-strip\.jpg$/);
+      expect(doc.querySelector('.ds-comic-motion')?.getAttribute('style')).toContain('display:none');
+      expect(message.html).toContain('@media screen and (prefers-reduced-motion:no-preference)');
+      expect(message.text).not.toContain('?view=images');
+    }
+  });
+
+  it('keeps the personal verification action primary, and gives only a known member the image-workspace destination', () => {
+    const primary = 'https://example.test/personal-confirm';
+    for (const pending of [
+      renderEmail('auth-confirm-signup', { actionUrl: primary }, comicBrand),
+      renderEmail('newsletter-confirm', { confirmUrl: primary }, comicBrand)
+    ]) {
+      const doc = new DOMParser().parseFromString(pending.html, 'text/html');
+      expect(doc.querySelector('.ds-action')?.getAttribute('href')).toBe(primary);
+      expect(pending.text.indexOf(primary)).toBeLessThan(pending.text.indexOf(reader));
+      expect(pending.text).not.toMatch(/account is ready|subscription is confirmed/i);
+    }
+    for (const [studio, include] of [['comic_studio', true], ['stream_studio', false], ['chat_studio', false]] as const) {
+      const mail = renderEmail('studio-invite', { studio });
+      expect(mail.text.includes('https://comics.dreamstreamstudio.ai/?view=images')).toBe(include);
+      expect(mail.html.includes('last-tram-strip.jpg')).toBe(include);
+    }
+    for (const name of ['auth-recovery', 'auth-reauthentication', 'auth-magic-link', 'auth-security-notice'] as const) {
+      const security = renderEmail(name, {}, comicBrand);
+      expect(security.html).not.toContain('last-tram-strip');
+      expect(security.text).not.toContain(reader);
+    }
   });
 });

@@ -25,10 +25,15 @@ ask Supabase to send anything:
      Stream Studio's own host instead: `https://stream.dreamstreamstudio.ai/?after=…&token_hash=…&type=signup`.
      Recovery and magic links always stay on the main app, even when asked for from that host.
 
+   A magic link requested at the standalone image workspace carries `next=/?view=images`.
+   After confirmation, the browser restores that workspace even when the user opened the email
+   on another device. Password recovery opens Account → Security to set a new password.
+
    Verifying needs the page's JavaScript (a POST), so a mail scanner that prefetches the link
    can't burn the token.
 4. It mails the branded `auth-*` template through the mailer → email Worker `/send` (HMAC),
-   with `brand: 'stream-studio'` for live-app links and **no read-receipt pixel**. Every send
+   with `brand: 'stream-studio'` for live-app links and `brand: 'comic-studio'` for the canonical
+   Comic Studio callback. Both use **no read-receipt pixel**. Every send
    is an `email_log` row and counts toward `EMAIL_MAX_PER_DAY` / `EMAIL_MAX_PER_MONTH`.
 
 | Endpoint | Body | What it does | Answers |
@@ -61,8 +66,9 @@ ask Supabase to send anything:
 - Logs mask addresses (`a***@example.com`) and never contain tokens or links.
 
 **Where links may point: `AUTH_LINK_ORIGINS`.** A recovery or magic link signs in whoever opens
-it, so link origins come from a strict allowlist: `APP_PUBLIC_URL`'s origin plus the exact
-origins in `AUTH_LINK_ORIGINS` (comma-separated, default empty). The request's `Origin` is used
+it. The allowlist includes `APP_PUBLIC_URL` and each exact origin in `AUTH_LINK_ORIGINS`
+(comma-separated, default empty). The production apex also trusts the canonical Comic Studio
+origin so the browser that requested a sign-in can complete it on that host. The request's `Origin` is used
 only on an **exact** match; anything else gets `APP_PUBLIC_URL`. Never use wildcards or the CORS
 helper `isAllowedOrigin()` here: `*.dreamstreamstudio.ai` includes user-controlled Studio preview
 hosts, and a reset link sent there would hand the account to the host's owner. For local dev:
@@ -358,3 +364,37 @@ and a row appears in `email_suppressions`.
 
 Inspect delivery + reads in the `email_log` table (backend `/send` mail; auth-hook mail shows in
 `wrangler tail` and the Cloudflare Email Sending dashboard logs).
+
+## Optional product-update campaigns
+
+Product updates are disabled by default. If your organization already has a Postmark account, configure the **API backend** with a verified sender address in `POSTMARK_BROADCAST_FROM`, a server token in `POSTMARK_BROADCAST_SERVER_TOKEN`, and an active Broadcast message stream ID in `POSTMARK_BROADCAST_STREAM`. Keep Postmark-managed unsubscribes enabled on that stream. Set `EMAIL_PUBLIC_BASE_URL` to the public HTTPS origin for the newsletter unsubscribe endpoint, and configure the existing `EMAIL_HMAC_SECRET` for signed links. The shared template can use the backend's `COMPANY_NAME`, `COMPANY_ADDRESS`, `SUPPORT_EMAIL` and `LOGO_URL`. Set `PRODUCT_UPDATE_TRANSPORT=postmark` to enable delivery. Keep the server token out of the client and Worker configuration.
+
+In the admin Email Console, choose **product-update**. Preview renders locally. The readiness indicator checks configuration values locally. At send time, the backend checks the stream's type and subscription settings through Postmark. Postmark validates the sending signature or domain. Each recipient, including the administrator using the test button, needs a confirmed updates subscription with no unsubscribe date or marketing suppression. Existing access requests and account preferences alone do not qualify. Provider-side suppressions on that stream also apply.
+
+The branded message includes the studio's signed unsubscribe link in HTML and plain text. Postmark adds its own unsubscribe link and RFC 8058 one-click headers. A provider unsubscribe suppresses recipients in that Postmark stream. Keep using the same stream for this audience, and reconcile its suppressions before moving to a different stream or provider. Sending an update is a manual admin action. A successful API response means Postmark accepted the message.
+
+Provider contracts are documented in the [Email API](https://postmarkapp.com/developer/api/email-api), [Message Streams API](https://postmarkapp.com/developer/api/message-streams-api) and [List-Unsubscribe guide](https://postmarkapp.com/support/article/1299-how-to-include-a-list-unsubscribe-header).
+
+
+## Lifecycle delivery
+
+Apply `server/sql/waitlist_signups.sql`, `server/sql/email_system.sql` and `server/sql/email_lifecycle.sql` in that order before enabling the updated API. The migrations can run twice. They preserve existing waitlist and account rows and enqueue no historical mail. The API submits interest messages, while the Auth database records the first transition to a verified email. Auth confirmations, password recovery and one-time codes continue through their immediate delivery paths.
+
+**Controls.** The API's `INTEREST_EMAILS=on` enables new access receipts, update confirmation requests and the welcome after double opt-in. Previous waitlist registrations retain their original answers and access state. A separate, service-only setting enables account onboarding for future verifications. To enable it deliberately, set `account_welcome_enabled=true` on the singleton `public.email_lifecycle_settings` row. Both switches default off and are checked again before delivery. The optional updates checkbox starts no campaign.
+
+**Delivery.** Signup and consent transactions enqueue messages durably before replying. The API runner checks on startup, after an interest request and every minute while awake. Each pass claims up to ten jobs, one at a time. A job has a ten-minute lease. Failures back off for up to eight attempts. Jobs expire after a day. Workers recheck current opt-out, verification and token state. The send log's request ID matches the job ID. A provider acknowledgement recorded in the log survives a process crash before the queue updates. A provider acceptance followed by loss of both its response and the log can still produce a duplicate on retry.
+
+**Sleeping containers.** For delivery during quiet periods, enable Supabase `pg_cron` and `pg_net`, reapply the lifecycle migration, and set `wake_url` on the settings row to the deployment's public HTTPS `/api/health` endpoint. The five-minute cron issues a GET only when a job is due. It sends no credentials or recipient data. Check that `dreamstream-email-wake` exists in `cron.job` and the endpoint reaches Express. Without the wake schedule, queued work resumes the next time the API runs.
+
+**Operations.** Group `public.email_lifecycle_jobs` by `state, template` and inspect the oldest available time for queued jobs. Use the Email Console to trace transport results. After resolving a provider failure, an administrator can reset a specific eligible failed job's `state` to `queued`, `attempts` to zero and `available_at` to `now()` within its one-day lifetime. Check the provider and send log before requeuing any ambiguous delivery. To stop new lifecycle messages, turn off both switches. Restore the previous API only after stopping the new runner; its older routes attempt synchronous mail. Keep queue and signup rows for inspection. Clear `wake_url` to stop waking the container.
+
+
+## Message acknowledgements and image signals
+
+Apply the current `server/sql/email_system.sql` before the updated API and email Worker. Set `EMAIL_PUBLIC_BASE_URL` to the first-party HTTPS origin where the API serves `/api/email/*`. The Worker accepts receipt URLs only from its `APP_URL` origin, or its explicit `EMAIL_RECEIPT_ORIGIN` if the API is on a separate host. Keep provider-side open and link tracking disabled when privacy-preserving first-party receipts are required.
+
+Access receipts, welcome messages, service announcements, studio and beta invitations, and double-opt-in welcome messages can include an optional acknowledgement link. `EMAIL_ACKNOWLEDGEMENTS=off` disables issuance and collection, including existing links. The landing page describes the action. Loading it or fetching it with HEAD records no acknowledgement. The form POST records only the first acknowledgement time. A link holder, including someone to whom an email was forwarded, can press the button. The event identifies the message; it does not verify the reader’s identity or prove they read its contents.
+
+Passive image signals are off by default. Set `EMAIL_OPEN_SIGNALS=on` on the backend to include a disclosed first-party pixel on those same eligible messages and collect its first GET time. A mail proxy may fetch images automatically, and a reader can block remote images. The pixel and the acknowledgement use independent tokens. The admin console reports each separately. Auth actions, verification and recovery codes, sign-in and other security notices, and product-update broadcasts carry neither. Tracking can also be disabled for an individual send. No image signal or acknowledgement is inferred from a provider accepting a message.
+
+Each new token uses 32 random bytes. Only its SHA-256 digest enters the service-role send log. Receipt endpoints retain a single timestamp per event, never IP address, browser identity or repeated view history. They emit no referrer, and application logs mask the links. Receipt validity is 90 days. Earlier UUID pixel links work only for legacy rows in the eligibility window when passive collection is enabled. Existing open timestamps retain their original meaning. No historical acknowledgement is inferred. Previewing or testing with user-supplied tracker URLs cannot record opens on behalf of another message.

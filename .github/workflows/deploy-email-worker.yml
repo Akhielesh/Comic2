@@ -21,6 +21,7 @@ on:
       # Bundled into the worker (Stream Studio links). tests/config/deployPaths.test.ts enforces
       # that every bundled file is listed here.
       - 'dreamstreamcomicstudio/shared/streamHost.ts'
+      - 'dreamstreamcomicstudio/services/productHost.ts'
       - '.github/workflows/deploy-email-worker.yml'
   workflow_dispatch:
 

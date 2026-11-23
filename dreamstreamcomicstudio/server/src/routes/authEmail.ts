@@ -1,3 +1,7 @@
+import { dobProblem, USERNAME_REGEX } from '../services/signupValidation.js';
+export { dobProblem } from '../services/signupValidation.js';
+import { AUTH_WORKSPACE_PATHS, authWorkspace, type AuthWorkspace } from '../../../shared/authWorkspace.js';
+import { COMICS_ORIGIN } from '../../../services/productHost.js';
 import crypto from 'crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -47,8 +51,6 @@ import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
 export const authEmailRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
-const MIN_SIGNUP_AGE_YEARS = 8;
 const DAY_MS = 86_400_000;
 
 /** Per-recipient limits across all auth emails (email_log, status queued|sent). */
@@ -95,7 +97,8 @@ export const SIGNUP_DATA_KEYS = [
   'email_pref_product_updates',
   'email_pref_marketing',
   'live_ticket',
-  'signup_source'
+  'signup_source',
+  'referral_code'
 ] as const;
 
 export interface SignupInput {
@@ -104,24 +107,6 @@ export interface SignupInput {
   password: string;
   data: Record<string, string | boolean | null>;
 }
-
-const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
-
-/**
- * DOB rules mirroring the clients (the live DB trigger checks the format but NOT the age).
- * One day of slack: the clients check in the user's local zone, which can be ahead of UTC.
- */
-export const dobProblem = (dob: string, now: Date = new Date()): string | null => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return 'Date of birth must be valid.';
-  const date = new Date(`${dob}T00:00:00Z`);
-  if (Number.isNaN(date.getTime()) || isoDay(date) !== dob || dob < '1900-01-01') return 'Date of birth must be valid.';
-  const latest = new Date(now.getTime() + DAY_MS);
-  if (dob > isoDay(latest)) return 'Date of birth cannot be in the future.';
-  const oldEnough = new Date(latest);
-  oldEnough.setUTCFullYear(oldEnough.getUTCFullYear() - MIN_SIGNUP_AGE_YEARS);
-  if (dob > isoDay(oldEnough)) return `You must be at least ${MIN_SIGNUP_AGE_YEARS} years old to sign up.`;
-  return null;
-};
 
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
@@ -169,6 +154,8 @@ export const parseSignupInput = (
   }
   const ticket = text(raw.live_ticket);
   if (ticket && ticket.length <= 128) data.live_ticket = ticket;
+  const referralCode = text(raw.referral_code);
+  if (/^[0-9a-f]{32}$/.test(referralCode)) data.referral_code = referralCode;
   const source = text(raw.signup_source);
   if (/^[a-z0-9_]{1,40}$/.test(source)) data.signup_source = source;
 
@@ -370,11 +357,14 @@ const lookupAccount = async (admin: SupabaseClient, email: string): Promise<Acco
 type LinkError = { status?: number; code?: string; message?: string };
 type LinkProps = { hashed_token?: string; verification_type?: string };
 
+const requestedWorkspace = (body: Body): AuthWorkspace | undefined =>
+  authWorkspace(body.returnToWorkspace) ?? (body.returnToImages === true ? 'images' : undefined);
+
 /** Build the link from what GoTrue actually issued and mail it. Never throws. */
 const deliver = async (
   req: Request,
   route: string,
-  opts: { email: string; app: AuthApp; after?: string; origin: string; props: LinkProps | undefined; userId?: string | null }
+  opts: { email: string; app: AuthApp; after?: string; origin: string; props: LinkProps | undefined; userId?: string | null; workspace?: AuthWorkspace }
 ): Promise<boolean> => {
   const type = opts.props?.verification_type || '';
   let actionUrl: string;
@@ -388,6 +378,11 @@ const deliver = async (
       // The requesting browser's nonce: in that browser the link completes without a confirm step.
       signInNonce: parseSignInNonce(bodyOf(req).sn)
     });
+    if (opts.app === 'main' && opts.workspace && (type === 'magiclink' || type === 'signup')) {
+      const destination = new URL(actionUrl);
+      destination.searchParams.set('next', AUTH_WORKSPACE_PATHS[opts.workspace]);
+      actionUrl = destination.href;
+    }
   } catch (err) {
     console.error(`[auth-email] ${route} → ${maskEmail(opts.email)}: cannot build link (${(err as Error).message})`);
     return false;
@@ -396,7 +391,7 @@ const deliver = async (
     to: opts.email,
     template: TEMPLATE_FOR_TYPE[type],
     params: { actionUrl },
-    brand: linksToLiveApp(opts.app, type) ? 'stream-studio' : undefined,
+    brand: linksToLiveApp(opts.app, type) ? 'stream-studio' : opts.origin === COMICS_ORIGIN ? 'comic-studio' : undefined,
     track: false,
     userId: opts.userId ?? req.user?.id ?? null,
     requestId: req.requestId ?? null
@@ -406,9 +401,11 @@ const deliver = async (
   return result.ok;
 };
 
-const linkTarget = (req: Request) => {
+const linkTarget = (req: Request, workspace?: AuthWorkspace) => {
   const origin = pickLinkOrigin(req.get('origin'));
-  return { origin, redirectTo: `${origin}/auth/callback` };
+  const callback = new URL('/auth/callback', origin);
+  if (workspace) callback.searchParams.set('next', AUTH_WORKSPACE_PATHS[workspace]);
+  return { origin, redirectTo: callback.href };
 };
 
 const isDatabaseError = (error: LinkError) => /database error/i.test(error.message || '');
@@ -471,7 +468,8 @@ authEmailRouter.post('/signup', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status === 'confirmed') return fail(res, 409, 'email_exists', EMAIL_EXISTS_MESSAGE);
 
-    const { origin, redirectTo } = linkTarget(req);
+    const workspace = input.app === 'main' ? requestedWorkspace(body) : undefined;
+    const { origin, redirectTo } = linkTarget(req, workspace);
     // An existing UNCONFIRMED account gets a fresh confirmation, nothing else: GoTrue would
     // merge new metadata into it (Supabase's own signUp deliberately doesn't), and it never
     // changes an existing password.
@@ -481,7 +479,7 @@ authEmailRouter.post('/signup', async (req, res, next) => {
           type: 'signup',
           email,
           password: input.password,
-          options: { data: input.data, redirectTo }
+          options: { data: origin === COMICS_ORIGIN ? { ...input.data, signup_source: 'comic_studio' } : input.data, redirectTo }
         })
       : await admin.auth.admin.generateLink({ type: 'signup', email, password: throwawayPassword(), options: { redirectTo } });
 
@@ -502,6 +500,7 @@ authEmailRouter.post('/signup', async (req, res, next) => {
       email,
       app: input.app,
       after: input.after,
+      workspace,
       origin,
       props: data?.properties,
       userId: data?.user?.id ?? (account.status === 'none' ? null : account.userId)
@@ -548,7 +547,8 @@ authEmailRouter.post('/resend', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status !== 'unconfirmed') return res.json({ ok: true });
 
-    const { origin, redirectTo } = linkTarget(req);
+    const workspace = app === 'main' ? requestedWorkspace(body) : undefined;
+    const { origin, redirectTo } = linkTarget(req, workspace);
     const { data, error } = await admin.auth.admin.generateLink({
       type: 'signup',
       email,
@@ -561,7 +561,7 @@ authEmailRouter.post('/resend', async (req, res, next) => {
       console.error(`[auth-email] resend → ${maskEmail(email)}: generateLink failed (${(error as LinkError).status ?? '?'})`);
       return fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
     }
-    const sent = await deliver(req, 'resend', { email, app, after, origin, props: data?.properties, userId: account.userId });
+    const sent = await deliver(req, 'resend', { email, app, after, origin, workspace, props: data?.properties, userId: account.userId });
     return sent ? res.json({ ok: true }) : fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
   } catch (err) {
     next(err);
@@ -619,13 +619,14 @@ authEmailRouter.post('/magiclink', async (req, res, next) => {
     const account = await lookupAccount(admin, email);
     if (account.status === 'none') return res.json({ ok: true });
 
-    const { origin, redirectTo } = linkTarget(req);
+    const workspace = requestedWorkspace(bodyOf(req));
+    const { origin, redirectTo } = linkTarget(req, workspace);
     const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email, options: { redirectTo } });
     if (error) {
       console.error(`[auth-email] magiclink → ${maskEmail(email)}: generateLink failed (${(error as LinkError).status ?? '?'})`);
       return fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
     }
-    const sent = await deliver(req, 'magiclink', { email, app: 'main', origin, props: data?.properties, userId: account.userId });
+    const sent = await deliver(req, 'magiclink', { email, app: 'main', origin, props: data?.properties, userId: account.userId, workspace });
     return sent ? res.json({ ok: true }) : fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
   } catch (err) {
     next(err);

@@ -7,8 +7,8 @@ const insert = vi.hoisted(() => vi.fn());
 vi.mock('./supabase', () => ({ supabase: { from: () => ({ insert }) } }));
 const cfg = vi.hoisted(() => ({ check: false }));
 vi.mock('./clientConfig', () => ({
-  API_BASE_URL: 'https://api.test',
-  buildApiUrl: (p: string) => `https://api.test${p}`,
+  API_BASE_URL: '',
+  buildApiUrl: (p: string) => p,
   turnstileEnabled: () => cfg.check
 }));
 
@@ -31,6 +31,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -49,9 +50,9 @@ describe('interpretSubscribeResponse', () => {
   it('429 is an honest wait-a-moment', () => {
     expect(interpretSubscribeResponse(false, 429, null)?.status).toBe('rate-limited');
   });
-  it('400 verify: asks again with a check on the page, saves directly without one', () => {
+  it('400 verification is authoritative even if the page has no widget', () => {
     expect(interpretSubscribeResponse(false, 400, { status: 'verify', message: 'x' } as never, 'access', true)?.status).toBe('verify');
-    expect(interpretSubscribeResponse(false, 400, { status: 'verify', message: 'x' } as never, 'access', false)).toBeNull();
+    expect(interpretSubscribeResponse(false, 400, { status: 'verify', message: 'x' } as never, 'access', false)).toMatchObject({ ok: false, status: 'verify', message: expect.stringMatching(/refresh/i) });
   });
   it('other 400s are shown as they are; server errors and odd bodies save directly', () => {
     expect(interpretSubscribeResponse(false, 400, { message: 'Your comment can be at most 1000 characters.' })).toMatchObject({
@@ -71,7 +72,7 @@ describe('the neutral answer promises no email', () => {
 });
 
 describe('submitWaitlistEmail', () => {
-  it('sends the cleaned answers to the server and returns the neutral answer', async () => {
+  it('sends the cleaned answers to the production same-origin endpoint and returns the neutral answer', async () => {
     const fetchMock = vi.fn(() => reply(200, { ok: true, status: 'registered', message: 'x' }));
     vi.stubGlobal('fetch', fetchMock);
     const res = await submitWaitlistEmail(' A@B.co ', 'access', { source: 'auth' }, undefined, {
@@ -81,6 +82,7 @@ describe('submitWaitlistEmail', () => {
       comment: ' hi '
     });
     expect(res).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers });
+    expect(fetchMock).toHaveBeenCalledWith('/api/newsletter/subscribe', expect.objectContaining({ method: 'POST' }));
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     // Register interest always says whether the box was ticked: here it was not.
     expect(body).toEqual({ email: 'a@b.co', kind: 'access', source: 'auth', makes: ['kids'], heardFrom: 'friend', comment: 'hi', keepUpdated: false });
@@ -135,14 +137,31 @@ describe('submitWaitlistEmail', () => {
     expect(insert.mock.calls[1]?.[0].metadata).toEqual({ source: 'home' });
   });
 
-  it('400 verify with no check on the page saves directly; with a check it asks again', async () => {
+  it('a verification refusal never falls back to a direct database write', async () => {
     vi.stubGlobal('fetch', vi.fn(() => reply(400, { ok: false, status: 'verify', message: 'Please complete the check.' })));
-    expect((await submitWaitlistEmail('a@b.co', 'access')).ok).toBe(true);
-    expect(insert).toHaveBeenCalledTimes(1);
+    expect(await submitWaitlistEmail('a@b.co', 'access')).toMatchObject({ ok: false, status: 'verify' });
+    expect(insert).not.toHaveBeenCalled();
     cfg.check = true;
     const res = await submitWaitlistEmail('a@b.co', 'access');
     expect(res).toMatchObject({ ok: false, status: 'verify' });
-    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('preserves verification when the API is down, and a server rejection when the widget is off', async () => {
+    cfg.check = true;
+    vi.stubGlobal('fetch', vi.fn(() => reply(503, { ok: false })));
+    expect(await submitWaitlistEmail('a@b.co', 'access', {}, 'solved-token')).toMatchObject({ ok: false, status: 'unavailable' });
+    cfg.check = false;
+    vi.stubGlobal('fetch', vi.fn(() => reply(403, { ok: false })));
+    expect(await submitWaitlistEmail('a@b.co', 'access')).toMatchObject({ ok: false, status: 'unavailable' });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('a deployed page never skips server verification or mail processing during an outage', async () => {
+    vi.stubEnv('DEV', false);
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))));
+    expect(await submitWaitlistEmail('a@b.co', 'access')).toMatchObject({ ok: false, status: 'unavailable' });
+    expect(insert).not.toHaveBeenCalled();
   });
 
   it('a repeat on the direct path (23505) gets the same answer as a new address', async () => {

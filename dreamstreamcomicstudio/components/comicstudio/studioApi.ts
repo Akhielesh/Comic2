@@ -1,3 +1,4 @@
+import { isFriendlyMessage } from '../../services/apiErrors';
 // HTTP + SSE client for Comic Studio (v4) — `/api/comic/*` (server/src/routes/comic.ts).
 //
 // Every call goes through services/apiClient (auth token, BYOK provider keys, source
@@ -106,26 +107,7 @@ interface ErrorLike {
   details?: unknown;
 }
 
-/** Bare HTTP status texts apiClient falls back to when the body had no message. */
-const STATUS_TEXT_RE =
-  /^(bad request|unauthorized|payment required|forbidden|not found|conflict|unprocessable (entity|content)|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)$/i;
-/** Text that reads like a stack, a driver/transport error or markup — never shown to a user. */
-const TECHNICAL_RE =
-  /(\b(TypeError|ReferenceError|SyntaxError|RangeError|AbortError|DOMException|Exception|ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|Failed to fetch|NetworkError|Load failed|status code|Unexpected token|violates|constraint|stack trace|undefined|NaN|postgres|PGRST\w*|supabase|jwt|bearer|is not a function|is not defined|Cannot read propert(y|ies)|JSON)\b|\bError:|<\/?[a-z!][^>]*>|[{}]|\n\s+at\s)/i;
-
-/**
- * True when a server message is calm, human copy the studio may show verbatim (the studio
- * routes send user-safe `userMessage`s). Bare codes, status texts, stack-ish or driver text,
- * markup and very long strings are not — the caller shows its own copy instead.
- */
-export const isFriendlyMessage = (text: unknown): text is string => {
-  if (typeof text !== 'string') return false;
-  const t = text.trim();
-  if (t.length < 4 || t.length > 280) return false;
-  if (/^[A-Z0-9_.:-]+$/.test(t)) return false; // a bare code ("NOT_AVAILABLE")
-  if (STATUS_TEXT_RE.test(t)) return false;
-  return !TECHNICAL_RE.test(t);
-};
+export { isFriendlyMessage } from '../../services/apiErrors';
 
 const CODE_RE = /^[A-Z][A-Z0-9_]{1,40}$/;
 
@@ -370,11 +352,13 @@ export interface StudioProjectResponse {
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 export async function createStudioProject(input: {
+  directorIdea?: string;
+  creationId?: string;
   title?: string;
   importFromProjectId?: string;
-}): Promise<StudioProjectResponse & { projectId: string }> {
+}, expectedAccountId?: string): Promise<StudioProjectResponse & { projectId: string }> {
   try {
-    const res = await post<typeof input, { projectId?: unknown; doc?: unknown; urls?: unknown; caps?: unknown }>('/api/comic/projects', input);
+    const res = await post<typeof input, { projectId?: unknown; doc?: unknown; urls?: unknown; caps?: unknown }>('/api/comic/projects', input, expectedAccountId ? { expectedAccountId } : undefined);
     const doc = asDoc(res?.doc);
     const projectId = typeof res?.projectId === 'string' && res.projectId ? res.projectId : doc.id;
     const caps = asCaps(res?.caps);

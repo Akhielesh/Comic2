@@ -30,6 +30,24 @@ type Tab = 'compose' | 'invite' | 'log';
 const statusTone = (s: string): StatusState =>
   s === 'sent' ? 'healthy' : s === 'failed' || s === 'rate_limited' ? 'error' : s === 'suppressed' || s === 'skipped' ? 'attention' : 'waiting';
 
+const statusLabel: Record<string, string> = {
+  sent: 'Provider accepted', queued: 'Queued', failed: 'Failed', suppressed: 'Suppressed', skipped: 'Skipped', rate_limited: 'Rate limited'
+};
+
+function ReceiptTime({ timestamp }: { timestamp?: string | null }) {
+  if (timestamp === undefined) return <>Unavailable</>;
+  return timestamp ? <time dateTime={timestamp}>{new Date(timestamp).toLocaleString()}</time> : <>No record</>;
+}
+
+function activityTotals(rows: EmailLogRow[]) {
+  const accepted = rows.filter(row => row.status === 'sent').length;
+  const imageRequests = rows.filter(row => row.opened_at).length;
+  const acknowledgements = rows.some(row => row.acknowledged_at === undefined)
+    ? 'Acknowledgement data unavailable'
+    : `${rows.filter(row => row.acknowledged_at).length} acknowledged via link`;
+  return `Showing ${rows.length} logged requests · ${accepted} provider accepted · ${imageRequests} with an image request · ${acknowledgements}`;
+}
+
 export const EmailConsole: React.FC = () => {
   const [tab, setTab] = useState<Tab>('compose');
   const [configured, setConfigured] = useState(true);
@@ -42,6 +60,7 @@ export const EmailConsole: React.FC = () => {
   const [template, setTemplate] = useState('announcement');
   const [fields, setFields] = useState({ subject: '', heading: '', body: '', ctaLabel: '', ctaUrl: '', firstName: '' });
   const [preview, setPreview] = useState<EmailPreview | null>(null);
+  const campaignBlocked = template === 'product-update' && !usage?.broadcast?.configured;
   const [recipients, setRecipients] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -51,14 +70,15 @@ export const EmailConsole: React.FC = () => {
   // Studios the invite unlocks. All selected (default) = full account; a subset confines
   // the redeemed account to those studios and the email marks the rest "coming soon".
   const [invProducts, setInvProducts] = useState<ProductId[]>([...PRODUCT_IDS]);
-  const [invResult, setInvResult] = useState<{ code: string; inviteUrl: string; products?: string[]; confined?: boolean } | null>(null);
+  const [invResult, setInvResult] = useState<Awaited<ReturnType<typeof adminInviteByEmail>> | null>(null);
   const [copied, setCopied] = useState(false);
 
   const toggleInvProduct = (product: ProductId) =>
     setInvProducts((prev) => (prev.includes(product) ? prev.filter((p) => p !== product) : [...prev, product]));
 
   // Log state
-  const [log, setLog] = useState<EmailLogRow[]>([]);
+  const [log, setLog] = useState<EmailLogRow[] | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
 
   const params = useCallback(
@@ -92,11 +112,12 @@ export const EmailConsole: React.FC = () => {
 
   const refreshLog = useCallback(async () => {
     setLogLoading(true);
+    setLogError(null);
     try {
       const res = await getEmailLog(50);
       setLog(res.items || []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load log');
+      setLogError(e instanceof Error ? e.message : 'Failed to load activity');
     } finally {
       setLogLoading(false);
     }
@@ -122,7 +143,7 @@ export const EmailConsole: React.FC = () => {
     const ok = outcomes.filter((o) => o.ok).length;
     const skipped = outcomes.filter((o) => !o.ok && o.skipped).map((o) => `${o.to}: ${o.skipped}`);
     const failed = outcomes.filter((o) => !o.ok && o.error).map((o) => `${o.to}: ${o.error}`);
-    return [`${ok} sent`, ...(skipped.length ? [`skipped — ${skipped.join(', ')}`] : []), ...(failed.length ? [`failed — ${failed.join(', ')}`] : [])].join(' · ');
+    return [`${ok} accepted by provider`, ...(skipped.length ? [`skipped — ${skipped.join(', ')}`] : []), ...(failed.length ? [`failed — ${failed.join(', ')}`] : [])].join(' · ');
   };
 
   const doTest = async () => {
@@ -131,7 +152,7 @@ export const EmailConsole: React.FC = () => {
     setError(null);
     try {
       const o = await sendTestEmail(template, params());
-      setResult(o.ok ? `Test sent to ${o.to} ✓` : `Test ${o.skipped || o.error} (${o.to})`);
+      setResult(o.ok ? `Provider accepted the test for ${o.to}` : `Test ${o.skipped || o.error} (${o.to})`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Test send failed');
     } finally {
@@ -173,7 +194,7 @@ export const EmailConsole: React.FC = () => {
         expiresInDays: inv.expiresInDays,
         products: invProducts
       });
-      if (r.ok || r.code) setInvResult({ code: r.code, inviteUrl: r.inviteUrl, products: r.products, confined: r.confined });
+      if (r.ok || r.code) setInvResult(r);
       else setError(r.error || r.skipped || 'Invite failed');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invite failed');
@@ -197,19 +218,25 @@ export const EmailConsole: React.FC = () => {
       {/* Usage / config banner */}
       {!configured ? (
         <div className={cn('flex items-center gap-2 rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm', STATUS_SURFACE.attention, 'text-[var(--ds-ink)]')}>
-          <AlertTriangle size={16} className={cn('shrink-0', STATUS_INK.attention)} aria-hidden /> Email isn't configured yet (EMAIL_WORKER_URL / EMAIL_HMAC_SECRET unset). Composing works; sends are skipped. See docs/email/SETUP.md.
+          <AlertTriangle size={16} className={cn('shrink-0', STATUS_INK.attention)} aria-hidden /> Transactional email needs EMAIL_WORKER_URL and EMAIL_HMAC_SECRET. Preview is available.
         </div>
       ) : (
         usage && (
           <div className="flex flex-wrap items-center gap-3 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs font-medium tabular-nums">
             <span>This month: {usage.month}/{usage.maxPerMonth} ({usage.monthPct}%)</span>
             <span>Today: {usage.day}/{usage.maxPerDay}</span>
-            <span className={usage.freeTierRemaining > 0 ? TONE_TEXT.success : TONE_TEXT.danger}>
-              Free tier left: {usage.freeTierRemaining}
-            </span>
+            {usage.maxPerMonth > 0 && <span>Monthly allowance remaining: {Math.max(0, usage.maxPerMonth - usage.month)}</span>}
             {usage.monthPct >= 80 && <span className={TONE_TEXT.danger}>⚠ near monthly cap</span>}
           </div>
         )
+      )}
+
+      {template === 'product-update' && tab === 'compose' && (
+        <p className={cn('text-sm', MUTED)} role="status">
+          {!usage?.broadcast?.enabled ? 'Product-update delivery is off.' : usage.broadcast.configured
+            ? 'Postmark Broadcast is configured. Each send checks the stream, confirmed subscription and suppression status.'
+            : `Product-update configuration needs ${usage.broadcast.missing.join(', ')}.`}
+        </p>
       )}
 
       {error && <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>{error}</div>}
@@ -270,7 +297,7 @@ export const EmailConsole: React.FC = () => {
               <Button variant="outline" onClick={doPreview} disabled={busy === 'preview'}>
                 {busy === 'preview' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Eye size={14} />} Preview
               </Button>
-              <Button variant="outline" onClick={doTest} disabled={busy === 'test'}>
+              <Button variant="outline" onClick={doTest} disabled={busy === 'test' || campaignBlocked}>
                 {busy === 'test' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Send size={14} />} Send test to me
               </Button>
             </div>
@@ -282,7 +309,7 @@ export const EmailConsole: React.FC = () => {
                 onChange={(e) => setRecipients(e.target.value)}
                 placeholder="a@example.com, b@example.com"
               />
-              <Button className="mt-2" onClick={doSend} disabled={busy === 'send' || !recipients.trim()}>
+              <Button className="mt-2" onClick={doSend} disabled={busy === 'send' || !recipients.trim() || campaignBlocked}>
                 {busy === 'send' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Send size={14} />} Send to recipients
               </Button>
             </div>
@@ -306,8 +333,8 @@ export const EmailConsole: React.FC = () => {
       {tab === 'invite' && (
         <div className="max-w-xl space-y-3">
           <div>
-            <label className={labelCls}>Friend's email</label>
-            <input className={inputCls} value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="them@example.com" />
+            <label className={labelCls} htmlFor="email-invite-recipient">Friend's email</label>
+            <input id="email-invite-recipient" className={inputCls} value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="them@example.com" />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -355,8 +382,8 @@ export const EmailConsole: React.FC = () => {
             {busy === 'invite' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Ticket size={14} />} Create &amp; send invite
           </Button>
           {invResult && (
-            <div className={cn('space-y-2 rounded-[var(--ds-radius-panel)] border p-3 text-sm text-[var(--ds-ink)]', STATUS_SURFACE.healthy)}>
-              <div>Invite <strong>{invResult.code}</strong> created &amp; emailed.</div>
+            <div className={cn('space-y-2 rounded-[var(--ds-radius-panel)] border p-3 text-sm text-[var(--ds-ink)]', invResult.ok ? STATUS_SURFACE.healthy : STATUS_SURFACE.attention)} role="status">
+              <div>Invite <strong>{invResult.code}</strong> created. {invResult.ok ? 'Email accepted by provider.' : `Email delivery was not confirmed (${invResult.skipped || invResult.error || 'unknown result'}).`}</div>
               {invResult.products && (
                 <div className={cn('text-xs', MUTED)}>
                   {invResult.confined
@@ -380,40 +407,45 @@ export const EmailConsole: React.FC = () => {
           <Button variant="outline" onClick={refreshLog} disabled={logLoading}>
             {logLoading ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <RefreshCw size={14} />} Refresh
           </Button>
-          <div className="overflow-x-auto rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[var(--ds-well)] font-semibold text-[var(--ds-muted)]">
-                <tr>
-                  <th className="px-2 py-1">When</th>
-                  <th className="px-2 py-1">To</th>
-                  <th className="px-2 py-1">Template</th>
-                  <th className="px-2 py-1">Status</th>
-                  <th className="px-2 py-1">Opened</th>
-                </tr>
-              </thead>
-              <tbody>
-                {log.map((r) => (
-                  <tr key={r.id} className="border-t border-[var(--ds-hairline-soft)]">
-                    <td className="px-2 py-1 whitespace-nowrap">{new Date(r.created_at).toLocaleString()}</td>
-                    <td className="px-2 py-1 font-mono">{r.to_email}</td>
-                    <td className="px-2 py-1">{r.template}</td>
-                    <td className="px-2 py-1">
-                      <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[statusTone(r.status)])}>{r.status}</span>
-                      {r.error && <span className={cn('ml-1', TONE_TEXT.danger)} title={r.error}>!</span>}
-                    </td>
-                    <td className="px-2 py-1">{r.opened_at ? '✓' : '—'}</td>
-                  </tr>
-                ))}
-                {!log.length && (
+          <p className={cn('text-sm', MUTED)}>
+            Provider acceptance records the handoff to the sending service. Inbox delivery is unverified.
+            Mail apps can load tracking images automatically. Acknowledgement records a submitted confirmation from the email link.
+          </p>
+          {logError && <p role="alert" className={cn('text-sm', TONE_TEXT.danger)}>{logError}</p>}
+          <p role="status" className="text-sm">
+            {logLoading ? 'Loading email activity…' : log?.length
+              ? activityTotals(log)
+              : log && !logError ? 'No email activity yet.' : ''}
+          </p>
+          {Boolean(log?.length) && (
+            <div role="region" aria-label="Message activity details" tabIndex={0} className="overflow-x-auto rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
+              <table className="w-full text-left text-xs">
+                <caption className="sr-only">Recent email requests and the first recorded receipt events. Times are local.</caption>
+                <thead className="bg-[var(--ds-well)] font-semibold text-[var(--ds-muted)]">
                   <tr>
-                    <td colSpan={5} className={cn('px-2 py-4 text-center', MUTED)}>
-                      No email activity yet.
-                    </td>
+                    {['Requested', 'To', 'Template', 'Send status', 'First image request', 'Acknowledged via link'].map(label => (
+                      <th key={label} scope="col" className="px-2 py-2">{label}</th>
+                    ))}
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {log?.map((r) => (
+                    <tr key={r.id} className="border-t border-[var(--ds-hairline-soft)]">
+                      <td className="px-2 py-2 whitespace-nowrap"><ReceiptTime timestamp={r.created_at} /></td>
+                      <td className="px-2 py-2 font-mono">{r.to_email}</td>
+                      <td className="px-2 py-2">{r.template}</td>
+                      <td className="px-2 py-2">
+                        <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[statusTone(r.status)])}>{statusLabel[r.status] || r.status}</span>
+                        {r.error && <details className="mt-1"><summary className="cursor-pointer">Details</summary>{r.error}</details>}
+                      </td>
+                      <td className="px-2 py-2"><ReceiptTime timestamp={r.opened_at} /></td>
+                      <td className="px-2 py-2"><ReceiptTime timestamp={r.acknowledged_at} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

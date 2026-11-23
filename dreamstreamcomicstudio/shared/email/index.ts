@@ -8,6 +8,7 @@ export {
   isEmailTemplateName,
   isMarketing,
   EMAIL_TEMPLATE_NAMES,
+  RECEIPT_TEMPLATES,
   TEMPLATE_KIND,
   SENDER_ROLE,
   senderRoleFor,

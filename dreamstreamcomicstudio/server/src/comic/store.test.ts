@@ -438,6 +438,20 @@ describe('createSupabaseDocStore', () => {
     });
   });
 
+  it('claims a planning revision only once for its owner and never creates a missing document on a failed claim', async () => {
+    const { db, store } = setup();
+    const claim = (userId: string, title: string) => store.save({
+      projectId: PID, userId, expectedRev: 0, doc: docWith({ rev: 1, brief: { title, notes: [] } }), summary: { title }
+    });
+    await expect(claim(USER, 'Missing')).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.tables.comic_docs).toHaveLength(0);
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    await expect(claim(OTHER, 'Other owner')).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(claim(USER, 'First')).resolves.toBeUndefined();
+    await expect(claim(USER, 'Replay')).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.tables.comic_docs[0]).toMatchObject({ rev: 1, doc: { brief: { title: 'First' } } });
+  });
+
   // P2-GATE L5 (HIGH reliability): a str()-sanitized field can still carry \u0000 or half an emoji (a pasted
   // PDF script, a clipped brief). Postgres jsonb rejects both, and the bad character stays in the live doc —
   // so before this fix EVERY later save of the project failed and edits were lost on eviction.

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { NewsletterLinkResult, newsletterLinkStatus } from './components/NewsletterLinkResult';
 import { AuthProvider } from './contexts/AuthContext';
 import { initTelemetry } from './services/telemetry';
 import { bootDsSkin } from './services/dsSkin';
@@ -48,13 +49,16 @@ if (backToMain) {
   window.location.replace(backToMain);
 } else {
   const root = ReactDOM.createRoot(rootElement);
+  const emailStatus = newsletterLinkStatus(new URL(window.location.href));
   root.render(
     <React.StrictMode>
-      <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </BrowserRouter>
+      {emailStatus ? <NewsletterLinkResult status={emailStatus} /> : (
+        <BrowserRouter>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </BrowserRouter>
+      )}
     </React.StrictMode>
   );
 }

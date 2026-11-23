@@ -4,6 +4,12 @@ import type { CostCentreReport } from '../../shared/types/costCentre';
 
 const getCostCentre = vi.hoisted(() => vi.fn());
 vi.mock('../../services/adminCosts', () => ({ getCostCentre }));
+vi.mock('../usage/UsageBudgetsPanel', () => ({ UsageBudgetsPanel: () => null }));
+vi.mock('../../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'operator' } }) }));
+vi.mock('../../services/adminProviderBalances', () => ({
+  getPlatformBalances: async () => ({ available: true, balanceReports: [] }),
+  refreshPlatformBalance: vi.fn()
+}));
 
 import { CostCentre } from './CostCentre';
 
@@ -101,6 +107,12 @@ beforeEach(() => {
 });
 
 describe('CostCentre', () => {
+  it('opens the platform provider readings in the cost centre', async () => {
+    getCostCentre.mockResolvedValue(fixture());
+    render(<CostCentre />);
+    fireEvent.click(screen.getByRole('button', { name: 'Platform provider balances and quotas' }));
+    expect(await screen.findByText('No saved platform reading for OpenRouter.')).toBeInTheDocument();
+  });
   it('renders KPI values from the report', async () => {
     getCostCentre.mockResolvedValue(fixture());
     render(<CostCentre />);

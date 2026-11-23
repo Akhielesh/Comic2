@@ -8,6 +8,9 @@ import { act, render, screen } from '@testing-library/react';
 const admin = vi.hoisted(() => ({ value: true }));
 vi.mock('../../hooks/useIsAdmin', () => ({ useIsAdmin: () => admin.value }));
 
+vi.mock('../../contexts/AuthContext', () => ({ useAuth: () => ({user: {id:'account'}}) }));
+vi.mock('../../services/accountProviderUsage', () => ({ ownerBearer: async () => 'Bearer account-test' }));
+
 import { ToolsDashboard } from './ToolsDashboard';
 import { CATEGORY_META, TOOL_CATALOG } from '../../toolCatalog';
 
@@ -67,4 +70,14 @@ describe('ToolsDashboard: rollout tools', () => {
     expect(chip(productivity.label).textContent).toContain(`${productivity.label} (${n})`);
     expect(screen.getByText('Live tools').previousElementSibling?.textContent).toBe(String(TOOL_CATALOG.length));
   });
+});
+
+it('only fetches platform usage for admins and sends a bearer without provider credentials',async()=>{
+  admin.value=false;
+  const screen=render(<ToolsDashboard />);
+  expect(fetch).not.toHaveBeenCalled();
+  screen.unmount();
+  admin.value=true;
+  await renderDashboard();
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/usage/providers'),expect.objectContaining({headers:{Authorization:'Bearer account-test'}}));
 });

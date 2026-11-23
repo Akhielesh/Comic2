@@ -72,3 +72,45 @@ measurement limits, privacy and release verification, and
    that route. Unsupported sources and unavailable access remain explicit errors.
    Model-specific entitlement and successful generation require a real request;
    saving a key alone does not verify either.
+
+## Account provider activity and balance history
+
+The member dashboard reads the signed-in member’s current UTC calendar month from
+`GET /api/usage/account-providers`. It counts settled model operations and observed
+unreserved helper calls, plus metered connector requests, failures and budget
+refusals. Reservations, cancellations, and matching ledger duplicates are excluded.
+Provider-reported personal-key costs and estimates have separate totals. A missing
+cost remains unknown. Connector errors are included in admitted calls, while a
+budget refusal occurs before the upstream request. Connector persistence can lag
+a running instance by about a minute. Activity outside DreamStream is visible
+only when a provider reports an account balance or quota that includes it.
+
+`POST /api/keys/balance` uses the selected personal key or the authenticated member’s
+saved key. The dashboard can revalidate a supported saved key in the background
+after 15 minutes, coalescing concurrent reads and backing off for two minutes
+after a failure. An allowed-sources header can disable these background checks.
+A dashboard visit reads saved results first. Timestamps identify the actual
+observation. Unsupported providers use their own dashboard for balance checks.
+
+The operator Cost Centre uses `GET /api/admin/provider-balances` and
+`POST /api/admin/provider-balances/:provider`. Both require the admin role.
+Its reports use the current platform credential. The runtime guardrails already
+available in the Cost Centre reflect DreamStream’s configured limits.
+
+### Database setup and verification
+
+Apply `server/sql/account_provider_analytics.sql` after `token_billing_foundation.sql`,
+`provider_usage_log.sql`, and account-key storage. The migration reads historical
+ledgers in place. Each successful provider observation retains the latest reported
+values for that UTC day and credential. An HMAC binds readings to the owner,
+provider and exact credential. Key rotation makes previous observations ineligible
+for display on the new credential. Removing an account connection deletes the
+provider’s stored observations; account deletion cascades. The service role owns
+data access, and direct member and anonymous API roles have no table or routine
+privileges. No generation, wallet movement, or historical balance backfill runs
+when applying the migration.
+
+Use `node server/sql/tests/harness.mjs account_provider_analytics.test.sql` against
+a disposable local PostgreSQL installation to verify isolation, deduplication,
+out-of-order updates, and removal. Reverting the API release leaves the additive
+analytics tables available for later use.

@@ -11,13 +11,13 @@
 // values with escapeHtml on the HTML side.
 
 import { BrandConfig, COLORS, resolveBrand } from './theme.js';
-import { streamAppHref } from '../streamHost.js';
+import { MAIN_ORIGIN, isStreamUrl, streamAppHref } from '../streamHost.js';
+import { COMICS_ORIGIN, comicsEntryUrl } from '../../services/productHost.js';
 import {
   button,
   codeBadge,
-  divider,
+  comicSample,
   escapeHtml,
-  featureCard,
   heading,
   infoBox,
   linkFallback,
@@ -58,6 +58,10 @@ export type EmailTemplateName =
  * unsubscribable and bypass the marketing suppression list + cost-throttle's marketing rules.
  * Marketing = opt-in updates. These carry a working unsubscribe and honor suppression.
  */
+export const RECEIPT_TEMPLATES: readonly EmailTemplateName[] = [
+  'announcement', 'access-requested', 'beta-invite', 'studio-invite', 'welcome', 'newsletter-welcome'
+];
+
 export type EmailKind = 'essential' | 'marketing';
 
 export const TEMPLATE_KIND: Record<EmailTemplateName, EmailKind> = {
@@ -135,11 +139,11 @@ type Renderer = (params: EmailParams, brand: BrandConfig) => TemplateOutput;
 
 const greetName = (params: EmailParams): string => {
   const name = (params.firstName || params.name || '').trim();
-  return name ? `Hey ${escapeHtml(name)},` : 'Hey there,';
+  return name ? `Hello ${escapeHtml(name)},` : 'Hello,';
 };
 const greetNameText = (params: EmailParams): string => {
   const name = (params.firstName || params.name || '').trim();
-  return name ? `Hey ${name},` : 'Hey there,';
+  return name ? `Hello ${name},` : 'Hello,';
 };
 
 /**
@@ -155,462 +159,186 @@ const textToParagraphs = (text: string): string =>
     .map((block) => paragraph(escapeHtml(block).replace(/\n/g, '<br/>')))
     .join('');
 
-// ── Newsletter: double opt-in confirmation ──────────────────────────────────────
+// The same copy and destination are used for the HTML and plain-text versions.
 const newsletterConfirm: Renderer = (params, brand) => {
-  const url = params.confirmUrl || brand.appUrl;
+  const url = params.confirmUrl && safeUrl(params.confirmUrl) !== '#' ? params.confirmUrl : undefined;
+  const intro = `Someone requested ${brand.productName} updates for this address. Confirm below if you would like to subscribe.`;
+  const ignore = 'If you didn’t request updates, you can leave this message unanswered. Your subscription requires confirmation.';
+  const missing = 'The confirmation link is missing. Submit the subscription form again to request a new one.';
   return {
     subject: `Confirm your subscription to ${brand.productName}`,
-    preheader: 'Confirm your email to start getting updates.',
-    content:
-      heading('One click to confirm') +
-      paragraph(`${greetName(params)} thanks for signing up for ${escapeHtml(brand.productName)} updates! 🎉`) +
-      paragraph('We just need to make sure this inbox is really yours. Tap the button to lock in your spot.') +
-      button('Confirm subscription', url, 'yellow') +
-      linkFallback(url) +
-      muted("If you didn't sign up, no worries — just ignore this email and you won't hear from us again."),
-    text: [
-      greetNameText(params),
-      '',
-      `Thanks for signing up for ${brand.productName} updates!`,
-      '',
-      'Confirm your subscription by opening this link:',
-      url,
-      '',
-      "If you didn't sign up, you can safely ignore this email."
-    ].join('\n')
+    preheader: 'One step remains before you can receive product updates.',
+    content: heading('Confirm your subscription') + paragraph(greetName(params)) + paragraph(escapeHtml(intro)) +
+      (url ? button('Confirm subscription', url) + linkFallback(url) : paragraph(missing)) + muted(ignore),
+    text: [greetNameText(params), intro, url ? `Confirm subscription: ${url}` : missing, ignore].join('\n\n')
   };
 };
 
-// ── Newsletter: welcome after confirmation ──────────────────────────────────────
-const newsletterWelcome: Renderer = (params, brand) => ({
-  subject: `You're in — welcome to ${brand.productName}`,
-  preheader: "Your subscription is confirmed — here's what's next.",
-  content:
-    heading("You're on the list! 🚀") +
-    paragraph(`${greetName(params)} your subscription is confirmed.`) +
-    paragraph(
-      `Expect occasional dispatches on new comic styles, AI models, and features landing in ${escapeHtml(
-        brand.productName
-      )}. No spam — just the good stuff.`
-    ) +
-    button('Jump into the studio', brand.appUrl, 'blue'),
-  text: [
-    greetNameText(params),
-    '',
-    `Your subscription to ${brand.productName} is confirmed. Welcome aboard!`,
-    '',
-    `Open the studio: ${brand.appUrl}`
-  ].join('\n')
-});
+const newsletterWelcome: Renderer = (params, brand) => {
+  const intro = `Your subscription to ${brand.productName} product updates is confirmed.`;
+  return {
+    subject: `Subscription confirmed — ${brand.productName}`,
+    preheader: 'You are subscribed to product updates.',
+    content: heading('Subscription confirmed') + paragraph(greetName(params)) + paragraph(escapeHtml(intro)) +
+      button('Visit the studio', brand.appUrl),
+    text: [greetNameText(params), intro, `Visit the studio: ${brand.appUrl}`].join('\n\n')
+  };
+};
 
-// ── Product update (marketing broadcast) ────────────────────────────────────────
 const productUpdate: Renderer = (params, brand) => {
-  const title = params.title || `What's new in ${brand.productName}`;
-  const bodyHtml = params.bodyHtml || paragraph(escapeHtml(params.body || 'We shipped some new things we think you’ll like.'));
+  const title = params.title || `Product update from ${brand.productName}`;
+  const body = params.body || (params.bodyHtml ? htmlToText(params.bodyHtml) : `The latest product news is available at ${brand.productName}.`);
   const cta = params.ctaUrl || brand.appUrl;
-  const ctaLabel = params.ctaLabel || 'See what’s new';
+  const label = params.ctaLabel || 'Read the update';
   return {
     subject: params.subject || title,
     preheader: params.preheader || title,
-    content: heading(title) + paragraph(`${greetName(params)}`) + bodyHtml + button(ctaLabel, cta, 'yellow'),
-    text: [greetNameText(params), '', params.body || 'We shipped some new things.', '', `${ctaLabel}: ${cta}`].join('\n')
+    content: heading(title) + (params.bodyHtml || textToParagraphs(body)) + button(label, cta),
+    text: [title, body, `${label}: ${cta}`].join('\n\n')
   };
 };
 
-// ── Announcement / custom notice (admin "structured composer") ──────────────────
 const announcement: Renderer = (params, brand) => {
-  const head = params.heading || 'An update from ' + brand.productName;
-  const bodyHtml = params.body ? textToParagraphs(params.body) : '';
-  const cta = params.ctaUrl && params.ctaLabel ? button(params.ctaLabel, params.ctaUrl, 'yellow') : '';
-  const greeting = params.firstName ? paragraph(greetName(params)) : '';
+  const title = params.heading || `A notice from ${brand.productName}`;
+  const cta = params.ctaUrl && params.ctaLabel;
   return {
-    subject: params.subject || head,
-    preheader: params.preheader || head,
-    content: heading(head) + greeting + bodyHtml + cta,
-    text: [
-      params.firstName ? greetNameText(params) + '\n' : '',
-      params.body || '',
-      params.ctaUrl && params.ctaLabel ? `\n${params.ctaLabel}: ${params.ctaUrl}` : ''
-    ]
-      .filter(Boolean)
-      .join('\n')
+    subject: params.subject || title,
+    preheader: params.preheader || title,
+    content: heading(title) + (params.firstName ? paragraph(greetName(params)) : '') +
+      textToParagraphs(params.body || '') + (cta ? button(cta, params.ctaUrl!) + linkFallback(params.ctaUrl!) : ''),
+    text: [title, params.firstName ? greetNameText(params) : '', params.body, cta ? `${cta}: ${params.ctaUrl}` : ''].filter(Boolean).join('\n\n')
   };
 };
 
-// ── Beta invite / referral (one-to-one, sent by an admin or a user) ─────────────
-// When `params.studios` carries product ids (comma-separated), the email names exactly
-// those studios, walks their feature cards, and lists the rest as "coming soon" — so the
-// inbox matches what the invite actually unlocks. Without `studios` (referrals, legacy
-// callers) the original generic copy renders unchanged.
+export type StudioInviteId = 'stream_studio' | 'comic_studio' | 'chat_studio';
+
+const STUDIO_INVITES = {
+  stream_studio: { name: 'Stream Studio', path: '/live.html', description: 'Host a live broadcast, manage the room and share the viewing link.' },
+  comic_studio: { name: 'Comic Studio', path: '/', description: 'Start with a story, review your page plan and edit the artwork and lettering before sharing.' },
+  chat_studio: { name: 'Chat Studio', path: '/', description: 'Start a conversation, choose an available model and return to your saved chats.' }
+} as const;
+
+export const isStudioInviteId = (value: unknown): value is StudioInviteId =>
+  typeof value === 'string' && Object.prototype.hasOwnProperty.call(STUDIO_INVITES, value);
+export const STUDIO_INVITE_IDS = ['stream_studio', 'comic_studio', 'chat_studio'] as const satisfies readonly StudioInviteId[];
+
+export const parseStudioIds = (value: string | undefined): StudioInviteId[] =>
+  [...new Set(String(value || '').split(/[\s,;]+/).filter(isStudioInviteId))];
+
 const joinNames = (names: string[]): string =>
   names.length <= 1 ? names[0] || '' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 const betaInvite: Renderer = (params, brand) => {
-  const url = params.inviteUrl || brand.appUrl;
-  const inviter = (params.inviterName || '').trim();
   const chosen = parseStudioIds(params.studios);
-  const comingSoon = chosen.length ? STUDIO_INVITE_IDS.filter((id) => !chosen.includes(id)) : [];
-  const chosenNames = joinNames(chosen.map((id) => STUDIO_INVITES[id].name));
-
-  const note = params.personalNote
-    ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
-    : '';
-  const codeLine = params.code
-    ? muted(`Or enter this invite code at sign-up: <strong>${escapeHtml(params.code)}</strong>`)
-    : '';
-  const codeText = params.code ? `Invite code: ${params.code}` : '';
-
-  if (chosen.length === 0) {
-    const intro = inviter
-      ? `${escapeHtml(inviter)} thinks you'd love ${escapeHtml(brand.productName)} and invited you to the beta.`
-      : `You've been invited to the ${escapeHtml(brand.productName)} beta.`;
-    return {
-      subject: inviter ? `${inviter} invited you to ${brand.productName}` : `You're invited to the ${brand.productName} beta`,
-      preheader: 'Your beta invite is inside — claim your spot.',
-      content:
-        heading("You're invited! 🎟️") +
-        paragraph(intro) +
-        note +
-        paragraph('Turn scripts into cinematic comics, build with 100+ AI models in Chat, and more. Tap below to claim your spot.') +
-        button('Accept your invite', url, 'yellow') +
-        linkFallback(url) +
-        codeLine,
-      text: [
-        intro,
-        params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
-        `\nAccept your invite: ${url}`,
-        codeText
-      ]
-        .filter(Boolean)
-        .join('\n')
-    };
-  }
-
-  const intro = inviter
-    ? `${escapeHtml(inviter)} invited you to <strong>${escapeHtml(chosenNames)}</strong> on ${escapeHtml(brand.productName)}.`
-    : `You've been invited to <strong>${escapeHtml(chosenNames)}</strong> on ${escapeHtml(brand.productName)}.`;
-  const studioSections = chosen
-    .map((id) => {
-      const s = STUDIO_INVITES[id];
-      return (
-        divider() +
-        paragraph(`<strong style="font-size:18px;">${s.emoji} ${escapeHtml(s.name)}</strong>`) +
-        paragraph(escapeHtml(s.pitch)) +
-        s.features.map(([emoji, title, desc]) => featureCard(emoji, title, desc)).join('')
-      );
-    })
-    .join('');
-  const comingSoonBox = comingSoon.length
-    ? divider() +
-      infoBox(
-        `<strong>Coming soon to your account</strong><br/>` +
-          comingSoon
-            .map((id) => {
-              const s = STUDIO_INVITES[id];
-              return `${s.emoji} <strong>${escapeHtml(s.name)}</strong> — ${escapeHtml(s.descriptor)} · <em>coming soon</em>`;
-            })
-            .join('<br/>')
-      ) +
-      muted(`Your invite covers ${escapeHtml(chosenNames)} today — we'll email you the moment the rest opens up for you.`)
-    : '';
-  const introText = inviter
-    ? `${inviter} invited you to ${chosenNames} on ${brand.productName}.`
-    : `You've been invited to ${chosenNames} on ${brand.productName}.`;
-
+  const studios = joinNames(chosen.map(id => STUDIO_INVITES[id].name));
+  const target = studios || `the ${brand.productName} beta`;
+  const inviter = params.inviterName?.trim();
+  const intro = inviter ? `${inviter} invited you to ${target}.` : `You have been invited to ${target}.`;
+  const url = params.inviteUrl || (params.code ? `${brand.appUrl.replace(/\/+$/, '')}/?invite=${encodeURIComponent(params.code)}` : undefined);
+  const next = 'Open the invitation, then sign in to your existing account or create an account to claim access.';
+  const recovery = 'If the invitation has expired or the link is missing, ask the sender for a new invitation.';
+  const code = params.code ? `Invitation code: ${params.code}` : '';
+  const note = params.personalNote?.trim();
   return {
-    subject: inviter
-      ? `${inviter} invited you to ${chosenNames} — ${brand.productName}`
-      : `You're invited to ${chosenNames} — ${brand.productName}`,
-    preheader: `Your invite unlocks ${chosenNames} — claim your spot.`,
-    content:
-      heading("You're invited! 🎟️") +
-      paragraph(intro) +
-      note +
-      paragraph(`Here's what your invite unlocks — tap below to claim your spot.`) +
-      button('Accept your invite', url, 'yellow') +
-      linkFallback(url) +
-      codeLine +
-      studioSections +
-      comingSoonBox,
-    text: [
-      introText,
-      params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
-      `\nAccept your invite: ${url}`,
-      codeText,
-      ...chosen.flatMap((id) => {
-        const s = STUDIO_INVITES[id];
-        return ['', `${s.name} — ${s.pitch}`, ...s.textFeatures];
-      }),
-      ...(comingSoon.length
-        ? ['', 'Coming soon to your account:', ...comingSoon.map((id) => `- ${STUDIO_INVITES[id].name} — ${STUDIO_INVITES[id].descriptor} (coming soon)`)]
-        : [])
-    ]
-      .filter(Boolean)
-      .join('\n')
+    subject: inviter ? `${inviter} invited you to ${studios || brand.productName}${studios ? ` — ${brand.productName}` : ''}` : `You're invited to ${target}${studios ? ` — ${brand.productName}` : ''}`,
+    preheader: 'Use your invitation to claim access.',
+    content: heading('Your beta invitation') + paragraph(escapeHtml(intro)) + (note ? infoBox(escapeHtml(note)) : '') +
+      (url ? paragraph(next) + button('Accept invitation', url) + linkFallback(url) : '') +
+      (code ? muted(escapeHtml(code)) : '') +
+      chosen.map(id => paragraph(`<strong>${STUDIO_INVITES[id].name}</strong><br/>${STUDIO_INVITES[id].description}`)).join('') + muted(recovery),
+    text: [intro, note, url ? next : '', url ? `Accept invitation: ${url}` : '', code,
+      ...chosen.map(id => `${STUDIO_INVITES[id].name}: ${STUDIO_INVITES[id].description}`), recovery].filter(Boolean).join('\n\n')
   };
 };
 
-// ── Studio invite: onboarding to a standalone studio ───────────────────────────
-// "User X invited you to DreamStream Studio's Stream Studio" — feature tour,
-// one CTA, and a stay-tuned note for the other studios coming to the account.
-// The caller passes `studio` (a product id) to pick the studio's feature set and
-// deep link; omitted/unknown ids fall back to Stream Studio (the original behavior).
-
-export type StudioInviteId = 'stream_studio' | 'comic_studio' | 'chat_studio';
-
-interface StudioInviteContent {
-  /** Display name (overridable via params.studioName). */
-  name: string;
-  /** "— DreamStream Studio's {descriptor}." in the intro line. */
-  descriptor: string;
-  /** Inbox preheader + the one-line pitch paragraph above the feature cards. */
-  preheader: string;
-  pitch: string;
-  /** Path appended to brand.appUrl when no inviteUrl is supplied. */
-  path: string;
-  /** Heading emoji. */
-  emoji: string;
-  /** Exactly four feature cards: [emoji, title, description]. */
-  features: Array<[string, string, string]>;
-  /** Plain-text bullets mirroring the cards. */
-  textFeatures: string[];
-  /** The other studios named in the stay-tuned footer. */
-  othersComing: string;
-}
-
-const STUDIO_INVITES: Record<StudioInviteId, StudioInviteContent> = {
-  stream_studio: {
-    name: 'Stream Studio',
-    descriptor: 'live streaming studio',
-    preheader: 'Go live from your browser in under a minute — viewers join with just a name.',
-    pitch: 'Go live from your browser in under a minute. Your viewers join with just a name — no account, no installs.',
-    path: '/live.html',
-    emoji: '🎬',
-    features: [
-      ['🎥', 'Go live from any device', 'Camera or screen + cam with seamless scene cuts, native lens switching, and portrait-perfect mobile hosting.'],
-      ['💬', 'A room that runs itself', 'Live chat with a big reaction library, approval lobby, automatic profanity/spam timeouts, and hard viewer caps you control.'],
-      ['📼', 'Never lose a stream', 'Recordings save to your device AND a 7-day cloud store; viewers can replay any stream for 24 hours from the same link.'],
-      ['📊', 'Honest analytics', 'Peak and unique viewers, watch-time curves, network health and a full activity log after every stream.']
-    ],
-    textFeatures: [
-      '- Go live from any device: camera or screen + cam, seamless scene cuts, mobile hosting',
-      '- A room that runs itself: chat, reactions, approval lobby, auto-moderation, viewer caps',
-      '- Never lose a stream: device + 7-day cloud recordings, 24-hour viewer replay',
-      '- Honest analytics: watch curves, network health, full activity log'
-    ],
-    othersComing: 'Comic Studio and Chat Studio'
-  },
-  comic_studio: {
-    name: 'Comic Studio',
-    descriptor: 'AI comic creation studio',
-    preheader: 'Turn a script into a finished, styled comic — right from your browser.',
-    pitch: 'Turn a script into a finished comic in minutes. Write, generate, polish and publish — all from one studio.',
-    path: '/',
-    emoji: '🎨',
-    features: [
-      ['📝', 'Script to panels', 'Paste a script — even a paragraph — and watch it become cinematic, fully-styled panels with characters that stay consistent.'],
-      ['🧠', 'A model library to explore', 'Generate with a deep bench of AI image models and styles; compare looks and pick the one that fits your story.'],
-      ['🎨', 'A real page editor', 'Tune layouts, speech bubbles and covers, then regenerate any panel until the page lands exactly right.'],
-      ['📚', 'Share it anywhere', 'Publish to the public library or share a private link — readers open it on any device, no installs.']
-    ],
-    textFeatures: [
-      '- Script to panels: a paragraph becomes styled, consistent comic panels',
-      '- A model library to explore: a deep bench of AI image models and styles',
-      '- A real page editor: layouts, bubbles, covers — regenerate until it lands',
-      '- Share it anywhere: public library or private link, readable on any device'
-    ],
-    othersComing: 'Stream Studio and Chat Studio'
-  },
-  chat_studio: {
-    name: 'Chat Studio',
-    descriptor: 'AI chat workspace',
-    preheader: 'Chat with 100+ models — rich widgets, dashboards and cloud sync built in.',
-    pitch: 'One workspace for serious AI chat. Ask anything and get rich, interactive answers — not just walls of text.',
-    path: '/',
-    emoji: '💬',
-    features: [
-      ['🧩', 'Rich answers, not walls of text', 'Charts, maps, finance, news and interactive widgets render right inside the conversation.'],
-      ['🧠', 'Any model, your way', 'Chat with Claude, Gemini and 100+ more — use the built-in tier or bring your own key for any provider.'],
-      ['📊', 'Dashboards that stay live', 'Pin your favorite widgets into custom dashboards and watch them update in place.'],
-      ['☁️', 'Synced to your account', 'Conversations, keys and settings follow you across devices with secure cloud sync.']
-    ],
-    textFeatures: [
-      '- Rich answers: charts, maps, finance, news and widgets inside the chat',
-      '- Any model, your way: Claude, Gemini & 100+ more, built-in tier or BYOK',
-      '- Dashboards that stay live: pin widgets and watch them update in place',
-      '- Synced to your account: conversations, keys and settings on every device'
-    ],
-    othersComing: 'Stream Studio and Comic Studio'
+/** Only the production suite front page maps to Comic Studio. Preserve invite tokens and preview hosts. */
+const comicEntry = (address: string): string => {
+  try {
+    const url = new URL(address);
+    if (url.pathname === '/' && !url.search && !url.hash) return comicsEntryUrl(url.hostname) || address;
+  } catch {
+    // The layout handles invalid destinations.
   }
+  return address;
 };
 
-export const isStudioInviteId = (value: unknown): value is StudioInviteId =>
-  typeof value === 'string' && Object.prototype.hasOwnProperty.call(STUDIO_INVITES, value);
-
-/** Every studio id, in display order — the universe the invite email partitions into "included" vs "coming soon". */
-export const STUDIO_INVITE_IDS = ['stream_studio', 'comic_studio', 'chat_studio'] as const satisfies readonly StudioInviteId[];
-
-/** Parse a comma/space-separated studios param into known ids (deduped, order preserved). */
-export const parseStudioIds = (value: string | undefined): StudioInviteId[] => {
-  const seen: StudioInviteId[] = [];
-  for (const part of String(value || '').split(/[\s,;]+/)) {
-    if (isStudioInviteId(part) && !seen.includes(part)) seen.push(part);
+const comicPage = (appUrl: string, path: string): string => {
+  try {
+    const base = new URL(comicEntry(appUrl));
+    if (base.protocol === 'https:' || base.protocol === 'http:') return new URL(path, base).href;
+  } catch {
+    // Fall back to the canonical product when the configured origin is unavailable.
   }
-  return seen;
+  return new URL(path, COMICS_ORIGIN).href;
 };
 
+// The admin sends this after granting a studio to an existing account.
 const studioInvite: Renderer = (params, brand) => {
-  const content = STUDIO_INVITES[isStudioInviteId(params.studio) ? params.studio : 'stream_studio'];
-  const studio = (params.studioName || content.name).trim();
-  // Deep link per studio: Stream Studio's address (shared/streamHost.ts — /live.html, or its own
-  // host once switched on); the suite studios open the app root.
-  const url =
-    params.inviteUrl ||
-    (content.path === '/' ? brand.appUrl : streamAppHref(`${brand.appUrl.replace(/\/+$/, '')}${content.path}`));
-  const inviter = (params.inviterName || '').trim();
-  const intro = inviter
-    ? `${escapeHtml(inviter)} has invited you to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(
-        brand.productName
-      )}'s ${escapeHtml(content.descriptor)}.`
-    : `You've been invited to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(brand.productName)}'s ${escapeHtml(content.descriptor)}.`;
-  const note = params.personalNote
-    ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
-    : '';
+  const studio = STUDIO_INVITES[isStudioInviteId(params.studio) ? params.studio : 'stream_studio'];
+  const name = params.studioName?.trim() || studio.name;
+  const destination = params.inviteUrl || (studio.path === '/' ? brand.appUrl : streamAppHref(`${brand.appUrl.replace(/\/+$/, '')}${studio.path}`));
+  const url = params.studio === 'comic_studio' ? comicEntry(destination) : destination;
+  const intro = `Your account now has access to ${name}. Sign in with the account that received this message.`;
+  const note = params.personalNote?.trim();
+  const label = `Open ${name}`;
   return {
-    subject: inviter ? `${inviter} invited you to ${studio} — ${brand.productName}` : `You're invited to ${studio}`,
-    preheader: content.preheader,
-    content:
-      heading(`You're invited to ${escapeHtml(studio)} ${content.emoji}`) +
-      paragraph(`${greetName(params)} ${intro}`) +
-      note +
-      paragraph(escapeHtml(content.pitch)) +
-      content.features.map(([emoji, title, desc]) => featureCard(emoji, title, desc)).join('') +
-      button(`Open ${studio}`, url, 'yellow') +
-      linkFallback(url) +
-      divider() +
-      muted(
-        `${escapeHtml(studio)} is the first standalone studio on your ${escapeHtml(
-          brand.productName
-        )} account — ${escapeHtml(content.othersComing)} access are on the way. Stay tuned, you'll be among the first in.`
-      ),
-    text: [
-      greetNameText(params),
-      '',
-      inviter
-        ? `${inviter} has invited you to ${studio} — ${brand.productName}'s ${content.descriptor}.`
-        : `You've been invited to ${studio} — ${brand.productName}'s ${content.descriptor}.`,
-      params.personalNote ? `
-"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
-      '',
-      content.pitch,
-      '',
-      ...content.textFeatures,
-      '',
-      `Open ${studio}: ${url}`,
-      '',
-      `${studio} is the first standalone studio on your account — ${content.othersComing} are on the way. Stay tuned.`
-    ]
-      .filter(Boolean)
-      .join('\n')
+    subject: params.inviterName ? `${params.inviterName} invited you to ${name} — ${brand.productName}` : `You're invited to ${name}`,
+    preheader: `${name} is ready to use with your existing account.`,
+    content: heading(`Access to ${name}`) + paragraph(greetName(params)) + paragraph(escapeHtml(intro)) +
+      (note ? infoBox(escapeHtml(note)) : '') + button(label, url) + linkFallback(url) + paragraph(studio.description),
+    text: [greetNameText(params), intro, note, `${label}: ${url}`, studio.description].filter(Boolean).join('\n\n')
   };
 };
 
-// ── Early access request received ───────────────────────────────────────────────
-const accessRequested: Renderer = (params, brand) => ({
-  subject: `We got your access request — ${brand.productName}`,
-  preheader: "You're in the early-access queue.",
-  content:
-    heading('Request received ✅') +
-    paragraph(`${greetName(params)} thanks for requesting early access to ${escapeHtml(brand.productName)}.`) +
-    paragraph(
-      'New access is invite-only right now while we scale up. You’re in the queue, and we’ll email you the moment a spot opens.'
-    ) +
-    infoBox('In the meantime, keep an eye on this inbox — your invite will arrive right here.') +
-    muted('Didn’t request access? You can ignore this email.'),
-  text: [
-    greetNameText(params),
-    '',
-    `Thanks for requesting early access to ${brand.productName}.`,
-    'Access is invite-only right now. You’re in the queue and we’ll email you when a spot opens.'
-  ].join('\n')
-});
+const accessRequested: Renderer = (params, brand) => {
+  const receipt = 'We recorded your interest in Comic Studio. Choose Sign up on the Comic Studio home page when you’re ready to create your account.';
+  const returning = 'Already a member?';
+  const memberLink = comicPage(brand.appUrl, '/?view=dashboard');
+  return {
+    subject: 'Comic Studio interest registration received',
+    preheader: 'Your interest is recorded. No further action is required.',
+    content: heading('Your interest is recorded') + paragraph(greetName(params)) + paragraph(receipt) +
+      paragraph(`${returning} <a class="ds-link" href="${escapeHtml(memberLink)}" style="color:${COLORS.ink};text-decoration:underline;">Sign in to open your comics</a>.`) +
+      muted('If you didn’t submit this request, no action is required.'),
+    text: [greetNameText(params), receipt, `${returning} Sign in to open your comics: ${memberLink}`, 'If you didn’t submit this request, no action is required.'].join('\n\n')
+  };
+};
 
-// ── Post-signup welcome (the fuller, feature-rich onboarding email) ─────────────
 const welcome: Renderer = (params, brand) => {
   const cta = params.ctaUrl || brand.appUrl;
-  const features =
-    featureCard('🎬', 'Comic Studio', 'Turn a script into a cinematic, fully-styled comic — pick a style, generate panels, export.') +
-    featureCard('💬', 'AI Chat', 'Build, brainstorm and research with 100+ models. Bring your own key or use the free tier.') +
-    featureCard('🧩', 'Rich tools', 'Live charts, maps, finance, news and more render right inside chat.');
+  const intro = 'Your account is ready. Sign in to see the studios available to you.';
   return {
-    subject: `Welcome to ${brand.productName} — let's make something 🎬`,
-    preheader: 'Your account is ready. Here’s everything you can do.',
-    content:
-      heading(`Welcome aboard, ${params.firstName || 'creator'}! 🎉`) +
-      paragraph(
-        `You're in. ${escapeHtml(
-          brand.productName
-        )} is one studio with three superpowers — here's the quick tour.`
-      ) +
-      button('Open the studio', cta, 'yellow') +
-      divider() +
-      features +
-      divider() +
-      infoBox(
-        '<strong>Pro tip:</strong> start in Comic Studio with a short script — even a paragraph. You’ll have styled panels in a couple of minutes.'
-      ) +
-      paragraph('Got stuck or have an idea? Just reply — a real human reads every message. 💛'),
-    text: [
-      greetNameText(params),
-      '',
-      `Welcome to ${brand.productName}! One studio, three superpowers:`,
-      '• Comic Studio — scripts into cinematic comics',
-      '• AI Chat — build with 100+ models',
-      '• Rich tools — charts, maps, finance, news in chat',
-      '',
-      `Open the studio: ${cta}`,
-      '',
-      'Pro tip: start in Comic Studio with a short script — styled panels in minutes.',
-      'Questions or ideas? Just reply — a real human reads every message.'
-    ].join('\n')
+    subject: `Welcome to ${brand.productName}`,
+    preheader: 'Sign in and open your workspace.',
+    content: heading(`Welcome to ${brand.productName}`) + paragraph(greetName(params)) + paragraph(intro) +
+      button('Open your workspace', cta) + linkFallback(cta) + muted(`For help getting started, contact ${escapeHtml(brand.supportEmail)}.`),
+    text: [greetNameText(params), intro, `Open your workspace: ${cta}`, `For help getting started, contact ${brand.supportEmail}.`].join('\n\n')
   };
 };
 
-// ── New sign-in security alert ──────────────────────────────────────────────────
+/** Account security lives in the suite. The standalone Stream host opens the main account page. */
+const securitySettingsUrl = (brand: BrandConfig): string => {
+  const base = isStreamUrl(brand.appUrl) ? MAIN_ORIGIN : brand.appUrl;
+  try {
+    return new URL('/?view=settings&tab=security', base).href;
+  } catch {
+    return `${MAIN_ORIGIN}/?view=settings&tab=security`;
+  }
+};
+
 const signinAlert: Renderer = (params, brand) => {
-  const when = params.time || 'just now';
-  const device = params.device || 'an unrecognized device';
-  const location = params.location || 'an unknown location';
-  const secureUrl = params.secureUrl || brand.appUrl;
-  const details =
-    `<strong>When:</strong> ${escapeHtml(when)}<br/>` +
-    `<strong>Device:</strong> ${escapeHtml(device)}<br/>` +
-    `<strong>Location:</strong> ${escapeHtml(location)}` +
-    (params.ip ? `<br/><strong>IP:</strong> ${escapeHtml(params.ip)}` : '');
+  const intro = `There was a new sign-in to your ${brand.productName} account.`;
+  const details = [
+    ['Time', params.time], ['Device', params.device], ['Approximate location', params.location], ['IP address', params.ip]
+  ].filter((entry): entry is [string, string] => Boolean(entry[1])).map(([label, value]) => `${label}: ${value}`);
+  const url = params.secureUrl || securitySettingsUrl(brand);
+  const next = 'If you recognize this sign-in, no action is needed. If you don’t, review your account security and change your password.';
   return {
     subject: `New sign-in to your ${brand.productName} account`,
-    preheader: `New sign-in from ${device}.`,
-    content:
-      heading('New sign-in detected') +
-      paragraph(`${greetName(params)} we noticed a new sign-in to your ${escapeHtml(brand.productName)} account.`) +
-      infoBox(details) +
-      paragraph('If this was you, you’re all set — no action needed.') +
-      paragraph('<strong>Didn’t recognize this?</strong> Secure your account right away:') +
-      button('Secure my account', secureUrl, 'blue'),
-    text: [
-      greetNameText(params),
-      '',
-      `New sign-in to your ${brand.productName} account.`,
-      `When: ${when}`,
-      `Device: ${device}`,
-      `Location: ${location}`,
-      params.ip ? `IP: ${params.ip}` : '',
-      '',
-      'If this was you, no action is needed.',
-      `If not, secure your account: ${secureUrl}`
-    ]
-      .filter(Boolean)
-      .join('\n')
+    preheader: 'Review this sign-in and take action if it was unexpected.',
+    content: heading('New sign-in') + paragraph(escapeHtml(intro)) + (details.length ? infoBox(details.map(escapeHtml).join('<br/>')) : '') +
+      paragraph(next) + button('Review your account', url) + linkFallback(url) + muted(`If you cannot sign in, contact ${escapeHtml(brand.supportEmail)}.`),
+    text: [intro, details.join('\n'), next, `Review your account: ${url}`, `If you cannot sign in, contact ${brand.supportEmail}.`].filter(Boolean).join('\n\n')
   };
 };
 
@@ -618,6 +346,7 @@ const signinAlert: Renderer = (params, brand) => {
 // Plain-text twin of a small inline-HTML string (tags stripped, the few entities we emit decoded).
 const htmlToText = (html: string): string =>
   html
+    .replace(/<br\s*\/?\s*>|<\/(?:p|div|li|h[1-6])>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -637,34 +366,25 @@ const authLink = (
     note?: string;
     /** Replaces the default "didn't request it? ignore this email" line. */
     ignoreLine?: string;
+    recovery?: string;
   },
   params: EmailParams,
   brand: BrandConfig
 ): TemplateOutput => {
-  const url = params.actionUrl || brand.appUrl;
-  const ignoreLine = opts.ignoreLine ?? "If you didn't request it, you can ignore this email.";
+  const url = params.actionUrl && safeUrl(params.actionUrl) !== '#' ? params.actionUrl : undefined;
+  const recovery = opts.recovery ?? 'If the link has expired, start the request again to get a new link.';
+  const ignore = opts.ignoreLine ?? 'If you didn’t request this, you can ignore this message. Keep the link and any verification code private.';
+  const missing = 'This message is missing its action link.';
   return {
     subject: `${opts.subjectVerb} — ${brand.productName}`,
     preheader: opts.preheader,
-    content:
-      heading(opts.title) +
-      paragraph(opts.intro) +
-      button(opts.cta, url, opts.variant ?? 'blue') +
-      linkFallback(url) +
-      (params.token ? muted(`Or enter this code: <strong>${escapeHtml(params.token)}</strong>`) : '') +
-      (opts.note ? muted(opts.note) : '') +
-      muted(`This link expires soon for your security. ${ignoreLine}`),
-    text: [
-      htmlToText(opts.intro),
-      '',
-      `${opts.cta}: ${url}`,
-      params.token ? `Code: ${params.token}` : '',
-      opts.note ? htmlToText(opts.note) : '',
-      '',
-      `This link expires soon. ${htmlToText(ignoreLine)}`
-    ]
-      .filter(Boolean)
-      .join('\n')
+    content: heading(opts.title) + paragraph(opts.intro) +
+      (url ? button(opts.cta, url, opts.variant ?? 'blue') + linkFallback(url) : paragraph(missing)) +
+      (params.token ? muted(`If the app asks for a code, enter <strong>${escapeHtml(params.token)}</strong>.`) : '') +
+      (opts.note ? infoBox(opts.note) : '') + muted(recovery) + muted(ignore),
+    text: [htmlToText(opts.intro), url ? `${opts.cta}: ${url}` : missing,
+      params.token ? `Verification code: ${params.token}` : '', opts.note ? htmlToText(opts.note) : '',
+      recovery, ignore].filter(Boolean).join('\n\n')
   };
 };
 
@@ -676,7 +396,8 @@ const authConfirmSignup: Renderer = (params, brand) =>
       intro: `Welcome to ${escapeHtml(brand.productName)}! Confirm your email address to activate your account.`,
       cta: 'Confirm email',
       variant: 'yellow',
-      preheader: 'Confirm your email to activate your account.'
+      preheader: 'Confirm your email to activate your account.',
+      recovery: 'If the link has expired, request another confirmation from the sign-in page.'
     },
     params,
     brand
@@ -690,15 +411,15 @@ const authMagicLink: Renderer = (params, brand) => {
       {
         subjectVerb: 'Your sign-in link',
         title: 'Sign in to your account',
-        intro: `Tap below to securely sign in to ${escapeHtml(brand.productName)}.`,
+        intro: `Use this personal link to sign in to ${escapeHtml(brand.productName)}.`,
         cta: 'Sign in',
-        preheader: 'Your magic sign-in link is ready.'
+        preheader: 'Open the link to sign in without a password.'
       },
       params,
       brand
     );
   }
-  const url = params.actionUrl || brand.appUrl;
+  const url = params.actionUrl && safeUrl(params.actionUrl) !== '#' ? params.actionUrl : undefined;
   return {
     subject: `Your sign-in code — ${brand.productName}`,
     preheader: 'Your sign-in code is inside.',
@@ -706,18 +427,16 @@ const authMagicLink: Renderer = (params, brand) => {
       heading('Your sign-in code') +
       paragraph(`Enter this code in ${escapeHtml(brand.productName)} to sign in:`) +
       codeBadge(params.token) +
-      paragraph('Or sign in with one tap:') +
-      button('Sign in', url, 'blue') +
-      linkFallback(url) +
-      muted("This code expires soon for your security. If you didn't request it, you can ignore this email."),
+      (url ? button('Use sign-in link', url) + linkFallback(url) : '') +
+      muted("Keep this code private. If it expires, request a new code from the sign-in screen. If you didn’t request it, no action is required."),
     text: [
       `Enter this code in ${brand.productName} to sign in:`,
       '',
       params.token,
       '',
-      `Or sign in with one tap: ${url}`,
+      url ? `Use sign-in link: ${url}` : '',
       '',
-      "This code expires soon. If you didn't request it, ignore this email."
+      "Keep this code private. If it expires, request a new code from the sign-in screen. If you didn’t request it, no action is required."
     ].join('\n')
   };
 };
@@ -727,9 +446,10 @@ const authRecovery: Renderer = (params, brand) =>
     {
       subjectVerb: 'Reset your password',
       title: 'Reset your password',
-      intro: `We received a request to reset your ${escapeHtml(brand.productName)} password. Tap below to choose a new one.`,
+      intro: `We received a request to reset your ${escapeHtml(brand.productName)} password. Open the reset link to choose a new password.`,
       cta: 'Reset password',
-      preheader: 'Reset your password with this secure link.'
+      preheader: 'Choose a new password using this reset link.',
+      recovery: 'If this link has expired, choose Forgot password? on the sign-in page to request another.'
     },
     params,
     brand
@@ -746,13 +466,13 @@ const authEmailChange: Renderer = (params, brand) => {
       {
         subjectVerb: 'Approve your email change',
         title: 'Approve your email change',
-        intro: `We got a request to change the email on your ${product} account to ${newEmail}. Tap below to approve it from this address.`,
+        intro: `A request was made to change the email on your ${product} account to ${newEmail}. Approve it here if you recognize the new address.`,
         cta: 'Approve change',
         preheader: 'Approve the email change on your account.',
         note: params.bothRequired
           ? 'We also sent a link to the new address — the change completes once both links are confirmed.'
           : undefined,
-        ignoreLine: "Didn't ask for this? Don't tap anything — your email stays the same. Consider changing your password."
+        ignoreLine: "If you didn’t request this change, leave it unapproved and review your account security directly in the app."
       },
       params,
       brand
@@ -782,33 +502,26 @@ const authInvite: Renderer = (params, brand) =>
   authLink(
     {
       subjectVerb: "You're invited",
-      title: `You're invited! 🎟️`,
+      title: 'Your account invitation',
       intro: `You've been invited to join ${escapeHtml(brand.productName)}. Accept your invite to set up your account.`,
       cta: 'Accept invite',
       variant: 'yellow',
-      preheader: `Accept your invite to ${brand.productName}.`
+      preheader: `Accept your invite to ${brand.productName}.`,
+      recovery: 'If the invitation has expired, ask the sender to issue a new one.'
     },
     params,
     brand
   );
 
 const authReauthentication: Renderer = (params, brand) => {
-  const code = params.token || '------';
+  const intro = `Return to ${brand.productName} and enter this code where you were asked to verify your identity.`;
+  const missing = 'This message is missing its verification code. Request a new one in the app.';
+  const safety = 'Keep the code private. If it expires, request a new one. If you didn’t start this action, leave the request unanswered.';
   return {
     subject: `Your verification code — ${brand.productName}`,
-    preheader: 'Your verification code is inside.',
-    content:
-      heading('Confirm it’s you') +
-      paragraph(`Enter this code in ${escapeHtml(brand.productName)} to confirm this action:`) +
-      codeBadge(code) +
-      muted("This code expires shortly. If you didn't request it, you can ignore this email."),
-    text: [
-      `Enter this code in ${brand.productName} to confirm this action:`,
-      '',
-      code,
-      '',
-      "This code expires shortly. If you didn't request it, ignore this email."
-    ].join('\n')
+    preheader: 'Verify your identity to continue the action you started.',
+    content: heading('Verify your identity') + (params.token ? paragraph(escapeHtml(intro)) + codeBadge(params.token) : paragraph(missing)) + muted(safety),
+    text: [params.token ? intro : missing, params.token, safety].filter(Boolean).join('\n\n')
   };
 };
 
@@ -892,7 +605,7 @@ const securityNoticeCopy = (params: EmailParams, product: string): { subject: st
 
 const authSecurityNotice: Renderer = (params, brand) => {
   const copy = securityNoticeCopy(params, brand.productName);
-  const secureUrl = params.secureUrl || brand.appUrl;
+  const secureUrl = params.secureUrl || securitySettingsUrl(brand);
   const details = [
     params.email ? `<strong>Account:</strong> ${escapeHtml(params.email)}` : '',
     params.time ? `<strong>When:</strong> ${escapeHtml(params.time)}` : '',
@@ -903,17 +616,17 @@ const authSecurityNotice: Renderer = (params, brand) => {
   const support = escapeHtml(brand.supportEmail);
   return {
     subject: `${copy.subject} — ${brand.productName}`,
-    preheader: copy.summary,
+    preheader: 'Review the change to your account security.',
     content:
       heading(copy.title) +
       paragraph(greetName(params)) +
       paragraph(escapeHtml(copy.summary)) +
       (details ? infoBox(details) : '') +
-      paragraph('If this was you, you’re all set — no action needed.') +
+      paragraph('If you made this change, no action is needed.') +
       paragraph(
-        `<strong>Didn’t do this?</strong> Secure your account right away and let us know at <a href="mailto:${support}" style="color:${COLORS.blueDark};">${support}</a>.`
+        `<strong>Don’t recognize this change?</strong> Review your account security and contact <a href="mailto:${support}" style="color:${COLORS.blueDark};">${support}</a>.`
       ) +
-      button('Secure my account', secureUrl, 'blue'),
+      button('Review your account', secureUrl, 'blue') + linkFallback(secureUrl),
     text: [
       greetNameText(params),
       '',
@@ -959,6 +672,15 @@ const RENDERERS: Record<EmailTemplateName, Renderer> = {
  * emailChangeStep / currentEmail / bothRequired (auth-email-change), notice / email / oldEmail /
  * oldPhone / phone / provider / factorType (auth-security-notice).
  */
+// Receipt controls never turn authentication or marketing campaign templates into tracking surfaces.
+const safeReceiptUrl = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined;
+  } catch { return undefined; }
+};
+
 export const renderEmail = (
   name: EmailTemplateName,
   params: EmailParams = {},
@@ -971,26 +693,72 @@ export const renderEmail = (
   const marketing = isMarketing(name);
 
   const noReply = isNoReply(name);
+  const reasons: Partial<Record<EmailTemplateName, string>> = {
+    announcement: `This service notice was sent by ${brand.productName}.`,
+    'access-requested': 'You received this receipt because this address was submitted on the Comic Studio interest form.',
+    'newsletter-confirm': 'You received this message because someone requested product updates for this address.',
+    'beta-invite': 'You received this invitation because the sender selected this address.',
+    'auth-invite': 'You received this invitation because the sender selected this address.'
+  };
+  const footerNotice = marketing ? `You subscribed to ${brand.productName} updates.` : reasons[name] ?? `This is a required ${brand.productName} account notification.`;
+  const granted = name === 'beta-invite' ? parseStudioIds(params.studios) : [];
+  let studio: StudioInviteId | undefined;
+  if (name === 'access-requested') studio = 'comic_studio';
+  if (name === 'studio-invite') studio = isStudioInviteId(params.studio) ? params.studio : 'stream_studio';
+  if (granted.length === 1) studio = granted[0];
+  // Masthead and footer links open the studio they name. Explicit worker brands and custom destinations take priority.
+  let shellBrand = brand;
+  if (brand.productName === 'DreamStream Studio' && brand.appUrl.replace(/\/+$/, '') === MAIN_ORIGIN && studio) {
+    const homes = {
+      comic_studio: comicEntry(brand.appUrl),
+      stream_studio: streamAppHref(MAIN_ORIGIN + '/live.html'),
+      chat_studio: MAIN_ORIGIN + '/?view=chat'
+    };
+    shellBrand = { ...brand, appUrl: homes[studio] };
+  }
+  const comicBrand = brand.productName === 'Comic Studio';
+  const suiteBrand = brand.productName === 'DreamStream Studio';
+  const comicGrant = (suiteBrand || comicBrand) && name === 'studio-invite' && params.studio === 'comic_studio';
+  const confirmationLink = name === 'newsletter-confirm' ? params.confirmUrl : name === 'auth-confirm-signup' ? params.actionUrl : undefined;
+  const showSample = ((suiteBrand || comicBrand) && (name === 'access-requested' || name === 'welcome'))
+    || comicGrant || (comicBrand && (name === 'newsletter-welcome' || (confirmationLink && safeUrl(confirmationLink) !== '#')));
+  if (showSample) {
+    // Only the studio grant notice is evidence of creator access. Reading the bundled sample needs no grant.
+    if (comicGrant) {
+      const images = comicPage(shellBrand.appUrl, '/?view=images');
+      out.content += paragraph(`To try a single scene before a whole comic, <a class="ds-link" href="${escapeHtml(images)}" style="color:${COLORS.ink};text-decoration:underline;">open the image workspace</a> and describe the first frame.`);
+      out.text += `\n\nTo try a single scene before a whole comic, open the image workspace and describe the first frame: ${images}`;
+    }
+    const reader = comicPage(shellBrand.appUrl, '/?view=gallery&sample=last-tram');
+    const headline = 'The Last Tram';
+    const story = 'A traveler boards the last tram along the coast. Turn the page to follow a paper boat out into the moonlit harbor. This two-page comic is open to everyone.';
+    out.content += comicSample(reader, headline, story);
+    out.text += `\n\n${headline}\n${story}\nRead both pages of The Last Tram: ${reader}`;
+  }
   const html = wrapHtml({
-    brand,
+    brand: shellBrand,
+    studio,
     preheader: out.preheader,
     content: out.content,
     unsubscribeUrl: marketing ? params.unsubscribeUrl : undefined,
     essential: !marketing,
-    pixelUrl: params.pixelUrl,
+    footerNotice,
+    ackUrl: RECEIPT_TEMPLATES.includes(name) ? safeReceiptUrl(params.ackUrl) : undefined,
+    pixelUrl: RECEIPT_TEMPLATES.includes(name) ? safeReceiptUrl(params.pixelUrl) : undefined,
     noReply
   });
 
   // Plain-text footer mirrors the HTML one (sign-off + unsubscribe / required notice + reply policy).
-  const textFooter =
-    (marketing
-      ? params.unsubscribeUrl
-        ? `\n\nUnsubscribe: ${params.unsubscribeUrl}\nYou're receiving this because you subscribed to ${brand.productName} updates.`
-        : ''
-      : `\n\nThis is a required ${brand.productName} account notification.`) +
-    (noReply ? `\nThis mailbox isn't monitored — please don't reply. Need help? ${brand.supportEmail}` : '');
+  const textFooter = [
+    brand.productName,
+    footerNotice,
+    RECEIPT_TEMPLATES.includes(name) && safeReceiptUrl(params.ackUrl) ? `Acknowledge this message (optional): ${safeReceiptUrl(params.ackUrl)}` : '',
+    marketing && params.unsubscribeUrl ? `Unsubscribe: ${params.unsubscribeUrl}` : '',
+    noReply ? "This mailbox isn't monitored. Please don't reply." : '',
+    `Get help: ${brand.supportEmail}`
+  ].filter(Boolean).join('\n');
 
-  return { subject: out.subject, html, text: `${out.text}\n\n— ${brand.productName}${textFooter}` };
+  return { subject: out.subject, html, text: `${out.text}\n\n${textFooter}` };
 };
 
 export { safeUrl };

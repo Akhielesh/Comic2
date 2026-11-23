@@ -61,13 +61,14 @@ export function fakeDocStore(): FakeDocStore {
       if (store.docs.has(projectId)) throw new StudioError('BAD_REQUEST', 'exists', { status: 409 });
       store.docs.set(projectId, { userId, doc: clone(doc) });
     },
-    async save({ projectId, userId, doc, summary }) {
+    async save({ projectId, userId, doc, summary, expectedRev }) {
       if (store.failSaves > 0) {
         store.failSaves -= 1;
         throw new Error('db down');
       }
       const row = store.docs.get(projectId);
       if (!row || row.userId !== userId) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
+      if (expectedRev !== undefined && row.doc.rev !== expectedRev) throw new StudioError('CONFLICT', 'This comic changed.', { status: 409 });
       row.doc = clone(doc);
       store.saves.push({ projectId, rev: doc.rev, summary });
     },

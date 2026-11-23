@@ -44,8 +44,8 @@ describe('hostRouting', () => {
   });
 
   it('sends other products to the main site', () => {
-    expect([...OFF_HOST_VIEWS].sort()).toEqual(['chat', 'models', 'ventures']);
-    expect(offHostUrlForView('chat')).toBe('https://dreamstreamstudio.ai/?view=chat');
+    expect([...OFF_HOST_VIEWS].sort()).toEqual(['models', 'ventures']);
+    expect(offHostUrlForView('chat')).toBeNull();
     expect(offHostUrlForView('ventures')).toBe('https://dreamstreamstudio.ai/?view=ventures');
     expect(offHostUrlForView('models')).toBe('https://dreamstreamstudio.ai/models');
     for (const comicsView of ['dashboard', 'comicstudio', 'gallery', 'reader', 'settings', 'learn', 'how-it-works', 'home', 'auth']) {
@@ -98,6 +98,11 @@ describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the float
       }
     }
   });
+});
+
+it('restores the linked homepage section when a member returns from a workspace', () => {
+  expect(shouldBootToDashboard({ pathname: '/', search: '', hash: '#workspaces' })).toBe(false);
+  expect(shouldBootToDashboard({ pathname: '/', search: '', hash: '' })).toBe(true);
 });
 
 describe('useComicsHost', () => {
@@ -192,8 +197,11 @@ describe('useComicsHost', () => {
     expect(result.current.leaving).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
     rerender({ view: 'chat' });
+    expect(result.current.leaving).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+    rerender({ view: 'ventures' });
     expect(result.current.leaving).toBe(true);
-    expect(navigate).toHaveBeenCalledWith('https://dreamstreamstudio.ai/?view=chat');
+    expect(navigate).toHaveBeenCalledWith('https://dreamstreamstudio.ai/?view=ventures');
     rerender({ view: 'models' });
     expect(navigate).toHaveBeenLastCalledWith('https://dreamstreamstudio.ai/models');
   });
@@ -210,28 +218,25 @@ describe('ComicsLanding', () => {
   });
   const heroOf = () => screen.getByTestId('comics-hero-cta').closest('section') as HTMLElement;
 
-  it('routes signed-out visitors to the page’s own interest form, the Library and sign-in (sign-up stays closed)', () => {
+  it('routes signed-out visitors to public signup, the Library and sign-in', () => {
     const h = handlers();
     const scroll = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
     try {
       render(<ComicsLanding signedIn={false} {...h} />);
-      expect(screen.getByRole('heading', { level: 1, name: 'Make your story a comic.' })).toBeInTheDocument();
-      const cta = within(heroOf()).getByRole('button', { name: 'Register your interest' });
+      expect(screen.getByRole('heading', { level: 1, name: 'Your story in panels.' })).toBeInTheDocument();
+      const cta = within(heroOf()).getByRole('button', { name: 'Create an account' });
       expect(cta).toHaveAttribute('data-testid', 'comics-hero-cta');
       fireEvent.click(cta);
-      // It stays on this page: it scrolls to the register section and never opens sign-in or the access request.
-      expect(scroll).toHaveBeenCalledTimes(1);
-      expect(scroll.mock.contexts[0]).toBe(document.getElementById('register'));
+      expect(h.onRequestAccess).toHaveBeenCalledOnce();
       expect(h.onSignIn).not.toHaveBeenCalled();
-      expect(h.onRequestAccess).not.toHaveBeenCalled();
       fireEvent.click(within(heroOf()).getByRole('button', { name: 'Read comics' }));
       expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
       // Members keep a clear Sign in: in the header and under the hero's actions.
       fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Sign in' }));
       fireEvent.click(within(heroOf()).getByRole('button', { name: 'Sign in' }));
       expect(h.onSignIn).toHaveBeenCalledTimes(2);
-      expect(within(heroOf()).queryByRole('button', { name: 'Start creating' })).toBeNull();
+      expect(within(heroOf()).queryByRole('button', { name: 'Start a comic' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
     } finally {
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
@@ -242,14 +247,15 @@ describe('ComicsLanding', () => {
     const h = handlers();
     const onStartCreating = vi.fn();
     render(<ComicsLanding signedIn {...h} onStartCreating={onStartCreating} />);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start creating' }));
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start a comic' }));
     expect(onStartCreating).toHaveBeenCalledTimes(1);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' }));
     expect(h.onOpenComics).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
+    expect(within(heroOf()).getByRole('link', { name: 'Create an image' })).toHaveAttribute('href', '/?view=images');
+    fireEvent.click(within(screen.getByRole('contentinfo')).getByRole('button', { name: 'Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Request access|Register interest/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Create an account|Sign up/ })).toBeNull();
   });
 
   it('the footer links to the Library, legal pages, and the routed support mailbox', () => {

@@ -50,6 +50,7 @@ import {
   type CharacterLook,
   type ComicDoc,
   type Cover,
+  type DirectorDraft,
   type DocSafety,
   type EditionTextField,
   type Format,
@@ -155,6 +156,7 @@ export type DocSafetyPatch = {
 };
 
 export type DocOp =
+  | { op: 'director_draft'; draft: DirectorDraft }
   | { op: 'brief'; patch: Partial<Brief> }
   | { op: 'note_add'; text: string }
   | { op: 'format'; patch: Partial<Format> }
@@ -392,6 +394,8 @@ export type SpendAction =
   | EnrichPagesAction;
 
 export type StudioAction =
+  | { type: 'start_director_draft'; idea: string; expectedRev: number }
+  | { type: 'take_over_director_draft' }
   | SpendAction
   | { type: 'approve_gate'; gateId: string }
   | { type: 'decline_gate'; gateId: string }
@@ -500,7 +504,7 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
 export const INVERTIBLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>([...CLIENT_PATCHABLE_OPS, ...PRO_PAGE_PATCH_OPS, ...PRO_EDIT_OPS]);
 /** Server-only (contract test asserts none of these is patchable). */
 export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
-  'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
+  'director_draft', 'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
   'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'image_model',
   // --- history ---
   'history_restore'
@@ -2063,6 +2067,8 @@ const applyPageMotion = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_motion' }
 export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
   if (!op || typeof op !== 'object') return doc;
   switch (op.op) {
+    case 'director_draft':
+      return { ...doc, directorDraft: { ...op.draft } };
     case 'brief':
       return { ...doc, brief: { ...doc.brief, ...op.patch, notes: op.patch.notes || doc.brief.notes } };
     case 'note_add': {

@@ -1,10 +1,13 @@
 // The reader hides only the assistant's floating launcher (it sat over the art on phones): the component stays mounted
 // and an open panel is not closed by it. Every other view keeps the launcher.
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { UniversalAssistantResponse } from '../apiTypes';
 
-vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: null }) }));
+const auth = vi.hoisted(() => ({ user: null as null | { id: string } }));
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => auth }));
+afterEach(() => { auth.user = null; vi.clearAllMocks(); });
 vi.mock('../services/geminiService', () => ({ queryUniversalAssistant: vi.fn() }));
 vi.mock('../services/db', () => ({
   getUsageLimits: vi.fn(async () => null),
@@ -40,4 +43,27 @@ describe('UniversalAssistant launcher', () => {
     render(<UniversalAssistant currentView="reader" projects={[]} hideLauncher />);
     expect(screen.queryByRole('button', { name: 'Open assistant' })).toBeNull();
   });
+});
+
+it('sends general questions without comic context and drops a pending reply when starting over', async () => {
+  auth.user = { id: 'account-a' };
+  Element.prototype.scrollIntoView = vi.fn();
+  const { queryUniversalAssistant } = await import('../services/geminiService');
+  const query = vi.mocked(queryUniversalAssistant);
+  let finish!: (value: UniversalAssistantResponse) => void;
+  query.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  render(<UniversalAssistant currentView="chat" projects={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }));
+  const box = screen.getByPlaceholderText('Ask a question…');
+  fireEvent.change(box, { target: { value: 'How do rainbows form?' } });
+  fireEvent.keyDown(box, { key: 'Enter' });
+  await waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  const [, history, context, options] = query.mock.calls[0];
+  expect(history).toEqual([]);
+  expect(context).toEqual({ view: 'chat' });
+  expect(options?.expectedAccountId).toBe('account-a');
+  fireEvent.click(screen.getByRole('button', { name: 'New conversation' }));
+  expect(options?.signal?.aborted).toBe(true);
+  await act(async () => finish({ text: 'A previous reply.', model: 'fixture', policy: { scope: 'conversation', offTopicBlocked: false } }));
+  expect(screen.queryByText('A previous reply.')).not.toBeInTheDocument();
 });

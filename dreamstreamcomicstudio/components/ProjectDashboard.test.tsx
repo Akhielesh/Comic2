@@ -106,16 +106,41 @@ describe('Comic Studio idea workspace', () => {
     empty.rerender(<ProjectDashboard {...empty.props} projectsLoaded />);
     expect(screen.getByLabelText('Your comic idea or script')).toBeVisible();
   });
+  it('retries a director request with the same project id after a reload, and accepts the submit shortcut', async () => {
+    const onCreateProject = vi.fn().mockRejectedValue(new Error('Network unavailable'));
+    const first = renderDashboard([studioProject()], { ...options, onCreateProject });
+    const brief = 'A courier follows a paper boat through a flooded town.';
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: brief } });
+    expect(onCreateProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Draft it for me' }));
+    await screen.findByRole('alert');
+    const [, , submitted, id] = onCreateProject.mock.calls[0];
+    expect(submitted).toBe(brief);
+    expect(id).toMatch(/^[a-f0-9-]{36}$/i);
+    first.unmount();
+    renderDashboard([studioProject()], { ...options, onCreateProject });
+    const idea = screen.getByLabelText('Your comic idea or script');
+    expect(idea).toHaveValue(brief);
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(idea, { key: 'Enter', ctrlKey: true });
+    await screen.findByRole('alert');
+    expect(onCreateProject).toHaveBeenLastCalledWith('', 'studio', brief, id);
+    fireEvent.change(idea, { target: { value: 'A different story.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Draft it for me' }));
+    await screen.findByRole('alert');
+    expect(onCreateProject.mock.calls[2][3]).not.toBe(id);
+  });
+
   it('keeps the entry local until explicit Start and prevents double creation', async () => {
     let resolve!: () => void;
     const onCreateProject = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
     renderDashboard([studioProject()], { ...options, onCreateProject });
-    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Work step by step' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Comic name (optional)'), { target: { value: ' Observatory ' } });
     const idea = screen.getByLabelText('Your comic idea or script');
     fireEvent.change(idea, { target: { value: 'A botanist finds a garden on the moon.' } });
     expect(onCreateProject).not.toHaveBeenCalled();
-    fireEvent.keyDown(idea, { key: 'Enter', ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Work step by step' }));
     fireEvent.click(screen.getByRole('button', { name: 'Preparing…' }));
     expect(onCreateProject).toHaveBeenCalledExactlyOnceWith('Observatory', 'studio', 'A botanist finds a garden on the moon.');
     await act(async () => resolve());
@@ -128,11 +153,11 @@ describe('Comic Studio idea workspace', () => {
     renderDashboard([], { ...options, onCreateProject });
     fireEvent.change(screen.getByLabelText('Comic name (optional)'), { target: { value: 'Keep my name' } });
     fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'Keep my script' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Work step by step' }));
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't create your comic");
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('Keep my script');
     expect(screen.getByLabelText('Comic name (optional)')).toHaveValue('Keep my name');
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Work step by step' }));
     await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(2));
   });
 

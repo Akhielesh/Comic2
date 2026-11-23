@@ -47,8 +47,28 @@ revoke all on public.email_suppressions from anon, authenticated;
 --    A subscribe sets confirm_token + confirmed=false and emails the confirm link; clicking
 --    it flips confirmed=true and clears the token. Unsubscribe stamps unsubscribed_at.
 alter table public.waitlist_signups
+  add column if not exists feedback text,
   add column if not exists confirmed boolean not null default false,
   add column if not exists confirm_token text,
   add column if not exists confirm_sent_at timestamptz,
   add column if not exists confirmed_at timestamptz,
   add column if not exists unsubscribed_at timestamptz;
+
+-- Direct registration may write only the public form fields. Proof of ownership and
+-- opt-out timestamps are managed by the backend. Existing registrations are preserved.
+revoke insert on public.waitlist_signups from public, anon, authenticated;
+grant insert (email, kind, source, metadata) on public.waitlist_signups to anon, authenticated;
+
+-- New Supabase projects can require explicit Data API grants, including for service roles.
+grant select, insert, update on public.waitlist_signups, public.email_log, public.email_suppressions to service_role;
+
+-- Historical opened_at values are first image requests. They never establish a human read.
+alter table public.email_log
+  add column if not exists acknowledged_at timestamptz,
+  add column if not exists open_receipt_hash text,
+  add column if not exists ack_receipt_hash text,
+  add column if not exists receipt_version smallint;
+-- Historical UUID pixels identify only rows that predate this migration.
+alter table public.email_log alter column receipt_version set default 2;
+create unique index if not exists email_log_open_receipt on public.email_log(open_receipt_hash) where open_receipt_hash is not null;
+create unique index if not exists email_log_ack_receipt on public.email_log(ack_receipt_hash) where ack_receipt_hash is not null;

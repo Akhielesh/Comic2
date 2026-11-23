@@ -1,7 +1,11 @@
-import React, { useState } from 'react';
-import { getAuthPersistMode, getAuthRedirectUrl, setAuthPersistMode, supabase } from '../services/supabase';
+import { userFacingErrorMessage } from '../services/apiErrors';
+import React, { useEffect, useRef, useState } from 'react';
+import { cancelGoogleSignIn, completeGoogleSignIn, googleSignInAvailable, pendingGoogleSignIn, startGoogleSignIn, type GoogleProfile } from '../services/googleSignIn';
+import { GoogleAccountProfile } from './GoogleAccountProfile';
+import { getSignupReferralCode } from '../services/memberReferrals';
+import type { AuthWorkspace } from '../shared/authWorkspace';
+import { getAuthPersistMode, setAuthPersistMode, supabase } from '../services/supabase';
 import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, MailWarning, Ticket } from 'lucide-react';
-import { WaitlistForm } from './WaitlistForm';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
@@ -15,8 +19,6 @@ import { Input } from './ds/Input';
 import { Segmented } from './ds/Segmented';
 import {
     ACCENT_FILL,
-    CHIP,
-    CHIP_VARIANT,
     DENSITY,
     FOCUS_RING,
     FONT_DISPLAY,
@@ -30,36 +32,35 @@ import {
     STATUS_SURFACE
 } from './chat/studioDesign';
 
-// New registrations are invite-only for now: existing accounts can still sign in,
-// while everyone else can leave their email to request access. Flip this to true
-// to re-open self-serve sign-up.
-const SIGNUPS_ENABLED = false;
-
 interface AuthPageProps {
     onLoginSuccess: () => void;
     onOpenPrivacy: () => void;
     onOpenTerms: () => void;
-    initialMode?: 'signin' | 'request-access';
-    /**
-     * A captured `?invite=` code (from the invite email link). Holding one unlocks the
-     * real sign-up tab even while public signups are off — the invite is auto-redeemed
-     * after the first signed-in load (see App.tsx).
-     */
+    initialMode?: 'signin' | 'signup';
+    onModeChange?: (mode: 'signin' | 'signup') => void;
+    returnToWorkspace?: AuthWorkspace;
+    checkGoogleAvailability?: typeof googleSignInAvailable;
+    /** Optional product invitation to redeem after the email is verified. */
     pendingInviteCode?: string | null;
 }
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', pendingInviteCode = null }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', onModeChange, pendingInviteCode = null, returnToWorkspace, checkGoogleAvailability = googleSignInAvailable }) => {
     const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const MIN_SIGNUP_AGE_YEARS = 8;
-    // An invite in hand unlocks real account creation even while public signups are off.
-    const signupsAllowed = SIGNUPS_ENABLED || Boolean(pendingInviteCode);
-    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link' | 'request-access'>(
-        pendingInviteCode ? 'signup' : initialMode === 'request-access' && !SIGNUPS_ENABLED ? 'request-access' : 'signin'
-    );
+    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link'>(pendingInviteCode ? 'signup' : initialMode);
     const [isLoading, setIsLoading] = useState(false);
-    /** Register interest saved: the thank-you replaces the intro that asked for it. */
-    const [joined, setJoined] = useState(false);
+    const [googleEnabled, setGoogleEnabled] = useState(false);
+    const [googleProfile, setGoogleProfile] = useState<{ firstName: string; email: string } | null>(null);
+    const googleCallbackHandled = useRef(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
+    useEffect(() => {
+        const request = new AbortController();
+        void checkGoogleAvailability(request.signal).then(enabled => {
+            if (!request.signal.aborted) setGoogleEnabled(enabled);
+        });
+        return () => request.abort();
+    }, [checkGoogleAvailability]);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const [captchaToken, setCaptchaToken] = useState('');
@@ -76,7 +77,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const [showPassword, setShowPassword] = useState(false);
     const [rememberMe, setRememberMe] = useState(getAuthPersistMode() === 'local');
     const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
-    const authRedirectUrl = getAuthRedirectUrl();
 
     // Consents
     const [termsAccepted, setTermsAccepted] = useState(false);
@@ -100,9 +100,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         setIsLoading(true);
         const usedCaptcha = Boolean(captchaToken);
         try {
-            // Our backend sends it (Supabase's own mailer allows ~2 emails/hour project-wide);
-            // the direct Supabase call is only the fallback when the backend can't be reached.
+            if (turnstileEnabled() && !captchaToken) throw new Error('Please complete the verification challenge.');
             const viaApi = await requestAuthEmail('resend', {
+                returnToWorkspace,
                 email: normalizedEmail,
                 app: 'main',
                 captchaToken: captchaToken || undefined
@@ -124,6 +124,52 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         }
     };
 
+    const finishGoogle = async (profile?: GoogleProfile) => {
+        setGoogleLoading(true);
+        setError(null);
+        try {
+            const result = await completeGoogleSignIn(profile);
+            if (result.needsProfile === true) {
+                setGoogleProfile({ email: result.email, firstName: result.firstName });
+            } else {
+                clearSignInIntents();
+                if (result.destination) window.location.replace(result.destination);
+                else onLoginSuccess();
+            }
+        } catch (err) {
+            setError(userFacingErrorMessage(err, 'Google sign-in could not finish. Try again or use email.'));
+        } finally { setGoogleLoading(false); }
+    };
+    useEffect(() => {
+        const resume = () => {
+            if (googleCallbackHandled.current) return;
+            const pending = pendingGoogleSignIn();
+            if (!pending) return;
+            googleCallbackHandled.current = true;
+            if (pending === 'error') setError('Google sign-in was cancelled or expired. Try again or use email.');
+            else void finishGoogle();
+        };
+        resume();
+        window.addEventListener('hashchange', resume);
+        return () => window.removeEventListener('hashchange', resume);
+    }, []);
+
+    const handleGoogle = async () => {
+        if (googleLoading || isLoading) return;
+        setError(null);
+        setMessage(null);
+        setGoogleLoading(true);
+        setAuthPersistMode(rememberMe ? 'local' : 'session');
+        try {
+            if (turnstileEnabled() && !captchaToken) throw new Error('Please complete the verification challenge.');
+            await startGoogleSignIn(returnToWorkspace, captchaToken || undefined);
+        } catch (err) {
+            setError(userFacingErrorMessage(err, 'Google sign-in could not start. Try again or continue with email.'));
+            setGoogleLoading(false);
+            if (turnstileEnabled()) { setCaptchaToken(''); resetTurnstile(); }
+        }
+    };
+
     // Handlers
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -138,9 +184,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 throw new Error('Please complete the verification challenge.');
             }
             if (mode === 'signup') {
-                if (!signupsAllowed) {
-                    throw new Error('New sign-ups are invite-only right now. Request access and we’ll be in touch.');
-                }
                 // Validation
                 const normalizedEmail = email.trim().toLowerCase();
                 const normalizedUsername = username.trim();
@@ -170,24 +213,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 minAllowedDob.setFullYear(today.getFullYear() - MIN_SIGNUP_AGE_YEARS);
                 if (dobDate > minAllowedDob) throw new Error(`You must be at least ${MIN_SIGNUP_AGE_YEARS} years old to sign up.`);
 
-                // Fast username availability check before submit.
-                const { data: usernameLookupData, error: usernameLookupError } = await supabase.rpc('resolve_email_from_username', { login_username: normalizedUsername });
-                if (usernameLookupError) {
-                    const usernameLookupMessage = String(usernameLookupError?.message || '').toLowerCase();
-                    const missingResolver = usernameLookupMessage.includes('resolve_email_from_username') && usernameLookupMessage.includes('does not exist');
-                    if (!missingResolver) throw usernameLookupError;
-                    console.warn('Username resolver RPC missing; relying on DB uniqueness enforcement.');
-                } else {
-                    const existingEmailForUsername = Array.isArray(usernameLookupData)
-                        ? usernameLookupData[0]?.email
-                        : (usernameLookupData as { email?: string } | null)?.email;
-                    if (existingEmailForUsername) {
-                        throw new Error("Username is already taken. Please choose another.");
-                    }
-                }
-
                 // Sign up with metadata. Profile rows are created by Supabase DB trigger.
+                const referralCode = getSignupReferralCode();
                 const signupData = {
+                    ...(referralCode ? { referral_code: referralCode } : {}),
                     username: normalizedUsername,
                     first_name: normalizedFirstName,
                     last_name: normalizedLastName || null,
@@ -200,6 +229,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 };
                 // Our backend creates the account and sends the confirmation from dreamstreamstudio.ai.
                 const viaApi = await requestAuthEmail('signup', {
+                    returnToWorkspace,
                     app: 'main',
                     email: normalizedEmail,
                     password,
@@ -213,6 +243,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     if (viaApi.code === 'send_failed') {
                         // The account exists; only the email didn't go out — offer the resend button.
                         setMode('signin');
+                        onModeChange?.('signin');
                         setPassword('');
                         setConfirmPassword('');
                         setPendingVerificationEmail(normalizedEmail);
@@ -222,7 +253,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
                 if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
 
-                setMessage("Account created! Please check your email to confirm.");
+                setMessage("Check your email and open the verification link to finish creating your account.");
+                setPendingVerificationEmail(normalizedEmail);
+                onModeChange?.('signin');
                 setMode('signin');
                 setPassword('');
                 setConfirmPassword('');
@@ -287,6 +320,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 setAuthPersistMode(rememberMe ? 'local' : 'session');
 
                 const viaApi = await requestAuthEmail('magiclink', {
+                    returnToWorkspace,
                     email: normalizedEmail,
                     app: 'main',
                     captchaToken: captchaToken || undefined
@@ -326,12 +360,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         }
     };
 
-    // The two choices on the card: signing in (with its reset and magic-link steps) or joining (sign up with an
-    // invite, otherwise asking for access). Switching clears what the last attempt said.
     const resetNotices = () => { setError(null); setMessage(null); setPendingVerificationEmail(null); };
     const choice: 'signin' | 'join' = mode === 'signin' || mode === 'forgot' || mode === 'magic-link' ? 'signin' : 'join';
-    const chooseSignIn = () => { setMode('signin'); resetNotices(); };
-    const chooseJoin = () => { setMode(signupsAllowed ? 'signup' : 'request-access'); resetNotices(); };
+    const chooseSignIn = () => { setMode('signin'); onModeChange?.('signin'); resetNotices(); };
+    const chooseJoin = () => { setMode('signup'); onModeChange?.('signup'); resetNotices(); };
     const onChoiceClick = (e: React.MouseEvent<HTMLDivElement>) => {
         if (mode !== 'forgot' && mode !== 'magic-link') return;
         const radio = (e.target as HTMLElement).closest('[role="radio"]');
@@ -353,63 +385,35 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             <div className={`w-full max-w-md overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] ${SHADOW_SOFT}`}>
                 {/* On the reset and sign-in-link steps "Sign in" is already the checked radio, so the Segmented sends no
                     change: a press on it (click, Space or Enter) still goes back to the password step, as the old tab did. */}
-                <div className="border-b border-[var(--ds-hairline-soft)] p-3" onClick={onChoiceClick}>
+                {!googleProfile && <div className="border-b border-[var(--ds-hairline-soft)] p-3" onClick={onChoiceClick}>
                     <Segmented
-                        label={signupsAllowed ? 'Sign in or join' : 'Sign in or register interest'}
+                        label="Sign in or join"
                         fullWidth
                         value={choice}
                         onChange={(next) => (next === 'signin' ? chooseSignIn() : chooseJoin())}
                         options={[
                             { value: 'signin', label: 'Sign in' },
-                            { value: 'join', label: signupsAllowed ? 'Sign up' : 'Register interest' }
+                            { value: 'join', label: 'Sign up' }
                         ]}
                     />
-                </div>
+                </div>}
 
                 <div className="p-6 sm:p-8">
                     <header className="mb-6">
-                        <h1 className={`text-[length:var(--ds-text-2xl)] leading-8 ${HEADING}`}>{heading.title}</h1>
-                        {heading.body ? <p className="mt-1.5 text-[length:var(--ds-text-base)] text-[var(--ds-muted)]">{heading.body}</p> : null}
+                        <h1 className={`text-[length:var(--ds-text-2xl)] leading-8 ${HEADING}`}>{googleProfile ? 'Finish your Google signup' : heading.title}</h1>
+                        {heading.body && !googleProfile ? <p className="mt-1.5 text-[length:var(--ds-text-base)] text-[var(--ds-muted)]">{heading.body}</p> : null}
                     </header>
 
                     {pendingInviteCode && (
                         <div role="status" className={`mb-6 flex items-start gap-2.5 ${RADIUS_CONTROL} border px-3 py-2.5 text-[length:var(--ds-text-base)] ${STATUS_SURFACE.active}`}>
                             <Ticket aria-hidden className="mt-0.5 size-4 shrink-0 text-[var(--ds-muted)]" />
                             <span className="min-w-0">
-                                You&apos;ve been invited! Create your account (or sign in) and invite{' '}
-                                <span className="font-mono font-medium [overflow-wrap:anywhere]">{pendingInviteCode}</span> will be applied automatically.
+                                Create an account or sign in to check your invite code{' '}
+                                <span className="font-mono font-medium [overflow-wrap:anywhere]">{pendingInviteCode}</span>.
                             </span>
                         </div>
                     )}
-                    {mode === 'request-access' && (
-                        <div className="space-y-5">
-                            <span className={`${CHIP} ${CHIP_VARIANT.outline}`}>
-                                Private beta
-                            </span>
-                            {/* The intro asks for the email and answers: once saved, the thank-you speaks alone. */}
-                            {!joined && (
-                                <p className="text-[length:var(--ds-text-base)] leading-relaxed text-[var(--ds-muted)]">
-                                    Comic Studio is in a small private beta. Leave your email, and a few answers if you
-                                    like.
-                                </p>
-                            )}
-                            <WaitlistForm
-                                kind="access"
-                                source="auth-request-access"
-                                buttonLabel="Register interest"
-                                onSignIn={chooseSignIn}
-                                onJoined={() => setJoined(true)}
-                            />
-                            <p className="text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
-                                Already have an account?{' '}
-                                <button type="button" onClick={chooseSignIn} className={`inline-flex items-center justify-center ${textLink} font-medium ${DENSITY.coarseSquare}`}>
-                                    Sign in
-                                </button>
-                            </p>
-                        </div>
-                    )}
-
-                    {mode !== 'request-access' && (<>
+                    {googleLoading && !googleProfile && <p role="status" className="mb-4 text-[var(--ds-muted)]">Connecting to Google…</p>}
                     {error && (
                         <div role="alert" className={`mb-6 flex items-start gap-2 ${RADIUS_CONTROL} border p-3 text-[length:var(--ds-text-base)] ${STATUS_SURFACE.error}`}>
                             <AlertCircle aria-hidden className={`mt-0.5 size-4 shrink-0 ${STATUS_INK.error}`} />
@@ -441,7 +445,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         </div>
                     )}
 
-                    <form onSubmit={handleAuth} className="space-y-4">
+                    {!googleProfile && googleEnabled && (mode === 'signup' || mode === 'signin') && (
+                        <div className="mb-5">
+                            <Button type="button" variant="outline" size="lg" className="w-full" loading={googleLoading} disabled={isLoading} onClick={handleGoogle}>
+                                Continue with Google
+                            </Button>
+                            <p className="mt-4 text-center text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">Or continue with email</p>
+                        </div>
+                    )}
+                    {googleProfile ? (
+                        <GoogleAccountProfile {...googleProfile} maxDob={maxSignupDob} busy={googleLoading}
+                            onSubmit={profile => void finishGoogle(profile)} onCancel={() => {
+                                cancelGoogleSignIn();
+                                setGoogleProfile(null);
+                                chooseSignIn();
+                            }} />
+                    ) : <form onSubmit={handleAuth} className="space-y-4">
                         {mode === 'signup' && (
                             <Field label="Username" required>
                                 <Input
@@ -612,7 +631,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             </div>
                         )}
 
-                        <Button type="submit" size="lg" loading={isLoading} className="h-11 w-full">
+                        <Button type="submit" size="lg" loading={isLoading} disabled={googleLoading} className="h-11 w-full">
                             {mode === 'signin'
                                 ? 'Enter Studio'
                                 : mode === 'magic-link'
@@ -621,15 +640,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                         ? 'Send reset link'
                                         : 'Create account'} <ArrowRight aria-hidden />
                         </Button>
-                    </form>
-                    </>)}
+                    </form>}
                 </div>
             </div>
 
-            {/* Sessions are per host, and the main site's bare front page now opens Comic Studio: a member of the main
-                site gets back to its own front page here, never through the bare "/". Not under the Register interest
-                card, which is about Comic Studio alone. */}
-            {comicsHost && mode !== 'request-access' ? (
+            {comicsHost && mode !== 'signup' ? (
                 <p className="mt-6 text-center text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
                     Have a DreamStream account on the main site?{' '}
                     <a href={mainFrontPageUrl()} className={`inline-flex items-center justify-center ${textLink} font-medium ${DENSITY.coarseSquare}`}>
@@ -646,12 +661,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
 };
 
 /** The card's heading for each step: what this step does, in plain words. */
-const AUTH_HEADINGS: Record<'signin' | 'signup' | 'forgot' | 'magic-link' | 'request-access', { title: string; body?: string }> = {
+const AUTH_HEADINGS: Record<'signin' | 'signup' | 'forgot' | 'magic-link', { title: string; body?: string }> = {
     signin: { title: 'Welcome back', body: 'Sign in with your email or username.' },
-    signup: { title: 'Create your account' },
+    signup: { title: 'Create your account', body: 'Verify your email to enter the studio. You can set up AI usage after signing in.' },
     forgot: { title: 'Reset your password', body: 'Enter your email to receive a reset link.' },
-    'magic-link': { title: 'Email me a sign-in link', body: 'Enter your email and we will send a secure sign-in link.' },
-    'request-access': { title: 'Register your interest' }
+    'magic-link': { title: 'Email me a sign-in link', body: 'Enter your email and we will send a secure sign-in link.' }
 };
 
 /** A link inside a sentence: ink, underlined, the focus outline. */

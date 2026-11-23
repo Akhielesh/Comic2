@@ -709,11 +709,12 @@ const generateImage = async (
  * usage/limit/is_free_tier — the source of truth for the verification + usage display.
  * Never throws: returns null on failure so the UI degrades gracefully.
  */
-export const fetchOpenRouterKeyStatus = async (apiKey: string): Promise<Record<string, unknown> | null> => {
+export const fetchOpenRouterKeyStatus = async (apiKey: string, timeoutMs = OPENROUTER_REQUEST_TIMEOUT_MS): Promise<Record<string, unknown> | null> => {
   if (!apiKey) return null;
   try {
-    const data = await openRouterFetch<any>('/key', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, { apiKey, byok: true });
-    return (data && typeof data === 'object' && data.data) ? data.data : data ?? null;
+    const data = await openRouterFetch<any>('/key', { method: 'GET' }, timeoutMs, { apiKey, byok: true });
+    const record = data?.data ?? data;
+    return record && typeof record === 'object' && !Array.isArray(record) && !('data' in record) && !('error' in record) ? record : null;
   } catch {
     return null;
   }
@@ -725,18 +726,16 @@ export const fetchOpenRouterKeyStatus = async (apiKey: string): Promise<Record<s
  * remaining credits (e.g. $10), so we surface both. Never throws.
  */
 export const fetchOpenRouterCredits = async (
-  apiKey: string
+  apiKey: string, timeoutMs = OPENROUTER_REQUEST_TIMEOUT_MS
 ): Promise<{ total: number; usage: number; remaining: number } | null> => {
   if (!apiKey) return null;
   try {
-    const data = await openRouterFetch<any>('/credits', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, { apiKey, byok: true });
+    const data = await openRouterFetch<any>('/credits', { method: 'GET' }, timeoutMs, { apiKey, byok: true });
     const d = (data && typeof data === 'object' && data.data) ? data.data : data;
-    const total = Number(d?.total_credits);
-    const usage = Number(d?.total_usage);
-    if (!Number.isFinite(total) && !Number.isFinite(usage)) return null;
-    const t = Number.isFinite(total) ? total : 0;
-    const u = Number.isFinite(usage) ? usage : 0;
-    return { total: t, usage: u, remaining: Math.max(0, t - u) };
+    const total = d?.total_credits;
+    const usage = d?.total_usage;
+    if (typeof total !== 'number' || typeof usage !== 'number' || !Number.isFinite(total) || !Number.isFinite(usage) || total < 0 || usage < 0) return null;
+    return { total, usage, remaining: total - usage };
   } catch {
     return null;
   }

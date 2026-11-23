@@ -9,10 +9,8 @@ import type { LandingMedia } from './landingMedia';
 import { LandingClip } from './LandingClip';
 import { LandingShot } from './LandingShot';
 
-/** Every section of the landing, in page order (the hero is `top`). */
-export const LANDING_SECTION_IDS = ['top', 'features', 'looks', 'how-it-works', 'models', 'pricing', 'read', 'register', 'faq'] as const;
-export type LandingSectionId = (typeof LANDING_SECTION_IDS)[number];
-export const isLandingSectionId = (id: string): id is LandingSectionId => (LANDING_SECTION_IDS as readonly string[]).includes(id);
+import type { LandingSectionId } from '../hostRouting';
+export { LANDING_SECTION_IDS, isLandingSectionId, type LandingSectionId } from '../hostRouting';
 
 const scrollBehavior = (): ScrollBehavior => (prefersReducedMotion() ? 'auto' : 'smooth');
 
@@ -20,7 +18,7 @@ const scrollBehavior = (): ScrollBehavior => (prefersReducedMotion() ? 'auto' : 
  * Scroll a section under the sticky header (smooth unless reduced motion, or `behavior`), then focus the first match of
  * each selector in `focus`, in that order of preference (by default its heading).
  */
-export const showSection = (id: string, focus: string | readonly string[] = 'h2', behavior: ScrollBehavior = scrollBehavior()): void => {
+export const showSection = (id: string, focus: string | readonly string[] = 'h2, h3', behavior: ScrollBehavior = scrollBehavior()): void => {
   if (typeof document === 'undefined') return;
   const section = document.getElementById(id);
   if (!section) return;
@@ -29,8 +27,8 @@ export const showSection = (id: string, focus: string | readonly string[] = 'h2'
   target?.focus({ preventScroll: true });
 };
 
-/** "Register your interest": the section, with the cursor in its email field (its heading when signed in). */
-export const showRegister = (): void => showSection('register', ['input[type="email"]', 'h2']);
+/** Focus the signup action when arriving from the footer. */
+export const showRegister = (): void => showSection('register', ['button', 'h2']);
 
 /**
  * Arriving on a section link (…/#pricing): wait for the web fonts and two frames, so the page above has its final
@@ -47,7 +45,7 @@ export const arriveAtSection = (id: LandingSectionId): (() => void) => {
     if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(step);
     else step();
   };
-  const go = () => showSection(id, 'h2', 'auto');
+  const go = () => showSection(id, 'h2, h3', 'auto');
   const settled = document.fonts?.ready ?? Promise.resolve();
   settled
     .catch(() => undefined)

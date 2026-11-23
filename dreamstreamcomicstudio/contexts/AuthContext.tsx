@@ -13,6 +13,7 @@ import { registerDevice } from '../services/deviceSessions';
 import { cancelScheduledPush, reconcileOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData, takeOverDevice } from '../live/accountPurge';
 import { clearLocalOwner, getLocalOwner, setLocalOwner } from '../services/localOwner';
+import { clearSignupReferral, getSignupReferralCode } from '../services/memberReferrals';
 import { clearPendingInviteCode } from '../services/invites';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 import { clearSignInIntents } from '../services/pendingSignIn';
@@ -102,6 +103,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     /** The account whose sign-out is still being settled with the auth server (see signOutSession). */
     const signingOutRef = useRef<{ userId: string | null } | null>(null);
 
+    useEffect(() => {
+        if (loading) return;
+        if (!user?.id) {
+            getSignupReferralCode();
+            return;
+        }
+        clearSignupReferral();
+    }, [loading, user?.id]);
+
     const applyAuthState = (nextSession: Session | null) => {
         // Chat rows are tagged by THIS tab's account (not the device-wide owner marker, which
         // another tab can move to a different account while this one keeps running).
@@ -176,6 +186,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                     // A real switch: a one-time invite captured for the previous account must not be
                     // redeemed by this one. (On a first sign-in it stays: that's the invite flow.)
                     clearPendingInviteCode();
+                    clearSignupReferral();
                     // Stream Studio's copy stays only if this account already owns it — anything
                     // else (the previous account's, or data with no owner) goes.
                     takeOverDevice(userId);
@@ -293,6 +304,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }, []);
 
     const clearLocalAuthState = () => {
+        clearSignupReferral();
         setUser(null);
         setSession(null);
         purgeLocalAccountData();

@@ -17,6 +17,7 @@ export interface EmailPreview {
 }
 
 export interface EmailUsage {
+  broadcast?: { enabled: boolean; configured: boolean; missing: string[] };
   configured: boolean;
   day: number;
   month: number;
@@ -35,7 +36,10 @@ export interface EmailLogRow {
   status: string;
   message_id?: string | null;
   error?: string | null;
+  /** First request for the tracking image, including email-client proxy requests. */
   opened_at?: string | null;
+  /** First confirmation-form submission. Older API versions omit this field. */
+  acknowledged_at?: string | null;
   created_at: string;
 }
 

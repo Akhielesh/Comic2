@@ -270,3 +270,15 @@ Add to `.env.example` (read by code, were absent): `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `FINNHUB_API_KEY`, `FRED_API_KEY`, `ADMIN_EMAILS`,
 `VENTURES_ENABLED`, `MCP_OUTBOUND_TOKEN`,
 `AMADEUS_PRODUCTION`, `OPENROUTER_SMART_TEXT_MODEL`, `NVIDIA_TEXT_MODEL`.
+
+
+## Private Comic artwork backup
+
+| Binding or configuration | Location | Purpose |
+|---|---|---|
+| `BACKUP_TOKEN` | Private artwork Worker secret | Authenticates a read of the approved source buckets. The Edge Function stores its SHA-256 digest. |
+| `SOURCE_ANON_KEY` | Public project key in the artwork Worker configuration | Supplies the project JWT required by the Supabase Edge gateway. |
+| `BACKUP` and `TASKS` | Artwork Worker R2 and Queue bindings | Store versioned image bytes and schedule bounded copy batches. R2 capacity, operations, queues and source egress may incur charges. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Built-in Edge Function secret in Supabase | Signs ten-minute artwork reads for the authenticated backup Worker. |
+
+See the [artwork recovery procedure](../production/comic-artwork-backups.md).

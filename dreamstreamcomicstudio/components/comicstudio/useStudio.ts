@@ -1296,23 +1296,29 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     return () => clearTimeout(timer);
   }, [stale, state.refreshing, state.loading, state.hardRefresh, streamCount, refresh]);
 
-  // Renders running with no stream attached (the page was reloaded mid-render, or a
-  // stream dropped): poll the doc, bounded, until they settle.
+  // Resume from the saved project after opening a new tab mid-draft or mid-render.
+  // This only reloads the document; it never starts or replays a model call.
   const rendering = renderingCount(state.doc);
+  const watchingDirectorDraft = state.doc?.directorDraft?.status === 'planning' || state.doc?.directorDraft?.status === 'ready';
   const watchPollsRef = useRef(0);
   useEffect(() => {
-    if (rendering === 0 || streamCount > 0) {
+    if ((!rendering && !watchingDirectorDraft) || streamCount > 0) {
       watchPollsRef.current = 0;
       return;
     }
     if (state.loading || state.refreshing || watchPollsRef.current >= RENDER_WATCH_MAX_POLLS) return;
-    const timer = setTimeout(() => {
+    const check = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       watchPollsRef.current += 1;
       void refresh();
-    }, RENDER_WATCH_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [rendering, streamCount, state.loading, state.refreshing, state.base?.rev, refresh]);
+    };
+    const timer = setTimeout(check, RENDER_WATCH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [rendering, watchingDirectorDraft, streamCount, state.loading, state.refreshing, state.base?.rev, refresh]);
 
   // ── Signed URLs ────────────────────────────────────────────────────────────
 

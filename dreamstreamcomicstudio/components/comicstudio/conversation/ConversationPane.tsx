@@ -21,11 +21,13 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDown } from 'lucide-react';
+import { WRAP_TEXT } from '../../chat/studioDesign';
 import { buildSettleIndex, settledCardsOn } from '../../../shared/comic/settle';
 import { retriesVersion, subscribeRetries, waitingRetries } from '../reliability/retryIntents';
 import type { ComicStudioController } from '../useStudio';
 import { conversationEntries } from '../studioReducer';
 import { ActivityLine } from './ActivityLine';
+import { DirectorDraftControl } from './DirectorDraftControl';
 import { QueuedMessages } from './QueuedMessages';
 import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
@@ -224,6 +226,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
 
   return (
     <section aria-label="Conversation" className={cx('relative flex h-full min-h-0 w-full flex-col', className)} onDragOver={onDragOver} onDrop={onDrop}>
+      {doc && !replaceList && <DirectorDraftControl key={doc.id} studio={studio} readComposerDraft={() => composerRef.current?.readDraft?.() ?? ''} />}
       {replaceList ? (
         <div className="min-h-0 flex-1 overflow-hidden">{replaceList}</div>
       ) : (
@@ -237,7 +240,13 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
             className={cx('mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col gap-6 px-4 pt-6 sm:px-6', pinned ? 'pb-6' : 'pb-14')}
           >
             {isEmpty ? (
-              <EmptyConversation onSend={(t) => void studio.send(t)} disabled={!doc || messageBusy} />
+              doc?.directorDraft && doc.directorDraft.status !== 'hands_on' ? (
+                <div className="mx-auto my-auto w-full max-w-xl space-y-3 py-5">
+                  <DirectorMark className="h-8 w-8" />
+                  <h2 className="text-xl font-semibold tracking-tight text-[var(--ds-ink)]">Your story brief</h2>
+                  <p className={`line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ds-muted)] ${WRAP_TEXT}`}>{doc.directorDraft.idea}</p>
+                </div>
+              ) : <EmptyConversation onSend={(t) => void studio.send(t)} disabled={!doc || messageBusy} />
             ) : (
               <>
                 {docEntries.map(({ msg, draft }, i) => {

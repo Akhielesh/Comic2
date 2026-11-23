@@ -490,6 +490,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
             </button>
             <DictationButton
+              focusOnEntry={new URLSearchParams(window.location.search).get('voice') === '1'}
               disabled={busy}
               onStart={() => {
                 dictationBaseRef.current = text;

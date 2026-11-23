@@ -15,6 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CircleCheck, Coffee, Info, PenLine, RefreshCw, Redo2, ShieldCheck, Undo2, X } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { useCostFormat } from './cost';
+import { API_KEYS_HREF } from '../../usage/links';
 import { ACCENT_SOFT_BG, FOCUS_RING, STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
@@ -32,6 +33,7 @@ export interface ErrorPresentation {
   hint?: string;
   /** Offer "Resync" (reload the comic) — only when the state may really be out of date. */
   resync: boolean;
+  accountAction?: string;
 }
 
 /** Tailor the error banner to the server's code (unknown codes fall back to a calm problem line). */
@@ -46,6 +48,11 @@ export const errorPresentation = (code: string | null | undefined): ErrorPresent
         hint: 'Try rewording it — action, adventure and spooky stories are all fine; comics stay PG-13 at most.',
         resync: false
       };
+    case 'BILLING_DENIED':
+      return { tone: 'info', accountAction: 'Review usage and API keys', resync: false };
+    case 'NO_TEXT_KEY':
+    case 'NO_IMAGE_KEY':
+      return { tone: 'info', accountAction: 'Add an API key', resync: false };
     case 'LIMIT':
     case 'FORBIDDEN':
     case 'NOT_READY':
@@ -94,6 +101,7 @@ export const StudioErrorBanner: React.FC<{ studio: Pick<ComicStudioController, '
           {p.title && <span className="font-semibold">{p.title}: </span>}
           {studio.error}
         </p>
+        {p.accountAction && <a href={API_KEYS_HREF} className={cx(SMALL_BTN, 'mt-1 underline')}>{p.accountAction}</a>}
         {p.hint && (
           <p className="mt-0.5 flex items-start gap-1 text-[11.5px] text-[var(--ds-muted)]">
             {p.tone === 'care' && <PenLine className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />}

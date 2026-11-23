@@ -4,9 +4,14 @@
 
 import { mainAppUrl } from '../../services/productHost';
 
+/** Every section of the landing, in page order (the hero is `top`). */
+export const LANDING_SECTION_IDS = ['top', 'features', 'workspaces', 'looks', 'how-it-works', 'models', 'pricing', 'read', 'register', 'faq'] as const;
+export type LandingSectionId = (typeof LANDING_SECTION_IDS)[number];
+export const isLandingSectionId = (id: string): id is LandingSectionId => (LANDING_SECTION_IDS as readonly string[]).includes(id);
+
 /** App views that belong to OTHER DreamStream products. On the comics host they open on the main
  *  site instead (its own session there), never inside Comic Studio. */
-export const OFF_HOST_VIEWS: ReadonlySet<string> = new Set(['chat', 'ventures', 'models']);
+export const OFF_HOST_VIEWS: ReadonlySet<string> = new Set(['ventures', 'models']);
 
 /** Main-site URL for an off-host view (paths match how the main app restores each view). */
 export const offHostUrlForView = (view: string): string | null => {
@@ -28,6 +33,7 @@ export const shouldBootToDashboard = (location: { pathname: string; search: stri
   const params = new URLSearchParams(location.search);
   if (INTENT_PARAMS.some((key) => params.has(key))) return false;
   const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
+  if (hash !== 'top' && isLandingSectionId(hash)) return false;
   if (/(^|&)(access_token|refresh_token|token_hash|error_description)=/.test(hash)) return false;
   return true;
 };

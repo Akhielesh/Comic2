@@ -1,218 +1,200 @@
-// Email-safe building blocks. Everything is table-based with inline CSS because real
-// inboxes (Gmail, Outlook desktop/web, Apple Mail, Yahoo) strip <style>, flexbox, grid
-// and most modern CSS. Modern niceties (box-shadow for the "comic" lift, web fonts) are
-// layered on as progressive enhancement — they render where supported and are ignored
-// everywhere else without breaking the layout.
+// Shared transactional email components. Each element has a usable inline light palette.
+// Fluid tables work without media queries. Classic Outlook receives a fixed outer frame.
+import { BrandConfig, COLORS, DEFAULT_BRAND, FONT_BODY, FONT_DISPLAY } from './theme.js';
 
-import { BrandConfig, COLORS, FONT_BODY, FONT_DISPLAY } from './theme.js';
-
-/** Escape user/dynamic text before it lands in HTML. */
 export const escapeHtml = (value: string): string =>
-  String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-/** Only allow http(s) (and mailto) hrefs — neutralises javascript:/data: injection in links. */
+/** Normalize a destination; HTML callers also escape it for its attribute context. */
 export const safeUrl = (value: string): string => {
-  const v = String(value ?? '').trim();
-  if (/^https?:\/\//i.test(v) || /^mailto:/i.test(v)) return v.replace(/"/g, '%22');
+  const url = String(value ?? '').trim();
+  if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) return url.replace(/"/g, '%22');
   return '#';
 };
 
-/** A comic-style heading inside the card. */
-export const heading = (text: string): string =>
-  `<h1 style="margin:0 0 16px;font-family:${FONT_DISPLAY};font-size:30px;line-height:1.1;letter-spacing:0.5px;color:${COLORS.ink};text-transform:uppercase;">${escapeHtml(
-    text
-  )}</h1>`;
+const hrefAttr = (href: string) => escapeHtml(safeUrl(href));
+const tableAttrs = 'role="presentation" cellpadding="0" cellspacing="0" border="0"';
+const tableStyle = 'border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;';
+const longText = 'overflow-wrap:anywhere;word-wrap:break-word;word-break:break-word;';
 
-/** A body paragraph. Pass already-safe inline HTML (use escapeHtml on dynamic bits). */
+export const heading = (text: string): string =>
+  `<h1 class="ds-ink ds-heading" style="margin:0 0 22px;font-family:${FONT_DISPLAY};font-size:34px;font-weight:700;line-height:1.16;letter-spacing:-1.1px;color:${COLORS.ink};${longText}">${escapeHtml(text)}</h1>`;
+
 export const paragraph = (html: string): string =>
-  `<p style="margin:0 0 16px;font-family:${FONT_BODY};font-size:16px;line-height:1.6;color:${COLORS.ink};">${html}</p>`;
+  `<p class="ds-ink" style="margin:0 0 18px;font:16px/1.6 ${FONT_BODY};color:${COLORS.ink};${longText}">${html}</p>`;
 
 export const muted = (html: string): string =>
-  `<p style="margin:0 0 12px;font-family:${FONT_BODY};font-size:13px;line-height:1.6;color:${COLORS.muted};">${html}</p>`;
+  `<p class="ds-muted" style="margin:0 0 14px;font:14px/1.6 ${FONT_BODY};color:${COLORS.muted};${longText}">${html}</p>`;
 
-/** Pale-yellow info panel with the signature black outline. */
 export const infoBox = (html: string): string =>
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:separate;">
-    <tr><td style="background:${COLORS.boxBg};border:2px solid ${COLORS.black};border-radius:10px;padding:16px 18px;font-family:${FONT_BODY};font-size:15px;line-height:1.6;color:${COLORS.ink};">${html}</td></tr>
+  `<table ${tableAttrs} width="100%" style="${tableStyle}table-layout:fixed;margin:6px 0 22px;">
+    <tr><td class="ds-panel ds-ink" bgcolor="${COLORS.boxBg}" style="border-left:3px solid #5c5c5c;padding:16px 20px;font:15px/1.6 ${FONT_BODY};color:${COLORS.ink};${longText}">${html}</td></tr>
   </table>`;
 
-/** A feature row: emoji + bold title + muted description. Email-safe (table-based). */
-export const featureCard = (emoji: string, title: string, desc: string): string =>
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;border-collapse:separate;">
-    <tr>
-      <td width="46" valign="top" style="font-size:26px;line-height:1;padding-top:2px;">${emoji}</td>
-      <td valign="top" style="font-family:${FONT_BODY};color:${COLORS.ink};">
-        <div style="font-weight:bold;font-size:16px;margin:0 0 2px;">${escapeHtml(title)}</div>
-        <div style="font-size:14px;line-height:1.5;color:${COLORS.muted};">${escapeHtml(desc)}</div>
-      </td>
-    </tr>
+// Present each feature as a readable text row even when a client has no emoji glyphs.
+export const featureCard = (_emoji: string, title: string, desc: string): string =>
+  `<table ${tableAttrs} width="100%" style="${tableStyle}table-layout:fixed;">
+    <tr><td class="ds-rule" style="border-top:1px solid ${COLORS.line};padding:13px 0 15px;">
+      <p class="ds-ink" style="margin:0 0 3px;font:700 16px/1.45 ${FONT_BODY};color:${COLORS.ink};${longText}">${escapeHtml(title)}</p>
+      <p class="ds-muted" style="margin:0;font:14px/1.6 ${FONT_BODY};color:${COLORS.muted};${longText}">${escapeHtml(desc)}</p>
+    </td></tr>
   </table>`;
 
-/** A thin divider rule. */
 export const divider = (): string =>
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="border-top:2px solid ${COLORS.black};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table><div style="height:18px;line-height:18px;">&nbsp;</div>`;
+  `<table ${tableAttrs} width="100%" style="${tableStyle}"><tr><td class="ds-rule" height="19" style="border-top:1px solid ${COLORS.line};line-height:1px;font-size:1px;">&nbsp;</td></tr></table>`;
 
-/** A big monospace verification code / token badge. */
 export const codeBadge = (code: string): string =>
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:separate;">
-    <tr><td align="center" style="background:${COLORS.yellow};border:3px solid ${COLORS.black};border-radius:12px;padding:18px 12px;">
-      <span style="font-family:'Courier New',Courier,monospace;font-size:30px;font-weight:bold;letter-spacing:6px;color:${COLORS.ink};">${escapeHtml(
-        code
-      )}</span>
+  `<table ${tableAttrs} width="100%" style="${tableStyle}table-layout:fixed;margin:6px 0 22px;">
+    <tr><td class="ds-panel ds-ink ds-code" bgcolor="${COLORS.boxBg}" align="center" dir="ltr" style="border:1px solid ${COLORS.line};border-radius:8px;padding:16px 10px;font:700 26px/1.45 'Courier New',Courier,monospace;letter-spacing:3px;color:${COLORS.ink};${longText}">${escapeHtml(code)}</td></tr>
+  </table>`;
+
+/** MSO's raised text trick keeps the padded anchor clickable without a second link or a fixed VML width. */
+export const button = (label: string, href: string, _variant: 'yellow' | 'blue' = 'blue'): string =>
+  `<table ${tableAttrs} style="${tableStyle}margin:8px 0 22px;max-width:100%;">
+    <tr><td class="ds-cta" align="center" bgcolor="${COLORS.ink}" style="border-radius:7px;background:${COLORS.ink};mso-padding-alt:0;">
+      <a class="ds-action" href="${hrefAttr(href)}" target="_blank" style="display:inline-block;padding:13px 23px;color:#ffffff;font:700 16px/22px ${FONT_BODY};text-decoration:none;text-align:center;mso-padding-alt:0;${longText}"><!--[if mso]><i style="letter-spacing:23px;mso-font-width:-100%;mso-text-raise:23pt" hidden>&nbsp;</i><![endif]--><span style="mso-text-raise:11pt;">${escapeHtml(label)}</span><!--[if mso]><i style="letter-spacing:23px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></a>
     </td></tr>
   </table>`;
 
-/**
- * Bulletproof comic CTA button. Uses an MSO conditional fill so it renders solid in
- * Outlook desktop too, then the styled anchor for everyone else.
- */
-export const button = (label: string, href: string, variant: 'yellow' | 'blue' = 'blue'): string => {
-  const bg = variant === 'yellow' ? COLORS.yellow : COLORS.blue;
-  const fg = variant === 'yellow' ? COLORS.ink : COLORS.white;
-  const url = safeUrl(href);
-  const text = escapeHtml(label);
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 24px;">
-    <tr><td align="center" bgcolor="${bg}" style="border-radius:10px;border:3px solid ${COLORS.black};box-shadow:4px 4px 0 ${COLORS.black};">
-      <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${url}" style="height:48px;v-text-anchor:middle;width:280px;" arcsize="20%" strokecolor="${COLORS.black}" fillcolor="${bg}"><w:anchorlock/><center style="color:${fg};font-family:${FONT_BODY};font-size:16px;font-weight:bold;"><![endif]-->
-      <a href="${url}" target="_blank" style="display:inline-block;padding:14px 30px;font-family:${FONT_BODY};font-size:16px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;color:${fg};text-decoration:none;">${text}</a>
-      <!--[if mso]></center></v:roundrect><![endif]-->
-    </td></tr>
-  </table>`;
-};
-
-/** Render a small "or paste this link" fallback row beneath a CTA. */
 export const linkFallback = (href: string): string => {
-  const url = safeUrl(href);
-  return `<p style="margin:0 0 18px;font-family:${FONT_BODY};font-size:12px;line-height:1.5;color:${COLORS.muted};word-break:break-all;">
-    Button not working? Copy &amp; paste this link:<br/>
-    <a href="${url}" target="_blank" style="color:${COLORS.blueDark};">${escapeHtml(url)}</a>
+  const url = hrefAttr(href);
+  return `<p class="ds-muted" style="margin:0 0 20px;font:13px/1.55 ${FONT_BODY};color:${COLORS.muted};">
+    You can also copy this link into your browser.<br>
+    <a class="ds-link" href="${url}" target="_blank" style="color:${COLORS.ink};text-decoration:underline;word-break:break-all;overflow-wrap:anywhere;">${url}</a>
   </p>`;
 };
 
+/** The static frame is the baseline for Outlook, stripped CSS and reduced-motion devices. */
+export const comicSample = (readerUrl: string, headline: string, story: string): string => {
+  const art = 'https://comics.dreamstreamstudio.ai/assets/email/last-tram-strip';
+  const alt = 'Two panels from The Last Tram. A traveler overlooks a moonlit harbor, then follows the coastal tram.';
+  const sizing = 'width:100%;max-width:530px;height:auto;border:0;';
+  return `<table ${tableAttrs} width="100%" style="${tableStyle}table-layout:fixed;margin:20px 0 6px;">
+    <tr><td class="ds-rule" style="border-top:1px solid ${COLORS.line};padding:20px 0 10px;">
+      <h2 class="ds-ink" style="margin:0 0 12px;font:600 22px/1.25 ${FONT_DISPLAY};color:${COLORS.ink};">${escapeHtml(headline)}</h2>
+      <img class="ds-comic-still" src="${art}.jpg" alt="${alt}" width="530" height="143" style="display:block;${sizing}">
+      <!--[if !mso]><!--><img class="ds-comic-motion" src="${art}.gif" alt="${alt}" width="530" height="143" style="display:none;max-height:0;overflow:hidden;mso-hide:all;${sizing}"><!--<![endif]-->
+    </td></tr>
+    <tr><td>
+      <p class="ds-muted" style="margin:0 0 5px;font:15px/1.55 ${FONT_BODY};color:${COLORS.muted};">${escapeHtml(story)}</p>
+      <a class="ds-link" href="${hrefAttr(readerUrl)}" style="display:inline-block;padding:8px 0;color:${COLORS.ink};font:700 15px/1.45 ${FONT_BODY};text-decoration:underline;">Read both pages of The Last Tram</a>
+    </td></tr>
+  </table>`;
+};
+
+
 interface LayoutInput {
   brand: BrandConfig;
-  /** Hidden inbox-preview text (the grey line next to the subject). */
+  studio?: 'comic_studio' | 'stream_studio' | 'chat_studio';
   preheader: string;
-  /** Inner card HTML, assembled from the helpers above. */
   content: string;
-  /** Per-recipient unsubscribe / manage-preferences URL (marketing mail only). */
   unsubscribeUrl?: string;
-  /** True for required account/security mail — shows a "required notice" line, never an unsubscribe. */
   essential?: boolean;
-  /** Optional 1x1 read-receipt pixel URL embedded before </body>. */
+  footerNotice?: string;
+  ackUrl?: string;
   pixelUrl?: string;
-  /** True for automated mail sent from a no-reply address — adds a "don't reply" notice. */
   noReply?: boolean;
 }
 
-/** Wrap card content in the full responsive, comic-branded HTML document. */
-export const wrapHtml = ({ brand, preheader, content, unsubscribeUrl, essential, pixelUrl, noReply }: LayoutInput): string => {
+export const wrapHtml = ({ brand, studio, preheader, content, unsubscribeUrl, essential, footerNotice, ackUrl, pixelUrl, noReply }: LayoutInput): string => {
   const year = new Date().getUTCFullYear();
-  const logo = brand.logoUrl
-    ? `<img src="${safeUrl(brand.logoUrl)}" width="220" alt="${escapeHtml(
-        brand.productName
-      )}" style="display:block;border:0;max-width:220px;height:auto;" />`
-    : `<span style="font-family:${FONT_DISPLAY};font-size:30px;letter-spacing:1px;color:${COLORS.ink};text-transform:uppercase;">${escapeHtml(
-        brand.productName
-      )}</span>`;
-
-  // Always embed the app conventions (open / sign in / help). Unsubscribe is added for
-  // marketing mail only — required account & security notices can never be unsubscribed.
-  const fLink = (href: string, label: string) =>
-    `<a href="${href}" style="color:${COLORS.footerLink};text-decoration:none;">${label}</a>`;
-  const footerLinks = [
-    fLink(safeUrl(brand.appUrl), 'Open the app'),
-    fLink(safeUrl(brand.appUrl), 'Sign in'),
-    fLink(`mailto:${escapeHtml(brand.supportEmail)}`, 'Get help'),
-    unsubscribeUrl ? fLink(safeUrl(unsubscribeUrl), 'Unsubscribe') : ''
-  ]
-    .filter(Boolean)
-    .join('&nbsp;&nbsp;·&nbsp;&nbsp;');
-
-  // Honest "why am I getting this" notice (CAN-SPAM / CASL).
-  const noticeLine = essential
-    ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">This is a required ${escapeHtml(
-        brand.productName
-      )} account notification, so it has no unsubscribe link.</div>`
-    : unsubscribeUrl
-      ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">You're receiving this because you subscribed to ${escapeHtml(
-          brand.productName
-        )} updates.</div>`
-      : '';
-
-  const replyNotice = noReply
-    ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">This mailbox isn't monitored, so please don't reply. Need a hand? <a href="mailto:${escapeHtml(
-        brand.supportEmail
-      )}" style="color:${COLORS.footerLink};text-decoration:none;">${escapeHtml(brand.supportEmail)}</a></div>`
-    : '';
-
-  const addressLine = brand.companyAddress
-    ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">${escapeHtml(brand.companyAddress)}</div>`
-    : '';
-
-  // 1x1 read-receipt pixel (open tracking). Only embedded when the caller supplies a URL.
-  const pixel =
-    pixelUrl && /^https?:\/\//i.test(pixelUrl)
-      ? `<img src="${safeUrl(pixelUrl)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;opacity:0;" />`
-      : '';
+  const name = escapeHtml(brand.productName);
+  const appUrl = hrefAttr(brand.appUrl);
+  const helpUrl = hrefAttr(`mailto:${brand.supportEmail}`);
+  // Same mark and two-tone wordmark as BrandLockup.tsx and ComicsHeader.tsx.
+  // Use the checked-in manifest PNGs because Outlook cannot reliably display those headers' SVGs.
+  const suiteBrand = brand.productName === DEFAULT_BRAND.productName;
+  const standardBrand = suiteBrand || ['Comic Studio', 'Stream Studio', 'Chat Studio'].includes(brand.productName);
+  const studioNames = { comic_studio: 'Comic', stream_studio: 'Stream', chat_studio: 'Chat' };
+  const studioName = suiteBrand ? studio ? studioNames[studio] : 'DreamStream' : brand.productName.replace(/ Studio$/, '');
+  const comicPaper = standardBrand && studioName === 'Comic';
+  const paper = comicPaper ? '#fffdf7' : COLORS.paper;
+  const canvas = comicPaper ? '#fbf8f0' : COLORS.pageBg;
+  const wordmark = standardBrand
+    ? `<strong class="ds-ink" style="color:${COLORS.ink};font-weight:600;">${studioName}</strong> <span class="ds-muted" style="color:${COLORS.muted};font-weight:500;">Studio</span>`
+    : name;
+  const icon = comicPaper ? 'comics-192.png' : 'app-192.png';
+  const assetUrl = hrefAttr(`${DEFAULT_BRAND.appUrl}/icons/${icon}`);
+  const brandText = `<span class="ds-ink" style="font:600 22px/1.3 ${FONT_DISPLAY};color:${COLORS.ink};letter-spacing:-0.4px;">${wordmark}</span>`;
+  const mark = brand.logoUrl
+    ? `<img src="${hrefAttr(brand.logoUrl)}" alt="${name}" width="180" style="display:block;max-width:100%;height:auto;border:0;color:${COLORS.ink};">`
+    : `${standardBrand ? `<img src="${assetUrl}" width="32" height="32" alt="" style="vertical-align:middle;border:0;border-radius:8px;">&nbsp;&nbsp;` : ''}<span style="vertical-align:middle;">${brandText}</span>`;
+  const footerLink = (url: string, label: string) =>
+    `<a class="ds-footerlink" href="${url}" style="display:inline-block;padding:5px 0;color:${COLORS.footerLink};text-decoration:underline;font-weight:bold;">${label}</a>`;
+  const links = [footerLink(appUrl, 'Open the app'), footerLink(helpUrl, 'Get help')];
+  if (unsubscribeUrl && !essential) links.push(footerLink(hrefAttr(unsubscribeUrl), 'Unsubscribe'));
+  if (ackUrl) links.push(footerLink(hrefAttr(ackUrl), 'Acknowledge this message (optional)'));
+  const notice = footerNotice || (essential
+    ? `This is a required ${brand.productName} account notification.`
+    : unsubscribeUrl ? `You subscribed to ${brand.productName} updates.` : '');
+  const footerLine = (html: string) =>
+    `<p class="ds-muted" style="margin:5px 0 0;font:13px/1.55 ${FONT_BODY};color:${COLORS.footerText};${longText}">${html}</p>`;
+  const pixel = pixelUrl && /^https?:\/\//i.test(pixelUrl)
+    ? `<img src="${hrefAttr(pixelUrl)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">` : '';
 
   return `<!DOCTYPE html>
-<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="en" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="x-apple-disable-message-reformatting" />
-  <meta name="color-scheme" content="light only" />
-  <meta name="supported-color-schemes" content="light only" />
-  <title>${escapeHtml(brand.productName)}</title>
-  <!--[if mso]><style>* { font-family: Arial, sans-serif !important; }</style><![endif]-->
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark">
+  <title>${name}</title>
+  <!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap');
-    body { margin:0; padding:0; width:100% !important; -webkit-text-size-adjust:100%; }
-    a { text-decoration:none; }
-    @media (max-width:600px) { .card-pad { padding:24px 20px !important; } }
+    :root {color-scheme:light dark;supported-color-schemes:light dark}
+    body {margin:0;padding:0;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}
+    a:focus-visible {outline:3px solid #5c5c5c;outline-offset:2px}
+    @media screen and (prefers-reduced-motion:no-preference) {
+      .ds-comic-still {display:none!important}
+      .ds-comic-motion {display:block!important;max-height:none!important;overflow:visible!important}
+    }
+    @media screen and (max-width:600px) {
+      .ds-outer {padding:18px 10px!important}
+      .ds-head {padding:18px 20px!important}
+      .ds-body {padding:26px 20px 15px!important}
+      .ds-foot {padding:12px 14px 8px!important}
+      .ds-heading {font-size:28px!important;letter-spacing:-0.6px!important}
+      .ds-code {font-size:22px!important;letter-spacing:2px!important}
+    }
+    @media (prefers-color-scheme:dark) {
+      .ds-page {background-color:${comicPaper ? '#191612' : '#0a0a0a'}!important}
+      .ds-card {background-color:${comicPaper ? '#211c17' : '#111111'}!important;border-color:#393939!important;border-top-color:#fafafa!important}
+      .ds-rule {border-color:#393939!important}
+      .ds-ink {color:${comicPaper ? '#f8efe1' : '#fafafa'}!important}
+      .ds-muted {color:${comicPaper ? '#c5b8aa' : '#a3a3a3'}!important}
+      .ds-panel {background-color:#202020!important;border-color:#5c5c5c!important}
+      .ds-link,.ds-footerlink,.ds-panel a {color:#fafafa!important}
+      .ds-cta {background:#fafafa!important}
+      .ds-action {color:#0a0a0a!important}
+    }
   </style>
 </head>
-<body style="margin:0;padding:0;background:${COLORS.pageBg};">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:${COLORS.pageBg};">${escapeHtml(
-    preheader || brand.tagline
-  )}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COLORS.pageBg};">
-    <tr><td align="center" style="padding:28px 12px;">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;">
-
-        <!-- Header / wordmark on comic yellow -->
-        <tr><td style="background:${COLORS.yellow};border:3px solid ${COLORS.black};border-bottom:none;border-radius:14px 14px 0 0;padding:22px 28px;" align="left">
-          ${logo}
-        </td></tr>
-
-        <!-- Card body (the comic-shadow lift renders where box-shadow is supported) -->
-        <tr><td class="card-pad" style="background:${COLORS.paper};border:3px solid ${COLORS.black};border-top:none;border-radius:0 0 14px 14px;box-shadow:6px 6px 0 ${COLORS.black};padding:30px 32px;">
-          ${content}
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="padding:22px 8px 8px;" align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COLORS.footerBg};border:3px solid ${COLORS.black};border-radius:12px;">
-            <tr><td align="center" style="padding:18px 22px;font-family:${FONT_BODY};font-size:12px;line-height:1.7;color:${COLORS.footerText};">
-              <div style="margin-bottom:6px;">${footerLinks}</div>
-              <div>© ${year} ${escapeHtml(brand.companyName)}. All rights reserved.</div>
-              ${noticeLine}
-              ${replyNotice}
-              ${addressLine}
+<body class="ds-page" style="margin:0;padding:0;background-color:${canvas};">
+  <div aria-hidden="true" style="display:none!important;mso-hide:all;max-height:0;max-width:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;">${escapeHtml(preheader || brand.tagline)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
+  <table ${tableAttrs} width="100%" class="ds-page" bgcolor="${canvas}" style="${tableStyle}width:100%;">
+    <tr><td class="ds-outer" align="center" style="padding:40px 14px 28px;">
+      <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+      <table ${tableAttrs} width="100%" style="${tableStyle}width:100%;max-width:600px;table-layout:fixed;">
+        <tr><td class="ds-card" bgcolor="${paper}" style="border:1px solid ${COLORS.line};border-top:3px solid #0a0a0a;border-radius:10px;">
+          <table ${tableAttrs} width="100%" style="${tableStyle}width:100%;table-layout:fixed;">
+            <tr><td class="ds-head ds-rule" align="left" style="padding:19px 34px;border-bottom:1px solid ${COLORS.line};">
+              <a href="${appUrl}" aria-label="${standardBrand ? studioName + ' Studio' : name}" style="color:${COLORS.ink};text-decoration:none;${longText}">${mark}</a>
             </td></tr>
+            <tr><td class="ds-body" align="left" style="padding:32px 34px 18px;${longText}">${content}</td></tr>
           </table>
         </td></tr>
-
+        <tr><td class="ds-foot" align="left" style="padding:16px 20px 8px;font:13px/1.55 ${FONT_BODY};color:${COLORS.footerText};">
+          <div>${links.join(' &nbsp;·&nbsp; ')}</div>
+          ${notice ? footerLine(escapeHtml(notice)) : ''}
+          ${pixelUrl ? footerLine('Loading images can record an image request for this message.') : ''}
+          ${noReply ? footerLine(`This mailbox isn't monitored. For help, email <a class="ds-footerlink" href="${helpUrl}" style="color:${COLORS.footerLink};text-decoration:underline;">${escapeHtml(brand.supportEmail)}</a>.`) : ''}
+          ${footerLine(`© ${year} ${escapeHtml(brand.companyName)}${brand.companyAddress ? ` · ${escapeHtml(brand.companyAddress)}` : ''}`)}
+        </td></tr>
       </table>
+      <!--[if mso]></td></tr></table><![endif]-->
     </td></tr>
   </table>
   ${pixel}
 </body>
-</html>`;
+</html>`.replace(/^[ \t]+$/gm, '');
 };

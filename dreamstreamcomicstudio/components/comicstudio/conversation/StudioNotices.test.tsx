@@ -24,6 +24,18 @@ describe('StudioErrorBanner — tailored by the server code', () => {
     expect(errorPresentation('SOMETHING_NEW')).toMatchObject({ tone: 'problem', resync: true });
   });
 
+  it.each([
+    ['BILLING_DENIED', 'Review usage and API keys'],
+    ['NO_TEXT_KEY', 'Add an API key'],
+    ['NO_IMAGE_KEY', 'Add an API key']
+  ])('gives one account recovery action for %s without a misleading resync', (errorCode, label) => {
+    const studio = makeFakeStudio({ error: 'The draft could not run.', errorCode });
+    render(<StudioErrorBanner studio={studio} />);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', '/?view=settings&tab=settings');
+    expect(screen.queryByRole('button', { name: 'Resync' })).not.toBeInTheDocument();
+  });
+
   it('a safety break reads as a pause: no Resync, reading and editing still work', () => {
     const studio = makeFakeStudio({ error: 'New drawings are paused for a few minutes.', errorCode: 'COOLDOWN' });
     render(<StudioErrorBanner studio={studio} />);

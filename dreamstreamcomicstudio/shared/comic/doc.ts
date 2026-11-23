@@ -1204,7 +1204,7 @@ export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
 /** Moved from routes/comic.ts:47 (single source for client + server). */
 export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
-  'relayout_balloons', 'cancel',
+  'relayout_balloons', 'cancel', 'start_director_draft', 'take_over_director_draft',
   'fit_render', 'show_breakdown', 'use_preset', 'ref_crop',
   'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
   'safety_recheck', 'swap_source_language', 'accept_translation_issue',
@@ -1246,7 +1246,17 @@ export interface Msg {
   runAt?: number;
 }
 
+export const DIRECTOR_DRAFT_IDEA_LIMIT = 200_000;
+export interface DirectorDraft {
+  status: 'ready' | 'planning' | 'review' | 'interrupted' | 'hands_on';
+  idea: string;
+  pageId?: string;
+  startedAt?: number;
+}
+
 export interface ComicDoc {
+  /** Private owner-selected drafting intent. Older projects start in hands-on mode. */
+  directorDraft?: DirectorDraft;
   v: number;
   id: string;
   createdAt: number;
@@ -2264,6 +2274,7 @@ export const isValidNextStep = (s: unknown): s is NextStep =>
   isObject(s) &&
   typeof s.label === 'string' &&
   !!s.label.trim() &&
+  !(isObject(s.action) && (s.action.type === 'start_director_draft' || s.action.type === 'take_over_director_draft')) &&
   [s.say !== undefined, s.action !== undefined, s.client !== undefined].filter(Boolean).length <= 1;
 
 const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -2303,7 +2314,7 @@ export const normalizeImageModelLock = (value: unknown): ImageModelLock | undefi
 };
 
 /** A StudioAction type name the server knows (spend or not). */
-const isStudioActionType = (type: unknown): type is string => typeof type === 'string' && (SPEND_ACTION_TYPES.has(type) || NON_SPEND_ACTION_TYPES.has(type));
+const isStudioActionType = (type: unknown): type is string => typeof type === 'string' && type !== 'start_director_draft' && type !== 'take_over_director_draft' && (SPEND_ACTION_TYPES.has(type) || NON_SPEND_ACTION_TYPES.has(type));
 
 /**
  * A well-formed `model_outage` card (malformed options dropped; no valid option → undefined). A `blockedAction`
@@ -2522,6 +2533,15 @@ const CONTENT_RATING_SET: ReadonlySet<string> = new Set(['G', 'PG', 'PG-13']);
 export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDoc => {
   const base = createEmptyDoc(input.id, input.brief?.title || 'Untitled comic', input.createdAt || Date.now());
   const doc = { ...base, ...input } as ComicDoc;
+  const draft = input.directorDraft;
+  if (draft && ['ready', 'planning', 'review', 'interrupted', 'hands_on'].includes(draft.status) &&
+      typeof draft.idea === 'string' && draft.idea.trim() && draft.idea.length <= DIRECTOR_DRAFT_IDEA_LIMIT) {
+    doc.directorDraft = { status: draft.status, idea: draft.idea,
+      ...(typeof draft.pageId === 'string' ? { pageId: draft.pageId } : {}),
+      ...(typeof draft.startedAt === 'number' && Number.isFinite(draft.startedAt) ? { startedAt: draft.startedAt } : {}) };
+  } else {
+    delete doc.directorDraft;
+  }
   doc.v = COMIC_DOC_VERSION;
   doc.rev = typeof input.rev === 'number' ? input.rev : 0;
   doc.brief = { ...base.brief, ...(input.brief || {}), notes: asArray<string>(input.brief?.notes) };

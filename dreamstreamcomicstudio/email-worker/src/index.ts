@@ -6,8 +6,7 @@
 //
 //   POST /send       — HMAC-signed (x-email-signature) calls from the backend.
 //                      Body: { template, to, params?, subject?, replyTo?, brand? }.
-//                      brand: 'stream-studio' renders + signs as Stream Studio (the backend's
-//                      live-app auth emails); any other value is ignored.
+//                      A signed backend request may select the Stream Studio or Comic Studio brand.
 //   POST /auth-hook   — Supabase "Send Email Hook" (Standard Webhooks signature). Turns every
 //                      GoTrue email (signup, magic link/OTP, recovery, invite, email change,
 //                      reauthentication, security notifications) into branded mail. The
@@ -94,6 +93,8 @@ export interface Env {
   // Brand overrides → shared/email BrandConfig.
   PRODUCT_NAME?: string;
   APP_URL?: string;
+  /** Optional when the backend receipt origin differs from the public app. */
+  EMAIL_RECEIPT_ORIGIN?: string;
   SUPPORT_EMAIL?: string;
   COMPANY_NAME?: string;
   COMPANY_ADDRESS?: string;
@@ -261,6 +262,26 @@ async function handleSecurity(req: Request, env: Env): Promise<Response> {
   }
 }
 
+/** Accept only first-party receipt routes. Client-supplied trackers cannot survive a signed relay. */
+const receiptParams = (input: EmailParams | undefined, env: Env): EmailParams => {
+  const params = { ...input };
+  const origin = env.EMAIL_RECEIPT_ORIGIN || env.APP_URL || 'https://dreamstreamstudio.ai';
+  for (const [key, path] of [
+    ['ackUrl', /^\/api\/email\/ack\/[A-Za-z0-9_-]{43}$/],
+    ['pixelUrl', /^\/api\/email\/o\/[A-Za-z0-9_-]{43}\.gif$/]
+  ] as const) {
+    const proposed = params[key];
+    if (!proposed) continue;
+    delete params[key];
+    try {
+      const url = new URL(proposed);
+      if (url.protocol === 'https:' && url.origin === new URL(origin).origin && path.test(url.pathname) &&
+          !url.username && !url.password && !url.search && !url.hash) params[key] = url.href;
+    } catch { /* malformed optional receipts are omitted */ }
+  }
+  return params;
+};
+
 // ── Backend /send ──────────────────────────────────────────────────────────────
 async function handleSend(req: Request, env: Env): Promise<Response> {
   const body = await req.text();
@@ -279,8 +300,12 @@ async function handleSend(req: Request, env: Env): Promise<Response> {
     return json({ error: 'template and to are required' }, 400);
   }
 
+  if (parsed.template === 'product-update') {
+    return json({ error: 'Product updates require the broadcast transport' }, 422);
+  }
+
   try {
-    const params = parsed.params ?? {};
+    const params = receiptParams(parsed.params, env);
     // Same merge as /auth-hook: a sub-brand overrides the env brand (name, home link, From name).
     const override = brandForSend(parsed.brand, env.APP_URL);
     const rendered = renderEmail(parsed.template, params, { ...brandFromEnv(env), ...override });

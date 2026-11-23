@@ -724,6 +724,9 @@ async function directorTurnBody(
   // With the conflict guard on, the model also hears the A3 rule: ask once before overriding DECIDED or a Conflict: result.
   const contradictions = conflictGuardOn(ctx.caps);
   const rules = [...toolset.promptRules, ...(contradictions ? [CONFLICT_PROMPT_LINE] : [])];
+  if (doc.directorDraft?.status === 'review') {
+    rules.push('The creator chose an AI-led first draft and now has an editable page plan. Use the existing pages and cast for changes. Do not repeat the initial writer pass. If a drawing quote is open, direct the creator to review it before drawing. Never interpret the original draft request as permission for more spending, publishing or sharing.');
+  }
   const prompt = rules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${rules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.

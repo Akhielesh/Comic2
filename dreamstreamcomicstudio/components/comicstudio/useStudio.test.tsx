@@ -80,6 +80,20 @@ describe('useStudio — load', () => {
     expect(result.current.urlFor(null)).toBeUndefined();
   });
 
+  it('resumes a saved Director run by reading its state without starting a turn or approving its drawing', async () => {
+    const original = makeSampleDoc({
+      pages: [], cast: [], style: { status: 'empty', refs: [], options: [] },
+      directorDraft: { status: 'planning', idea: 'A lunar ferry.' }
+    });
+    const { result } = await setup(original);
+    const review = makeSampleDoc({ rev: original.rev + 1, directorDraft: { status: 'review', idea: 'A lunar ferry.', pageId: 'pg_1' } });
+    api.loadStudioProject.mockResolvedValue({ doc: review, urls: {} });
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(result.current.doc?.directorDraft?.status).toBe('review'));
+    expect(api.streamStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+  });
+
   it('reports a fatal load error', async () => {
     api.loadStudioProject.mockRejectedValue(new StudioApiError('not_found', "This comic doesn't exist or you don't have access to it.", { status: 404 }));
     const { result } = renderHook(() => useStudio('missing'));

@@ -51,15 +51,10 @@ export const PUBLIC_LEGAL_POINTERS = [
   'Stored payment information is managed by Stripe tokenized methods, not raw card storage on DreamStream.'
 ];
 
-export const OFF_TOPIC_REDIRECT_TIPS = [
-  'Ask about project setup, script analysis, world-building, layout, generation, export, account settings, plans, or troubleshooting.',
-  'For general knowledge unrelated to DreamStream, use a general-purpose assistant.'
-];
-
 export const ASSISTANT_IDENTITY_FACTS = [
   'You are DreamStream Universal Assistant.',
   'You help with DreamStream workflows, troubleshooting, account/settings guidance, and feature explanations.',
-  'You enforce platform-only scope and cannot answer unrelated general-knowledge queries.',
+  'You also answer general questions without needing a project. This chat has no tools or workspace actions.',
   'You cannot access sensitive secrets (API keys, tokens, passwords) and only use safe, allowlisted context.'
 ];
 

@@ -31,6 +31,9 @@ export const attachRequestContext = (req: Request, res: Response, next: NextFunc
 export const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const startedAt = process.hrtime.bigint();
   res.on('finish', () => {
+    const path = loggablePath(req.originalUrl || req.url);
+    // These public endpoints retain only the message event. Do not couple receipts to IPs or accounts in access logs.
+    if (path.startsWith('/api/email/ack/:token') || path.startsWith('/api/email/o/:token')) return;
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     console.info(
       JSON.stringify({
@@ -39,7 +42,7 @@ export const requestLogger = (req: Request, res: Response, next: NextFunction) =
         requestId: req.requestId,
         method: req.method,
         // Never the raw URL: share slugs/tokens are read capabilities and queries carry tokens (S19).
-        path: loggablePath(req.originalUrl || req.url),
+        path,
         status: res.statusCode,
         latencyMs: Number(elapsedMs.toFixed(2)),
         userId: req.user?.id ?? null,

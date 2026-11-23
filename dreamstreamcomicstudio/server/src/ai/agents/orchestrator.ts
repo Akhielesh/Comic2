@@ -318,7 +318,8 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
               ...baseReq,
               model: agentModel,
               messages: [...priorMessages, { role: 'user', content: p.task }],
-              systemOverride: userMemory ? `${agentPrompt}\n\nUser context / preferences:\n${userMemory}` : agentPrompt,
+              systemOverride: agentPrompt,
+              conversationPreferences: userMemory,
               clientContext: params.clientContext,
               tools: resolveTools(toolsFor(def), toolCtx),
               temperature: 0.4,
@@ -397,14 +398,14 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
     ...params.messages.slice(0, -1),
     { role: 'user', content: synthInput }
   ];
-  const synthSystem = [SYNTH_SYSTEM, params.systemPrompt?.trim()].filter(Boolean).join('\n\n');
 
   const synthRes = await runWithConnectorPrivacy(connectorRun, () => runChat({
     ...baseReq,
     model: params.model,
     ...(freeOnly && params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
     messages: synthMessages,
-    systemPrompt: synthSystem,
+    systemPrompt: SYNTH_SYSTEM,
+    conversationPreferences: userMemory,
     clientContext: params.clientContext,
     temperature: 0.5,
     maxTokens: 3072,

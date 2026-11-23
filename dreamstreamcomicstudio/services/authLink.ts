@@ -161,7 +161,7 @@ export async function peekLinkAccount(lookup: TokenEmailLookup | null | undefine
 /* ------------------------------------------------------------------ main app */
 
 export type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
-type MainOtpType = 'magiclink' | 'recovery' | 'signup' | 'email_change';
+type MainOtpType = 'magiclink' | 'recovery' | 'signup' | 'email_change' | 'invite' | 'email';
 
 export interface MainAuthLink {
   /** Null on /auth/callback with nothing usable: an honest "invalid link". */
@@ -187,7 +187,7 @@ export function readMainAuthLink(url: URL): MainAuthLink | null {
   const hash = fragmentParams(url);
   const rawType = url.searchParams.get('type') || hash.get('type') || 'magiclink';
   const flow: AuthCallbackFlow = rawType === 'recovery' || rawType === 'signup' || rawType === 'magiclink' ? rawType : 'unknown';
-  const otpType: MainOtpType = rawType === 'recovery' || rawType === 'signup' || rawType === 'email_change' ? rawType : 'magiclink';
+  const otpType: MainOtpType = rawType === 'recovery' || rawType === 'signup' || rawType === 'email_change' || rawType === 'invite' || rawType === 'email' ? rawType : 'magiclink';
   return { tokens, flow, otpType, next: url.searchParams.get('next') };
 }
 

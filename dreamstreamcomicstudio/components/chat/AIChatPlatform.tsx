@@ -494,7 +494,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Continuity: a reload restores the last view (URL ?cview= → session memory),
   // so refreshing on Dashboards no longer bounces the user back to the default.
   const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'library' || v === 'dashboards' || v === 'gallery';
-  const [view, setView] = useState<StudioView>(() => resolveInitialUiState('chat.view', 'cview', isStudioView, 'chat'));
+  const [view, setView] = useState<StudioView>(() =>
+    new URLSearchParams(window.location.search).get('voice') === '1' ? 'chat' : resolveInitialUiState('chat.view', 'cview', isStudioView, 'chat'));
   useEffect(() => {
     persistUiState('chat.view', 'cview', view === 'chat' ? null : view);
   }, [view]);

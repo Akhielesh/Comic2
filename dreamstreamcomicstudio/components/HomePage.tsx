@@ -306,7 +306,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
               {!user && (
                 <p className="text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
-                  * Chat Studio is open to members. New here? We’re in invite-only beta — request access above.
+                  Sign in or create an account to get started. Your account’s studio permissions apply.
                 </p>
               )}
             </div>

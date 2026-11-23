@@ -26,6 +26,9 @@ import { recordAudit } from '../observability/auditLog.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 import { listContactMessages, markContactMessageHandled } from '../services/contactStore.js';
 
+import { canonicalAccountProvider } from '../middleware/accountKeys.js';
+import { platformBalanceHistory, platformBalanceKey, refreshProviderBalance } from '../services/accountProviderUsage.js';
+
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
 const allowedRoles = ['admin', 'moderator'] as const;
 type AllowedRole = typeof allowedRoles[number];
@@ -568,6 +571,23 @@ adminRouter.post('/contact-messages/:id/handled', requireAdmin, async (req, res,
 // ── Per-user model spend (admin-only) ─────────────────────────────────────────
 // Current-month platform spend + request mix per user, heaviest spenders first.
 // This is the ONE place allowance dollars are exposed; users only ever see percent.
+adminRouter.get('/provider-balances', requireAdmin, async (_req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await platformBalanceHistory());
+  } catch (error) { next(error); }
+});
+
+adminRouter.post('/provider-balances/:provider', requireAdmin, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const provider = canonicalAccountProvider(String(req.params.provider));
+    if (!provider) return res.status(400).json({ error: { message: 'Choose a supported provider.' } });
+    const result = await refreshProviderBalance({ ownerId: null, provider, key: platformBalanceKey(provider) });
+    return res.json(result);
+  } catch (error) { next(error); }
+});
+
 adminRouter.get('/usage/users', requireAdmin, async (req, res, next) => {
   try {
     const limit = parseLimit(req.query.limit, 50);

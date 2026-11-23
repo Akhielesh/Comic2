@@ -565,7 +565,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         e.preventDefault();
         setSecurityMessage(null);
 
-        const candidate = normalizeText(newPassword);
+        const candidate = newPassword;
         if (candidate.length < 8) {
             setSecurityMessage({ type: 'error', text: 'Password must be at least 8 characters.' });
             return;
@@ -574,7 +574,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setSecurityMessage({ type: 'error', text: 'Password must include letters and numbers.' });
             return;
         }
-        if (candidate !== normalizeText(confirmNewPassword)) {
+        if (candidate !== confirmNewPassword) {
             setSecurityMessage({ type: 'error', text: 'Passwords do not match.' });
             return;
         }

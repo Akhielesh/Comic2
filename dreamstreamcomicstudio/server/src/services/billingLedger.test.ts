@@ -45,6 +45,7 @@ const installFakeSupabase = () => {
 
 const {
   getBillingSummary,
+  recordUnreservedHelperUsage,
   releaseReservation,
   reserveUsageTokens,
   settleReservation
@@ -189,6 +190,24 @@ describe('billingLedger', () => {
 });
 
 describe('billingLedger — usage-budget paths (P1-LIMITS)', () => {
+  it('records unreserved helpers once for the authenticated owner without moving wallet funds or storing content', async () => {
+    installFakeSupabase();
+    const args = {
+      provider: 'openrouter', model: 'fixture/text', operation: 'chat.title', byok: true, failed: false,
+      usage: { promptTokens: 3, candidatesTokens: 2, totalTokens: 5, providerCostUsd: 0, prompt: 'private prompt', key: 'private key' }
+    };
+    await recordUnreservedHelperUsage({ ...args, userId: 'owner-1' });
+    await recordUnreservedHelperUsage({ ...args, userId: 'owner-2', usage: undefined });
+    expect(sb.rpcs).toEqual([]);
+    expect(sb.calls.map((call) => call.table)).toEqual(['token_ledger_entries', 'token_ledger_entries']);
+    expect(sb.calls[0].payload).toMatchObject({
+      user_id: 'owner-1', entry_type: 'USAGE_OBSERVED', is_byok: true, ct_delta: 0, usd_delta: 0,
+      provider_cost_usd: 0, metadata: { promptTokens: 3, candidatesTokens: 2, totalTokens: 5 }
+    });
+    expect(sb.calls[1].payload).toMatchObject({ user_id: 'owner-2', provider_cost_usd: undefined });
+    expect(JSON.stringify(sb.calls)).not.toMatch(/private prompt|private key/);
+  });
+
   afterEach(() => {
     sb.fake = null;
   });

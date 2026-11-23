@@ -17,6 +17,7 @@ import { SortableTable, type Column } from './costs/SortableTable';
 import { StackedDailyChart } from './costs/StackedDailyChart';
 import { BudgetMeter, CategoryBreakdown, CostDelta, KpiTile, PeakDay, SkeletonBlock, SourceBadge } from './costs/CostBits';
 import { CloudflareCard } from './costs/CloudflareCard';
+import { PlatformBalances } from './costs/PlatformBalances';
 import { StreamCard } from './costs/StreamCard';
 import { SecurityCard } from './costs/SecurityCard';
 import { COST_PALETTE_CLASS, CATEGORY_SHORT_LABEL, STACK_ORDER } from './costs/costPalette';
@@ -650,6 +651,7 @@ export const CostCentre: React.FC = () => {
     <div className={`space-y-4 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
       {header}
       {body}
+      <PlatformBalances />
       {/* Per-user usage budgets ($10 lifetime per user, all studios) — independent of the report above. */}
       <UsageBudgetsPanel />
     </div>

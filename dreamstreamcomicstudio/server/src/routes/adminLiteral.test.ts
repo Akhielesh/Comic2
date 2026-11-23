@@ -55,6 +55,7 @@ describe('assistant account summary: admin only from the server-held plan', () =
     db.billing = summary('free');
     const out = await resolveSafeAccountSummary({ id: 'u1', email: 'admin@test.com' });
     expect(out).toMatchObject({ isAdmin: false, planTier: 'free' });
+    expect(out).not.toHaveProperty('billing');
   });
 
   it.each([

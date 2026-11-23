@@ -13,6 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 const h = vi.hoisted(() => ({
   user: { id: '11111111-2222-3333-4444-555555555555', email: 'reader.one@dreamstream.test' } as { id: string; email: string } | null,
   getReferral: vi.fn(),
+  changePassword: vi.fn(async (_value: string) => ({ success: true, message: 'Password updated successfully.' })),
   avatarUrl: '',
   adminAccess: vi.fn(async () => ({ isAdmin: false, isModerator: false })),
   saveAvatarImage: vi.fn(async () => 'avatars/new.png')
@@ -25,7 +26,7 @@ vi.mock('../contexts/AuthContext', () => ({
     signOutAll: vi.fn(),
     signOutOthers: vi.fn(),
     resendVerificationEmail: vi.fn(),
-    changePassword: vi.fn()
+    changePassword: h.changePassword
   })
 }));
 vi.mock('../services/supabase', () => ({
@@ -53,7 +54,7 @@ vi.mock('../services/deviceSessions', () => ({
   currentDeviceId: () => 'device-1'
 }));
 vi.mock('../services/studioAccessApi', () => ({ fetchAccountAccess: vi.fn(async () => null) }));
-vi.mock('../services/invites', () => ({ getReferral: h.getReferral, sendReferral: vi.fn() }));
+vi.mock('../services/memberReferrals', () => ({ getMemberReferral: h.getReferral }));
 vi.mock('./admin/AdminConsole', () => ({ AdminConsole: () => null }));
 vi.mock('./ApiConfiguration', () => ({ ApiConfiguration: () => null }));
 vi.mock('./account/StudiosAccess', () => ({ StudiosAccess: () => null }));
@@ -69,7 +70,7 @@ beforeEach(() => {
   h.avatarUrl = '';
   h.adminAccess.mockReset();
   h.adminAccess.mockResolvedValue({ isAdmin: false, isModerator: false });
-  h.getReferral.mockResolvedValue({ url: INVITE_URL, used: 0, max: 5, invited: [], joinedViaLink: 0 });
+  h.getReferral.mockResolvedValue({ url: INVITE_URL, verifiedSignups: 0 });
   window.history.replaceState({}, '', '/');
   try {
     window.sessionStorage.clear();
@@ -95,18 +96,19 @@ describe('Settings › Profile: every field is named by its own label (FX-6)', (
     expect(screen.getByLabelText(/^Date of birth/i)).toHaveValue('1990-01-01');
   });
 
-  it('the invite link is found by its label', async () => {
+  it('the referral link is found by its label and can be copied', async () => {
     await openProfile();
-    await waitFor(() => expect(screen.getByLabelText('Your invite link')).toHaveValue(INVITE_URL));
-    expect(screen.getByLabelText(/email them directly/i).tagName).toBe('TEXTAREA');
+    expect(await screen.findByLabelText('Your referral link')).toHaveValue(INVITE_URL);
+    expect(screen.getByRole('button', { name: 'Copy link' })).toBeEnabled();
   });
 
-  it('a disabled Copy says why (the link could not be loaded)', async () => {
-    h.getReferral.mockRejectedValue(new Error('offline'));
+  it('explains an unavailable referral link and offers a working retry', async () => {
+    h.getReferral.mockRejectedValueOnce(new Error('offline'));
     await openProfile();
-    const copy = await screen.findByRole('button', { name: /copy/i });
-    await waitFor(() => expect(copy).toBeDisabled());
-    expect(copy).toHaveAccessibleDescription(/no link to copy/i);
+    expect(await screen.findByText('Your link is temporarily unavailable.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy link' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByLabelText('Your referral link')).toHaveValue(INVITE_URL);
   });
 
   it('the photo upload is a focusable button with a name that opens the file picker', async () => {
@@ -205,12 +207,11 @@ describe('Settings › Profile: the email, the photo and the chip row (FX-6 revi
     expect(writes).toEqual(['', '']);
   });
 
-  it('a disabled Copy says why while the link is still loading', async () => {
+  it('shows the loading explanation before offering Copy', async () => {
     h.getReferral.mockReturnValue(new Promise(() => undefined));
     await openProfile();
-    const copy = await screen.findByRole('button', { name: /copy/i });
-    expect(copy).toBeDisabled();
-    expect(copy).toHaveAccessibleDescription('No link to copy yet: it is still loading.');
+    expect(await screen.findByText('Loading your link…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy link' })).toBeNull();
   });
 
   // jsdom has no layout: give the chip row a width (375 px phone, or 1024 px when it is a desktop column) and record
@@ -273,4 +274,20 @@ describe('Settings › Profile: the email, the photo and the chip row (FX-6 revi
       restore();
     }
   });
+});
+
+
+it('changes the recovered account password exactly as typed', async () => {
+  render(<AccountSettings onClose={() => undefined} initialTab="security" openPasswordReset />);
+  await screen.findByText('Recovery link verified. Set a new password below.');
+  const password = ' space-kept-123 ';
+  fireEvent.change(screen.getByLabelText('New Password'), { target: { value: password } });
+  fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: password.trim() } });
+  fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+  expect(await screen.findByText('Passwords do not match.')).toBeInTheDocument();
+  expect(h.changePassword).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: password } });
+  fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+  expect(h.changePassword).toHaveBeenCalledWith(password);
+  expect(await screen.findByText('Password updated successfully.')).toBeInTheDocument();
 });

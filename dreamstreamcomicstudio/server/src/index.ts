@@ -36,7 +36,8 @@ import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
 import { usageRouter } from './routes/usage.js';
 import { attachAccountContext } from './lib/accountContext.js';
-import { setUsageCloudSink } from './lib/providerUsage.js';
+import { requireStudioProduct } from './middleware/studioProduct.js';
+import { flushUsageDeltas, setUsageCloudSink } from './lib/providerUsage.js';
 import { getSupabaseAdmin } from './services/supabase.js';
 import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
@@ -51,7 +52,9 @@ import { modelsRouter } from './routes/models.js';
 import { catalogMaintenanceRouter } from './routes/catalogMaintenance.js';
 import { modelShowcaseRouter } from './routes/modelShowcase.js';
 import { telemetryRouter } from './routes/telemetry.js';
+import { startLifecycleEmail } from './services/lifecycleEmail.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { googleLoginRouter } from './routes/googleLogin.js';
 import { authEmailRouter } from './routes/authEmail.js';
 import { authHandoffRouter } from './routes/authHandoff.js';
 import { emailRouter } from './routes/email.js';
@@ -59,6 +62,7 @@ import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
 import { modelBenchRouter } from './routes/modelBench.js';
 import { requireAdmin, requireModerator, requireResearcher } from './middleware/requireAdmin.js';
+import { memberReferralsRouter } from './routes/memberReferrals.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
 import { accountStudiosRouter } from './routes/accountStudios.js';
@@ -203,10 +207,11 @@ app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
 // Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
 // logged-out — sign-up and password reset happen before there is a session).
+app.use('/api/auth/google', createRateLimit({ scope: 'google-login', windowMs: 600_000, maxRequests: 60 }), googleLoginRouter);
 app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
-app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
-app.use('/api/assistant', optionalAuth, createRateLimit({ scope: 'assistant', windowMs: 60_000, maxRequests: 20 }), assistantLimits, assistantRouter);
+app.use('/api/email', systemRateLimit, emailRouter);
+app.use('/api/assistant', optionalAuth, createRateLimit({ scope: 'assistant', windowMs: 60_000, maxRequests: 20 }), assistantLimits, attachAccountContext, attachAccountKeys, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
 // Share token validation needs optionalAuth (returns loginRequired hint if not authenticated)
@@ -255,7 +260,7 @@ app.use('/api/keys', systemRateLimit, keysRouter);
 // Best-effort: without a service-role key this stays in-memory only.
 try {
   setUsageCloudSink(async (rows) => {
-    const { error } = await getSupabaseAdmin().from('provider_usage_log').insert(rows);
+    const { error } = await getSupabaseAdmin().from('provider_usage_log').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
     if (error) throw new Error(error.message);
   });
 } catch {
@@ -288,7 +293,7 @@ app.use('/api/admin/costs', requireAdmin, adminCostsRouter);
 app.use('/api/admin/model-bench', adminRateLimit, requireResearcher, modelBenchRouter);
 app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
-app.use('/api/chat', textRateLimit, chatRouter);
+app.use('/api/chat', textRateLimit, requireStudioProduct('chat_studio', 'Chat Studio', 'Chat Studio'), chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
@@ -299,6 +304,7 @@ app.use('/api/mcp', systemRateLimit, mcpRouter);
 // was retired with Code Studio (ADR 0005), see the ventures router.
 app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
+app.use('/api/referrals', systemRateLimit, memberReferralsRouter);
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
 // Your access to every studio (both apps read the same answer).
@@ -334,6 +340,7 @@ const httpServer = app.listen(PORT, () => {
   startCatalogRefreshLoop();
   // Autopilot pilot loop (in-process). No-op unless VENTURES_ENABLED && VENTURES_PILOT_INLINE.
   startInlineVenturesRunner();
+  startLifecycleEmail();
   // Persist the code-defined connector catalog (enablement/admin config). Best-effort.
   void seedConnectorCatalog();
 });
@@ -347,9 +354,13 @@ const shutdown = (signal: string) => {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} — draining studio sessions`);
-  httpServer.close();
+  const requestsDrained = new Promise<void>((resolve) => httpServer.close(() => resolve()));
   const drainMs = Number(process.env.SHUTDOWN_DRAIN_MS) || 25_000;
-  void drainStudioSessions(drainMs)
+  // Persist the current batch promptly. Once outstanding requests and studio jobs
+  // finish, drain any deltas they produced during shutdown as well.
+  const drain = Promise.all([requestsDrained, drainStudioSessions(drainMs), flushUsageDeltas()])
+    .then(() => flushUsageDeltas());
+  void Promise.race([drain, new Promise<void>((resolve) => setTimeout(resolve, drainMs).unref())])
     .catch((err) => console.warn('[shutdown] drain error', (err as Error)?.message))
     .finally(() => process.exit(0));
 };
