@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow,noarchive"><title>Private studio review</title>
+<style>html{color-scheme:light dark;font:17px/1.55 system-ui,sans-serif}body{max-width:32rem;margin:15vh auto;padding:1.5rem}h1{font-size:1.8rem;margin-bottom:.25rem}</style></head>
+<body><main><h1>Private studio review</h1><p id="status" role="status">Open the complete review link to continue.</p><noscript>This review opens in a browser with JavaScript enabled.</noscript></main>
+<script>
+(async () => {
+  'use strict';
+  const value = new URLSearchParams(location.hash.slice(1)).get('key');
+  if (!value) return;
+  const status = document.querySelector('#status');
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) { status.textContent = 'This review link could not be unlocked.'; return; }
+  try {
+    status.textContent = 'Opening the review…';
+    const raw = Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/') + '='), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const response = await fetch('./review.bin', {credentials:'omit',referrerPolicy:'no-referrer'});
+    if (!response.ok) throw new Error();
+    const packet = new Uint8Array(await response.arrayBuffer());
+    const clear = await crypto.subtle.decrypt({name:'AES-GCM',iv:packet.slice(0,12),additionalData:new TextEncoder().encode('dreamstream-standard-studio-review-v1')}, key, packet.slice(12));
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', clear))].map(b => b.toString(16).padStart(2,'0')).join('');
+    if (digest !== 'fdd7ee06756739f8e385d568b0b32cecf565ee739a974bf806799aefd591d20f') throw new Error();
+    const source = new TextDecoder('utf-8', {fatal:true}).decode(clear);
+    document.open(); document.write(source); document.close();
+  } catch { status.textContent = 'This review link could not be unlocked.'; }
+})();
+</script></body></html>
