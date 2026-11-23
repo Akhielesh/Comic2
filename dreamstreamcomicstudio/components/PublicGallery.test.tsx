@@ -515,7 +515,7 @@ describe('member reading sync controls', () => {
     expect(await screen.findByRole('link', { name:'Continue Story 001 from page 2' })).toHaveAttribute('href', '/c/'+slug+'?p=2');
     openSettings();
     fireEvent.click(screen.getByRole('button',{ name: 'Clear reading history' }));
-    expect(await screen.findByRole('link',{ name: 'Read Story 001', exact: true })).toBeVisible();
+    expect(await screen.findByRole('link', { name: 'Read Story 001' })).toBeVisible();
     expect(settings).toHaveBeenCalledWith('member-a','clear','consent-a');
     fireEvent.click(screen.getByRole('button',{name:'Turn off sync and delete progress'}));
     expect(await screen.findByRole('button',{name:'Sync my reading progress'})).toBeVisible();

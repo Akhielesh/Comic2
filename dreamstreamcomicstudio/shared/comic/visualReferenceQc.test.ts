@@ -41,6 +41,21 @@ describe('using a checked illustration as a visual reference', () => {
     expect(visualReferenceQcAllows({ ...qc([]), missingSpeakers: [{ panel: 1, castId: 'pilot' }] })).toBe(false);
   });
 
+  it('honors a dismissed duplicate issue while preserving independent observations and other panels', () => {
+    const finding: ConsistencyFinding = { id: '1', panel: 2, kind: 'identity', severity: 'major', note: 'Wrong silhouette', dismissed: true };
+    expect(visualReferenceQcAllows(qc(['Panel 2: Wrong silhouette.'], [finding]), true)).toBe(true);
+    expect(visualReferenceQcAllows(qc(['Wrong silhouette'], [finding]), true)).toBe(true);
+    expect(visualReferenceQcAllows(qc(['Panel 3: Wrong silhouette.'], [finding]), true)).toBe(false);
+    expect(visualReferenceQcAllows(qc(['Wrong silhouette', 'The palette differs from the approved colors.'], [finding]), true)).toBe(false);
+    expect(visualReferenceQcAllows(qc(['Wrong silhouette'], [finding, { ...finding, id: '2', panel: 3, dismissed: undefined }]))).toBe(false);
+  });
+
+  it.each(['minor', 'major'] as const)('keeps pure lettering issues at %s severity, but rejects lettering that hides visual identity', severity => {
+    const finding: ConsistencyFinding = { id: '1', panel: 1, kind: 'style', severity, note: 'The dialogue font style is wrong.' };
+    expect(visualReferenceQcAllows(qc([finding.note], [finding]), true)).toBe(true);
+    expect(visualReferenceQcAllows(qc([], [{ ...finding, note: 'A caption obscures the face of the pilot.' }]))).toBe(false);
+  });
+
   it('permits unchecked legacy neighbours while requiring evidence to promote older images', () => {
     expect(visualReferenceQcAllows(undefined)).toBe(true);
     expect(visualReferenceQcAllows(undefined, true)).toBe(false);

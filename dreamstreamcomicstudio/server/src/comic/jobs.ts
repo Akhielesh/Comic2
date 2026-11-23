@@ -2811,7 +2811,11 @@ class RenderRun {
       label: 'Cover',
       activityLabel: textless ? 'Drawing a textless cover' : 'Drawing the cover',
       // docFor sets cover.lettering='overlay' too, so the spec hash and the TEXTLESS COVER line agree.
-      compile: (doc, opts) => compileCover(doc, { ...this.compileOpts(opts), ...(textless ? { textless: true } : {}) }),
+      compile: (doc, opts) => compileCover(doc, {
+        ...this.compileOpts(opts),
+        ownsPageArt: path => isProjectPageArt(path, this.ctx.userId, this.ctx.projectId),
+        ...(textless ? { textless: true } : {})
+      }),
       prev: this.prevOf({ kind: 'cover' }),
       implicit: !explicit && !textless && !action.safe,
       ...(action.safe ? { safe: true, note: 'Safer take' } : textless ? { note: 'Textless cover' } : explicit ? { note: 'New take' } : {}),

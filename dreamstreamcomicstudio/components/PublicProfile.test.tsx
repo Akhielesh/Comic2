@@ -18,7 +18,8 @@ vi.mock('../services/supabase', () => ({
     storage: { from: (bucket: string) => ({ getPublicUrl: (p: string) => ({ data: { publicUrl: `https://sb.test/storage/v1/object/public/${bucket}/${p}` } }) }) }
   }
 }));
-vi.mock('../services/db', () => ({
+vi.mock('../services/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/db')>()),
   getImageUrl: vi.fn(async (id: string) => `https://signed.test/${id}`),
   getProfileByUsername: vi.fn(async () => ({ id: 'u1', username: 'mira', avatar_url: null, bio: 'Draws lakes.' })),
   getPublicProjectsByUser: vi.fn(async () => projects.value),

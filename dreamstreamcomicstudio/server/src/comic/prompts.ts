@@ -2316,10 +2316,10 @@ export const coverTitleBand = (doc: ComicDoc): { side: 'top' | 'bottom'; pct: nu
  * ready, servable page — preferring one that is not out of date. A page judged above the
  * cover's rating is never the anchor (it would pull the cover over the rating too).
  */
-const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating): PlannedReference[] => {
+const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating, owns?: (path: string) => boolean): PlannedReference[] => {
   if (budget.objects <= 0 || budget.total <= 0) return [];
   const ready = doc.pages
-    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc) && servable(p.render.asset) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
+    .filter((p) => p.render.status === 'ready' && visualReferenceQcAllows(p.render.qc) && servable(p.render.asset) && (!owns || owns(p.render.asset.path)) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
     .sort((a, b) => a.n - b.n);
   const page = ready.find((p) => !isPageStale(doc, p)) || ready[0];
   if (!page?.render.asset) return [];
@@ -2342,7 +2342,7 @@ const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: num
  * the featured cast (leads + companions, coverCastOf) as the hero image; the style anchor;
  * and, when an object slot remains, the first story page for consistency.
  */
-export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: boolean } = {}): CompiledRenderJob => {
+export const compileCover = (doc: ComicDoc, opts: CompileOptions & Pick<PageCompileOptions, 'ownsPageArt'> & { textless?: boolean } = {}): CompiledRenderJob => {
   const resolved = resolveJob(doc, 'cover');
   const { spec } = resolved;
   const aspect = coverAspectFor(doc, spec);
@@ -2354,7 +2354,7 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
   const fixes = opts.storyFixes === true;
   const characters = castReferences(featured, spec, budget, 'cover', () => ({ effectiveRating: rating }), fixes);
   const style = styleReferences(doc, spec, budget, { effectiveRating: rating });
-  const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating)];
+  const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating, opts.ownsPageArt)];
   const index = indexReferences(refs);
   const bw = doc.format.colorMode === 'bw';
 

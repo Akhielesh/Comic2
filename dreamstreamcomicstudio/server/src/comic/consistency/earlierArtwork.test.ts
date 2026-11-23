@@ -91,6 +91,8 @@ describe('returning to established artwork across a 24-page book', () => {
     expect(continuityAnchorFor(doc, target).page?.id).toBe('p15');
     doc.pages[1].render.qc = faulty.render.qc;
     expect(compileCover(doc).references.find(r => r.label === 'STORY PAGE')?.path).toBe(pathAt(6));
+    doc.pages[5].render.asset!.path = pathAt(6).replace(owner, 'different-owner');
+    expect(compileCover(doc, { ownsPageArt: owns }).references.find(r => r.label === 'STORY PAGE')?.path).toBe(pathAt(11));
   });
 
   it('accepts checked artwork with a small lettering issue or a negated defect on the same visual dimensions', () => {
