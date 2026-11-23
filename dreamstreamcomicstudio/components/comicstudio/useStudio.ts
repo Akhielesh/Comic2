@@ -53,6 +53,9 @@
 // registry tells alerts when a reply lands or work settles, mounted or not (subscribeStudioMoments), and a sign-out
 // aborts what was left running. The account comes from useAuth (read, never changed).
 
+import { isPrivatePath } from '../../shared/comic/imagePaths';
+import { directDisplayUrl } from './signedAssets';
+import { usePrivateUrlRenewal } from './usePrivateUrlRenewal';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../services/supabase';
@@ -1360,6 +1363,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
   // ── Signed URLs ────────────────────────────────────────────────────────────
 
+  const viewedPrivate = useRef(new Set<string>());
   const wantedRef = useRef(new Set<string>());
   const signingRef = useRef(new Set<string>());
   const signAttemptsRef = useRef(new Map<string, number>());
@@ -1378,7 +1382,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     // requestSign's cap is checked again here: a path queued before the image error that gave up on it (a broken
     // file) must not be signed once more when the debounce fires.
     const paths = [...wantedRef.current].filter(
-      (p) => !signingRef.current.has(p) && (signAttemptsRef.current.get(p) || 0) < MAX_SIGN_ATTEMPTS && !urlIsFresh(urls[p], now)
+      (p) => !signingRef.current.has(p) && (signAttemptsRef.current.get(p) || 0) < MAX_SIGN_ATTEMPTS && !urlIsFresh(urls[p], now, p)
     );
     wantedRef.current.clear();
     if (!paths.length || !stateRef.current.base) return;
@@ -1413,7 +1417,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
   const requestSign = useCallback(
     (path: string) => {
-      if (signingRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS) return;
+      if (unsignableRef.current.has(path) || signingRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS) return;
       wantedRef.current.add(path);
       if (!signTimerRef.current) signTimerRef.current = setTimeout(() => void flushSigning(), SIGN_DEBOUNCE_MS);
     },
@@ -1434,7 +1438,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     signAttemptsRef.current.clear();
     unsignableRef.current.clear();
     loadErrorsRef.current.clear();
-  }, [projectId]);
+    viewedPrivate.current.clear();
+  }, [projectId, accountId]);
 
   /** Path → AssetRef with variants, rebuilt lazily once per doc (for urlFor(pathString, {width})). */
   const variantIndexRef = useRef<{ doc: ComicDoc | null; map: Map<string, AssetRef> }>({ doc: null, map: new Map() });
@@ -1453,13 +1458,21 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   }, []);
 
   const urls = state.urls;
+  usePrivateUrlRenewal(urls, (due) => {
+    for (const path of due) if (viewedPrivate.current.has(path)) requestSign(path);
+  }, bumpUnsignable);
   const urlFor = useCallback(
     (asset?: AssetRef | string | null, opts?: { width?: number }): string | undefined => {
-      if (typeof asset === 'string' && isDirectUrl(asset)) return asset;
       const path = assetPath(asset);
       if (!path) return undefined;
-      if (isDirectUrl(path)) return path;
+      if (isDirectUrl(path)) return directDisplayUrl(path);
       const now = Date.now();
+      const display = (key: string) => {
+        const entry = urls[key];
+        if (!isPrivatePath(key)) return entry?.url;
+        viewedPrivate.current.add(key);
+        return entry && entry.expiresAt > now && !unsignableRef.current.has(key) ? entry.url : undefined;
+      };
       const width = opts?.width;
       // Side effects are limited to scheduling (refs + a timer) — safe during render.
       if (typeof width === 'number' && Number.isFinite(width) && width > 0) {
@@ -1467,20 +1480,21 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         const pick = ref ? variantFor(ref, width, devicePixelRatioNow()).path : path;
         if (pick !== path && !unsignableRef.current.has(pick) && (signAttemptsRef.current.get(pick) || 0) < MAX_SIGN_ATTEMPTS) {
           const v = urls[pick];
-          if (!urlIsFresh(v, now)) requestSign(pick);
-          if (v?.url) return v.url;
+          if (!urlIsFresh(v, now, pick)) requestSign(pick);
+          const variant = display(pick);
+          if (variant) return variant;
           // The smaller file is still being signed: show the original if it is already here
           // (never fetch both while waiting).
-          return urls[path]?.url;
+          return display(path);
         }
       }
       const entry = urls[path];
-      if (!urlIsFresh(entry, now)) requestSign(path);
+      if (!urlIsFresh(entry, now, path)) requestSign(path);
       // A stale URL is still returned: the browser has it cached, and the re-signed one
       // replaces it as soon as it arrives.
-      return entry?.url;
+      return display(path);
     },
-    [urls, requestSign, assetWithVariants]
+    [urls, requestSign, assetWithVariants, unsignableSeq]
   );
 
   /**

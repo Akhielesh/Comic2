@@ -7,6 +7,7 @@ import {
   buildRefPath,
   isLibraryPath,
   isPrivatePath,
+  isPrivateDraftPath,
   isPublicationPath,
   isQuarantinePath,
   pubPath,
@@ -33,6 +34,22 @@ describe('storagePaths (contract §12.5)', () => {
     expect(isPrivatePath('xq/abc.webp')).toBe(false);
     expect(isQuarantinePath('q/user-1/proj-1/abc.webp')).toBe(true);
     expect(isQuarantinePath('u/user-1/p/proj-1/ref/abc.webp')).toBe(false);
+  });
+
+  it('routes only versioned draft originals and their two supported preview sizes to private storage', () => {
+    const name = 'draft-v1-00000000-0000-4000-8000-000000000001';
+    for (const root of ['u/user/p/project/img/', 'u/user/tmp/']) {
+      for (const suffix of ['.webp', '_w480.webp', '_w1080.webp']) {
+        expect(isPrivateDraftPath(root + name + suffix)).toBe(true);
+        expect(bucketForPath(root + name + suffix)).toBe(PRIVATE_BUCKET);
+        expect(signedTtlFor(root + name + suffix)).toBe(300);
+      }
+    }
+    for (const path of ['u/user/p/project/img/old.webp', 'library/' + name + '.webp', 'pub/' + KEY + '/' + name + '.webp']) {
+      expect(isPrivateDraftPath(path)).toBe(false);
+      expect(bucketForPath(path)).toBe(PUBLIC_BUCKET);
+    }
+    expect(isPrivateDraftPath('u/user/p/project/ref/' + name + '.webp')).toBe(false);
   });
 
   it('signs private paths for 5 minutes and public ones for an hour', () => {

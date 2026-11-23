@@ -23,6 +23,7 @@
 //   delay (`retryIn`), so a flaky connection heals by itself and the page can say so honestly.
 
 import { useEffect, useSyncExternalStore } from 'react';
+import { isPrivatePath } from '../../../shared/comic/imagePaths';
 import type { AssetRef } from '../../../shared/comic/doc';
 import { paletteFromBlob, type Palette } from './ambient';
 
@@ -275,7 +276,7 @@ export class PageImageCache {
 
   ensure(path: string, url: string, prio: CachePriority, signal?: AbortSignal): Promise<CachedPage> {
     const existing = this.entries.get(path);
-    if (existing && existing.state === 'ready') {
+    if (existing && existing.state === 'ready' && (!existing.direct || existing.url === url)) {
       this.touch(path);
       return Promise.resolve(existing);
     }
@@ -567,6 +568,11 @@ export const connectionHints = (): { saveData: boolean; slow: boolean; fast: boo
 };
 
 // ── React binding ────────────────────────────────────────────────────────────
+
+/** A cached private bitmap is visible only while the viewer has a current display URL for its path. */
+export function availableCachedPath(path: string | undefined, urlFor: (path: string) => string | undefined): string | undefined {
+  return path && isPrivatePath(path) && !urlFor(path) ? undefined : path;
+}
 
 export interface CachedImage {
   src?: string;

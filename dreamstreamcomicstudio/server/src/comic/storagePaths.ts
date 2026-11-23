@@ -3,20 +3,21 @@
 //
 // | Lane                 | Bucket         | Path                                                   |
 // |----------------------|----------------|--------------------------------------------------------|
-// | generated / derived  | comic-assets   | u/<user>/p/<project>/img/<uuid>.webp (+ _w480/_w1080)  |
+// | generated / derived  | comic-private  | u/<user>/p/<project>/img/draft-v1-<uuid>.webp (+ sizes) |
+// | older generated art  | comic-assets   | u/<user>/p/<project>/img/<uuid>.webp (+ _w480/_w1080)  |
 // | refs & uploads       | comic-private  | u/<user>/p/<project>/ref/<uuid>.webp                   |
 // | quarantine           | comic-private  | q/<user>/<project>/<uuid>.webp                         |
 // | publication copies   | comic-assets   | pub/<assetKey>/<slot>-<sha12>[-w480|-w1080].webp       |
 // | platform library     | comic-assets   | library/v<ver>/<id>/<rev>[@320|@640].webp              |
 
 import { isPrivatePath } from '../../../shared/comic/imagePaths.js';
-export { isPrivatePath, isQuarantinePath } from '../../../shared/comic/imagePaths.js';
+export { isPrivatePath, isPrivateDraftPath, isReferencePath, isQuarantinePath, PRIVATE_DRAFT_PREFIX } from '../../../shared/comic/imagePaths.js';
 import { ASSET_KEY_RE } from '../../../shared/comic/publication.js';
 import { COMIC_PRIVATE_BUCKET, STORAGE_BUCKET } from '../config.js';
 
-/** Public (not listable) bucket: generated art, publication copies, the platform library. */
+/** Public (not listable) bucket: older generated art, publication copies, the platform library. */
 export const PUBLIC_BUCKET: string = STORAGE_BUCKET;
-/** Private bucket (no storage policies): reference photos, uploads, quarantine. */
+/** Private bucket (no storage policies): new Director artwork, reference photos, uploads and quarantine. */
 export const PRIVATE_BUCKET: string = COMIC_PRIVATE_BUCKET;
 
 /** Signed-URL lifetimes per bucket (seconds). */

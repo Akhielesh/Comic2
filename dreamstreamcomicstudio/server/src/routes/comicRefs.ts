@@ -333,7 +333,7 @@ export function createComicRefsRouter(deps: ComicRefsRouterDeps = {}): Router {
           throw after ? new StudioError('LIMIT', limitMessage(session.doc, owner), { status: 409 }) : missingOwner(owner);
         }
         await session.flush();
-        const urls = await signAssetPaths(ctx.assets, [ref.path, ...(ref.variants || []).map((v) => v.path)], { projectId: session.projectId, via: 'refs' });
+        const urls = await signAssetPaths(ctx.assets, [ref.path, ...(ref.variants || []).map((v) => v.path)], { projectId: session.projectId, userId: session.userId, via: 'refs' });
         res.set('Cache-Control', 'private, no-store');
         res.status(201).json({
           ref,

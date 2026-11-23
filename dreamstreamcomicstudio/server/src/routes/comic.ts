@@ -13,6 +13,8 @@
 // (codes and ids only — never user text, file names or secrets), so "it still fails"
 // reports can be checked against the server log.
 
+import { blockedAssetPaths, servablePaths } from '../comic/ownerAssetVisibility.js';
+export { blockedAssetPaths, servablePaths } from '../comic/ownerAssetVisibility.js';
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { DEFAULT_CAPS, sanitizeStudioUsage, steerOn, withHistoryCaps, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
@@ -74,7 +76,6 @@ import { loadPublicByProjectId } from '../comic/publication/index.js';
 import { applyAttachmentTargets, takeInbox } from '../comic/refs/index.js';
 import {
   cooldownFor,
-  isServableToOwner,
   requireActiveUser,
   respondBlocked,
   screenTurnInput,
@@ -390,39 +391,6 @@ const bodyShape = (body: unknown): Pick<RefusalLog, 'kind' | 'action'> => {
 };
 
 // ── Asset visibility for the owner ───────────────────────────────────────────
-
-/**
- * Paths the owner may NOT be served (a `blocked` safety verdict): the asset, its variants
- * and its original. Walks the whole doc so every lane (pages, sheets, refs, archive, trash,
- * inbox, attachments, future fields) is covered by the one isServableToOwner rule.
- */
-export function blockedAssetPaths(doc: ComicDoc): Set<string> {
-  const blocked = new Set<string>();
-  const seen = new Set<object>();
-  const visit = (value: unknown): void => {
-    if (!value || typeof value !== 'object' || seen.has(value as object)) return;
-    seen.add(value as object);
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    const obj = value as Record<string, unknown>;
-    if (typeof obj.path === 'string' && obj.path && !isServableToOwner(obj as unknown as AssetRef)) {
-      blocked.add(obj.path);
-      if (Array.isArray(obj.variants)) obj.variants.forEach((v) => isObject(v) && typeof v.path === 'string' && blocked.add(v.path));
-      if (isObject(obj.original) && typeof obj.original.path === 'string') blocked.add(obj.original.path);
-    }
-    for (const key of Object.keys(obj)) visit(obj[key]);
-  };
-  visit(doc);
-  return blocked;
-}
-
-/** Filter paths down to the ones the owner may be served. */
-export const servablePaths = (doc: ComicDoc, paths: string[]): string[] => {
-  const blocked = blockedAssetPaths(doc);
-  return blocked.size ? paths.filter((p) => !blocked.has(p)) : paths;
-};
 
 /** What the reader shows: current page and cover art (+ variants). Never history/refs/sheets. */
 const readerAssetPaths = (doc: ComicDoc): string[] => {
@@ -1192,7 +1160,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
   const backfill = deps.backfillVariants ?? true;
 
   /** Sign what the studio shows right away: displayAssetPaths, minus anything blocked. */
-  const signDisplay = (doc: ComicDoc) => signAssetPaths(assets(), servablePaths(doc, displayAssetPaths(doc)), { projectId: doc.id, via: 'display' });
+  const signDisplay = (doc: ComicDoc, userId: string) => signAssetPaths(assets(), servablePaths(doc, displayAssetPaths(doc)), { projectId: doc.id, userId, via: 'display' });
 
   router.get('/models', (_req, res) => {
     res.json({ models: IMAGE_MODELS, tiers: TIER_PRESETS, presets: STYLE_PRESETS });
@@ -1276,7 +1244,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       if (importFrom) notifyImported({ projectId, userId, doc, fromProjectId: importFrom, ...(fromVersionId ? { fromVersionId } : {}) });
       logger.info('comic_project_created', { projectId, imported: !!importFrom, ...(kind ? { kind } : {}) });
       res.set('Cache-Control', 'private, no-store');
-      res.status(201).json({ projectId, doc, urls: await signDisplay(doc), caps });
+      res.status(201).json({ projectId, doc, urls: await signDisplay(doc, userId), caps });
     })
   );
 
@@ -1290,12 +1258,12 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     owned(async (req, res) => {
       const session = await sessionFor(req);
       const { byok } = keysFor(req);
-      const [caps, urls] = await Promise.all([capsFor(req, byok), signDisplay(session.doc)]);
+      const [caps, urls] = await Promise.all([capsFor(req, byok), signDisplay(session.doc, session.userId)]);
       // Older images get their 480w/1080w variants in the background (≤ 40, one at a time; once per session).
       if (backfill) {
         void scheduleVariantBackfill(session, assets(), {
           onUrls: async (paths) => {
-            const signed = await signAssetPaths(assets(), servablePaths(session.doc, paths), { projectId: session.projectId, via: 'variants' });
+            const signed = await signAssetPaths(assets(), servablePaths(session.doc, paths), { projectId: session.projectId, userId: session.userId, via: 'variants' });
             if (Object.keys(signed).length) session.emit({ type: 'urls', urls: signed });
           }
         });
@@ -1407,7 +1375,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const allowed = new Set(servablePaths(session.doc, collectAssetPaths(session.doc)));
       const paths = [...new Set(raw.slice(0, MAX_URL_PATHS * 4).filter((p): p is string => typeof p === 'string' && allowed.has(p)))].slice(0, MAX_URL_PATHS);
       res.set('Cache-Control', 'private, no-store');
-      res.json({ urls: await signAssetPaths(assets(), paths, { projectId: session.projectId, via: 'urls' }) });
+      res.json({ urls: await signAssetPaths(assets(), paths, { projectId: session.projectId, userId: session.userId, via: 'urls' }) });
     })
   );
 
@@ -1939,7 +1907,7 @@ export function createComicPublicRouter(deps: ComicPublicRouterDeps = {}): Route
         const lang = pickLang(req.query.lang, languages);
         const blocked = blockedAssetPaths(own);
         const clean = withholdBlocked(sanitizePublicDoc(lang ? localizeDoc(own, lang) : own), blocked);
-        const urls = await signAssetPaths(assets(), readerAssetPaths(clean).filter((p) => !blocked.has(p)), { projectId: id, via: 'owner_preview' });
+        const urls = await signAssetPaths(assets(), readerAssetPaths(clean).filter((p) => !blocked.has(p)), { projectId: id, userId: viewer!, via: 'owner_preview' });
         res.set('Cache-Control', 'private, no-store');
         res.json({ doc: clean, urls, languages, preview: true, ...(lang ? { lang } : {}) });
         return;

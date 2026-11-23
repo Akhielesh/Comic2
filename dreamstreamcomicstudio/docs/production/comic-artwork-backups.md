@@ -4,6 +4,12 @@ The production `dreamstream-comic-artwork-backup` Cloudflare Worker copies objec
 
 The initial production scan finished on 23 November 2026 at 16:17 UTC. The source and archive each contained 1,204 artwork objects and 294,842,715 bytes. Their inventory digests matched across bucket, object ID and byte length. Each object had a recovery manifest. The separate restore check read back a 61,614-byte sample and removed its temporary copy. The private source bucket was empty on this scan.
 
+## Director draft artwork
+
+New Director renders and derived artwork, including their 480- and 1080-pixel previews, use a `draft-v1-<uuid>` basename in the existing image lane. The application resolves that basename in the private bucket and signs owner previews for five minutes. Publication copies the approved pages into its existing public `pub/` folder. Both locations remain covered by the backup schedule.
+
+Before deploying the writer, verify the private bucket accepts WebP, has no client read or write policy and allows 40 MiB files at both project and bucket level. The idempotent `server/sql/comic_private_draft_capacity.sql` raises only the existing private bucket’s per-file limit as needed. Keep the versioned path reader deployed to open, restore or publish artwork written by this version. A rollback that stops new private writes must retain this read support. Earlier draft originals and previews keep their original bucket and cached URLs; moving them requires a separate verified migration.
+
 ## Operation
 
 One Cloudflare Queue consumer processes up to 30 records per batch, with three concurrent source downloads. Page advances use a conditional R2 checkpoint write. A retry revisits the same page and reuses previously completed file versions. Workers.dev, preview URLs and public bucket domains are disabled. No HTTP route starts a scan or serves a backup. Worker request tracing and subrequest logging are disabled because signed source URLs are sensitive.

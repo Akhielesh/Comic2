@@ -7,6 +7,7 @@
 // bearer token.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { createEmptyDoc } from '../../../shared/comic/doc.js';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 
@@ -273,6 +274,25 @@ describe('image proxy: bucket routing (P1-STORAGE, contract §12.5)', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     expect(await res.json()).toMatchObject({ path: ref(), expiresIn: 300 });
     expect(db.signedWith).toEqual([{ bucket: 'comic-private', path: ref(), ttl: 300 }]);
+  });
+
+  it('checks the private draft and its real preview against the owner document and current safety verdict', async () => {
+    const path = v4Path('img/draft-v1-12345678-1234-4000-8000-123456789abc.webp');
+    const variant = path.replace('.webp', '_w480.webp');
+    const doc = createEmptyDoc(V4);
+    doc.cover.render = { status: 'ready', history: [], asset: { path, source: 'generated', at: 1, variants: [{ path: variant, w: 480, h: 720 }] } };
+    db.tables.comic_docs[0].doc = doc;
+    for (const memberPath of [path, variant]) {
+      expect((await fetchImage(memberPath)).status).toBe(401);
+      expect((await fetchImage(memberPath, 'stranger-token')).status).toBe(403);
+      expect((await fetchImage(memberPath, 'owner-token')).status).toBe(200);
+    }
+    expect(db.signedWith).toEqual([path, variant].map((p) => ({ path: p, bucket: 'comic-private', ttl: 300 })));
+    doc.cover.render.asset!.safety = { quarantined: true, at: 2 };
+    for (const hidden of [path, variant, path.replace('.webp', '_w1080.webp')]) {
+      expect((await fetchImage(hidden, 'owner-token')).status).toBe(403);
+    }
+    expect(db.signedWith).toHaveLength(2);
   });
 
   it('signs generated art from the public bucket with the usual TTL', async () => {

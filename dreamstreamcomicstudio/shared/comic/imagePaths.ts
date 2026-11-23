@@ -1,8 +1,20 @@
 /** These paths reside in the private bucket. Keep the signer and browser fallback in agreement. */
 export const isQuarantinePath = (path: string): boolean => typeof path === 'string' && path.startsWith('q/');
 
+export const isReferencePath = (path: string): boolean =>
+  typeof path === 'string' && /^u\/[^/]+\/p\/[^/]+\/ref\//.test(path);
+
+export const PRIVATE_DRAFT_PREFIX = 'draft-v1-';
+// The versioned basename marks the physical bucket without changing persisted project, history or publication paths.
+// A Director may also save to the owner's temporary lane while the project has no database ID.
+const draftRaster = new RegExp(
+  '^u/[A-Za-z0-9_-]+/(?:p/[A-Za-z0-9_-]+/img|tmp)/' + PRIVATE_DRAFT_PREFIX +
+  '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:_w480|_w1080)?\\.webp$'
+);
+export const isPrivateDraftPath = (path: string): boolean => typeof path === 'string' && draftRaster.test(path);
+
 export const isPrivatePath = (path: string): boolean =>
-  typeof path === 'string' && (/^u\/[^/]+\/p\/[^/]+\/ref\//.test(path) || isQuarantinePath(path));
+  isReferencePath(path) || isPrivateDraftPath(path) || isQuarantinePath(path);
 
 export const sanitizeImagePath = (value: unknown): string | null => {
   const raw = typeof value === 'string' ? value : Array.isArray(value) ? value[0] : '';

@@ -74,7 +74,7 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 |---|---|
 | Active project | **"Comic"** ref `bdjfmxfmhqhzvgrhbbzm`, region `us-west-2`, `ACTIVE_HEALTHY` |
 | Tables | ~90 (public schema), all RLS-enabled. Heaviest rows: `token_ledger_entries` 2392, `artifacts` 1000, `connector_items` 987, `image_assets` 602, `model_catalog_cache` 479, `provider_usage_log` 454. |
-| Comic storage | `comic-assets` holds generated artwork. `comic-private` holds private references and quarantine. Both are included in the artwork backup. |
+| Comic storage | New Director originals, previews, reference uploads and quarantine are stored in `comic-private`. Earlier generated art, published copies and the shared library reside in `comic-assets`. Both buckets are backed up. |
 | Artwork backup source | `comic-artwork-backup-source` requires a project JWT and a scoped reader secret. It signs short-lived reads in the two Comic buckets. |
 | Other projects | 9 more, all `INACTIVE` (free-tier auto-pause) — D&D, NovaPDF, Desk, Data Profiler, Global Financial, Sudoku, Budget, **AtlasD**, Comic. |
 

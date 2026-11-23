@@ -288,15 +288,16 @@ revoke all on function public.run_image_asset_retention() from public, anon, aut
 grant execute on function public.purge_expired_image_assets(text) to service_role;
 grant execute on function public.run_image_asset_retention() to service_role;
 
--- ── 4. Private bucket comic-private (refs + quarantine) ────────────────────────────────────
+-- ── 4. Private bucket comic-private (draft artwork, refs + quarantine) ────────────────────────────────────
 -- No storage.objects policies at all: only the service role (the server) can read or write it;
 -- the owner gets 5-minute signed URLs from the server.
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('comic-private', 'comic-private', false, 10485760, array['image/webp', 'image/png', 'image/jpeg'])
+values ('comic-private', 'comic-private', false, 41943040, array['image/webp', 'image/png', 'image/jpeg'])
 on conflict (id) do update
   set public = false,
-      file_size_limit = excluded.file_size_limit,
+      file_size_limit = case when storage.buckets.file_size_limit is null then null
+        else greatest(storage.buckets.file_size_limit, excluded.file_size_limit) end,
       allowed_mime_types = excluded.allowed_mime_types;
 
 -- ASSERTION (verified live on 2026-10-22): anon has NO SELECT on storage.objects for

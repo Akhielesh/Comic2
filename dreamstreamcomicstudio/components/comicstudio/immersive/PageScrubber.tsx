@@ -5,8 +5,8 @@
 
 import React, { useMemo, useState } from 'react';
 import type { ReaderItem } from '../reader/readerModel';
-import { chapterOf } from '../reader/readerModel';
-import { pageImageCache, useCacheVersion } from './pageImageCache';
+import { chapterOf, isWithheld } from '../reader/readerModel';
+import { availableCachedPath, pageImageCache, useCacheVersion } from './pageImageCache';
 import type { BookView } from './readerLayout';
 import { glass } from './ReaderHud';
 
@@ -16,21 +16,22 @@ export interface PageScrubberProps {
   view: number;
   rtl: boolean;
   labelOf(view: number): string;
+  urlFor(path: string): string | undefined;
   onGoto(view: number): void;
   onActivity(): void;
 }
 
-const thumbFor = (item: ReaderItem | undefined): string | undefined => {
-  if (!item) return undefined;
+const thumbFor = (item: ReaderItem | undefined, urlFor: PageScrubberProps['urlFor']): string | undefined => {
+  if (!item || isWithheld(item)) return undefined;
   const paths = [item.asset.path, ...(item.asset.variants || []).map((v) => v.path)];
   for (const p of paths) {
     const e = pageImageCache.get(p);
-    if (e?.state === 'ready' && e.objectUrl) return e.objectUrl;
+    if (e?.state === 'ready' && e.objectUrl && availableCachedPath(p, urlFor)) return e.objectUrl;
   }
   return undefined;
 };
 
-export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, rtl, labelOf, onGoto, onActivity }) => {
+export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, rtl, labelOf, urlFor, onGoto, onActivity }) => {
   useCacheVersion();
   const [preview, setPreview] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -49,7 +50,7 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
   );
   const firstItem = views[shown]?.items[0];
   const chapter = firstItem !== undefined ? chapterOf(items, firstItem)?.title : undefined;
-  const thumb = thumbFor(firstItem !== undefined ? items[firstItem] : undefined);
+  const thumb = thumbFor(firstItem !== undefined ? items[firstItem] : undefined, urlFor);
   const pct = (v: number) => (max ? (v / max) * 100 : 0);
   const pos = (v: number) => (rtl ? 100 - pct(v) : pct(v));
   if (views.length < 2) return null;

@@ -6,7 +6,7 @@
 // quiet relink of expired signed links.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
 import { libraryReads } from '../../services/libraryDiscovery';
@@ -662,6 +662,33 @@ describe('PublicComicReader — project link and owner preview', () => {
     // Still reading — no loading screen flash.
     expect(screen.getByRole('heading', { name: 'The Saffron Thief' })).toBeInTheDocument();
     expect(screen.queryByText('Opening the comic…')).toBeNull();
+  });
+
+  it('renews a five-minute owner preview on waking and removes it on lost access', async () => {
+    const path = 'u/member/p/proj_1/img/draft-v1-12345678-1234-4000-8000-123456789abc.webp';
+    const doc = makeSampleDoc();
+    doc.pages[0].render.asset = { ...doc.pages[0].render.asset!, path };
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      api.loadPublicComic.mockResolvedValueOnce({ doc, urls: { [path]: 'https://signed.test/first' } })
+        .mockResolvedValueOnce({ doc, urls: { [path]: 'https://signed.test/second' } })
+        .mockRejectedValueOnce(Object.assign(new Error('Private'), { status: 403 }));
+      render(<PublicComicReader projectId="proj_1" isOwner />);
+      expect(await screen.findByRole('img', { name: /Page 1/ })).toBeInTheDocument();
+      expect(pageImageCache.get(path)?.url).toBe('https://signed.test/first');
+      expect(api.loadPublicComic).toHaveBeenCalledTimes(1);
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await waitFor(() => expect(api.loadPublicComic).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole('img', { name: /Page 1/ })).toBeInTheDocument();
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await waitFor(() => expect(screen.queryByRole('img', { name: /Page 1/ })).toBeNull());
+      expect(api.loadPublicComic).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('never offers Report on a project link (no public slug), and downloads only to the owner', async () => {

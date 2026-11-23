@@ -273,3 +273,27 @@ describe('StudioController.isUnsignable (PF-2 #7)', () => {
     expect(makeFakeStudio().isUnsignable(PATH)).toBe(false);
   });
 });
+
+describe('five-minute private artwork previews', () => {
+  it('renews a viewed private image before expiry and removes it promptly when the owner signer declines', async () => {
+    const path = 'u/member/p/proj_1/img/draft-v1-12345678-1234-4000-8000-123456789abc.webp';
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { result } = await setup({ [path]: 'https://signed.test/first' });
+    api.loadStudioProject.mockResolvedValue({ doc: idleDoc(), urls: {}, caps: DEFAULT_CAPS });
+    expect(result.current.urlFor(path)).toBe('https://signed.test/first');
+    expect(result.current.urlFor('https://db.test/storage/v1/object/public/comic-assets/' + path)).toBeUndefined();
+    expect(api.signStudioUrls).not.toHaveBeenCalled();
+    api.signStudioUrls.mockResolvedValueOnce({ [path]: 'https://signed.test/second' });
+    now += 271_000;
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(result.current.urlFor(path)).toBe('https://signed.test/second'), { timeout: 2500 });
+    now += 301_000;
+    expect(result.current.urlFor(path)).toBeUndefined();
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(result.current.isUnsignable(path)).toBe(true), { timeout: 2500 });
+    expect(result.current.urlFor(path)).toBeUndefined();
+    expect(api.signStudioUrls).toHaveBeenCalledTimes(2);
+    expect(api.streamStudio).not.toHaveBeenCalled();
+  });
+});

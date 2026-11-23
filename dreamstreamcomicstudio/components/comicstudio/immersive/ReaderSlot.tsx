@@ -12,7 +12,7 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { isWithheld, type ReaderItem } from '../reader/readerModel';
 import { BAND_REACH } from './flipGeometry';
 import { letterbox, type SlotContent, type SlotSide } from './readerLayout';
-import { pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
+import { availableCachedPath, pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
 import type { Palette } from './ambient';
 
 export const CURL_GRADIENT =
@@ -81,12 +81,12 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const source = item && !withheld ? slotImageSource(item, cssWidth, img) : undefined;
   const path = source?.path;
   const url = source?.url;
-  const cached = useCachedImage(path, url, prio);
+  const cached = useCachedImage(availableCachedPath(path, () => url), url, prio);
   // While a sharper variant loads, keep showing the one already decoded.
-  const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? item.asset.path : undefined, undefined, prio);
+  const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? availableCachedPath(item.asset.path, img.urlFor) : undefined, undefined, prio);
   // Guided zoom wants the original: the fit-width variant it showed a moment ago stays up meanwhile.
   const fit = item && !withheld && img.original ? slotImageSource(item, cssWidth, { ...img, original: false }) : undefined;
-  const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset.path ? fit.path : undefined, undefined, prio);
+  const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset.path ? availableCachedPath(fit.path, () => fit.url) : undefined, undefined, prio);
   const sharp = cached.src || fallback.src || fitImage.src;
   const standIn = item && !withheld && !sharp ? slotStandIn(item, img, path) : undefined;
   // A cached stand-in always shows; a fast link fetches one only for the page on screen.

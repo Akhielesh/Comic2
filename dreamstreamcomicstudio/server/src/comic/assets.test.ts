@@ -100,22 +100,22 @@ describe('paths', () => {
 describe('createSupabaseAssetStore', () => {
   it('saves generated images as uncropped WebP with an image_assets row and primes the reference cache', async () => {
     const admin = makeAdmin();
-    const store = createSupabaseAssetStore({ admin: () => admin.client, bucket: 'test-bucket' });
+    const store = createSupabaseAssetStore({ admin: () => admin.client, privateBucket: 'test-private' });
     const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: await pngDataUrl(300, 450), model: 'google/gemini-nano-banana-2.1' });
 
-    expect(ref.path).toMatch(new RegExp(`^u/${USER}/p/${PROJECT}/img/[0-9a-f-]{36}\\.webp$`));
+    expect(ref.path).toMatch(new RegExp(`^u/${USER}/p/${PROJECT}/img/draft-v1-[0-9a-f-]{36}\\.webp$`));
     expect(ref).toMatchObject({ w: 300, h: 450, source: 'generated', model: 'google/gemini-nano-banana-2.1' });
     expect(typeof ref.at).toBe('number');
     const [path, data, opts] = admin.bucketApi.upload.mock.calls[0] as unknown as [string, Buffer, Record<string, unknown>];
     expect(path).toBe(ref.path);
-    expect(opts).toMatchObject({ contentType: 'image/webp', cacheControl: '31536000', upsert: false });
+    expect(opts).toMatchObject({ contentType: 'image/webp', cacheControl: '0', upsert: false });
     const meta = await sharp(data).metadata();
     expect(meta.format).toBe('webp');
     expect([meta.width, meta.height]).toEqual([300, 450]);
     expect(admin.inserts[0].row).toMatchObject({
       user_id: USER,
       project_id: PROJECT,
-      bucket: 'test-bucket',
+      bucket: 'test-private',
       path: ref.path,
       mime_type: 'image/webp',
       width: 300,
@@ -126,6 +126,14 @@ describe('createSupabaseAssetStore', () => {
     const loaded = await store.loadDataUrl(ref.path);
     expect(loaded.startsWith('data:image/webp;base64,')).toBe(true);
     expect(admin.bucketApi.download).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before uploading when the private bucket is mistakenly set to the public bucket', async () => {
+    const admin = makeAdmin();
+    const store = createSupabaseAssetStore({ admin: () => admin.client, bucket: 'same', privateBucket: 'same' });
+    await expect(store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: await pngDataUrl(8, 8) }))
+      .rejects.toMatchObject({ status: 503 });
+    expect(admin.bucketApi.upload).not.toHaveBeenCalled();
   });
 
   it('stores a composited WebP without changing pixels outside the edit', async () => {
@@ -147,6 +155,7 @@ describe('createSupabaseAssetStore', () => {
     const ref = await store.saveGenerated({ userId: USER, projectId: 'draft', dataUrl: await pngDataUrl(10, 10), model: 'gemini-nano-banana-2.1' });
     expect(ref.path.startsWith(`u/${USER}/tmp/`)).toBe(true);
     expect(admin.inserts[0].row.project_id).toBeNull();
+    expect(admin.inserts[0].row.bucket).toBe('comic-private');
     expect(admin.inserts[0].row.source).toBe('gemini');
   });
 
@@ -476,11 +485,41 @@ describe('v5: size variants (480/1080, inline, best-effort)', () => {
       { path: ref.path.replace(/\.webp$/, '_w1080.webp'), w: 1080, h: 540 }
     ]);
     for (const v of ref.variants!) {
-      expect(fake.bucket(PUB).has(v.path)).toBe(true);
-      const meta = await sharp(fake.bucket(PUB).get(v.path)!.data).metadata();
+      expect(fake.bucket(PRIV).has(v.path)).toBe(true);
+      const meta = await sharp(fake.bucket(PRIV).get(v.path)!.data).metadata();
       expect([meta.format, meta.width, meta.height]).toEqual(['webp', v.w, v.h]);
     }
     expect(fake.rows.filter((r) => r.source === 'variant').map((r) => r.path)).toEqual(ref.variants!.map((v) => v.path));
+  });
+
+  it('keeps fresh Director bytes, both previews and restored art private; only explicit publication creates a public copy', async () => {
+    const { fake, store } = v5Store();
+    const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: await pngDataUrl(1600, 1200) });
+    const paths = [ref.path, ...ref.variants!.map(v => v.path)];
+    expect(paths).toHaveLength(3);
+    expect(fake.bucket(PUB).size).toBe(0);
+    for (const path of paths) {
+      expect(fake.bucket(PRIV).has(path)).toBe(true);
+      expect(fake.rows.find(row => row.path === path)?.bucket).toBe(PRIV);
+    }
+    const urls = await store.signUrls(paths, { ttlSec: 86_400 });
+    for (const path of paths) expect(urls[path]).toBe(`https://signed.example/${PRIV}/${path}?ttl=300`);
+
+    const fit = await store.fitToAspect({ userId: USER, projectId: PROJECT, path: ref.path, aspect: '4:5', mode: 'pad' });
+    expect(fit.path).toContain('/img/draft-v1-');
+    expect(fake.bucket(PRIV).has(fit.path)).toBe(true);
+
+    const copy = `pub/${KEY22}/p1-0123456789ab.webp`;
+    await store.copyObject(ref.path, copy);
+    expect(fake.bucket(PUB).get(copy)?.data).toEqual(fake.bucket(PRIV).get(ref.path)?.data);
+    const held = await store.quarantine(ref.path, 'review');
+    for (const path of paths) expect(fake.bucket(PRIV).has(path)).toBe(false);
+    await store.restoreQuarantined!(held.quarantinePath, ref.path);
+    for (const path of paths) {
+      expect(fake.bucket(PRIV).has(path)).toBe(true);
+      expect(fake.bucket(PUB).has(path)).toBe(false);
+    }
+    expect([...fake.bucket(PUB).keys()]).toEqual([copy]);
   });
 
   it('never enlarges: an 800 px wide image gets only the 480 variant, a 300 px one none', async () => {
@@ -495,7 +534,7 @@ describe('v5: size variants (480/1080, inline, best-effort)', () => {
     const { fake, store } = v5Store();
     fake.fail.upload = (path) => path.includes('_w');
     const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/png;base64,${(await solidPng(1600, 1600)).toString('base64')}` });
-    expect(fake.bucket(PUB).has(ref.path)).toBe(true);
+    expect(fake.bucket(PRIV).has(ref.path)).toBe(true);
     expect(ref.variants).toBeUndefined();
   });
 
@@ -742,7 +781,7 @@ describe('v5: previews, crops and fits', () => {
       [1080, 1350]
     ]);
     expect(fake.bucket(PUB).has(src)).toBe(true); // the original is never touched
-    expect(fake.rows.find((r) => r.path === out.path)).toMatchObject({ source: 'derived', bucket: PUB });
+    expect(fake.rows.find((r) => r.path === out.path)).toMatchObject({ source: 'derived', bucket: PRIV });
   });
 });
 

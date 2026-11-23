@@ -278,6 +278,19 @@ describe('useStandInSwap: the underlay always leaves', () => {
 });
 
 describe('withheld pages (the PG-13 ceiling: their art is never downloaded, at any size)', () => {
+  it('withholds a previously decoded private bitmap after its display URL is removed', async () => {
+    const doc = oldDoc();
+    const page = doc.pages[0].render.asset!;
+    page.path = 'u/owner/p/project/img/draft-v1-12345678-1234-4000-8000-123456789abc.webp';
+    const first = renderSlot(doc);
+    await open(page.path);
+    expect(first.container.querySelector('img[src^="blob:"]')).toBeTruthy();
+    first.unmount();
+    expect(pageImageCache.get(page.path)?.state).toBe('ready');
+    const revoked = renderSlot(doc, false, { img: { ...img, urlFor: () => undefined } });
+    expect(revoked.container.querySelector('img[src]')).toBeNull();
+  });
+
   it('a withheld page never fetches a stand-in (or its page)', async () => {
     const doc = docWith(true);
     const item = readerItems(doc)[0];
