@@ -5,7 +5,7 @@ import { getImageUrl } from '../../services/db';
 import { IMAGE_TRANSFORMS } from '../../services/projectStorage';
 import { REVIEW_GROUP_SIZE, reviewWindow, scanPanelWindow, similarPanelPairs, type PanelThumbnail } from '../../services/classicArtworkComparison';
 import { STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_WELL } from '../AgentStageShell';
-import { FIELD } from '../chat/studioDesign';
+import { FIELD, WRAP_TEXT } from '../chat/studioDesign';
 import { Button } from '../ds/Button';
 
 function PanelPair({ panels, first }: { panels: ComicPanel[]; first: number }) {
@@ -54,8 +54,8 @@ function PanelPair({ panels, first }: { panels: ComicPanel[]; first: number }) {
         const panel = panels[index];
         const thumb = images?.[index];
         return <figure key={index} className={cn('m-0 min-w-0 overflow-hidden', STAGE_WELL)}>
-          <figcaption className="px-2 py-2 text-sm font-semibold">Panel {number(index)}{panel.title && <span className="block break-words font-normal text-[var(--ds-muted)]">{panel.title}</span>}</figcaption>
-          {thumb ? <img className="block h-auto max-h-80 w-full object-contain" src={thumb.url} alt={panel.description || panel.title || `Artwork for panel ${number(index)}`} /> :
+          <figcaption className="px-2 py-2 text-sm font-semibold">Panel {number(index)}{panel.title && <span className={cn(WRAP_TEXT, 'block font-normal text-[var(--ds-muted)]')}>{panel.title}</span>}</figcaption>
+          {thumb ? <img className="block h-auto max-h-80 w-full overflow-hidden object-contain" src={thumb.url} alt={panel.description || panel.title || `Artwork for panel ${number(index)}`} /> :
             <p className="p-3 text-sm text-[var(--ds-muted)]">{!panel.imageId && !panel.imageUrl ? 'No artwork saved.' : thumb === null ? 'Preview unavailable.' : 'Loading preview…'}</p>}
         </figure>;
       })}
