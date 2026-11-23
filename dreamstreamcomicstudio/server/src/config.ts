@@ -80,6 +80,9 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
     (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
   );
 };
+// Simultaneous provider work in the single named backend instance. Existing account and project limits still apply.
+export const COMIC_TEXT_CONCURRENCY = parseIntegerEnv(process.env.COMIC_TEXT_CONCURRENCY, 12, 'COMIC_TEXT_CONCURRENCY', 1);
+export const COMIC_IMAGE_CONCURRENCY = parseIntegerEnv(process.env.COMIC_IMAGE_CONCURRENCY, 6, 'COMIC_IMAGE_CONCURRENCY', 1);
 export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '10mb';
 // Default to trusting exactly ONE proxy hop in production (the Cloudflare Worker in front of the container), not
 // `true`: trust=true takes the LEFTMOST X-Forwarded-For value — i.e. whatever the

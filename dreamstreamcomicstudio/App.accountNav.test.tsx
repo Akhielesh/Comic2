@@ -96,6 +96,13 @@ vi.mock('./components/comicstudio/ComicStudio', async () => {
     )
   };
 });
+const standalone = vi.hoisted(() => ({ render: vi.fn() }));
+vi.mock('./services/standaloneImages', async (original) => ({
+  ...(await original<object>()),
+  loadImageHistory: async () => ({ images: [], hasMore: false }),
+  loadReference: async (file: File) => ({ name: file.name, data: 'data:image/png;base64,AQID' }),
+  renderStandalone: standalone.render
+}));
 vi.mock('./components/UniversalAssistant', () => ({ UniversalAssistant: () => null }));
 vi.mock('./components/QuickFinder', () => ({ QuickFinder: () => null }));
 vi.mock('./components/feedback/FeedbackWidget', () => ({ FeedbackWidget: () => null }));
@@ -164,6 +171,26 @@ describe('App: the account menu opens the DreamStream settings in the app, and B
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByLabelText(/Comic name/)).toHaveValue('The Lantern Ferry');
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('A ferry that only sails at night.');
+  });
+
+  it('image settings round-trip preserves the attached reference, prompt and retry identity', async () => {
+    standalone.render.mockReset().mockRejectedValue(Object.assign(new Error('Image allowance exhausted'), { status: 402 }));
+    goTo('?view=images');
+    render(<App />);
+    const prompt = await screen.findByLabelText(/Describe your image/, {}, SLOW);
+    fireEvent.change(prompt, { target: { value: 'Use the ferry in my reference' } });
+    fireEvent.change(screen.getByLabelText('Reference image files'), { target: { files: [new File(['example'], 'ferry.png', { type: 'image/png' })] } });
+    await screen.findByRole('button', { name: 'Remove ferry.png' });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate image' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Open API keys and usage' }));
+    fireEvent.click(within(await screen.findByTestId('settings')).getByRole('button', { name: 'Back' }));
+    expect(await screen.findByLabelText(/Describe your image/)).toHaveValue('Use the ferry in my reference');
+    expect(screen.getByRole('button', { name: 'Remove ferry.png' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate image' }));
+    await waitFor(() => expect(standalone.render).toHaveBeenCalledTimes(2));
+    const [first, retry] = standalone.render.mock.calls;
+    expect(first[4]).toEqual(expect.any(String));
+    expect(retry.slice(0, 5)).toEqual(first.slice(0, 5));
   });
 
   it('All comics → Preferences → Back → All comics', async () => {

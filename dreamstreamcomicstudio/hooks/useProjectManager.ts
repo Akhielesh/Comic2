@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, StyleVariant, PageStudioPage } from '../types';
 import { startBackgroundGeneration, cancelGeneration } from '../services/generationManager';
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
@@ -420,8 +420,16 @@ const carryCardDisplayUrls = (card: ComicState, full: ComicState): ComicState =>
 
 export const useProjectManager = () => {
   const { user, loading: authLoading } = useAuth();
+  const owner = useMemo(() => ({ id: user?.id }), [user?.id]);
+  const activeOwner = useRef(owner);
+  activeOwner.current = owner;
+  const listSequence = useRef(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const revisions = useRef(new Map<string, string>());
+  const unsaved = useRef(new Map<string, { project: Project; conflict: boolean; copyId?: string }>());
+  const recovering = useRef(new Set<string>());
+  const [saveIssue, setSaveIssue] = useState<{ id: string; name: string; conflict: boolean } | null>(null);
   const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingSavesRef = useRef<Map<string, Project>>(new Map());
   // Saves sent and not yet answered, per id (a 2.5 MB upsert can take a while on a slow uplink).
@@ -450,20 +458,47 @@ export const useProjectManager = () => {
     return value;
   };
 
+  const showUnsaved = () => {
+    if (activeOwner.current !== owner) return;
+    const first = unsaved.current.values().next().value;
+    setSaveIssue(first ? { id: first.project.id, name: first.project.name, conflict: first.conflict } : null);
+  };
+
   const persist = (project: Project): Promise<void> => {
     const id = project.id;
+    if (!owner.id || owner !== activeOwner.current || deletedIdsRef.current.has(id)) return Promise.resolve();
     const visibilitySeq = visibilityEditsRef.current.get(id)?.seq;
-    const run = saveProject(project).catch((error) => console.warn('[projects] save failed', id, error));
     const inflight = inflightSavesRef.current.get(id) ?? new Set<Promise<void>>();
+    const save = async () => {
+      if (activeOwner.current !== owner || !owner.id || deletedIdsRef.current.has(id)) return;
+      const prior = unsaved.current.get(id);
+      if (prior?.conflict) {
+        prior.project = project;
+        return;
+      }
+      try {
+        const revision = await saveProject(project, { ownerId: owner.id, revision: revisions.current.get(id) });
+        if (activeOwner.current !== owner || deletedIdsRef.current.has(id)) return;
+        if (revision) revisions.current.set(id, revision);
+        if (unsaved.current.delete(id)) showUnsaved();
+        const settledAt = Date.now();
+        lastSaveSettledRef.current.set(id, settledAt);
+        const visibility = visibilityEditsRef.current.get(id);
+        if (visibility && visibility.seq === visibilitySeq) visibility.settledAt = settledAt;
+      } catch (error) {
+        if (activeOwner.current !== owner || deletedIdsRef.current.has(id)) return;
+        const conflict = (error as { code?: string } | null)?.code === 'PROJECT_SAVE_CONFLICT';
+        unsaved.current.set(id, { project, conflict });
+        showUnsaved();
+      }
+    };
+    // Serialize writes per comic. A slow earlier request cannot finish over the latest edit.
+    const run = inflight.size ? Promise.all([...inflight]).then(save) : save();
     inflight.add(run);
     inflightSavesRef.current.set(id, inflight);
     void run.then(() => {
       inflight.delete(run);
       if (inflight.size === 0 && inflightSavesRef.current.get(id) === inflight) inflightSavesRef.current.delete(id);
-      const settledAt = Date.now();
-      lastSaveSettledRef.current.set(id, settledAt);
-      const visibility = visibilityEditsRef.current.get(id);
-      if (visibility && visibility.seq === visibilitySeq && visibility.settledAt === Infinity) visibility.settledAt = settledAt;
     });
     return run;
   };
@@ -471,6 +506,7 @@ export const useProjectManager = () => {
   /** True when a change of this comic made here is waiting to save, saving, or was saved after `since`. */
   const hasLocalSaveSince = (id: string, since: number) =>
     pendingSavesRef.current.has(id) ||
+    unsaved.current.has(id) ||
     (inflightSavesRef.current.get(id)?.size ?? 0) > 0 ||
     (lastSaveSettledRef.current.get(id) ?? -Infinity) >= since;
 
@@ -493,8 +529,38 @@ export const useProjectManager = () => {
     saveTimersRef.current.set(project.id, handle);
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Clear private state before painting the next account. Late requests retain
+    // their original owner token even when A signs out and later signs in again.
+    commitProjects([]);
+    setProjectsLoaded(false);
+    setSaveIssue(null);
+    revisions.current.clear();
+    unsaved.current.clear();
+    recovering.current.clear();
+    inflightSavesRef.current.clear();
+    lastSaveSettledRef.current.clear();
+    visibilityEditsRef.current.clear();
+    stateLoadsRef.current.clear();
+    queuedUpdatesRef.current.clear();
+    openFailedIdsRef.current.clear();
+    deletedIdsRef.current.clear();
+    const resume = () => {
+      for (const { project, conflict } of unsaved.current.values()) {
+        if (!conflict && !pendingSavesRef.current.has(project.id) && !inflightSavesRef.current.has(project.id)) void persist(project);
+      }
+    };
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (unsaved.current.size || pendingSavesRef.current.size || inflightSavesRef.current.size) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('online', resume);
+    window.addEventListener('beforeunload', beforeUnload);
     return () => {
+      window.removeEventListener('online', resume);
+      window.removeEventListener('beforeunload', beforeUnload);
       saveTimersRef.current.forEach((handle) => clearTimeout(handle));
       saveTimersRef.current.clear();
       pendingSavesRef.current.forEach((project) => {
@@ -502,7 +568,7 @@ export const useProjectManager = () => {
       });
       pendingSavesRef.current.clear();
     };
-  }, []);
+  }, [owner]);
 
 	  const hydrateProject = async (project: Project): Promise<Project> => {
 	    const hydratePanel = async (panel: ComicPanel) => {
@@ -774,6 +840,9 @@ export const useProjectManager = () => {
   };
 
   const loadAllProjects = async () => {
+    if (owner !== activeOwner.current) return;
+    const request = ++listSequence.current;
+    const currentRequest = () => activeOwner.current === owner && listSequence.current === request;
     try {
       setProjectsLoaded(false);
       if (!user) {
@@ -784,6 +853,7 @@ export const useProjectManager = () => {
 
       const requestedAt = Date.now();
       const cards = await loadProjectCards();
+      if (!currentRequest()) return;
       // Synchronous from here until every listed id is flagged, so no update lands between a decision and its flag.
       // A full comic held in memory is never replaced by its card (a workspace may be showing it, and an edit made
       // there from a card would be computed from keys the card lacks). It stays full when the row has not changed
@@ -796,7 +866,9 @@ export const useProjectManager = () => {
       for (const card of cards) {
         const existing = held.get(card.id);
         if (existing && !isCardState(existing.state)) {
-          const current = !isCardOnly(card.id) && (existing.updatedAt === card.updatedAt || hasLocalSaveSince(card.id, requestedAt));
+          const confirmed = revisions.current.get(card.id);
+          const current = !isCardOnly(card.id) && (existing.updatedAt === card.updatedAt ||
+            (confirmed !== undefined && Date.parse(confirmed) === card.updatedAt) || hasLocalSaveSince(card.id, requestedAt));
           if (current) {
             fullHeld.add(card.id);
           } else {
@@ -809,6 +881,7 @@ export const useProjectManager = () => {
       }
 
       const fresh = await Promise.all(cards.filter((card) => !fullHeld.has(card.id) && !staleHeld.has(card.id)).map(hydrateCardThumbnails));
+      if (!currentRequest()) return;
       const freshById = new Map(fresh.map((card) => [card.id, card]));
       commitProjects((prev) => {
         const live = new Map(prev.map((p) => [p.id, p]));
@@ -825,12 +898,13 @@ export const useProjectManager = () => {
             next.push(freshById.get(card.id) ?? card);
           }
         }
-        return next;
+        const listed = new Set(cards.map(card => card.id));
+        return [...prev.filter(p => !listed.has(p.id) && !deletedIdsRef.current.has(p.id) && hasLocalSaveSince(p.id, requestedAt)), ...next];
       });
     } catch (e) {
       console.error("Failed to load projects", e);
     } finally {
-      setProjectsLoaded(true);
+      if (currentRequest()) setProjectsLoaded(true);
     }
   };
 
@@ -842,6 +916,7 @@ export const useProjectManager = () => {
   const createProject = (name: string): Project => {
     const newProject: Project = {
       id: crypto.randomUUID(),
+      userId: user?.id,
       name,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -933,8 +1008,9 @@ export const useProjectManager = () => {
     if (inflight) return inflight;
     const run = settleSaves(id)
       .then(() => loadProjectState(id))
-      .then(({ state, updatedAt }) => {
-        if (deletedIdsRef.current.has(id) || !projectsRef.current.some((p) => p.id === id)) return undefined;
+      .then(({ state, updatedAt, revision }) => {
+        if (activeOwner.current !== owner || deletedIdsRef.current.has(id) || !projectsRef.current.some((p) => p.id === id)) return undefined;
+        revisions.current.set(id, revision ?? new Date(updatedAt).toISOString());
         markStateLoaded(id);
         openFailedIdsRef.current.delete(id);
         commitProjects((prev) => prev.map((p) => (p.id === id ? { ...p, state: carryCardDisplayUrls(p.state, state), updatedAt } : p)));
@@ -942,6 +1018,7 @@ export const useProjectManager = () => {
         return projectsRef.current.find((p) => p.id === id);
       })
       .catch((error) => {
+        if (activeOwner.current !== owner) return undefined;
         const dropped = queuedUpdatesRef.current.get(id)?.length ?? 0;
         queuedUpdatesRef.current.delete(id);
         if (dropped > 0) showProjectNotice(STATE_LOAD_FAILED_SAVE);
@@ -949,13 +1026,14 @@ export const useProjectManager = () => {
         throw error;
       })
       .finally(() => {
-        stateLoadsRef.current.delete(id);
+        if (stateLoadsRef.current.get(id) === run) stateLoadsRef.current.delete(id);
       });
     stateLoadsRef.current.set(id, run);
     return run;
   };
 
   const updateProject = (id: string, updates: ProjectUpdate) => {
+    if (activeOwner.current !== owner) return;
     const current = projectsRef.current.find((p) => p.id === id);
     if (!current) return;
     if (openFailedIdsRef.current.has(id) && isCardState(current.state)) {
@@ -984,9 +1062,20 @@ export const useProjectManager = () => {
     if (existing) clearTimeout(existing);
     saveTimersRef.current.delete(id);
     pendingSavesRef.current.delete(id);
+    if (unsaved.current.delete(id)) showUnsaved();
     queuedUpdatesRef.current.delete(id);
     openFailedIdsRef.current.delete(id);
-    void deleteProjectRecord(id);
+    const remove = async () => {
+      if (inflightSavesRef.current.has(id)) await settleSaves(id);
+      if (owner !== activeOwner.current) return;
+      await deleteProjectRecord(id);
+    };
+    void remove().catch(() => {
+      if (owner !== activeOwner.current) return;
+      deletedIdsRef.current.delete(id);
+      showProjectNotice("Couldn't delete this comic. Please try again.");
+      void loadAllProjects();
+    });
   };
 
   const duplicateProject = async (id: string) => {
@@ -1057,6 +1146,7 @@ export const useProjectManager = () => {
     if (!full) return undefined;
     if (isStudioV4Project(full)) return full;
     const hydrated = await hydrateProject(full);
+    if (activeOwner.current !== owner) return undefined;
     commitProjects((prev) => prev.map((p) => {
       if (p.id !== projectId) return p;
       // The row columns a reload took meanwhile stay; a change that landed while the images were signed (a
@@ -1111,9 +1201,59 @@ export const useProjectManager = () => {
     cancelGeneration(projectId);
   };
 
+  const recoverSave = async (id: string) => {
+    if (recovering.current.has(id) || !owner.id || activeOwner.current !== owner) return;
+    const failure = unsaved.current.get(id);
+    if (!failure) return;
+    recovering.current.add(id);
+    try {
+      await settleSaves(id);
+      if (activeOwner.current !== owner || deletedIdsRef.current.has(id)) return;
+      const latest = projectsRef.current.find(p => p.id === id) ?? failure.project;
+      if (!failure.conflict) {
+        await persist(latest);
+        return;
+      }
+      // Preserve both versions. A retry after a lost response reuses this private copy's id.
+      const copy: Project = {
+        id: failure.copyId ??= crypto.randomUUID(),
+        name: latest.name + ' (recovered edits)',
+        userId: owner.id,
+        state: { ...latest.state, isFeatured: false },
+        coverImage: latest.coverImage,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        isPublic: false
+      };
+      delete (copy.state as ComicState & { publishedAt?: number }).publishedAt;
+      const revision = await saveProject(copy, { ownerId: owner.id });
+      if (activeOwner.current !== owner) return;
+      if (revision) revisions.current.set(copy.id, revision);
+      commitProjects(prev => [copy, ...prev.filter(p => p.id !== copy.id)]);
+      // Edits may have arrived while saving the copy. Leave their recovery action available.
+      if (projectsRef.current.find(p => p.id === id) !== latest) return;
+      clearTimeout(saveTimersRef.current.get(id));
+      saveTimersRef.current.delete(id);
+      pendingSavesRef.current.delete(id);
+      unsaved.current.delete(id);
+      visibilityEditsRef.current.delete(id);
+      showUnsaved();
+      markCardOnly(id);
+      await loadAllProjects();
+      if (activeOwner.current === owner) await ensureProjectState(id);
+      showProjectNotice('Your edits are in a private copy in the library.');
+    } catch {
+      if (activeOwner.current === owner) showProjectNotice("Couldn't finish saving the private copy. Your edits are still open.");
+    } finally {
+      if (activeOwner.current === owner) recovering.current.delete(id);
+    }
+  };
+
   return {
     projects,
     projectsLoaded,
+    saveIssue,
+    recoverSave,
     createProject,
     updateProject,
     deleteProject,

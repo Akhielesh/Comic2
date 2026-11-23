@@ -18,7 +18,7 @@
 //    inline with the message as before — never lost. Removing a photo deletes the inbox copy it
 //    uploaded (a reused copy stays: it may belong to the other composer or to a failed message's
 //    "Try again").
-//    Up to 12 photos per message (REF_LIMITS.perMessageImages).
+//    Up to ten photos per message (REF_LIMITS.perMessageImages).
 //  - Quick-assign ("Who's this?"): tap a photo to say who it is — a cast member, a new
 //    character, a place or the art style — or "Assign all…" for several; the message sends
 //    those as `attachmentTargets` and the server files them for free before the director turn.
@@ -268,7 +268,7 @@ export const textToDataUrl = (text: string, mimeType = 'text/plain'): string => 
 export const buildOutgoing = (text: string, list: PendingAttachment[]): { text: string; attachments: PendingAttachment[] } => {
   let message = text.trim();
   const attachments = list.map(({ name, mimeType, dataUrl }) => ({ name, mimeType, dataUrl }));
-  if (message.length > MAX_MESSAGE_CHARS && attachments.length < MAX_ATTACHMENTS) {
+  if (message.length > MAX_MESSAGE_CHARS && attachments.filter(a => !a.mimeType.startsWith('image/')).length < MAX_ATTACHMENTS) {
     attachments.push({ name: 'pasted-script.txt', mimeType: 'text/plain', dataUrl: textToDataUrl(message.slice(0, MAX_TEXT_CHARS)) });
     message = '';
   }
@@ -812,7 +812,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     }
   }, [patchAtt, pumpUploads, forget, addRow]);
 
-  const addFiles = useCallback(
+  const stageFiles = useCallback(
     async (input: FileList | File[]) => {
       const files = Array.from(input || []);
       if (!files.length) return;
@@ -891,6 +891,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         }
       }
       if (added.length) {
+        if (!mountedRef.current) return;
+        attachmentsRef.current = [...attachmentsRef.current, ...added];
         setAttachments((prev) => [...prev, ...added]);
         void pumpPrepare();
       }
@@ -903,6 +905,14 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     },
     [focusEnd, showNotice, pumpPrepare, addRow, coarse]
   );
+
+  const stagedBatches = useRef(Promise.resolve());
+  const addFiles = useCallback((input: FileList | File[]) => {
+    const files = Array.from(input);
+    const run = stagedBatches.current.then(() => mountedRef.current && stageFiles(files));
+    stagedBatches.current = run.then(() => undefined, () => undefined);
+    return run;
+  }, [stageFiles]);
 
   const removeAttachment = (id: string) => {
     const rt = forget(id);
@@ -995,7 +1005,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       // Photos in the comic's inbox travel by path; the rest (no uploader, failed) go inline.
       const uploaded = list.filter((a) => a.kind === 'image' && a.upload === 'done' && a.inboxPath);
       const inline = list.filter((a) => !uploaded.includes(a) && (a.kind === 'text' || !!a.dataUrl));
-      if (inline.length > MAX_ATTACHMENTS || inline.reduce((n, a) => n + a.dataUrl.length, 0) > MAX_PAYLOAD_CHARS) {
+      if (inline.filter(a => a.kind === 'text').length > MAX_ATTACHMENTS || inline.reduce((n, a) => n + a.dataUrl.length, 0) > MAX_PAYLOAD_CHARS) {
         showNotice('That’s too much to carry inside one message — retry the photos that didn’t upload, or remove some.');
         return false;
       }

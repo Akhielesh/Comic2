@@ -182,6 +182,8 @@ describe('studioReducer — refresh', () => {
     expect(s.error).toBeNull();
     const withDoc = run(loaded(), { type: 'refresh_error', message: 'resync failed' });
     expect(withDoc.error).toBe('resync failed');
+    const recovered = run(withDoc, { type: 'refresh_success', doc: makeSampleDoc(), now: T });
+    expect(recovered.error).toBeNull();
   });
 });
 

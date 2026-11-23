@@ -31,6 +31,9 @@ import { applySecurityHeaders } from './middleware/security.js';
 import { assistantRouter } from './routes/assistant.js';
 import { chatPublicRouter, chatRouter } from './routes/chat.js';
 import { textRouter } from './routes/text.js';
+import bytes from 'bytes';
+import { imageBodyBudget } from './middleware/imageBodyBudget.js';
+import { REF_LIMITS } from '../../shared/comic/refs.js';
 import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
@@ -54,6 +57,7 @@ import { modelShowcaseRouter } from './routes/modelShowcase.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { startLifecycleEmail } from './services/lifecycleEmail.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { usernameRouter } from './routes/username.js';
 import { googleLoginRouter } from './routes/googleLogin.js';
 import { authEmailRouter } from './routes/authEmail.js';
 import { authHandoffRouter } from './routes/authHandoff.js';
@@ -75,7 +79,7 @@ import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
 import { comicPublicRouter, comicRouter } from './routes/comic.js';
 import { mountComicOwnerRoutes, mountComicPublicRoutes, type ComicRateLimits } from './routes/comicMounts.js';
-import { drainStudioSessions } from './comic/session.js';
+import { drainStudioSessions, hasActiveStudioWork } from './comic/session.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
 
@@ -125,6 +129,9 @@ app.use(
 // Webhook must be before express.json() to get raw body
 app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter);
 
+// Reserve the largest possible body BEFORE JSON inflation, raw ref buffering or a Sharp decode.
+const imageUploads = imageBodyBudget(Math.max(bytes.parse(MAX_BODY_SIZE), REF_LIMITS.maxUploadBytes));
+app.use(['/api/image', '/api/comic/projects/:id/refs', '/api/comic/projects/:id/stream', '/api/telemetry/reports'], imageUploads);
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use('/api/internal/catalog', catalogMaintenanceRouter);
 app.use(attachKeys);
@@ -183,7 +190,11 @@ const comicRateLimits: ComicRateLimits = {
   translateQuote: comicTranslateQuoteRateLimit
 };
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', (req, res) => {
+  // The edge strips this header from all public traffic. A direct idle probe has no payload or side effects.
+  if (req.method === 'HEAD' && req.get('X-Studio-Idle-Probe') === '1') {
+    return void res.set('Cache-Control', 'no-store').status(hasActiveStudioWork() ? 204 : 200).end();
+  }
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
   // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
   const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
@@ -207,6 +218,9 @@ app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
 // Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
 // logged-out — sign-up and password reset happen before there is a session).
+app.use('/api/auth/username/check', createRateLimit({ scope: 'username-check', windowMs: 60_000, maxRequests: 40 }));
+app.use('/api/auth/username/signin', createRateLimit({ scope: 'username-signin', windowMs: 600_000, maxRequests: 25 }));
+app.use('/api/auth/username', usernameRouter);
 app.use('/api/auth/google', createRateLimit({ scope: 'google-login', windowMs: 600_000, maxRequests: 60 }), googleLoginRouter);
 app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).

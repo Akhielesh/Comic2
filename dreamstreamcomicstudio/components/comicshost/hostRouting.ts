@@ -31,7 +31,7 @@ const INTENT_PARAMS = ['view', 'id', 'board', 'next', 'invite', 'code', 'token_h
 export const shouldBootToDashboard = (location: { pathname: string; search: string; hash: string }): boolean => {
   if (location.pathname !== '/' && location.pathname !== '') return false;
   const params = new URLSearchParams(location.search);
-  if (INTENT_PARAMS.some((key) => params.has(key))) return false;
+  if (params.get('tour') === '1' || INTENT_PARAMS.some((key) => params.has(key))) return false;
   const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash;
   if (hash !== 'top' && isLandingSectionId(hash)) return false;
   if (/(^|&)(access_token|refresh_token|token_hash|error_description)=/.test(hash)) return false;

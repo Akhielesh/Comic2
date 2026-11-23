@@ -958,9 +958,11 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
  * call is paid for once started, so it is drained rather than aborted — then persist every
  * cached session. flush() never throws; the outer race keeps a hung store from blocking exit.
  */
+export const hasActiveStudioWork = (): boolean => [...sessions.values()].some(session => session.busy);
+
 export const drainStudioSessions = async (timeoutMs = 25_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
-  while ([...sessions.values()].some((s) => s.busy) && Date.now() < deadline) {
+  while (hasActiveStudioWork() && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 250));
   }
   await Promise.race([

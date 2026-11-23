@@ -8,6 +8,7 @@
  * no traffic — billing stops while it sleeps, so idle cost is ~zero.
  */
 import { Container, type StopParams } from '@cloudflare/containers';
+import { extendForStudioWork } from './studioActivity';
 import { loadBackendEnv, type EnvDb } from './backendEnv';
 
 interface BackendWorkerEnv {
@@ -24,6 +25,7 @@ export class Backend extends Container<BackendWorkerEnv> {
   enableInternet = true;
 
   private envReady: Promise<void> | null = null;
+  private idleExtensions = 0;
 
   /** Loads the env once per container start; a D1 edit applies on the next start. */
   private ensureEnv(): Promise<void> {
@@ -42,6 +44,7 @@ export class Backend extends Container<BackendWorkerEnv> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    this.idleExtensions = 0;
     try {
       await this.ensureEnv();
       if (!this.ctx.container?.running) {
@@ -60,7 +63,24 @@ export class Backend extends Container<BackendWorkerEnv> {
     return super.fetch(request);
   }
 
+  override async onActivityExpired(): Promise<void> {
+    const container = this.ctx.container;
+    if (!container?.running) return;
+    // The SDK already keeps open SSE responses awake. Only approved work continuing
+    // after every tab has gone needs an extension, with a hard one-hour idle bound.
+    const busy = await extendForStudioWork(this.idleExtensions, () => container.getTcpPort(this.defaultPort).fetch(
+      'http://container/api/health', { method: 'HEAD', headers: { 'X-Studio-Idle-Probe': '1' }, signal: AbortSignal.timeout(2000) }
+    ));
+    if (busy) {
+      this.idleExtensions++;
+      this.renewActivityTimeout();
+      return;
+    }
+    await super.onActivityExpired();
+  }
+
   override onStart(): void {
+    this.idleExtensions = 0;
     console.log('[backend] container started');
   }
 

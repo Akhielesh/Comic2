@@ -1,3 +1,4 @@
+import { MAX_IMAGE_ATTACHMENTS } from '../../../../shared/attachmentLimits.js';
 import type { ChatTool, ToolContext } from './types.js';
 import { runPython, type RunPythonFile } from '../../services/pyodideRunner.js';
 
@@ -7,7 +8,7 @@ import { runPython, type RunPythonFile } from '../../services/pyodideRunner.js';
 // /input/<name>; whatever the code writes to /output/ is returned (text inline, images
 // shown to the user). Pyodide is memory-sandboxed — no host filesystem or network access.
 
-const MAX_FILES = 6;
+const MAX_FILES = MAX_IMAGE_ATTACHMENTS;
 const MAX_FILE_BYTES = 16 * 1024 * 1024; // 16MB per attachment
 const STDOUT_CAP = 6_000; // chars of stdout fed back to the model
 const INLINE_TEXT_CAP = 2_000; // small text/data outputs are echoed inline

@@ -607,8 +607,10 @@ describe('ReaderTab', () => {
     expect(document.body.querySelector('.gesture-root')).toBeNull();
   });
 
-  it('"Preview as reader" opens the live link in a new tab once published', () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  it('"Preview as reader" opens the live link in this tab once published', () => {
+    const assign = vi.fn();
+    const location = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...location, assign } });
     const doc = makeSampleDoc((d) => {
       d.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nOp5q', publishedRev: 3, publishedAt: SAMPLE_NOW, languages: ['en'] };
     });
@@ -618,7 +620,8 @@ describe('ReaderTab', () => {
     const sheet = screen.getByTestId('share-export-sheet');
     expect(within(sheet).getByRole('button', { name: /^Copy link/ })).toBeInTheDocument();
     fireEvent.click(within(sheet).getByRole('button', { name: /^Preview as reader/ }));
-    expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/c\/Ab3dEf6hIj9kLm2nOp5q$/), '_blank', 'noopener,noreferrer');
+    Object.defineProperty(window, 'location', { configurable: true, value: location });
+    expect(assign).toHaveBeenCalledWith(expect.stringMatching(/\/c\/Ab3dEf6hIj9kLm2nOp5q$/));
   });
 
   it('share and export status still shows under StrictMode (the dev re-mount must not mute it)', async () => {

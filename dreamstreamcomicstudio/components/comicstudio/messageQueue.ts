@@ -13,6 +13,7 @@
 // The queue is saved per project in sessionStorage. Every read and write sits in try/catch: a private window or a
 // full quota only loses the reload convenience, never the notes on screen.
 
+import { DOC_LIMITS } from '../../shared/comic/limits';
 import { STEER_LIMITS, type AttachmentTarget, type StudioFocus } from '../../shared/comic/events';
 import { CAST_KINDS, type ComicDoc } from '../../shared/comic/doc';
 import { isOpenQuestion, type SettlePending } from '../../shared/comic/settle';
@@ -23,7 +24,7 @@ export const QUEUE_LIMITS = {
   /** Characters per drained message (the server's MAX_MESSAGE_CHARS, routes/comic.ts). One note: QUEUE_NOTE_MAX_CHARS. */
   chars: 60_000,
   /** Inbox photos per drained message (the server's cap; useStudio MAX_INBOX_ATTACHMENTS). */
-  inboxPaths: 12,
+  inboxPaths: DOC_LIMITS.imagesPerMessage,
   /** BUSY answers (another tab or device) retried automatically before the queue waits for a tap. */
   busyRetries: 3
 } as const;

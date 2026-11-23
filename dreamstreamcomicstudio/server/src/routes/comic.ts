@@ -568,7 +568,8 @@ export function parseStreamRequest(body: unknown): StreamRequest {
     if (raw.length > MAX_ATTACHMENTS + MAX_INBOX_ATTACHMENTS) throw bad(`Send up to ${MAX_MESSAGE_IMAGES} images per message.`);
     const attachments: (LegacyAttachment | InboxAttachment)[] = [];
     const inboxSeen = new Set<string>();
-    let legacy = 0;
+    let textFiles = 0;
+    let inlineChars = 0;
     let images = 0;
     for (const a of raw) {
       if (isObject(a) && typeof a.inboxPath === 'string') {
@@ -582,12 +583,14 @@ export function parseStreamRequest(body: unknown): StreamRequest {
       }
       if (!isObject(a) || typeof a.dataUrl !== 'string' || !a.dataUrl.startsWith('data:')) throw bad('An attachment could not be read.');
       if (a.dataUrl.length > MAX_ATTACHMENT_DATA_URL_CHARS) throw bad('Each attachment must be 10 MB or smaller.');
-      legacy += 1;
+      inlineChars += a.dataUrl.length;
+      if (inlineChars > 9_000_000) throw bad('The attachments exceed the inline message size. Upload the photos to the comic first.');
       const mimeType = (typeof a.mimeType === 'string' ? a.mimeType : '').slice(0, 120).toLowerCase();
       if ((mimeType || mimeOfDataUrl(a.dataUrl)).startsWith('image/')) images += 1;
+      else textFiles += 1;
       attachments.push({ name: (typeof a.name === 'string' ? a.name : 'attachment').slice(0, 200), mimeType, dataUrl: a.dataUrl });
     }
-    if (legacy > MAX_ATTACHMENTS) throw bad(`Attach at most ${MAX_ATTACHMENTS} files per message.`);
+    if (textFiles > MAX_ATTACHMENTS) throw bad(`Attach at most ${MAX_ATTACHMENTS} files per message.`);
     if (inboxSeen.size > MAX_INBOX_ATTACHMENTS || images > MAX_MESSAGE_IMAGES) throw bad(`Send up to ${MAX_MESSAGE_IMAGES} images per message.`);
     let attachmentTargets: AttachmentTarget[] | undefined;
     if (body.attachmentTargets !== undefined && body.attachmentTargets !== null) {
@@ -1276,6 +1279,11 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       res.status(201).json({ projectId, doc, urls: await signDisplay(doc), caps });
     })
   );
+
+  router.get('/projects/:id/revision', owned(async (req, res) => {
+    const session = await sessionFor(req);
+    res.set('Cache-Control', 'private, no-store').json({ rev: session.doc.rev });
+  }));
 
   router.get(
     '/projects/:id',

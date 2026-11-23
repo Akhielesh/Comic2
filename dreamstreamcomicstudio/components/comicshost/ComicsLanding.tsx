@@ -1,5 +1,5 @@
 // Public Comic Studio landing and member entry points.
-import { ArrowRight, BookOpen } from 'lucide-react';
+import { ArrowRight, BookOpen, Compass } from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';
@@ -8,6 +8,7 @@ import { SAMPLE_LOOKS, sampleThumbnailUrl, type SampleLook } from '../comicstudi
 import { Button, buttonClasses } from '../ds/Button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ds/Dialog';
 import { prefersReducedMotion } from '../ds/useReducedMotion';
+import { openFeedbackReport } from '../../services/openFeedbackReport';
 import { CONTACT_HREF } from '../layout/LegalMicroLinks';
 import { getStylePreset } from '../../shared/comic/stylePresets';
 import { ComicsHeader } from './ComicsHeader';
@@ -18,6 +19,7 @@ import { FOOTER, HERO, JOIN } from './landing/landingCopy';
 import { ModelsSection, PricingSection } from './landing/ModelsPricing';
 import { arriveAtSection, isLandingSectionId, showRegister, showSection, type LandingSectionId } from './landing/parts';
 import { StudioDirectory } from './landing/StudioDirectory';
+import { StudioGuideDialog, useStudioGuide } from './landing/StudioGuide';
 import { ReadSection } from './landing/ReadSection';
 import { FaqSection, RegisterSection } from './landing/RegisterFaq';
 import './comicsLanding.css';
@@ -25,6 +27,7 @@ import './landing/landing.css';
 
 export interface ComicsLandingProps {
   signedIn: boolean;
+  tourAccountId?: string;
   onSignIn: () => void;
   onRequestAccess: () => void;
   onOpenComics: () => void;
@@ -60,8 +63,9 @@ function LookArtwork({ look }: { look: SampleLook }) {
   );
 }
 
-export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onStartCreating }: ComicsLandingProps) {
+export function ComicsLanding({ signedIn, tourAccountId, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onStartCreating }: ComicsLandingProps) {
   const { theme } = useComicTheme();
+  const guide = useStudioGuide(tourAccountId ?? (signedIn ? 'member' : 'guest'));
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [edition, setEdition] = useState<(typeof SHELF_EDITIONS)[number]>(SHELF_EDITIONS[0]);
   const [comparing, setComparing] = useState(false);
@@ -109,6 +113,9 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
                 </>
               )}
             </div>
+            <button type="button" ref={guide.hero} className={cn('studio-guide-entry', DENSITY.coarse, FOCUS_RING)} aria-haspopup="dialog" onClick={guide.start}>
+              <Compass aria-hidden />{guide.label}
+            </button>
             {!signedIn && (
               <p className="comics-invitation">
                 <span className="comics-invitation-line">{HERO.invitation}</span>
@@ -170,6 +177,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
         <FaqSection />
       </main>
 
+      <StudioGuideDialog guide={guide} theme={theme} signedIn={signedIn} onBrowse={onBrowseGallery}
+        onStartComic={signedIn ? (onStartCreating ?? onOpenComics) : onRequestAccess} />
       <Dialog open={comparing} onOpenChange={setComparing}>
         <DialogContent
           className="comics-style-dialog"
@@ -219,6 +228,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
           <button type="button" className={FOOTER_LINK} onClick={onBrowseGallery}>Library</button>
           <button type="button" className={FOOTER_LINK} onClick={onOpenPrivacy}>Privacy Policy</button>
           <button type="button" className={FOOTER_LINK} onClick={onOpenTerms}>Terms &amp; Conditions</button>
+          <button type="button" className={FOOTER_LINK} aria-haspopup="dialog" onClick={guide.start}>Studio guide</button>
+          <button type="button" className={FOOTER_LINK} onClick={() => openFeedbackReport()}>Send feedback</button>
           <a href={CONTACT_HREF} className={FOOTER_LINK}>Contact</a>
         </nav>
       </footer>

@@ -673,6 +673,12 @@ const generateImage = async (
     model: req.model,
     messages: [{ role: 'user', content }],
     modalities: ['image', 'text'],
+    ...(req.aspectRatio || req.imageSize ? {
+      image_config: {
+        ...(req.aspectRatio ? { aspect_ratio: req.aspectRatio } : {}),
+        ...(req.imageSize ? { image_size: req.imageSize } : {})
+      }
+    } : {}),
     usage: { include: true }
   };
   // An image made inside a connected-account turn (its prompt may quote that content) follows the

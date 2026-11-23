@@ -368,6 +368,12 @@ export async function createStudioProject(input: {
   }
 }
 
+export async function loadStudioRevision(id: string, expectedAccountId: string, signal: AbortSignal): Promise<number> {
+  const { rev } = await get<{ rev: number }>(projectPath(id) + '/revision', { expectedAccountId, signal, authOnly: true });
+  if (!Number.isSafeInteger(rev) || rev < 0) throw new Error('Invalid comic revision.');
+  return rev;
+}
+
 export async function loadStudioProject(id: string, opts: { signal?: AbortSignal } = {}): Promise<StudioProjectResponse> {
   try {
     const res = await get<{ doc?: unknown; urls?: unknown; caps?: unknown }>(projectPath(id), { signal: opts.signal });

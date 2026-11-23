@@ -464,8 +464,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       {current === 'public' && (
         <a
           href={LIBRARY_HREF}
-          target="_blank"
-          rel="noopener noreferrer"
           className={`!mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-1 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] touch-manipulation ${FOCUS_RING}`}
         >
           <LayoutGrid className="h-4 w-4" aria-hidden /> See it in the Library
@@ -610,8 +608,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                 {live && (
                   <a
                     href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
                     className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
                   >
                     <ExternalLink className="h-4 w-4" aria-hidden /> Preview as reader

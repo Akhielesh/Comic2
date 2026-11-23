@@ -15,7 +15,7 @@
 // edition (or, before publishing, every ready one) in one ZIP, a folder each — sized to the device's
 // memory first (export/zipMemory.ts). Every result's `notice` (a lettering font that didn't load, images
 // saved smaller to fit) is shown, never swallowed. Sharing: the full Share sheet, "Copy link" once
-// published, and "Preview as reader" (the live /c/ link in a new tab when published — a full
+// published, and "Preview as reader" (the live /c/ link when published — a full
 // navigation, as the enforced reader CSP requires — otherwise the owner preview with the cover intro).
 //
 // Wave 2 (P2-BOARD): "Read full screen" opens <ImmersiveReader> straight from the click (the
@@ -386,8 +386,8 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const preview = () => {
     setSheetOpen(false);
     if (shareUrl) {
-      // A full navigation in a new tab: the public reader runs under its own enforced CSP.
-      window.open(shareUrl, '_blank', 'noopener,noreferrer');
+      // Load the published reader under its own CSP. Browser Back returns to this comic.
+      window.location.assign(shareUrl);
       return;
     }
     openFullScreen(true);
@@ -551,7 +551,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           <SheetRow
             icon={<Eye className="h-4 w-4" />}
             label="Preview as reader"
-            hint={shareUrl ? 'Opens your published link in a new tab' : 'Full screen with the cover intro, as readers will see it'}
+            hint={shareUrl ? 'Opens the published comic. Back returns to the studio.' : 'Full screen with the cover intro, as readers will see it'}
             onClick={preview}
           />
           <p className={cx('px-2.5 pb-1 pt-3', OVERLINE)}>

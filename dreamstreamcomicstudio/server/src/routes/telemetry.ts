@@ -1,3 +1,5 @@
+import { ReportError, saveFeedbackReport } from '../services/feedbackReports.js';
+import { createRateLimit } from '../middleware/rateLimit.js';
 import { Router, type Request } from 'express';
 import type { FeedbackResponse, TelemetryIngestResponse } from '../../../apiTypes.js';
 import { recordFeedback, recordTelemetryEvents, type TelemetryContext } from '../services/telemetryStore.js';
@@ -36,5 +38,23 @@ telemetryRouter.post('/feedback', async (req, res, next) => {
     res.json(payload);
   } catch (err) {
     next(err);
+  }
+});
+
+// Explicit reports provide a durable receipt. The lightweight telemetry and vote routes
+// retain their original best-effort contract for older clients.
+telemetryRouter.post('/reports', createRateLimit({
+  scope: 'feedback-reports', windowMs: 60_000, maxRequests: 8
+}), async (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (req.header('Authorization') && !req.user?.id) {
+    return res.status(401).json({ error: { message: 'Your session expired. Sign in again to send this report.' } });
+  }
+  try {
+    const receipt = await saveFeedbackReport(req.body, req.user?.id ?? null, req.ip ?? 'unknown');
+    return res.status(201).json(receipt);
+  } catch (error) {
+    if (error instanceof ReportError) return res.status(error.status).json({ error: { message: error.message } });
+    next(error);
   }
 });

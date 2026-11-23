@@ -1,7 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { resolveAuthRedirectUrl } from './productHost';
-import { adoptStoredSessionOwner } from './localOwner';
+import { adoptStoredSessionOwner, userIdFromStoredSession } from './localOwner';
 
 // These will be populated by the user in .env.local
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -169,6 +169,15 @@ export const lookupAccessTokenEmail = async (accessToken: string, timeoutMs = 80
     }
 };
 
+const storedSessionJson = () => {
+    const mode = getAuthPersistMode();
+    return safeStorageGet(getModeStorage(mode), SUPABASE_AUTH_STORAGE_KEY) ??
+        safeStorageGet(getModeStorage(mode === 'local' ? 'session' : 'local'), SUPABASE_AUTH_STORAGE_KEY);
+};
+
+/** Check ownership of a delayed read after the access token for the same account rotates. */
+export const getStoredSessionOwnerId = (): string | null => userIdFromStoredSession(storedSessionJson());
+
 /**
  * Is `session` the one THIS tab holds? supabase-js announces every auth event to every tab of the
  * origin (BroadcastChannel) without storing the session there. With "Remember me" off each tab
@@ -187,11 +196,8 @@ export const lookupAccessTokenEmail = async (accessToken: string, timeoutMs = 80
  */
 export const isStoredSession = (session: { access_token?: string | null } | null | undefined): boolean => {
     if (!session?.access_token || typeof window === 'undefined') return true;
-    const mode = getAuthPersistMode();
-    const raw =
-        safeStorageGet(getModeStorage(mode), SUPABASE_AUTH_STORAGE_KEY) ??
-        safeStorageGet(getModeStorage(mode === 'local' ? 'session' : 'local'), SUPABASE_AUTH_STORAGE_KEY);
-    if (raw == null) return mode !== 'session';
+    const raw = storedSessionJson();
+    if (raw == null) return getAuthPersistMode() !== 'session';
     try {
         const stored = JSON.parse(raw) as { access_token?: unknown; currentSession?: { access_token?: unknown } } | null;
         const token = stored?.access_token ?? stored?.currentSession?.access_token;

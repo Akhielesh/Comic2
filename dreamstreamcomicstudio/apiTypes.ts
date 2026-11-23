@@ -270,6 +270,9 @@ export type ImageGenerateRequest = {
   model?: string;
 };
 export type ImageGenerateResponse = {
+  /** The actually selected workspace transport and source of payment. */
+  provider?: 'gemini' | 'openrouter';
+  payer?: 'personal' | 'platform';
   imageId?: string;
   imageUrl?: string;
   dataUrl?: string;
@@ -518,7 +521,7 @@ export type CustomAgentDef = {
 };
 
 /** A user-attached file sent with a chat turn (image, CSV, JSON, text, …) for tools like run_python to read. */
-export type ChatAttachmentInput = { name: string; mimeType: string; dataUri: string };
+export type ChatAttachmentInput = { name: string; mimeType: string } & ({ dataUri: string } | { messageImageIndex: number });
 
 export type ChatRequest = {
   messages: ChatRequestMessage[];

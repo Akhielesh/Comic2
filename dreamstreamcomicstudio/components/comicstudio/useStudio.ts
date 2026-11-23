@@ -92,6 +92,7 @@ import {
   getPublication,
   isAbortError,
   loadStudioProject,
+  loadStudioRevision,
   signStudioUrls,
   steerStudio,
   streamStudio,
@@ -246,6 +247,7 @@ export type SteerStudioFn = (projectId: string, req: SteerRequest) => Promise<St
 /** The studio's calls to the backend that a QA page or a test can answer itself (studioApi's functions by default). */
 export interface StudioTransport {
   loadStudioProject: typeof loadStudioProject;
+  loadStudioRevision?: typeof loadStudioRevision;
   streamStudio: typeof streamStudio;
   cancelStudio: typeof cancelStudio;
   signStudioUrls: typeof signStudioUrls;
@@ -323,7 +325,7 @@ const CANCEL_SAFETY_MS = 20_000;
 const IMAGE_SPEND_KINDS = new Set(['style', 'sheet', 'page', 'edit', 'cover']);
 
 /** Inbox paths per message (the server enforces the same cap). */
-const MAX_INBOX_ATTACHMENTS = 12;
+const MAX_INBOX_ATTACHMENTS = QUEUE_LIMITS.inboxPaths;
 /** StudioFocus.lineIds cap. */
 const MAX_FOCUS_LINES = 80;
 /** A typed message that is an undo request: handled here, never sent (contract §13.1). */
@@ -1299,26 +1301,62 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   // Resume from the saved project after opening a new tab mid-draft or mid-render.
   // This only reloads the document; it never starts or replays a model call.
   const rendering = renderingCount(state.doc);
-  const watchingDirectorDraft = state.doc?.directorDraft?.status === 'planning' || state.doc?.directorDraft?.status === 'ready';
+  const watchWork = rendering > 0 || state.doc?.directorDraft?.status === 'planning' || state.doc?.directorDraft?.status === 'ready';
   const watchPollsRef = useRef(0);
+  // An idle editor has no event stream from another tab or device. Re-read its
+  // document when the creator returns. Browsers often emit all three events
+  // together after sleep, so share one read and never replay a paid action.
   useEffect(() => {
-    if ((!rendering && !watchingDirectorDraft) || streamCount > 0) {
+    let lastCheck = -Infinity;
+    const resume = () => {
+      if (document.visibilityState === 'hidden' || !navigator.onLine || stateRef.current.loading) return;
+      const now = Date.now();
+      if (now - lastCheck < 1500) return;
+      lastCheck = now;
       watchPollsRef.current = 0;
-      return;
-    }
-    if (state.loading || state.refreshing || watchPollsRef.current >= RENDER_WATCH_MAX_POLLS) return;
-    const check = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      watchPollsRef.current += 1;
       void refresh();
     };
-    const timer = setTimeout(check, RENDER_WATCH_INTERVAL_MS);
-    document.addEventListener('visibilitychange', check);
+    window.addEventListener('online', resume);
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', resume);
     return () => {
-      clearTimeout(timer);
-      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('online', resume);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', resume);
     };
-  }, [rendering, watchingDirectorDraft, streamCount, state.loading, state.refreshing, state.base?.rev, refresh]);
+  }, [projectId, accountId, refresh]);
+  useEffect(() => {
+    if (!loadedDocId || streamCount) return;
+    const read = depsRef.current.transport ? depsRef.current.transport.loadStudioRevision : loadStudioRevision;
+    if (!watchWork && (!accountId || !read)) return;
+    watchPollsRef.current = 0;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    // Visible idle editors can see changes from another device. Stagger the
+    // scalar reads; unchanged comics cost no document download or image signing.
+    const schedule = () => {
+      const fast = watchWork && watchPollsRef.current < RENDER_WATCH_MAX_POLLS;
+      timer = setTimeout(check, fast ? RENDER_WATCH_INTERVAL_MS : 45_000 + Math.random() * 15_000);
+    };
+    const check = async () => {
+      try {
+        if (document.visibilityState === 'hidden' || !navigator.onLine || stateRef.current.refreshing) return;
+        watchPollsRef.current += 1;
+        if (read && accountId) {
+          const rev = await read(projectId, accountId, controller.signal);
+          if (!controller.signal.aborted && rev > (stateRef.current.base?.rev ?? -1)) await refresh();
+        } else if (watchWork) {
+          await refresh();
+        }
+      } catch {
+        // Transient read failure: the next check or reconnect will try again.
+      } finally {
+        if (!controller.signal.aborted) schedule();
+      }
+    };
+    schedule();
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [accountId, projectId, loadedDocId, streamCount, watchWork, refresh]);
 
   // ── Signed URLs ────────────────────────────────────────────────────────────
 

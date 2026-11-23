@@ -12,7 +12,7 @@ const CACHE_TTL_MS = 60_000;
 const MAX_ENTRIES = 512;
 type Data = Pick<ProviderBalanceReport, 'accountBalances' | 'keyQuotaUsd' | 'planQuotas'>;
 const noData = (): Data => ({ accountBalances: null, keyQuotaUsd: null });
-const cache = new Map<string, { expires: number; pending: Promise<ProviderBalanceReport> }>();
+const cache = new Map<string, { expires: number; pending: Promise<ProviderBalanceReport>; settled?: ProviderBalanceReport }>();
 
 const obj = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -120,6 +120,18 @@ async function read(provider: BalanceProvider, key: string): Promise<Data> {
   return noData();
 }
 
+const balanceId = (owner: string, provider: BalanceProvider, key: string) =>
+  createHash('sha256').update(JSON.stringify([owner, provider, key])).digest('hex');
+
+/** Only a recent, settled observation for this exact owner and key can disqualify a paid route. */
+export function recentOpenRouterCreditExhaustion(owner: string, key: string): boolean {
+  const cached = cache.get(balanceId(owner, 'openrouter', key.trim()));
+  if (!cached || cached.expires <= Date.now() || cached.settled?.status !== 'reported') return false;
+  const report = cached.settled;
+  return (typeof report.keyQuotaUsd?.remaining === 'number' && report.keyQuotaUsd.remaining <= 0) ||
+    !!report.accountBalances?.some(entry => entry.currency === 'USD' && entry.remaining <= 0);
+}
+
 export async function getProviderBalanceReport({ ownerId, provider, key }: {
   ownerId: string; provider: BalanceProvider; key: string | null;
 }): Promise<ProviderBalanceReport> {
@@ -128,7 +140,7 @@ export async function getProviderBalanceReport({ ownerId, provider, key }: {
   if (!ownerId || !key?.trim()) return { ...empty, status: 'missing' };
   if (PROVIDER_BALANCE_CAPABILITIES[provider] === 'dashboard') return { ...empty, status: 'unsupported' };
   const credential = key.trim();
-  const cacheKey = createHash('sha256').update(JSON.stringify([ownerId, provider, credential])).digest('hex');
+  const cacheKey = balanceId(ownerId, provider, credential);
   const cached = cache.get(cacheKey);
   if (cached && checkedAt < cached.expires) return cached.pending;
   if (cache.size >= MAX_ENTRIES) cache.delete(cache.keys().next().value!);
@@ -136,6 +148,8 @@ export async function getProviderBalanceReport({ ownerId, provider, key }: {
   const pending = read(provider, credential)
     .then(data => normalizeSavedBalanceReport({ provider, checkedAt, ...data, status: 'reported' }, provider) ?? unavailable)
     .catch(() => unavailable);
-  cache.set(cacheKey, { pending, expires: checkedAt + CACHE_TTL_MS });
+  const entry: { pending: Promise<ProviderBalanceReport>; expires: number; settled?: ProviderBalanceReport } = { pending, expires: checkedAt + CACHE_TTL_MS };
+  cache.set(cacheKey, entry);
+  void pending.then(report => { entry.settled = report; });
   return pending;
 }

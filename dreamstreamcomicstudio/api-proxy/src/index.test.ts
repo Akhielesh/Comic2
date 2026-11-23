@@ -320,7 +320,7 @@ describe('backend routing', () => {
     const { ns, seen } = fakeContainer(async (req) => new Response(await req.text(), { status: 201 }));
     const res = await call(
       '/api/projects?x=1',
-      { method: 'POST', ua: HUMAN, body: '{"a":1}', headers: { 'cf-connecting-ip': '203.0.113.9', 'content-type': 'application/json' } },
+      { method: 'POST', ua: HUMAN, body: '{"a":1}', headers: { 'cf-connecting-ip': '203.0.113.9', 'content-type': 'application/json', 'x-studio-idle-probe': '1' } },
       { BACKEND: ns, BACKEND_ORIGIN: 'https://railway.example' },
     ).res;
     expect(res.status).toBe(201);
@@ -331,6 +331,7 @@ describe('backend routing', () => {
     expect(seen[0].req.url).toBe('https://dreamstreamstudio.ai/api/projects?x=1');
     expect(seen[0].req.headers.get('x-forwarded-for')).toBe('203.0.113.9');
     expect(seen[0].req.headers.get('x-forwarded-proto')).toBe('https');
+    expect(seen[0].req.headers.has('x-studio-idle-probe')).toBe(false);
   });
 
   it('falls back to the external origin only when told to (or when no container is bound)', async () => {

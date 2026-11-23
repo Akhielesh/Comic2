@@ -1,3 +1,4 @@
+import { MAX_IMAGE_ATTACHMENTS } from '../../../shared/attachmentLimits';
 // Upload queue for reference photos (refs.md §7.1 useRefUploader, §7.5). Owner: P1-REFS.
 //
 // Per item:  queued → preparing → uploading (real XHR progress %) → checking → done
@@ -482,6 +483,7 @@ export function createUploadQueue(options: UploadQueueOptions): UploadQueueStore
       const additions: UploadItem[] = [];
       let left = room(owner);
       let index = opts.index;
+      let batchSize = 0;
       for (const file of list) {
         const id = nextId();
         const name = (file as { name?: string }).name || 'image';
@@ -500,11 +502,16 @@ export function createUploadQueue(options: UploadQueueOptions): UploadQueueStore
           });
           continue;
         }
+        if (batchSize >= MAX_IMAGE_ATTACHMENTS) {
+          additions.push({ ...base, state: 'over_cap', message: `Add up to ${MAX_IMAGE_ATTACHMENTS} photos at once. Choose more in another batch.` });
+          continue;
+        }
         if (left.owner <= 0 || left.project <= 0) {
           additions.push({ ...base, state: 'over_cap', message: overCapCopy(doc, owner, left.owner > 0) });
           continue;
         }
         left = { owner: left.owner - 1, project: left.project - 1 };
+        batchSize += 1;
         files.set(id, file);
         additions.push({ ...base, ...(index !== undefined ? { index } : {}) });
         if (index !== undefined) index += 1;

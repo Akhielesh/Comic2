@@ -174,6 +174,7 @@ export default {
     if (publicComic) return publicComic;
 
     const headers = new Headers(req.headers);
+    headers.delete('X-Studio-Idle-Probe');
     // Chat's approximate place (geoHeader.ts): only this Worker writes it, from Cloudflare's own request data, and
     // only for the main host's Chat routes. Whatever a request brought is dropped on every path and host.
     headers.delete(GEO_HEADER);

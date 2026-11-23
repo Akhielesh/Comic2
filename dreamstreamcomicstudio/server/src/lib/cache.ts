@@ -35,10 +35,12 @@ export class TtlCache<T = unknown> {
 
   delete(key: string): void {
     this.store.delete(key);
+    this.inflight.delete(key);
   }
 
   clear(): void {
     this.store.clear();
+    this.inflight.clear();
   }
 
   /**
@@ -53,15 +55,14 @@ export class TtlCache<T = unknown> {
     const pending = this.inflight.get(key);
     if (pending) return pending;
 
-    const promise = (async () => {
-      try {
-        const value = await compute();
-        this.set(key, value, ttlMs);
-        return value;
-      } finally {
-        this.inflight.delete(key);
-      }
-    })();
+    // A read begun before a credential rotation/deletion may finish afterwards.
+    // Only the current read can publish a value or remove its in-flight marker.
+    const promise = Promise.resolve().then(compute).then(value => {
+      if (this.inflight.get(key) === promise) this.set(key, value, ttlMs);
+      return value;
+    }).finally(() => {
+      if (this.inflight.get(key) === promise) this.inflight.delete(key);
+    });
     this.inflight.set(key, promise);
     return promise;
   }

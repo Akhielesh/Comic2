@@ -1,3 +1,4 @@
+import { MAX_INLINE_ATTACHMENT_CHARS } from '../../shared/attachmentLimits';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Code2, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -30,7 +31,7 @@ import {
   stoppedTurnMarker,
   type ConnectedDataAction
 } from './connectorPrivacy';
-import { API_KEYS_HREF } from '../usage/links';
+import { requestAccountSettings } from '../account/accountNav';
 import { ArtifactTurnsContext, type ArtifactTurnRef, type ArtifactTurnsValue } from './artifacts/ChatArtifacts';
 import {
   abortStream,
@@ -1295,13 +1296,29 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // 'text' (pasted-block) attachments are skipped — they're already inlined into the
       // message by toRequestMessage, so sending them again would duplicate the payload.
       const currentUserTurn = [...baseTurns].reverse().find((t) => t.role === 'user');
+      let imageIndex = 0;
       const turnAttachments = (currentUserTurn?.attachments || [])
         .filter((a) => a.kind !== 'text')
         .map((a) => ({
           name: a.name,
           mimeType: a.mimeType,
-          dataUri: a.dataUrl
+          ...(a.kind === 'image' ? { messageImageIndex: imageIndex++ } : { dataUri: a.dataUrl })
         }));
+      // The current images travel once, as message parts. Keep recent pictures from prior turns
+      // while they fit the same inline budget; their originals remain in local conversation history.
+      let imageChars = turnAttachments.reduce((n, file) => n + ('dataUri' in file ? file.dataUri.length : 0), 0);
+      for (let i = reqMessages.length - 1; i >= 0; i--) {
+        const message = reqMessages[i];
+        if (Array.isArray(message.content)) {
+          message.content = message.content.map(part => {
+            if (part.type !== 'image_url') return part;
+            const length = part.image_url.url.length;
+            if (i < reqMessages.length - 1 && imageChars + length > MAX_INLINE_ATTACHMENT_CHARS) return { type: 'text', text: '[Earlier image omitted to fit this request.]' };
+            imageChars += length;
+            return part;
+          });
+        }
+      }
       const reqBody = {
         messages: reqMessages,
         model: reqModel,
@@ -1651,7 +1668,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     }
     if (action === 'api-keys') {
       try {
-        window.location.assign(API_KEYS_HREF);
+        requestAccountSettings('settings');
       } catch {
         /* navigation unavailable */
       }

@@ -10,6 +10,7 @@
 // Calm-studio glass: --ds-* tokens, tabular numbers, 44 px touch targets on coarse pointers,
 // no motion when the user prefers reduced motion.
 
+import { openApiKeysLink } from '../account/accountNav';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gauge, KeyRound } from 'lucide-react';
@@ -213,13 +214,13 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
                 <KeyRound className="h-4 w-4" aria-hidden /> Continue with my key
               </button>
             ) : ownKey === null ? (
-              <a href={API_KEYS_HREF} className={CTA_CLASS}>
+              <a href={API_KEYS_HREF} onClick={openApiKeysLink} className={CTA_CLASS}>
                 <KeyRound className="h-4 w-4" aria-hidden /> Add your own key
               </a>
             ) : null}
             {ownKey !== null && (
               <a
-                href={API_KEYS_HREF}
+                href={API_KEYS_HREF} onClick={openApiKeysLink}
                 className="inline-flex h-9 items-center text-[12.5px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-colors hover:text-[var(--ds-ink)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] coarse:h-11"
               >
                 API keys
@@ -234,7 +235,7 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
           {status.pctLeft < 30 && ' Draft quality and the editor’s free tools stretch it furthest.'}
         </p>
       )}
-      {!status.exhausted && <a href={API_KEYS_HREF} className={cn('mt-2 inline-flex items-center py-1 text-xs font-semibold underline underline-offset-2 coarse:min-h-11', FOCUS_RING)}>
+      {!status.exhausted && <a href={API_KEYS_HREF} onClick={openApiKeysLink} className={cn('mt-2 inline-flex items-center py-1 text-xs font-semibold underline underline-offset-2 coarse:min-h-11', FOCUS_RING)}>
         Provider activity and balances
       </a>}
     </div>

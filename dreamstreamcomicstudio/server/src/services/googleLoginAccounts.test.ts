@@ -5,8 +5,7 @@ const h = vi.hoisted(() => ({
   lookup: vi.fn(), createUser: vi.fn(), getUserById: vi.fn(), generateLink: vi.fn(), checkName: vi.fn(), factors: vi.fn()
 }));
 vi.mock('./supabase.js', () => ({ getSupabaseAdmin: () => ({
-  rpc: () => ({ single: h.lookup }), auth: { admin: { ...h, mfa: { listFactors: h.factors } } },
-  from: () => ({ select: () => ({ ilike: () => ({ limit: h.checkName }) }) })
+  rpc: (name: string, args: unknown) => name === 'lookup_signup_handles' ? h.checkName(args) : ({ single: h.lookup }), auth: { admin: { ...h, mfa: { listFactors: h.factors } } },
 }) }));
 const identity = { sub: 'google-verified-sub', email: 'reader@example.test' };
 const user = { id: 'member', email: identity.email, email_confirmed_at: '2026-01-01', app_metadata: { dreamstream_google_sub: identity.sub } };
@@ -49,6 +48,13 @@ describe('binding a verified Google identity to a DreamStream login', () => {
       await expect(issueGoogleSession(identity)).rejects.toMatchObject({ code: 'identity-mismatch' });
     }
     expect(h.generateLink).toHaveBeenCalledTimes(1);
+  });
+  it('returns a recoverable handle collision without binding the other person or issuing a session', async () => {
+    h.lookup.mockResolvedValue({ data: missing });
+    h.createUser.mockResolvedValue({ data: { user: null }, error: { message: 'Database error saving new user' } });
+    h.checkName.mockResolvedValue({ data: [{ handle: 'reader_one', profile_id: 'different-account' }], error: null });
+    await expect(issueGoogleSession(identity, { ...profile, username: 'Reader_One' })).rejects.toMatchObject({ code: 'username-taken' });
+    expect(h.generateLink).not.toHaveBeenCalled();
   });
   it('requires a working second-factor check and leaves enrolled accounts on their established sign-in', async () => {
     h.factors.mockResolvedValueOnce({ data: { factors: [{ status: 'verified' }] } });

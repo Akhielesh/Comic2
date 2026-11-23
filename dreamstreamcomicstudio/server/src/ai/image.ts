@@ -6,7 +6,7 @@ import { IMAGE_MODEL, IMAGE_REQUEST_TIMEOUT_MS } from '../config.js';
 import { withRetry, withTimeout, nowMs } from './utils.js';
 
 const isGeminiImageModel = (model: string) => model.startsWith('gemini-');
-const supportsImageSize = (model: string) => model.includes('3-pro-image');
+const supportsImageSize = (model: string) => model.includes('3-pro-image') || model === 'gemini-nano-banana-2.1';
 
 const getMimeTypeFromDataUrl = (dataUrl: string, fallback: string) => {
   const match = dataUrl.match(/^data:(.*?);base64,/);
@@ -27,6 +27,7 @@ type GeminiInlineData = {
 };
 
 type GeminiContentPart = {
+  thought?: boolean;
   text?: string;
   inlineData?: GeminiInlineData;
 };
@@ -86,7 +87,8 @@ export const generateGeminiImage = async (
   aspectRatio: string,
   resolution: string,
   referenceImages: string[] = [],
-  modelId?: string
+  modelId?: string,
+  options: { singleRequest?: boolean } = {}
 ): Promise<ImageGenerateResponse> => {
   const ai = createClient(apiKey);
   const hasReferences = referenceImages.length > 0;
@@ -107,6 +109,7 @@ export const generateGeminiImage = async (
           model: effectiveModel,
           prompt,
           config: {
+            ...(options.singleRequest ? { abortSignal: AbortSignal.timeout(IMAGE_REQUEST_TIMEOUT_MS) } : {}),
             numberOfImages: 1,
             aspectRatio,
             ...(imageSize ? { imageSize } : {})
@@ -115,7 +118,7 @@ export const generateGeminiImage = async (
         IMAGE_REQUEST_TIMEOUT_MS,
         'Image generation'
       ),
-      2,
+      options.singleRequest ? 1 : 2,
       2000,
       'Generate Image'
     );
@@ -143,7 +146,8 @@ export const generateGeminiImage = async (
   const imageParts = referenceImages.map((img) => fileToGenerativePart(img, 'image/jpeg'));
 
   const requestImage = (imageConfig?: { aspectRatio?: string; imageSize?: string }) => {
-    const config: { responseModalities: Modality[]; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
+    const config: { responseModalities: Modality[]; imageConfig?: { aspectRatio?: string; imageSize?: string }; abortSignal?: AbortSignal } = {
+      ...(options.singleRequest ? { abortSignal: AbortSignal.timeout(IMAGE_REQUEST_TIMEOUT_MS) } : {}),
       responseModalities
     };
     if (imageConfig && Object.keys(imageConfig).length > 0) {
@@ -164,7 +168,7 @@ export const generateGeminiImage = async (
         IMAGE_REQUEST_TIMEOUT_MS,
         'Image generation'
       ),
-      2,
+      options.singleRequest ? 1 : 2,
       2000,
       'Generate Image'
     );
@@ -176,10 +180,10 @@ export const generateGeminiImage = async (
     ...(imageSize ? { imageSize } : {})
   };
   if (Object.keys(baseConfig).length > 0) configsToTry.push(baseConfig);
-  if (aspectRatio && !configsToTry.some((cfg) => cfg?.aspectRatio === aspectRatio && !cfg?.imageSize)) {
+  if (!options.singleRequest && effectiveModel !== 'gemini-nano-banana-2.1' && aspectRatio && !configsToTry.some((cfg) => cfg?.aspectRatio === aspectRatio && !cfg?.imageSize)) {
     configsToTry.push({ aspectRatio });
   }
-  configsToTry.push(undefined);
+  if (!configsToTry.length || (!options.singleRequest && effectiveModel !== 'gemini-nano-banana-2.1')) configsToTry.push(undefined);
 
   let response: GeminiGenerateContentResponse | undefined;
   let lastError: unknown;
@@ -203,12 +207,13 @@ export const generateGeminiImage = async (
   const apiMs = Math.round(nowMs() - requestStart);
   const candidate = response.candidates?.[0];
   const parts = (candidate?.content?.parts || []).filter(isGeminiContentPart);
-  const inlinePart = parts.find((part) => part.inlineData?.data);
+  // Thinking image models can send draft images before the final artwork.
+  const inlinePart = parts.find((part) => !part.thought && part.inlineData?.data && (!part.inlineData.mimeType || part.inlineData.mimeType.startsWith('image/')));
 
   if (!inlinePart?.inlineData?.data) {
     const finishReason = candidate?.finishReason || candidate?.finishMessage;
     const blockReason = response.promptFeedback?.blockReason;
-    const responseText = parts.map((part) => part.text).filter((text): text is string => typeof text === 'string').join(' ').trim();
+    const responseText = parts.filter(part => !part.thought).map((part) => part.text).filter((text): text is string => typeof text === 'string').join(' ').trim();
     const details = [
       finishReason ? `finishReason=${finishReason}` : null,
       blockReason ? `blockReason=${blockReason}` : null,

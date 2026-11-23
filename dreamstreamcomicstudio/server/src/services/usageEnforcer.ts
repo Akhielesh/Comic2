@@ -85,6 +85,8 @@ export const reserveForOperation = async (input: {
   req: Request;
   operation: string;
   fallbackModel: string;
+  /** Exact provider model selected by a server-owned workflow. */
+  resolvedModel?: string;
   provider?: BillingProvider;
   resolution?: TokenEstimateRequest['resolution'];
   imageUnits?: number;
@@ -160,7 +162,7 @@ export const reserveForOperation = async (input: {
   const userId = userIdOf(input.req)!;
   const provider = input.provider || resolveProviderFromOperation(input.operation);
   const byok = hasByokForProvider(input.req, provider);
-  const model = resolveModelFromRequest(input.req, input.fallbackModel);
+  const model = input.resolvedModel ?? resolveModelFromRequest(input.req, input.fallbackModel);
 
   // Usage budget (P1-LIMITS, services/platformAllowance.ts): ONE meter for platform-paid usage
   // across every studio. BYOK never counts; admins are exempt; everyone else is checked by the

@@ -8,7 +8,6 @@
  *      person was, New comic included (`resume`);
  *   4. after a hairline, Sign out: `await signOut()` from useAuth, then App's signed-out handler, the same two calls
  *      Settings makes (nothing about sign-in, sessions or roles changes here);
- *   5. while the Director works in the open comic, one muted line: the rows open a new tab then.
  *
  * Presentation: an anchored panel under the trigger from 600 px (OVERLAY on the popover layer, portalled and kept
  * inside the viewport); the studio's bottom sheet below 600 px, on a short landscape phone, and when the host asks for
@@ -21,7 +20,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState
 import { createPortal } from 'react-dom';
 import { HelpCircle, KeyRound, LogOut, Shield, ShieldCheck, SlidersHorizontal, User as UserIcon, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { DENSITY, FOCUS_RING, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, WRAP_TEXT, Z } from '../chat/studioDesign';
+import { DENSITY, FOCUS_RING, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, Z } from '../chat/studioDesign';
 import { useAuth } from '../../contexts/AuthContext';
 import { getProfileFace } from '../../services/db';
 import { placeSheet, useSheetBehaviour } from '../comicstudio/conversation/PopSheet';
@@ -32,7 +31,7 @@ import type { SettingsTab } from '../settingsTabs';
 import { AppearanceSegmented } from './AppearanceControl';
 import { AccountFace } from './AccountFace';
 import { rememberProfileRow, useAccount, usePersonWithProfile } from './AccountContext';
-import { requestAccountSettings, useSettingsOpenInNewTab, type AccountResume } from './accountNav';
+import { requestAccountSettings, type AccountResume } from './accountNav';
 
 /** The panel's accessible name (also the sheet's, which keys its history layer). */
 export const ACCOUNT_PANEL_LABEL = 'Account and settings';
@@ -54,7 +53,6 @@ export const ACCOUNT_ROWS: readonly Row[] = [
   { tab: 'admin', label: 'Admin console', Icon: Shield, staffOnly: true }
 ];
 
-export const BUSY_LINE = 'Opens in a new tab while the Director is working.';
 
 /** A row: ink words, a muted icon, the overlay-row tint, 44 px under a coarse pointer, the focus ring. */
 const ROW = cn(
@@ -98,28 +96,20 @@ const useProfileRead = (id: string | undefined, known: boolean): void => {
   }, [id]);
 };
 
-function PanelBody({ paper, resume, leave, onClose, firstRowRef }: {
+function PanelBody({ paper, resume, leave, firstRowRef }: {
   paper: boolean;
   resume?: AccountResume;
   /** Close the panel, then act (a sheet first lets its history entry go). */
   leave: (action: () => void) => void;
-  onClose: () => void;
   firstRowRef: React.RefObject<HTMLButtonElement>;
 }) {
   const { person: given, staff, onSignedOut } = useAccount();
   const person = usePersonWithProfile(given);
   const { signOut } = useAuth();
-  const newTab = useSettingsOpenInNewTab();
   const settingsId = useId();
   useProfileRead(given?.id, given?.username !== undefined || person?.username !== undefined);
 
   const open = (tab: SettingsTab) => {
-    if (newTab) {
-      // Inside the press, so the browser lets the new tab open; the comic stays as it is.
-      requestAccountSettings(tab);
-      onClose();
-      return;
-    }
     leave(() => requestAccountSettings(tab, resume ? { resume } : {}));
   };
   const signOutNow = () =>
@@ -162,7 +152,6 @@ function PanelBody({ paper, resume, leave, onClose, firstRowRef }: {
             </li>
           ))}
         </ul>
-        {newTab && <p className={cn('px-3 pb-1 pt-1 text-[length:var(--ds-text-xs)]', MUTED, WRAP_TEXT)}>{BUSY_LINE}</p>}
       </div>
       <div className="mt-1 border-t border-[var(--ds-hairline)] pt-1">
         <button type="button" className={ROW} onClick={signOutNow}>
@@ -264,7 +253,7 @@ export function AccountPanel({ id, anchorRef, onClose, paper = false, resume, pr
     [onClose, sheet]
   );
 
-  const body = <PanelBody paper={paper} resume={resume} leave={leave} onClose={onClose} firstRowRef={firstRowRef} />;
+  const body = <PanelBody paper={paper} resume={resume} leave={leave} firstRowRef={firstRowRef} />;
   if (sheet) {
     return (
       <AdaptiveSheet open presentation="bottom" onClose={onClose} label={ACCOUNT_PANEL_LABEL} title="Account" anchorRef={anchorRef}>

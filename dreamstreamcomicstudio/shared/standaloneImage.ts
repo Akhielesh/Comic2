@@ -1,3 +1,5 @@
+import { MAX_IMAGE_ATTACHMENTS } from './attachmentLimits.js';
+
 export const IMAGE_RATIOS = ['1:1', '4:3', '3:4', '16:9', '9:16'] as const;
 export type StandaloneRatio = typeof IMAGE_RATIOS[number];
 export type ImageFormatChoice = StandaloneRatio | 'auto';
@@ -24,15 +26,31 @@ export function suggestedImageRatio(brief: string): StandaloneRatio | undefined 
 }
 
 export const STANDALONE_MODEL = 'gemini-2.5-flash-image';
+export const NATIVE_REFERENCE_MODEL = 'gemini-nano-banana-2.1';
+export type WorkspaceQuality = 'native' | '1K' | '2K' | '4K';
+export const WORKSPACE_QUALITIES: WorkspaceQuality[] = ['native', '1K', '2K', '4K'];
 export const IMAGE_PROMPT_LIMIT = 4000;
-export const MAX_IMAGE_REFS = 3;
+export const MAX_IMAGE_REFS = MAX_IMAGE_ATTACHMENTS;
 export const MAX_REF_BYTES = 2 * 1024 * 1024;
 export const REF_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+export interface StandaloneRoute {
+  provider: 'gemini' | 'openrouter';
+  payer: 'personal' | 'platform';
+  model: string;
+}
 
 export interface SavedStandaloneImage {
   imageId: string;
   imageUrl: string;
   createdAt: string;
+  width?: number;
+  height?: number;
+  provider?: StandaloneRoute['provider'];
+  model?: string;
+  byok?: boolean;
+  apiMs?: number;
+  saveMs?: number;
 }
 
 export interface StandaloneGallery {

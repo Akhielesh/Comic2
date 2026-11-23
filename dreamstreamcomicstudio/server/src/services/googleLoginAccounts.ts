@@ -1,3 +1,4 @@
+import { lookupHandles } from './usernames.js';
 import { getSupabaseAdmin } from './supabase.js';
 import { dobProblem, USERNAME_REGEX } from './signupValidation.js';
 
@@ -59,8 +60,8 @@ export async function issueGoogleSession(identity: GoogleLoginIdentity, profile?
     if (!account.bound_id) {
       if (account.email_in_use) throw conflict();
       if (result.error) {
-        const { data: taken } = await admin.from('profiles').select('id').ilike('username', metadata.username.replaceAll('_','\\_')).limit(1);
-        if (taken?.length) throw new GoogleLoginAccountError('username-taken', 'That username is taken. Choose another.');
+        const handles = await lookupHandles(admin, [metadata.username]);
+        if (handles.has(metadata.username.toLowerCase())) throw new GoogleLoginAccountError('username-taken', 'That username is taken. Choose another.');
       }
       throw unavailable();
     }

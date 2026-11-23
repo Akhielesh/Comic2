@@ -95,7 +95,7 @@ const h = vi.hoisted(() => {
       : { data: { user: null }, error: { status: 404, message: 'User not found' } };
   });
 
-  const admin = { from: query, auth: { admin: { generateLink, getUserById } } };
+  const admin = { rpc: vi.fn(async (_fn: string, _args: unknown) => ({ data: [] as { handle: string; profile_id: string }[], error: null })), from: query, auth: { admin: { generateLink, getUserById } } };
   const sendEmail = vi.fn(async (_opts: Record<string, unknown>) => ({ ok: true, messageId: 'm1' }) as { ok: boolean; error?: string });
   const verifyTurnstile = vi.fn(async (token?: string) => token === 'good-token');
   return { state, admin, generateLink, getUserById, sendEmail, verifyTurnstile };
@@ -409,12 +409,11 @@ describe('POST /signup', () => {
     expect(sent.params.actionUrl).toBe(`${APP}/live?after=monitor&token_hash=hash-signup&type=signup`);
   });
 
-  it('answers 409 email_exists for a confirmed account without touching it', async () => {
+  it('answers with the ordinary signup acknowledgement for a confirmed main account without touching it', async () => {
     addUser('ada@example.com', true);
     const res = await post('/signup', signupBody());
-    expect(res.status).toBe(409);
-    expect(res.json).toMatchObject({ ok: false, code: 'email_exists' });
-    expect(String(res.json.message)).toMatch(/already exists/);
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ ok: true, confirmEmail: true });
     expect(h.generateLink).not.toHaveBeenCalled();
     expect(h.sendEmail).not.toHaveBeenCalled();
   });
@@ -430,24 +429,33 @@ describe('POST /signup', () => {
     expect(lastSend().template).toBe('auth-confirm-signup');
   });
 
-  it('maps GoTrue’s "Database error saving new user" to database_error (the live app retries)', async () => {
+  it('returns a username field error if another account claims the handle during insertion', async () => {
+    h.admin.rpc.mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [{ handle: 'ada_l', profile_id: 'winner' }], error: null });
+    h.generateLink.mockResolvedValueOnce({ data: { properties: null, user: null }, error: { status: 500, message: 'Database error saving new user' } } as never);
+    const res = await post('/signup', signupBody());
+    expect(res.status).toBe(409);
+    expect(res.json.code).toBe('username_taken');
+    expect(h.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unrelated database error distinct from a username race', async () => {
     h.generateLink.mockResolvedValueOnce({
       data: { properties: null, user: null },
       error: { status: 500, code: 'unexpected_failure', message: 'Database error saving new user' }
     } as never);
     const res = await post('/signup', signupBody());
-    expect(res.status).toBe(422);
-    expect(res.json.code).toBe('database_error');
-    expect(String(res.json.message)).toMatch(/database error/i);
+    expect(res.status).toBe(503);
+    expect(res.json.code).toBe('signup_unavailable');
     expect(h.sendEmail).not.toHaveBeenCalled();
   });
 
-  it('maps a racing email_exists from GoTrue to 409', async () => {
+  it('returns the same neutral acknowledgement for a racing main email registration', async () => {
     h.generateLink.mockResolvedValueOnce({
       data: { properties: null, user: null },
       error: { status: 422, code: 'email_exists', message: 'A user with this email address has already been registered' }
     } as never);
-    expect((await post('/signup', signupBody())).status).toBe(409);
+    expect((await post('/signup', signupBody())).json).toEqual({ ok: true, confirmEmail: true });
   });
 
   it('reports send_failed (created, no fallback) when the mail cannot go out', async () => {

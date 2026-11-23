@@ -42,6 +42,7 @@
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioEvent } from '../../../shared/comic/events';
 import type { QueuedNote } from '../messageQueue';
+import { WORK_CHANGED_EVENT } from '../home/workspaceTaskTarget';
 import type { ActivityItem } from '../types';
 import { requeue } from '../messageQueue';
 import {
@@ -238,6 +239,9 @@ export const subscribeStudioMoments = (fn: StudioMomentListener): (() => void) =
 };
 
 const say = (moment: StudioMoment): void => {
+  if (moment.phase === 'settled' && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(WORK_CHANGED_EVENT, { detail: { accountId: moment.accountId } }));
+  }
   for (const fn of Array.from(momentListeners)) {
     try {
       fn(moment);

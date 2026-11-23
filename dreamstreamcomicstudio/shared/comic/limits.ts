@@ -1,6 +1,8 @@
 // Every content cap of a Comic Studio project, in one place.
 // The server enforces them (session.ts / patch sanitizers); the client pre-checks for honest UI.
 
+import { MAX_IMAGE_ATTACHMENTS } from '../attachmentLimits.js';
+
 export const MAX_RENDER_HISTORY = 8; // unchanged (doc.ts re-exports)
 export const MAX_SPEND_ENTRIES = 200; // unchanged
 export const MAX_CONVERSATION = 160; // unchanged
@@ -20,7 +22,7 @@ export const DOC_LIMITS = {
   refsStyle: 8,
   refInbox: 24,
   refsProject: 150, // style + cast + places + inbox (conversation attachments excluded)
-  imagesPerMessage: 12,
+  imagesPerMessage: MAX_IMAGE_ATTACHMENTS,
   textFilesPerMessage: 6,
   nextSteps: 6,
   editions: 19,

@@ -5,10 +5,11 @@
 //                    server's breaker-aware route choice takes the route that answers; no look change).
 //   switch_model   → opens the model picker on that model (the models.md §3.6 C confirm "consistency can be
 //                    affected" lives there). NEVER switches by itself.
-//   add_key        → Settings → API keys in a new tab (a waiting retry on this page survives).
+//   add_key        → Settings → API keys in the current workspace tab.
 
+import { openApiKeysLink } from '../../account/accountNav';
 import React from 'react';
-import { ArrowRightLeft, Clock3, ExternalLink, KeyRound, RotateCcw } from 'lucide-react';
+import { ArrowRightLeft, Clock3, KeyRound, RotateCcw } from 'lucide-react';
 import type { OutageOption } from '../../../shared/comic/modelHealth';
 import { getImageModel } from '../../../shared/comic/models';
 import type { StudioAction } from '../../../shared/comic/ops';
@@ -81,10 +82,8 @@ export const OptionButton: React.FC<{
   );
   if (option.kind === 'add_key') {
     return (
-      <a href={API_KEYS_HREF} target="_blank" rel="noopener noreferrer" className={BTN} data-option="add_key">
+      <a href={API_KEYS_HREF} onClick={openApiKeysLink} className={BTN} data-option="add_key">
         {body}
-        <ExternalLink className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" aria-hidden />
-        <span className="sr-only"> (opens Settings in a new tab)</span>
       </a>
     );
   }

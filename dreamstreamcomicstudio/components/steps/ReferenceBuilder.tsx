@@ -1,3 +1,6 @@
+import { readAttachmentBatch } from '../../services/attachmentBatch';
+import { readLegacyReference } from '../../services/legacyReferenceImages';
+import { MAX_IMAGE_ATTACHMENTS } from '../../shared/attachmentLimits';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Users, Wand2, Check, UploadCloud, Download, Image as ImageIcon, CheckSquare, Square, Zap, Box, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
@@ -59,15 +62,6 @@ interface ReferenceBuilderProps {
   agentSettings?: ComicAgentSettings;
 }
 
-const fileToBase64 = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = error => reject(error);
-  });
-};
-
 type Tab = 'characters' | 'items' | 'locations';
 
 const STRUCTURED_FIELDS: Record<Tab, Array<{ key: string; label: string; placeholder: string }>> = {
@@ -116,6 +110,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [previewImage, setPreviewImage] = useState<{ url: string, title: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const hasFetched = useRef(hasInitialWorldData);
+  const [refNotice, setRefNotice] = useState<Record<string, string>>({});
+  const activeUploads = useRef(new Set<string>());
   const [referenceUrlMap, setReferenceUrlMap] = useState<Record<string, string>>({});
   const [characters, setCharacters] = useState<Character[]>(initialCharacters);
   const [items, setItems] = useState<Item[]>(initialItems);
@@ -298,22 +294,24 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   };
 
   const handleRefUpload = async (type: Tab, id: string, files: FileList | null) => {
-    if (!files) return;
-    const fileArray = Array.from(files).slice(0, 3);
-    const base64s = await Promise.all(fileArray.map(fileToBase64));
-    const ids = await Promise.all(base64s.map(saveImage));
-
-    const list = type === 'characters' ? characters : type === 'items' ? items : locations;
-    const entity = list.find(e => e.id === id);
-    if (entity) {
-      updateEntity(type, id, { referenceImageIds: [...(entity.referenceImageIds || []), ...ids].slice(0, 3) });
-    }
-    const entries: Record<string, string> = {};
-    for (const refId of ids) {
-      const url = await getImageUrl(refId);
-      if (url) entries[refId] = url;
-    }
-    setReferenceUrlMap(prev => ({ ...prev, ...entries }));
+    const selected = Array.from(files || []);
+    const entity = entitiesRef.current[type].find(item => item.id === id);
+    if (!entity || !selected.length || activeUploads.current.has(id)) return;
+    activeUploads.current.add(id);
+    try {
+      const { added, notice } = await readAttachmentBatch(selected, entity.referenceImageIds?.length || 0, 0,
+        async file => {
+          const data = await readLegacyReference(file);
+          const imageId = await saveImage(data);
+          return { imageId, data };
+        }, item => item.data, Number.POSITIVE_INFINITY);
+      const current = entitiesRef.current[type].find(item => item.id === id);
+      if (current && added.length) {
+        updateEntity(type, id, { referenceImageIds: [...(current.referenceImageIds || []), ...added.map(item => item.imageId)] });
+        setReferenceUrlMap(prev => ({ ...prev, ...Object.fromEntries(added.map(item => [item.imageId, item.data])) }));
+      }
+      setRefNotice(prev => ({ ...prev, [id]: notice }));
+    } finally { activeUploads.current.delete(id); }
   };
 
   const markGenerating = (id: string, active: boolean) => {
@@ -646,13 +644,16 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           {/* Refs */}
           <div className="flex flex-wrap gap-2">
             {(entity.referenceImageIds || []).map((id: string, i: number) => (
-              <img key={i} src={referenceUrlMap[id]} className="h-10 w-10 rounded-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] object-cover" />
+              <button key={id} type="button" aria-label={`Remove reference ${i + 1} for ${entity.name}`} onClick={() => updateEntity(type, entity.id, {referenceImageIds: (entity.referenceImageIds || []).filter((ref: string) => ref !== id)})}><img alt="" src={referenceUrlMap[id]} className="h-10 w-10 rounded-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] object-cover" /></button>
             ))}
             <label className={cn(UPLOAD_TILE, 'h-10 min-h-10 w-10 justify-center p-0', DENSITY.coarseSquare)}>
               <UploadCloud size={16} aria-hidden="true" />
-              <input type="file" multiple className="sr-only" aria-label={`Upload references for ${entity.name}`} onChange={(e) => handleRefUpload(type, entity.id, e.target.files)} />
+              <input type="file" multiple accept="image/*" className="sr-only" aria-label={`Upload references for ${entity.name}`} disabled={(entity.referenceImageIds?.length || 0) >= MAX_IMAGE_ATTACHMENTS} onChange={e => { void handleRefUpload(type, entity.id, e.target.files); e.target.value = ''; }} />
             </label>
           </div>
+
+          {refNotice[entity.id] && <p role="status" className="text-xs">{refNotice[entity.id]}</p>}
+          {(entity.referenceImageIds?.length || 0) > 3 && <p className="text-xs">Your photos are saved. The classic Flash image model uses the first three references, including the active style.</p>}
 
           {/* Img/PDF show busy with aria-busy + disabled, not the Button spinner: its icon would widen
               these ~75 px cells at 320 px while the PDF tools load. */}

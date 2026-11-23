@@ -28,6 +28,7 @@ import { getProviderDef, isTextProvider, type ProviderDef, type ProviderId } fro
 import { accountKeyForValidation, canonicalAccountProvider, readAccountBalanceKeys } from '../middleware/accountKeys.js';
 import { allowedProviderFilter } from '../middleware/keys.js';
 
+import { rememberImageKeyValidation } from '../services/standaloneImageRoute.js';
 import { refreshProviderBalance } from '../services/accountProviderUsage.js';
 
 export const keysRouter = Router();
@@ -291,5 +292,6 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
     }
   }
 
+  if (keyForCheck && userId) rememberImageKeyValidation(userId, provider, keyForCheck, result.status);
   res.json(publicResult(result));
 });

@@ -1037,7 +1037,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     const blockReason = response?.promptFeedback?.blockReason;
     const candidate = response?.candidates?.[0];
     const candidateParts = Array.isArray(candidate?.content?.parts) ? candidate!.content!.parts! : [];
-    const imagePart = candidateParts.find((p) => typeof p?.inlineData?.data === 'string' && (p.inlineData.data as string).length > 0);
+    const imagePart = candidateParts.find((p) => !p?.thought && (!p.inlineData?.mimeType || String(p.inlineData.mimeType).startsWith('image/')) && typeof p?.inlineData?.data === 'string' && (p.inlineData.data as string).length > 0);
     const text = candidateParts
       .filter((p) => typeof p?.text === 'string' && !p?.thought)
       .map((p) => p.text as string)

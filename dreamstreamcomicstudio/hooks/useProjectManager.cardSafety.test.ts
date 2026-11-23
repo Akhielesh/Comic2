@@ -18,7 +18,7 @@ vi.mock('../services/db', async (importOriginal) => ({
   getImageUrl: vi.fn(async (id: string) => `https://signed.test/${id}`),
   createGenerationNotification: vi.fn(async () => undefined)
 }));
-vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-1' }, loading: false }) }));
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: fakeSupabase.state.userId }, loading: false }) }));
 vi.mock('../services/generationManager', () => ({ startBackgroundGeneration: vi.fn(), cancelGeneration: vi.fn() }));
 
 const { useProjectManager, STATE_LOAD_FAILED, STATE_NOT_OPENED_SAVE, PROJECT_NOTICE_ID, OPEN_RETRY_DELAYS_MS } = await import('./useProjectManager');
@@ -42,7 +42,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   likes_count: 0, views_count: 0, created_at: '2026-10-01T00:00:00.000Z', updated_at: OLD, state: fullState, ...over
 });
 const stored = () => fakeSupabase.state.tables.projects[0] as Record<string, any>;
-const upserts = () => fakeSupabase.state.upserts.filter((u) => u.table === 'projects').map((u) => u.row as Record<string, any>);
+const saves = () => fakeSupabase.state.writes.filter((u) => u.table === 'projects').map((u) => u.row as Record<string, any>);
 const stateLoads = () => fakeSupabase.queriesOn('projects').filter((q) => q.columns === 'state,updated_at');
 const isStateLoad = (q: { columns: string }) => q.columns === 'state,updated_at';
 const failStateLoads = (times: number) => {
@@ -80,7 +80,7 @@ const openAndSettle = async (hook: Hook) => {
   await act(async () => {
     await hook.result.current.hydrateProjectAssets('c1');
   });
-  await waitFor(() => expect(upserts()).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   await sleep(20);
 };
 
@@ -135,7 +135,7 @@ describe('a comic that failed to open (App shows its card in the workspace)', ()
     expect(notice()).toHaveTextContent(STATE_NOT_OPENED_SAVE);
     await sleep(800);
     expect(stateLoads()).toHaveLength(ALL_ATTEMPTS);
-    expect(upserts()).toHaveLength(0);
+    expect(saves()).toHaveLength(0);
     expect(stored().state).toEqual(fullState);
   }, 10_000);
 
@@ -149,7 +149,7 @@ describe('a comic that failed to open (App shows its card in the workspace)', ()
       state: { ...prev.state, pageStudio: { ...(prev.state.pageStudio || {}), style: { ...ps.style, brief: 'new brief' } } as any }
     })));
     await sleep(800);
-    expect(upserts()).toHaveLength(0);
+    expect(saves()).toHaveLength(0);
     expect(stateLoads()).toHaveLength(ALL_ATTEMPTS);
     expect(stored().state.pageStudio.style).toEqual(STYLE);
   }, 10_000);
@@ -162,12 +162,12 @@ describe('a comic that failed to open (App shows its card in the workspace)', ()
       opened = await hook.result.current.hydrateProjectAssets('c1');
     });
     expect((opened!.state as any).versions).toEqual(VERSIONS);
-    const before = upserts().length;
+    const before = saves().length;
     act(() => hook.result.current.updateProject('c1', (prev) => ({
       state: { ...prev.state, versions: [...((prev.state as any).versions || []), { id: 'v2', name: 'New', createdAt: 2, state: {} }] } as any
     })));
-    await waitFor(() => expect(upserts().length).toBeGreaterThan(before), { timeout: 2000 });
-    const saved = upserts()[upserts().length - 1];
+    await waitFor(() => expect(saves().length).toBeGreaterThan(before), { timeout: 2000 });
+    const saved = saves()[saves().length - 1];
     expect(saved.state.versions.map((v: { id: string }) => v.id)).toEqual(['v1', 'v2']);
     expect(saved.state.imageTags).toEqual(TAGS);
     expect(saved.state.pageStudio.style).toEqual(STYLE);
@@ -188,8 +188,8 @@ describe('an update queued on a library card (the dashboard, the info modal)', (
       hook.result.current.updateProject('c1', (prev) => ({ state: { ...prev.state, comments: [...(prev.state.comments || []), comment] } }));
       hook.result.current.updateProject('c1', (prev) => ({ state: { ...prev.state, isFeatured: !prev.state.isFeatured } }));
     });
-    await waitFor(() => expect(upserts()).toHaveLength(1), { timeout: 2000 });
-    const saved = upserts()[0].state;
+    await waitFor(() => expect(saves()).toHaveLength(1), { timeout: 2000 });
+    const saved = saves()[0].state;
     expect(saved.imageTags).toEqual(TAGS);
     expect(saved.imageTagCounters).toEqual({ PANEL: 7 });
     expect(saved.comments).toEqual([comment]);
@@ -199,6 +199,46 @@ describe('an update queued on a library card (the dashboard, the info modal)', (
 });
 
 describe('a reload never replaces a full comic with its card', () => {
+  it('keeps remote edits and lets the creator save their conflicting version separately in private', async () => {
+    const hook = await mount();
+    await openAndSettle(hook);
+    Object.assign(stored(), { name: 'On the tablet', updated_at: '2026-11-23T12:21:00.123456Z' });
+    act(() => hook.result.current.updateProject('c1', { name: 'On this tab' }));
+    await waitFor(() => expect(hook.result.current.saveIssue?.conflict).toBe(true));
+    expect(stored().name).toBe('On the tablet');
+    await act(async () => { await hook.result.current.recoverSave('c1'); });
+    expect(fakeSupabase.state.tables.projects).toHaveLength(2);
+    expect(stored().name).toBe('On the tablet');
+    expect(fakeSupabase.state.tables.projects[1]).toMatchObject({ name: 'On this tab (recovered edits)', is_public: false, user_id: 'user-1' });
+    expect(hook.result.current.saveIssue).toBeNull();
+  });
+
+  it('recovers a failed write on reconnect and keeps only the latest local edits', async () => {
+    const hook = await mount();
+    await openAndSettle(hook);
+    fakeSupabase.state.failures.push({ when: q => q.table === 'projects' && q.columns === '', error: { message: 'offline' } });
+    act(() => hook.result.current.updateProject('c1', { name: 'Offline edit' }));
+    await waitFor(() => expect(hook.result.current.saveIssue?.conflict).toBe(false));
+    expect(stored().name).toBe('Comic');
+    act(() => window.dispatchEvent(new Event('online')));
+    await waitFor(() => expect(stored().name).toBe('Offline edit'));
+    expect(hook.result.current.saveIssue).toBeNull();
+  });
+
+  it('drops the previous account’s delayed library response after a switch', async () => {
+    const hook = await mount();
+    const release = gate(q => q.table === 'projects' && q.columns.includes('state->'));
+    let first!: Promise<void>;
+    act(() => { first = hook.result.current.reloadProjects(); });
+    await waitFor(() => expect(fakeSupabase.queriesOn('projects').filter(q => q.columns.includes('state->')).length).toBeGreaterThan(1));
+    fakeSupabase.state.userId = 'user-2';
+    fakeSupabase.state.tables.projects.push(row({ id: 'second-comic', user_id: 'user-2', name: 'Second account' }));
+    hook.rerender();
+    expect(hook.result.current.projects).toEqual([]);
+    release();
+    await act(async () => { await first; });
+    await waitFor(() => expect(hook.result.current.projects.map(p => p.name)).toEqual(['Second account']));
+  });
   it('a list asked for before this tab\'s save landed keeps the comic full: no stale flag, no second load', async () => {
     const hook = await mount();
     await openAndSettle(hook);
@@ -209,19 +249,22 @@ describe('a reload never replaces a full comic with its card', () => {
       reload = hook.result.current.reloadProjects();
     });
     act(() => hook.result.current.updateProject('c1', { name: 'Typed' }));
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
     await sleep(20);
     // The list's snapshot predates that save: the row it returns still has the older time.
+    const savedRevision = stored().updated_at;
     stored().updated_at = OLD;
     releaseList();
     await act(async () => {
       await reload;
     });
+    // Only the list response was stale. The next conditional write sees the committed row.
+    stored().updated_at = savedRevision;
     expect(isCardOnly('c1')).toBe(false);
     expect(listed(hook).name).toBe('Typed');
     expect((listed(hook).state as any).versions).toEqual(VERSIONS);
     act(() => hook.result.current.updateProject('c1', { name: 'Again' }));
-    await waitFor(() => expect(upserts()).toHaveLength(3), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(3), { timeout: 2000 });
     expect(stateLoads()).toHaveLength(loadsBefore);
   });
 
@@ -238,7 +281,7 @@ describe('a reload never replaces a full comic with its card', () => {
     expect(isCardState(listed(hook).state)).toBe(false);
     act(() => hook.result.current.updateProject('c1', (prev) => ({ state: { ...prev.state, script: 'Second edit' } })));
     releaseSave();
-    await waitFor(() => expect(upserts()).toHaveLength(3), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(3), { timeout: 2000 });
     expect(stored().state.overview).toBe('First edit');
     expect(stored().state.script).toBe('Second edit');
     expect(stored().state.versions).toEqual(VERSIONS);
@@ -256,9 +299,9 @@ describe('a kept full comic takes the row columns the server writes', () => {
     });
     expect(listed(hook).isPublic).toBe(false);
     act(() => hook.result.current.updateProject('c1', { name: 'Edit after hold' }));
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
     // In production projects_guard_client_writes refuses is_public true on a held row (42501), every save after it.
-    expect(upserts()[1].is_public).toBe(false);
+    expect(saves()[1].is_public).toBe(false);
   });
 
   it('a classic public share made by the server, and new counters, are kept', async () => {
@@ -271,8 +314,8 @@ describe('a kept full comic takes the row columns the server writes', () => {
     });
     expect(listed(hook)).toMatchObject({ isPublic: true, likesCount: 4, viewsCount: 9 });
     act(() => hook.result.current.updateProject('c1', { name: 'Edit after share' }));
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
-    expect(upserts()[1].is_public).toBe(true);
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
+    expect(saves()[1].is_public).toBe(true);
   });
 
   it('a visibility change made here and not yet saved wins over the list', async () => {
@@ -284,8 +327,8 @@ describe('a kept full comic takes the row columns the server writes', () => {
       await hook.result.current.reloadProjects();
     });
     expect(listed(hook).isPublic).toBe(true);
-    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
-    expect(upserts()[1].is_public).toBe(true);
+    await waitFor(() => expect(saves()).toHaveLength(2), { timeout: 2000 });
+    expect(saves()[1].is_public).toBe(true);
   });
 });
 
@@ -305,7 +348,7 @@ describe('App after a failed open (resolveProjectOpen on the real hook): it stay
     expect(notice()).toHaveTextContent(STATE_LOAD_FAILED);
     expect(notice()!.firstElementChild!.getAttribute('role')).toBe('alert');
     expect(isCardState(listed(hook).state)).toBe(true);
-    expect(upserts()).toHaveLength(0);
+    expect(saves()).toHaveLength(0);
   }, 10_000);
 
   it('the hook rejects that open with ProjectStateLoadError (the comic, the cause, the words on screen)', async () => {

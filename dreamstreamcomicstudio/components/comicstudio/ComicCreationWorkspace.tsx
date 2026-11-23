@@ -1,5 +1,5 @@
 import React, { useId, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, ChevronDown, FileText, Image as ImageIcon, Layers, Loader2, Menu, MessageCircle, Plus, X } from 'lucide-react';
+import { ArrowRight, BookOpen, Bug, CircleHelp, ChevronDown, FileText, Image as ImageIcon, Layers, Loader2, Menu, MessageCircle, Plus, X } from 'lucide-react';
 import type { Project } from '../../types';
 import { useFormFactor } from './mobile/useFormFactor';
 import { useFocusTrap } from './board/ui';
@@ -9,12 +9,17 @@ import { AccountMenu } from '../account/AccountMenu';
 import { IconButton } from '../ds/IconButton';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
+import { ComicTaskActivity } from './home/ComicTaskActivity';
+import { openFeedbackReport } from '../../services/openFeedbackReport';
 import { HOME_START_HELP } from './home/homeModel';
 import '../comicshost/comicsShell.css';
 import './comicCreationWorkspace.css';
 
 export interface ComicProjectNavigationProps {
   projects: Project[];
+  accountId?: string;
+  onOpenStudioWork?(id: string): void;
+  onReport?(): void;
   activeProjectId?: string | null;
   activeView?: 'new' | 'all';
   disabled?: boolean;
@@ -27,7 +32,7 @@ export interface ComicProjectNavigationProps {
 }
 
 /** Shared with the studio's left navigation: every entry uses the existing App routing. */
-export function ComicProjectNavigation({ projects, activeProjectId, activeView, disabled, onNewComic, onImages, onChat, onAllComics, onLibrary, onOpenProject }: ComicProjectNavigationProps) {
+export function ComicProjectNavigation({ projects, accountId, onOpenStudioWork, onReport, activeProjectId, activeView, disabled, onNewComic, onImages, onChat, onAllComics, onLibrary, onOpenProject }: ComicProjectNavigationProps) {
   const [recentOpen, setRecentOpen] = useState(true);
   const recentId = useId();
   const recent = [...projects].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
@@ -35,6 +40,7 @@ export function ComicProjectNavigation({ projects, activeProjectId, activeView, 
     <button type="button" className="comic-project-new" onClick={onNewComic} disabled={disabled} aria-current={activeView === 'new' ? 'page' : undefined}><Plus aria-hidden />New comic</button>
     {onImages && <button type="button" onClick={onImages} disabled={disabled}><ImageIcon aria-hidden />Standalone images</button>}
     {onChat && <button type="button" onClick={onChat} disabled={disabled}><MessageCircle aria-hidden />Open chat</button>}
+    {accountId && <ComicTaskActivity key={accountId} accountId={accountId} disabled={disabled} onOpen={onOpenStudioWork ?? onOpenProject} />}
     <button type="button" className="comic-project-recents-toggle" aria-expanded={recentOpen} aria-controls={recentId} onClick={() => setRecentOpen(!recentOpen)}><ChevronDown aria-hidden className={recentOpen ? '' : 'is-closed'} />Recent comics</button>
     {recentOpen && <div id={recentId} className="comic-project-recents">
       {recent.map((project) => <button type="button" key={project.id} disabled={disabled} onClick={() => onOpenProject(project.id)} aria-current={activeProjectId === project.id ? 'page' : undefined} title={project.name}><FileText aria-hidden /><span>{project.name || 'Untitled comic'}</span></button>)}
@@ -43,6 +49,8 @@ export function ComicProjectNavigation({ projects, activeProjectId, activeView, 
     <div className="comic-project-destinations">
       <button type="button" disabled={disabled} onClick={onAllComics} aria-current={activeView === 'all' ? 'page' : undefined}><Layers aria-hidden />All comics</button>
       <button type="button" disabled={disabled} onClick={onLibrary}><BookOpen aria-hidden />Library</button>
+      <a href="/?tour=1"><CircleHelp aria-hidden />Studio guide</a>
+      <button type="button" disabled={disabled} onClick={onReport ?? (() => openFeedbackReport('bug'))}><Bug aria-hidden />Report a problem</button>
     </div>
   </nav>;
 }
@@ -70,6 +78,8 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome }: {
   useFocusTrap(drawerRef, modalOpen);
   const route = (action: () => void) => () => { close(); action(); };
   const links: ComicProjectNavigationProps = { ...navigation,
+    onReport: route(navigation.onReport ?? (() => openFeedbackReport('bug'))),
+    onOpenStudioWork: navigation.onOpenStudioWork && ((id) => { close(); navigation.onOpenStudioWork!(id); }),
     onImages: navigation.onImages && route(navigation.onImages),
     onChat: navigation.onChat && route(navigation.onChat),
     onNewComic: route(navigation.onNewComic), onAllComics: route(navigation.onAllComics), onLibrary: route(navigation.onLibrary),

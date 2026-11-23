@@ -1,3 +1,5 @@
+import { MAX_IMAGE_ATTACHMENTS, MAX_INLINE_ATTACHMENT_CHARS } from '../../shared/attachmentLimits';
+import { readAttachmentBatch } from '../../services/attachmentBatch';
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Server } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
@@ -36,7 +38,7 @@ interface ChatComposerProps {
   onStop: () => void;
 }
 
-const MAX_ATTACHMENTS = 6;
+const MAX_ATTACHMENTS = MAX_IMAGE_ATTACHMENTS;
 
 /** Shown when /api/chat/enhance answers `skipped: 'usage'`: nothing was spent and the draft is unchanged. */
 export const ENHANCE_PAUSED_NOTE = 'Prompt polish is paused while your usage is used up — your draft is unchanged, and you can still send it.';
@@ -108,6 +110,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [text, setText] = useState('');
   const [slashIndex, setSlashIndex] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [fileNote, setFileNote] = useState('');
+  const [readingFiles, setReadingFiles] = useState(false);
+  const readLock = useRef(false);
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
@@ -189,8 +194,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     const onAttach = (e: Event) => {
       const d = (e as CustomEvent<{ name?: string; mimeType?: string; dataUrl?: string; kind?: 'image' | 'document' }>).detail;
       if (!d?.dataUrl) return;
+      if (readLock.current) { setFileNote('Wait for the selected files to finish attaching.'); return; }
+      if ((d.kind === 'image' || d.mimeType?.startsWith('image/')) && !features.vision) { setFileNote('Choose an image-capable model before attaching pictures.'); return; }
       setAttachments((prev) => {
-        if (prev.length >= MAX_ATTACHMENTS) return prev;
+        if (prev.length >= MAX_ATTACHMENTS || prev.reduce((n, a) => n + a.dataUrl.length, d.dataUrl!.length) > MAX_INLINE_ATTACHMENT_CHARS) {
+          setFileNote('This attachment exceeds the ten-file or 6 MB total limit.'); return prev;
+        }
         return [
           ...prev,
           {
@@ -206,9 +215,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     };
     window.addEventListener('dreamstream:attach', onAttach);
     return () => window.removeEventListener('dreamstream:attach', onAttach);
-  }, []);
+  }, [features.vision]);
 
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
+  const canSend = !readingFiles && (text.trim().length > 0 || attachments.length > 0) && !busy;
   const canEnhance = text.trim().length > 2 && !busy && !enhancing;
 
   // Improve the draft prompt in place (intent preserved); keeps the original for undo.
@@ -245,6 +254,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const resetInput = () => {
     setText('');
     setAttachments([]);
+    setFileNote('');
     setBeforeEnhance(null);
     setEnhanceNote(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -252,7 +262,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   const submit = () => {
     if (busy) return;
-    if (!canSend) return;
+    if (!canSend || readLock.current) return;
+    if (!features.vision && attachments.some(a => a.kind === 'image')) { setFileNote('Choose an image-capable model or remove the pictures.'); return; }
     onSend(text.trim(), attachments);
     resetInput();
   };
@@ -327,19 +338,25 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     const DATA_TYPES = ['text/csv', 'application/json', 'text/plain'];
     const DATA_EXTS = /\.(csv|tsv|json|txt)$/i;
     const isDataFile = (f: File) => DATA_TYPES.includes(f.type) || DATA_EXTS.test(f.name);
-    const accepted = Array.from(files).filter(
-      (f) => (features.vision && f.type.startsWith('image/')) || f.type === 'application/pdf' || isDataFile(f)
-    );
-    const next: ChatAttachment[] = [];
-    for (const file of accepted.slice(0, MAX_ATTACHMENTS - attachments.length)) {
-      try {
-        next.push(await fileToAttachment(file));
-      } catch {
-        /* skip unreadable file */
-      }
+    if (readLock.current) { setFileNote('Wait for the selected files to finish attaching.'); return; }
+    readLock.current = true;
+    setReadingFiles(true);
+    try {
+      const { added, notice } = await readAttachmentBatch(Array.from(files), attachments.length, attachments.reduce((n, a) => n + a.dataUrl.length, 0), async file => {
+        if (!file.size) throw new Error(`${file.name} is empty.`);
+        if (file.type.startsWith('image/') && !features.vision) throw new Error('Choose an image-capable model before attaching pictures.');
+        if (!((features.vision && /^image\/(jpeg|png|webp|gif|avif)$/.test(file.type)) || file.type === 'application/pdf' || isDataFile(file))) {
+          throw new Error(`${file.name} is an unsupported file type.`);
+        }
+        return fileToAttachment(file);
+      }, a => a.dataUrl);
+      setAttachments(prev => [...prev, ...added].slice(0, MAX_ATTACHMENTS));
+      setFileNote(notice);
+    } finally {
+      readLock.current = false;
+      setReadingFiles(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
-    setAttachments((prev) => [...prev, ...next].slice(0, MAX_ATTACHMENTS));
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const autoGrow = (el: HTMLTextAreaElement) => {
@@ -360,7 +377,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     const pasted = dt.getData('text/plain');
     if (pasted && pasted.length >= PASTE_TO_FILE_THRESHOLD && attachments.length < MAX_ATTACHMENTS) {
       e.preventDefault();
-      setAttachments((prev) => [...prev, textAttachment(pasted)].slice(0, MAX_ATTACHMENTS));
+      const item = textAttachment(pasted);
+      if (readLock.current || attachments.reduce((n, a) => n + a.dataUrl.length, item.dataUrl.length) > MAX_INLINE_ATTACHMENT_CHARS) {
+        setFileNote('This paste exceeds the remaining attachment space. Paste a smaller section after the current files finish.');
+        return;
+      }
+      setAttachments((prev) => [...prev, item].slice(0, MAX_ATTACHMENTS));
     }
     // Otherwise let the textarea insert the text normally.
   };
@@ -408,6 +430,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           })}
       </div>
 
+      {fileNote && <p role="status" className={`mb-2 text-xs ${MUTED}`}>{fileNote}</p>}
       {/* Attachment previews */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
@@ -430,6 +453,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 <img src={att.dataUrl} alt={att.name} className={`w-14 h-14 object-cover rounded-xl ${HAIRLINE}`} />
               )}
               <button
+                aria-label={`Remove ${att.name}`}
                 onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
                 className={`absolute -top-1.5 -right-1.5 ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white rounded-full ${SHADOW_SOFT} w-5 h-5 flex items-center justify-center ${TRANSITION}`}
               >
@@ -475,9 +499,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={attachments.length >= MAX_ATTACHMENTS}
+              disabled={readingFiles || attachments.length >= MAX_ATTACHMENTS}
               className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
-              title={features.vision ? 'Attach images or PDFs' : 'Attach a PDF'}
+              title={features.vision ? 'Attach up to 10 images or files (6 MB total)' : 'Attach a PDF'}
             >
               <Paperclip className="w-4 h-4" />
             </button>

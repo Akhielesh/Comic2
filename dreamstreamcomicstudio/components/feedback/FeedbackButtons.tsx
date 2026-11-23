@@ -45,6 +45,8 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // One submission per mounted control, no matter how many paths fire.
   const submittedRef = useRef(false);
@@ -55,6 +57,8 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
   const submitOnce = (finalVote: FeedbackVoteValue, comment?: string) => {
     if (submittedRef.current) return;
     submittedRef.current = true;
+    setSaving(true);
+    setFailed(false);
     void submitFeedback({
       targetType,
       targetId,
@@ -64,8 +68,11 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
       vote: finalVote,
       comment: comment && comment.trim() ? comment.trim() : undefined,
       metadata
+    }).then(result=>{
+      setSaving(false);
+      setDone(result.persisted);
+      setFailed(!result.persisted);
     });
-    setDone(true);
   };
 
   // Safety net: if a dislike was started but never confirmed, record it once on unmount.
@@ -112,9 +119,13 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
   return (
     <div className={cn('flex flex-col gap-1', className)}>
       <div className={`flex items-center gap-2 ${compact ? 'text-[11px]' : 'text-xs'}`}>
-        <span className={MUTED}>{done ? 'Thanks!' : 'Helpful?'}</span>
+        <span className={MUTED}>{done ? 'Thanks!' : saving ? 'Saving…' : failed ? 'Could not save.' : 'Helpful?'}</span>
+        {failed && vote && <button type="button" className={FOCUS_RING} onClick={()=>{
+          submittedRef.current=false; submitOnce(vote,vote==='dislike'?reason:undefined);
+        }}>Retry</button>}
         <button
           type="button"
+          disabled={saving || done || failed}
           onClick={handleLike}
           className={btn(vote === 'like', TONE_TEXT.success)}
           aria-pressed={vote === 'like'}
@@ -124,6 +135,7 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
         </button>
         <button
           type="button"
+          disabled={saving || done || failed}
           onClick={handleDislike}
           className={btn(vote === 'dislike', TONE_TEXT.danger)}
           aria-pressed={vote === 'dislike'}

@@ -1,17 +1,13 @@
 // @vitest-environment jsdom
 // The one way to the DreamStream settings (navtheme NT-1): a request App answers in the app, a page load when nothing
-// answers, and a new tab while the open comic reports the Director at work.
-import { act, renderHook } from '@testing-library/react';
+// answers, and repeated presses within a single tab.
+import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  ACCOUNT_NAV_NEW_TAB_WHILE_BUSY,
   ACCOUNT_SETTINGS_EVENT,
   accountSettingsHref,
-  isStudioBusy,
   requestAccountSettings,
-  setStudioBusy,
-  useAccountSettingsListener,
-  useSettingsOpenInNewTab
+  useAccountSettingsListener
 } from './accountNav';
 
 const realLocation = window.location;
@@ -22,7 +18,6 @@ const stubLocation = () => {
 };
 
 afterEach(() => {
-  setStudioBusy(false);
   Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
   vi.restoreAllMocks();
 });
@@ -53,35 +48,18 @@ describe('requestAccountSettings', () => {
     expect(accountSettingsHref('settings')).toBe('/?view=settings&tab=settings');
   });
 
-  it('while a comic is busy it opens a new tab (noopener) and does not dispatch; the rule lifts when the comic is idle', () => {
-    expect(ACCOUNT_NAV_NEW_TAB_WHILE_BUSY).toBe(true);
-    const assign = stubLocation();
+  it('repeated requests stay in the same tab', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     const onRequest = vi.fn((e: Event) => e.preventDefault());
     window.addEventListener(ACCOUNT_SETTINGS_EVENT, onRequest);
     try {
-      setStudioBusy(true);
-      expect(isStudioBusy()).toBe(true);
-      expect(requestAccountSettings('profile', { resume: 'new-comic' })).toBe(false);
-      expect(open).toHaveBeenCalledWith('/?view=settings&tab=profile', '_blank', 'noopener');
-      expect(onRequest).not.toHaveBeenCalled();
-      expect(assign).not.toHaveBeenCalled();
-      setStudioBusy(false);
       expect(requestAccountSettings('profile')).toBe(true);
-      expect(onRequest).toHaveBeenCalledTimes(1);
-      expect(open).toHaveBeenCalledTimes(1);
+      expect(requestAccountSettings('profile')).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+      expect(onRequest).toHaveBeenCalledTimes(2);
     } finally {
       window.removeEventListener(ACCOUNT_SETTINGS_EVENT, onRequest);
     }
-  });
-
-  it('useSettingsOpenInNewTab follows the busy flag', () => {
-    const { result } = renderHook(() => useSettingsOpenInNewTab());
-    expect(result.current).toBe(false);
-    act(() => setStudioBusy(true));
-    expect(result.current).toBe(true);
-    act(() => setStudioBusy(false));
-    expect(result.current).toBe(false);
   });
 });
 
