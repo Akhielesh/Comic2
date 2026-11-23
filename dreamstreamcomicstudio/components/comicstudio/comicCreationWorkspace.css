@@ -145,8 +145,9 @@
 .comic-task-body p, .comic-task-body small, .comic-task-sync { color:var(--ds-muted); font-size:var(--ds-text-xs); }
 .comic-task-body p { margin:6px; line-height:1.5; }
 .comic-task-sync { display:flex; align-items:center; justify-content:space-between; gap:4px; padding-left:6px; }
+.comic-task-sync > [role="status"] { min-width:0; overflow-wrap:anywhere; }
 .comic-task-sync small { display:block; }
-.comic-task-sync button { width:44px; justify-content:center; padding:0; }
+.comic-task-sync button { flex:0 0 44px; width:44px; justify-content:center; padding:0; }
 .comic-task-link { display:flex; min-height:44px; flex-direction:column; justify-content:center; gap:2px; padding:4px 6px; border-radius:var(--ds-radius-control); }
 .comic-task-link span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .comic-task-body .comic-task-secondary { font-size:var(--ds-text-xs); min-height:44px; padding-inline:6px; color:var(--ds-muted); }
