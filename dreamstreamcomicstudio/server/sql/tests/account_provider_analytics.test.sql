@@ -51,3 +51,4 @@ set role authenticated;
 delete from public.user_api_keys where user_id='d133d133-0000-4444-8888-000000000001';
 reset role;
 do $$ begin assert not exists(select from public.provider_balance_observations where owner_id='d133d133-0000-4444-8888-000000000001'); end $$;
+\echo ACCOUNT_PROVIDER_ANALYTICS_OK

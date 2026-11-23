@@ -10,8 +10,8 @@ import { FAQ, FAQ_HEAD, JOIN, REGISTER, fill } from './landingCopy';
 import { LANDING_VALUES } from './landingModels';
 import { showSection } from './parts';
 
-/** A quiet text link: ink, the underline draws in, a 44 px square target at least under a coarse pointer. */
-export const QUIET_LINK = cn('ds-link inline-flex items-center justify-center font-medium text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
+/** Text links have a 24 px minimum target height and a 44 px target for touch. */
+export const QUIET_LINK = cn('ds-link inline-flex min-h-6 items-center justify-center font-medium text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
 
 export const RegisterSection: React.FC<{ signedIn: boolean; onSignUp: () => void; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignUp, onSignIn, onOpenComics }) => {
   const [feedbackOpened, setFeedbackOpened] = useState(false);

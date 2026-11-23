@@ -28,3 +28,4 @@ do $$ declare a record; begin
  begin perform public.comic_artwork_backup_manifest('comic-assets',null,51); assert false; exception when invalid_parameter_value then null; end;
 end $$;
 rollback;
+\echo COMIC_ARTWORK_BACKUP_MANIFEST_OK

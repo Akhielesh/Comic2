@@ -28,3 +28,4 @@ begin
   assert has_function_privilege('service_role','public.lookup_google_login(text,text)','EXECUTE');
   assert not has_schema_privilege('authenticated','google_login_private','USAGE');
 end $$;
+\echo GOOGLE_LOGIN_ACCOUNTS_OK

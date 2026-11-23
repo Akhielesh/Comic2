@@ -61,3 +61,4 @@ do $$ declare a uuid:=gen_random_uuid(); b uuid:=gen_random_uuid(); c text; begi
   assert not exists(select 1 from public.member_referral_signups where member_id=b);
 end $$;
 rollback;
+\echo MEMBER_REFERRALS_OK
