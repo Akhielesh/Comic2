@@ -1,14 +1,16 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 import { githubIdentityToken } from './actionsIdentity.mjs';
 
 const endpoint = 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/internal/originals/';
 const keys = ['tide', 'orchard', 'fox', 'table-nine'];
 const audience = 'urn:dreamstream:originals-publisher';
 
-async function publish(key) {
+export async function publish(key, env = process.env, fetcher = fetch) {
+  if (!keys.includes(key)) throw new Error('Select one registered Studio Original.');
   for (let poll = 0; poll < 100; poll++) {
-    const token = await githubIdentityToken(audience);
-    const reply = await fetch(endpoint + key, {
+    const token = await githubIdentityToken(audience, env, fetcher);
+    const reply = await fetcher(endpoint + key, {
       method: 'POST', headers: {Authorization: 'Bearer ' + token, Accept: 'application/json'},
       redirect: 'error', signal: AbortSignal.timeout(45_000)
     });
@@ -25,14 +27,12 @@ async function publish(key) {
     if (result.state !== 'published' || !/^[a-zA-Z0-9]{17}$/.test(result.slug)) {
       throw new Error('Publishing ' + key + ' returned an incomplete result.');
     }
-    console.log(key + ' https://comics.dreamstreamstudio.ai/c/' + result.slug);
-    return;
+    return 'https://comics.dreamstreamstudio.ai/c/' + result.slug;
   }
   throw new Error('Timed out waiting for ' + key);
 }
 // A content release may start before its matching backend image reaches production.
-if (process.env.GITHUB_EVENT_NAME === 'push') {
-  const revision = process.env.GITHUB_SHA;
+async function waitForRevision(revision) {
   if (!/^[a-f0-9]{40}$/.test(revision ?? '')) throw new Error('Missing production revision.');
   let ready = false;
   for (let attempt = 0; attempt < 180 && !ready; attempt++) {
@@ -46,4 +46,7 @@ if (process.env.GITHUB_EVENT_NAME === 'push') {
   }
   if (!ready) throw new Error('The reviewed backend revision is not serving yet.');
 }
-for (const key of keys) await publish(key);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.env.GITHUB_EVENT_NAME === 'push') await waitForRevision(process.env.GITHUB_SHA);
+  console.log(await publish(process.env.ORIGINAL_BOOK));
+}
