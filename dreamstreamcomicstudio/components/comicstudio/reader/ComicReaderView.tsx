@@ -36,7 +36,7 @@ import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLan
 import { readerString } from '../i18n/readerStrings';
 import { EndCard } from '../immersive/EndCard';
 import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOptions, trimAspect, type ImmersiveReaderEndCard } from '../immersive/ImmersiveReader';
-import { connectionHints, pageImageCache } from '../immersive/pageImageCache';
+import { availableCachedPath, connectionHints, pageImageCache } from '../immersive/pageImageCache';
 import { SlotContentView, slotImageSource, type SlotImage } from '../immersive/ReaderSlot';
 import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookView, type LayoutPref } from '../immersive/readerLayout';
 import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition } from '../immersive/readerPrefs';
@@ -807,7 +807,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       .slice(Math.max(0, viewIdx - 2), viewIdx + 3)
       .flatMap((v) => v.items)
       .flatMap((i) => [items[i]?.asset.path, sourceOf(i)?.path])
-      .filter(Boolean) as string[];
+      .map((path) => availableCachedPath(path, img.urlFor)).filter((path): path is string => !!path);
     pageImageCache.retain(keep);
     const controller = new AbortController();
     // The page on screen first: on a slow phone connection, parallel downloads made it arrive last. Only once the

@@ -82,7 +82,7 @@ export async function signAssetPaths(assets: AssetStore, paths: string[], scope:
   const sign = async (group: string[], ttlSec?: number): Promise<Record<string, string>> => {
     if (!group.length) return {};
     try {
-      return (await assets.signUrls(group, ttlSec ? { ttlSec } : undefined)) || {};
+      return (await assets.signUrls(group, { scope: { userId: scope.userId, projectId: scope.projectId }, ...(ttlSec ? { ttlSec } : {}) })) || {};
     } catch (err) {
       logger.warn('comic_sign_urls_failed', { projectId: scope.projectId, via: scope.via, count: group.length, private: !!ttlSec, message: (err as Error)?.message });
       return {};

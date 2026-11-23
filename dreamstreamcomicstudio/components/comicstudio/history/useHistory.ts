@@ -18,8 +18,7 @@
 // itself. Requests are aborted when the panel closes or the inputs change.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isPrivatePath } from '../../../shared/comic/imagePaths';
-import { directDisplayUrl, mergeUrls, type UrlEntry } from '../signedAssets';
+import { isProtectedStudioPath, directDisplayUrl, mergeUrls, refreshSignedUrls, signingAccessDenied, type UrlEntry } from '../signedAssets';
 import { usePrivateUrlRenewal } from '../usePrivateUrlRenewal';
 import { displayAssetPaths, type AssetRef } from '../../../shared/comic/doc';
 import type { CompareRef, CompareResult, VersionRow } from '../../../shared/comic/history/types';
@@ -146,12 +145,10 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
     for (const [id, paths] of byVersion) {
       void api.urls(projectId, id, paths).then((got) => {
         if (signal?.aborted) return;
-        setUrls((cur) => {
-          const next = { ...cur };
-          for (const path of paths) delete next[path];
-          return mergeUrls(next, got, Date.now());
-        });
-      }).catch(() => undefined);
+        setUrls((cur) => refreshSignedUrls(cur, paths, got, Date.now()));
+      }).catch((err) => {
+        if (!signal?.aborted && signingAccessDenied(err)) setUrls((cur) => refreshSignedUrls(cur, paths, {}, Date.now()));
+      });
     }
   }, () => setExpires((n) => n + 1));
   const studioUrlFor = studio.urlFor;
@@ -160,7 +157,7 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
     if (!p) return undefined;
     if (/^(?:https?:|data:|blob:)/i.test(p)) return directDisplayUrl(p);
     const entry = urls[p];
-    if (entry && isPrivatePath(p)) return entry.expiresAt > Date.now() ? entry.url : undefined;
+    if (isProtectedStudioPath(p)) return entry && entry.expiresAt > Date.now() ? entry.url : undefined;
     return entry?.url || studioUrlFor(asset, o);
   }, [urls, studioUrlFor, expires]);
 
@@ -194,6 +191,7 @@ const useLazyUrls = (projectId: string | undefined, versionId: string | null, ba
   const baseEntries = useMemo(() => mergeUrls({}, base, Date.now()), [base]);
   const [extra, setExtra] = useState<Record<string, UrlEntry>>({});
   const requestScope = useRef(0);
+  const currentEntries = useRef<Record<string, UrlEntry>>({});
   const [expiryRevision, setExpiryRevision] = useState(0);
   // Paths whose map URL expired: the map's (and the live studio's) URL is not used for them any more.
   const [expired, setExpired] = useState<ReadonlySet<string>>(() => new Set());
@@ -212,18 +210,23 @@ const useLazyUrls = (projectId: string | undefined, versionId: string | null, ba
     (paths: string[]) => {
       if (!paths.length || !projectId || !versionId) return;
       const scope = requestScope.current;
-      api
-        .urls(projectId, versionId, paths)
-        .then((got) => {
-          if (scope !== requestScope.current) return;
-          setExtra((cur) => {
-            const next = { ...cur };
-            for (const path of paths) delete next[path];
-            return mergeUrls(next, got, Date.now());
-          });
-          setExpired((cur) => new Set([...cur, ...paths]));
-        })
-        .catch(() => undefined); // an unsignable image stays a calm placeholder
+      const previous = currentEntries.current;
+      const receive = (got: Record<string, string>) => {
+        if (scope !== requestScope.current) return;
+        setExtra((cur) => {
+          const next = { ...cur };
+          const merged = refreshSignedUrls({ ...previous, ...cur }, paths, got, Date.now());
+          for (const path of paths) {
+            if (merged[path]) next[path] = merged[path];
+            else delete next[path];
+          }
+          return next;
+        });
+        setExpired((cur) => new Set([...cur, ...paths]));
+      };
+      api.urls(projectId, versionId, paths).then(receive).catch((err) => {
+        if (signingAccessDenied(err)) receive({});
+      });
     },
     [api, projectId, versionId]
   );
@@ -232,6 +235,7 @@ const useLazyUrls = (projectId: string | undefined, versionId: string | null, ba
     for (const path of expired) delete current[path];
     return { ...current, ...extra };
   }, [baseEntries, extra, expired]);
+  currentEntries.current = entries;
   usePrivateUrlRenewal(entries, sign, () => setExpiryRevision((n) => n + 1));
   const flush = useCallback(() => sign(queue.current.splice(0)), [sign]);
   const urlFor = useCallback<UrlFor>(
@@ -240,9 +244,9 @@ const useLazyUrls = (projectId: string | undefined, versionId: string | null, ba
       if (!p) return undefined;
       if (/^(?:https?:|data:|blob:)/i.test(p)) return directDisplayUrl(p);
       const own = entries[p];
-      if (own) return !isPrivatePath(p) || own.expiresAt > Date.now() ? own.url : undefined;
+      if (own) return !isProtectedStudioPath(p) || own.expiresAt > Date.now() ? own.url : undefined;
       if (expired.has(p)) return undefined;
-      const live = studioUrlFor(asset, o);
+      const live = !isProtectedStudioPath(p) ? studioUrlFor(asset, o) : undefined;
       if (live) return live;
       if (!asked.current.has(p)) {
         asked.current.add(p);

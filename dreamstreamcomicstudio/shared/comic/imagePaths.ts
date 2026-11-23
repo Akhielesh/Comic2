@@ -16,6 +16,14 @@ export const isPrivateDraftPath = (path: string): boolean => typeof path === 'st
 export const isPrivatePath = (path: string): boolean =>
   isReferencePath(path) || isPrivateDraftPath(path) || isQuarantinePath(path);
 
+const uuidPart = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const LEGACY_PROJECT_IMAGE = new RegExp('^u/(' + uuidPart + ')/p/(' + uuidPart + ')/img/[A-Za-z0-9_@.-]+$');
+export function legacyArtScope(path: string): {owner: string; project: string} | undefined {
+  if (typeof path !== 'string' || path.includes('..') || path.endsWith('/.') || isPrivateDraftPath(path)) return;
+  const match = LEGACY_PROJECT_IMAGE.exec(path);
+  return match ? { owner: match[1], project: match[2] } : undefined;
+}
+
 export const sanitizeImagePath = (value: unknown): string | null => {
   const raw = typeof value === 'string' ? value : Array.isArray(value) ? value[0] : '';
   if (typeof raw !== 'string') return null;

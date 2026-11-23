@@ -11,7 +11,7 @@
 //  - paths are immutable (uuid names, upsert:false), so reference data URLs and signed
 //    URLs are safely cached in-process (bounded) — page N+1 reuses page N without a
 //    round-trip to Storage,
-//  - two buckets (storagePaths.ts): older art, publication copies and the library remain in public `comic-assets`;
+//  - two buckets (storagePaths.ts): unmigrated older art, publication copies and the library remain in public `comic-assets`;
 //    new Director drafts, reference photos and quarantine in PRIVATE `comic-private` (5-minute signed URLs),
 //  - one container (1 GiB, 512 MB heap): every sharp pipeline runs through the 3-slot gate in
 //    imageMeasure.ts and decodes with a 50 MP cap; variants are best-effort and never fail a save.
@@ -20,6 +20,7 @@ import crypto from 'crypto';
 import sharp from 'sharp';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
+import { legacyArtScope, migratedArtPaths } from './legacyArtLocation.js';
 import { logger } from '../lib/logger.js';
 import type { AspectRatio, AssetRef, AssetVariant, Box, RefAsset, RefQuality } from '../../../shared/comic/doc.js';
 import { REF_LIMITS, UPLOAD_MIME } from '../../../shared/comic/refs.js';
@@ -766,7 +767,7 @@ export interface SupabaseAssetStoreOptions {
 
 /** Low-level storage operations shared by the AssetStore and server maintenance (routes/comicStorageAdmin.ts). */
 export interface StorageOps {
-  bucketOf(path: string): string;
+  bucketOf(path: string): Promise<string>;
   /** Raw bytes of a stored object (cached data URL first). */
   readBytes(path: string): Promise<{ buffer: Buffer; type: string }>;
   /** Server-side copy between any lanes; 'exists' when the destination already holds an object. */
@@ -801,18 +802,19 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
   const publicBucket = opts.bucket || PUBLIC_BUCKET;
   const privateBucket = opts.privateBucket || PRIVATE_BUCKET;
   const admin = opts.admin || getSupabaseAdmin;
-  const bucketOf = (path: string) => {
-    if (!isPrivatePath(path)) return publicBucket;
+  const physicalBucket = (path: string, migrated: ReadonlySet<string>) => {
+    if (!isPrivatePath(path) && !migrated.has(path)) return publicBucket;
     if (privateBucket === publicBucket) {
       throw new StudioError('NOT_AVAILABLE', 'Private artwork storage is unavailable.', { status: 503 });
     }
     return privateBucket;
   };
-  const cacheKey = (path: string) => `${bucketOf(path)}:${path}`;
+  const bucketOf = async (path: string) => physicalBucket(path, await migratedArtPaths(admin, [path]));
+  const cacheKey = async (path: string) => `${await bucketOf(path)}:${path}`;
 
-  const uploadOnce = async (path: string, data: Buffer, contentType: string, cacheControl: string, upsert: boolean) => {
+  const uploadOnce = async (bucket: string, path: string, data: Buffer, contentType: string, cacheControl: string, upsert: boolean) => {
     const { error } = await withTimeout(
-      admin().storage.from(bucketOf(path)).upload(path, data, { contentType, cacheControl, upsert }),
+      admin().storage.from(bucket).upload(path, data, { contentType, cacheControl, upsert }),
       UPLOAD_TIMEOUT_MS,
       'Storage upload'
     );
@@ -826,16 +828,17 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     o: { contentType?: string; cacheControl?: string; upsert?: boolean } = {}
   ): Promise<'stored' | 'exists'> => {
     const contentType = o.contentType || 'image/webp';
-    const cacheControl = isPrivatePath(path) ? '0' : o.cacheControl || '31536000';
+    const bucket = await bucketOf(path);
+    const cacheControl = bucket === privateBucket ? '0' : o.cacheControl || '31536000';
     const upsert = o.upsert === true;
     try {
-      await uploadOnce(path, data, contentType, cacheControl, upsert);
+      await uploadOnce(bucket, path, data, contentType, cacheControl, upsert);
       return 'stored';
     } catch (first) {
       if (!upsert && isAlreadyExists(first)) return 'exists';
       logger.warn('comic_asset_upload_retry', { path, message: errMessage(first) });
       try {
-        await uploadOnce(path, data, contentType, cacheControl, upsert);
+        await uploadOnce(bucket, path, data, contentType, cacheControl, upsert);
         return 'stored';
       } catch (err) {
         // The first attempt may have landed after all (timeout racing a slow success).
@@ -859,7 +862,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       id: crypto.randomUUID(),
       user_id: owner,
       project_id: args.projectId && isUuid(args.projectId) ? args.projectId : null,
-      bucket: bucketOf(args.path),
+      bucket: await bucketOf(args.path),
       path: args.path,
       mime_type: mimeFromPath(args.path),
       bytes: Math.max(0, Math.round(args.bytes || 0)),
@@ -903,11 +906,11 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     }
   };
 
-  const downloadBytes = async (path: string): Promise<{ buffer: Buffer; type: string }> => {
+  const downloadBytes = async (path: string, resolvedBucket?: string): Promise<{ buffer: Buffer; type: string }> => {
     const controller = new AbortController();
     try {
       const { data, error } = await withTimeout(
-        admin().storage.from(bucketOf(path)).download(path, undefined, { signal: controller.signal }),
+        admin().storage.from(resolvedBucket ?? await bucketOf(path)).download(path, undefined, { signal: controller.signal }),
         DOWNLOAD_TIMEOUT_MS,
         'Storage download'
       );
@@ -934,18 +937,20 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
 
   const readBytes: StorageOps['readBytes'] = async (path) => {
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
-    const cached = dataUrlCache.get(cacheKey(path));
+    const bucket = await bucketOf(path);
+    const cached = dataUrlCache.get(`${bucket}:${path}`);
     if (cached) {
       const { mimeType, buffer } = decodeImageDataUrl(cached);
       return { buffer, type: mimeType };
     }
-    return downloadBytes(path);
+    return downloadBytes(path, bucket);
   };
 
   const copy: StorageOps['copy'] = async (srcPath, dstPath) => {
     if (!isSafeStoragePath(srcPath) || !isSafeStoragePath(dstPath)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
-    const srcBucket = bucketOf(srcPath);
-    const dstBucket = bucketOf(dstPath);
+    const migrated = await migratedArtPaths(admin, [srcPath, dstPath]);
+    const srcBucket = physicalBucket(srcPath, migrated);
+    const dstBucket = physicalBucket(dstPath, migrated);
     try {
       const { error } = await withTimeout(
         admin().storage.from(srcBucket).copy(srcPath, dstPath, srcBucket === dstBucket ? undefined : { destinationBucket: dstBucket }),
@@ -961,16 +966,17 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       }
       // Older Storage servers refuse cross-bucket copies: move the bytes through the server once.
       logger.warn('comic_asset_copy_fallback', { srcBucket, dstBucket, message: errMessage(err) });
-      const { buffer, type } = await downloadBytes(srcPath);
+      const { buffer, type } = await downloadBytes(srcPath, srcBucket);
       return (await upload(dstPath, buffer, { contentType: type })) === 'exists' ? 'exists' : 'copied';
     }
   };
 
   const removeObjects: StorageOps['removeObjects'] = async (paths) => {
     const byBucket = new Map<string, string[]>();
+    const migrated = await migratedArtPaths(admin, paths);
     for (const path of Array.from(new Set(paths || []))) {
       if (!isSafeStoragePath(path)) continue;
-      const bucket = bucketOf(path);
+      const bucket = physicalBucket(path, migrated);
       byBucket.set(bucket, [...(byBucket.get(bucket) || []), path]);
     }
     let count = 0;
@@ -1051,7 +1057,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       source: args.registrySource
     });
     // Prime the reference cache: the next page uses this one for continuity.
-    dataUrlCache.set(cacheKey(path), toDataUrl('image/webp', args.encoded.data));
+    dataUrlCache.set(await cacheKey(path), toDataUrl('image/webp', args.encoded.data));
     const ref: AssetRef = { path, source: args.source, at: Date.now() };
     if (args.encoded.width) ref.w = args.encoded.width;
     if (args.encoded.height) ref.h = args.encoded.height;
@@ -1125,21 +1131,22 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       height: args.encoded.h,
       source: args.registrySource
     });
-    dataUrlCache.set(cacheKey(path), toDataUrl('image/webp', args.encoded.buffer));
+    dataUrlCache.set(await cacheKey(path), toDataUrl('image/webp', args.encoded.buffer));
     const variants = await withinBudget(writeVariants(path, args.encoded.buffer, args.encoded.w), VARIANT_BUDGET_MS, [] as AssetVariant[]);
     return { path, variants };
   };
 
   const loadDataUrl: AssetStore['loadDataUrl'] = async (path) => {
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
-    const key = cacheKey(path);
+    const bucket = await bucketOf(path);
+    const key = `${bucket}:${path}`;
     const cached = dataUrlCache.get(key);
     if (cached) return cached;
     const pending = dataUrlInflight.get(key);
     if (pending) return pending;
     const work = (async () => {
       try {
-        const { buffer, type } = await downloadBytes(path);
+        const { buffer, type } = await downloadBytes(path, bucket);
         const dataUrl = toDataUrl(type, buffer);
         dataUrlCache.set(key, dataUrl);
         return dataUrl;
@@ -1156,11 +1163,21 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     const now = Date.now();
     const requested = clampInt(signOpts?.ttlSec, 30, MAX_SIGN_TTL_SECONDS, SIGNED_URL_TTL_SECONDS);
     const groups = new Map<string, { ttl: number; paths: string[] }>();
+    let migrated: Set<string>;
+    let locationFailed = false;
+    try { migrated = await migratedArtPaths(admin, paths); }
+    catch { migrated = new Set(); locationFailed = true; }
     for (const path of Array.from(new Set(paths || []))) {
-      if (!isSafeStoragePath(path)) continue;
-      const bucket = bucketOf(path);
+      if (!isSafeStoragePath(path) || (locationFailed && legacyArtScope(path))) continue;
+      const bucket = physicalBucket(path, migrated);
       // Private lanes never sign for longer than 5 minutes, whatever the caller asks for.
-      const ttl = isPrivatePath(path) ? Math.min(requested, PRIVATE_SIGNED_URL_TTL_SECONDS) : signOpts?.ttlSec ? requested : SIGNED_URL_TTL_SECONDS;
+      const scope = signOpts?.scope;
+      if (scope && migrated.has(path)) {
+        const source = legacyArtScope(path);
+        if (!source || source.owner !== scope.userId || source.project !== scope.projectId) continue;
+      }
+      const protectedPreview = bucket === privateBucket || (scope && !!legacyArtScope(path));
+      const ttl = protectedPreview ? Math.min(requested, PRIVATE_SIGNED_URL_TTL_SECONDS) : signOpts?.ttlSec ? requested : SIGNED_URL_TTL_SECONDS;
       const key = `${bucket}:${path}|${ttl}`;
       const hit = signedUrlCache.get(key);
       const minRemaining = Math.min(SIGNED_URL_MIN_REMAINING_MS, (ttl * 1000) / 2);
@@ -1213,7 +1230,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     if (Buffer.isBuffer(pathOrBuffer)) return previewImage(pathOrBuffer, e);
     const path = pathOrBuffer;
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
-    const key = `${cacheKey(path)}@${e}`;
+    const key = `${await cacheKey(path)}@${e}`;
     const cached = previewCache.get(key);
     if (cached) return cached;
     const pending = previewInflight.get(key);
@@ -1304,7 +1321,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     const siblings = canHaveVariants(path) ? VARIANT_WIDTHS.map((w) => variantPathFor(path, w)) : [];
     await removeObjects([path, ...siblings]);
     // Log a category only — never content (safety D10).
-    logger.info('comic_asset_quarantined', { reason: String(reason || '').slice(0, 64), bucket: bucketOf(path) });
+    logger.info('comic_asset_quarantined', { reason: String(reason || '').slice(0, 64), bucket: await bucketOf(path) });
     return { quarantinePath };
   };
 
@@ -1322,7 +1339,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
    * and THROWS for anything else (network, 5xx), so a returned false really means "not there".
    */
   const objectExists = async (path: string): Promise<boolean> => {
-    const { data } = await withTimeout(admin().storage.from(bucketOf(path)).exists(path), STORAGE_OP_TIMEOUT_MS, 'Storage exists');
+    const { data } = await withTimeout(admin().storage.from(await bucketOf(path)).exists(path), STORAGE_OP_TIMEOUT_MS, 'Storage exists');
     return data === true;
   };
 
@@ -1364,7 +1381,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
    */
   const restoreQuarantined = async (quarantinePath: string, originalPath: string): Promise<void> => {
     assertRestorePair(quarantinePath, originalPath);
-    const bucket = bucketOf(originalPath);
+    const bucket = await bucketOf(originalPath);
     let outcome: 'copied' | 'exists' | 'already';
     try {
       outcome = await copy(quarantinePath, originalPath);
@@ -1431,7 +1448,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     const sniffed = sniffImageType(buffer);
     if (`image/${sniffed}` !== type) throw new StudioError('BAD_REQUEST', "The image bytes don't match their type.", { status: 415 });
     await upload(path, buffer, { contentType: type, cacheControl: cacheControl || '31536000', upsert: true });
-    evictPath(bucketOf(path), path);
+    evictPath(await bucketOf(path), path);
   };
 
   const removePrefix: AssetStore['removePrefix'] = async (prefix) => {

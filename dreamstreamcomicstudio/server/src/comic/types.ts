@@ -224,7 +224,7 @@ export interface AssetStore {
    * Short-lived signed URLs for display. Missing/failed paths are omitted. v5: routes each
    * path to its bucket (storagePaths.bucketForPath); private paths sign with a 300 s TTL.
    */
-  signUrls(paths: string[], opts?: { ttlSec?: number }): Promise<Record<string, string>>;
+  signUrls(paths: string[], opts?: { ttlSec?: number; scope?: { userId: string; projectId: string } }): Promise<Record<string, string>>;
   /** Draw a red outline on a copy of the image (Mark-up edits); box is normalized. */
   outlineRegion(dataUrl: string, box: { x: number; y: number; w: number; h: number }, shape?: 'ellipse'): Promise<string>;
 

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { displayAssetPaths } from '../../../shared/comic/doc';
 import { resetBackStack } from '../mobile/backStack';
+import { legacyPagePath, signedLegacyPreview } from '../legacyPreview.testkit';
 import { VersionReader } from './VersionReader';
 import { historySetup, HISTORY_NOW, HISTORY_TZ, mountWith, settle } from './history.testkit';
 
@@ -31,6 +32,33 @@ beforeEach(() => resetBackStack());
 afterEach(() => resetBackStack());
 
 describe('the read-only reader re-signs expired images', () => {
+  it('keeps history open as migrated artwork renews, and masks it as soon as the version signer refuses access', async () => {
+    const path = legacyPagePath;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const first = signedLegacyPreview(path, 'comic-assets', now);
+      const second = signedLegacyPreview(path, 'comic-private', now + 271_000);
+      const m = historySetup({ studio: { urlFor: () => first } });
+      const book = await m.api.book(m.fixture.live.id, 'ver_before');
+      book.doc.pages[0].render.asset = { ...book.doc.pages[0].render.asset!, path };
+      m.api.book = vi.fn().mockResolvedValue({ ...book, urls: { [path]: first } });
+      m.api.urls = vi.fn().mockResolvedValueOnce({ [path]: second }).mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }));
+      mountWith(m, <VersionReader studio={m.studio} versionId="ver_before" now={HISTORY_NOW} tz={HISTORY_TZ} onCompare={vi.fn()} onRestore={vi.fn()} onBack={vi.fn()} />);
+      await settle();
+      expect(seen.urlFor!(path)).toBe(first);
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await act(async () => settle());
+      expect(seen.urlFor!(path)).toBe(second);
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await act(async () => settle());
+      expect(seen.urlFor!(path)).toBeUndefined();
+      expect(m.api.urls).toHaveBeenCalledTimes(2);
+    } finally { clock.mockRestore(); }
+  });
+
   it('an image that fails asks for fresh URLs of the book’s images once, and uses them', async () => {
     const m = historySetup();
     mountWith(m, <VersionReader studio={m.studio} versionId="ver_before" now={HISTORY_NOW} tz={HISTORY_TZ} onCompare={vi.fn()} onRestore={vi.fn()} onBack={vi.fn()} />);

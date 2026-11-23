@@ -13,7 +13,8 @@ import { libraryReads } from '../../services/libraryDiscovery';
 const memberSync = vi.hoisted(() => ({ record: vi.fn(), close: vi.fn() }));
 vi.mock('../../services/libraryReadingSync', () => ({ createReadingRecorder: () => memberSync }));
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
-import { pageImageCache } from './immersive/pageImageCache';
+import { availableCachedPath, pageImageCache } from './immersive/pageImageCache';
+import { legacyPagePath, signedLegacyPreview } from './legacyPreview.testkit';
 import { readerEntryOnTop } from './immersive/useImmersive';
 import { markIntroPlayed } from './immersive/readerPrefs';
 import { ExportError } from './export/errors';
@@ -662,6 +663,37 @@ describe('PublicComicReader — project link and owner preview', () => {
     // Still reading — no loading screen flash.
     expect(screen.getByRole('heading', { name: 'The Saffron Thief' })).toBeInTheDocument();
     expect(screen.queryByText('Opening the comic…')).toBeNull();
+  });
+
+  it('switches a decoded legacy page to its newly signed private copy and masks it on the next omission', async () => {
+    const path = legacyPagePath;
+    const doc = makeSampleDoc();
+    doc.pages[0].render.asset = { ...doc.pages[0].render.asset!, path, variants: [] };
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const first = signedLegacyPreview(path, 'comic-assets', now);
+    const second = signedLegacyPreview(path, 'comic-private', now + 271_000);
+    try {
+      api.loadPublicComic.mockResolvedValueOnce({ doc, urls: { [path]: first } })
+        .mockResolvedValueOnce({ doc, urls: { [path]: second } }).mockResolvedValueOnce({ doc, urls: {} });
+      render(<PublicComicReader projectId="proj_1" isOwner />);
+      const image = () => screen.queryByRole('img', { name: /Page 1/ });
+      await waitFor(() => expect(image()).toBeInTheDocument());
+      const oldSrc = image()!.getAttribute('src');
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await waitFor(() => {
+        const key = availableCachedPath(path, () => second);
+        expect(pageImageCache.get(key!)?.state).toBe('ready');
+        expect(image()).toBeInTheDocument();
+        expect(image()!.getAttribute('src')).not.toBe(oldSrc);
+      });
+      now += 271_000;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await waitFor(() => expect(image()).toBeNull());
+      expect(screen.getByRole('heading', { name: 'The Saffron Thief' })).toBeInTheDocument();
+      expect(api.loadPublicComic).toHaveBeenCalledTimes(3);
+    } finally { clock.mockRestore(); }
   });
 
   it('renews a five-minute owner preview on waking and removes it on lost access', async () => {

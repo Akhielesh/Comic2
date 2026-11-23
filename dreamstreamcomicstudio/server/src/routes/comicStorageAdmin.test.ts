@@ -109,6 +109,7 @@ class Query implements PromiseLike<{ data: unknown; error: null }> {
 }
 
 const client = {
+  rpc: () => ({ abortSignal: async () => ({ data: [], error: null }) }),
   from: (table: string) => ({
     select: () => new Query(table),
     update: (patch: Row) => new Query(table).update(patch),

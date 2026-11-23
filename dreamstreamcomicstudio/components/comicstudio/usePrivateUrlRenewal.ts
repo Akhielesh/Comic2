@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { isPrivatePath } from '../../shared/comic/imagePaths';
-import { PRIVATE_RENEW_BEFORE_MS, type UrlEntry } from './signedAssets';
+import { isProtectedStudioPath, PRIVATE_RENEW_BEFORE_MS, type UrlEntry } from './signedAssets';
 
 /** Renew while reading, and on return from a sleeping tab. One timer and one batched request per cycle. */
 export function usePrivateUrlRenewal(entries: Record<string, UrlEntry>, renew: (paths: string[]) => void, expired: () => void) {
@@ -8,7 +7,7 @@ export function usePrivateUrlRenewal(entries: Record<string, UrlEntry>, renew: (
   callbacks.current = { renew, expired };
   const attempts = useRef(new Map<string, number>());
   useEffect(() => {
-    const links = Object.entries(entries).filter(([path]) => isPrivatePath(path));
+    const links = Object.entries(entries).filter(([path]) => isProtectedStudioPath(path));
     if (!links.length) return;
     let timer: ReturnType<typeof setTimeout>;
     const active = new Set(links.map(([path]) => path));

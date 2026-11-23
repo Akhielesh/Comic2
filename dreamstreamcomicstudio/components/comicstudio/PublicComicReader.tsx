@@ -18,8 +18,7 @@
 // published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
-import { directDisplayUrl, mergeUrls, type UrlEntry } from './signedAssets';
-import { isPrivatePath } from '../../shared/comic/imagePaths';
+import { isProtectedStudioPath, directDisplayUrl, mergeUrls, type UrlEntry } from './signedAssets';
 import { usePrivateUrlRenewal } from './usePrivateUrlRenewal';
 import { createReadingRecorder } from '../../services/libraryReadingSync';
 import { rememberLibraryPage } from '../../services/libraryDiscovery';
@@ -808,7 +807,7 @@ const ProjectReader: React.FC<{ projectId: string; isOwner: boolean; start: Publ
   const links = useMemo(() => state.kind === 'ready' ? state.urls : {}, [state]);
   usePrivateUrlRenewal(links, () => void load(true), () => setExpiryRevision((n) => n + 1));
   const displayed = useMemo(() => Object.fromEntries(Object.entries(links)
-    .filter(([path, entry]) => !isPrivatePath(path) || entry.expiresAt > Date.now())
+    .filter(([path, entry]) => !isProtectedStudioPath(path) || entry.expiresAt > Date.now())
     .map(([path, entry]) => [path, entry.url])), [links, expiryRevision]);
 
   const status: Status = state.kind === 'loading' ? 'loading' : state.kind === 'ready' ? 'ready' : state.notFound ? 'not_found' : 'error';

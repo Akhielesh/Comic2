@@ -23,6 +23,7 @@ const FORCED_CLASSIC = '44444444-4444-4444-8444-444444444444';
 const db = vi.hoisted(() => ({
   tables: {} as Record<string, Record<string, unknown>[]>,
   tokens: {} as Record<string, string>,
+  migrated: [] as { project_id: string; owner_id: string }[],
   signed: [] as string[],
   signedWith: [] as { bucket: string; path: string; ttl: number }[],
   /** Storage paths with no object: signing them fails the way Supabase does (a 400). */
@@ -61,6 +62,7 @@ vi.mock('../services/supabase.js', async () => {
     }
   }
   const admin = {
+    rpc: () => ({ abortSignal: async () => ({ data: db.migrated, error: null }) }),
     from: (table: string) => new Query(table),
     storage: {
       from: (bucket: string) => ({
@@ -104,6 +106,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   publicReaderPathCache.clear();
   db.signed = [];
+  db.migrated = [];
   db.signedWith = [];
   db.missing = [];
   db.failProjects = null;
@@ -295,10 +298,11 @@ describe('image proxy: bucket routing (P1-STORAGE, contract §12.5)', () => {
     expect(db.signedWith).toHaveLength(2);
   });
 
-  it('signs generated art from the public bucket with the usual TTL', async () => {
+  it('caps an owner grant at five minutes even before a working key moves to the private bucket', async () => {
     const res = await fetchImage(v4Path('img/page.webp'), 'owner-token');
-    expect(await res.json()).toMatchObject({ expiresIn: 1800 });
-    expect(db.signedWith).toEqual([{ bucket: 'comic-assets', path: v4Path('img/page.webp'), ttl: 1800 }]);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toMatchObject({ expiresIn: 300 });
+    expect(db.signedWith).toEqual([{ bucket: 'comic-assets', path: v4Path('img/page.webp'), ttl: 300 }]);
   });
 
   it('a ref under a non-UUID project id is still owner-only (decided by its namespace, not the project)', async () => {
@@ -488,5 +492,33 @@ describe('image proxy: legacy paths of a public classic comic (reading is free w
     publicReaderPathCache.clear();
     expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`))).toHaveProperty('status', 401);
     expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`, 'stranger-token')).status).toBe(200);
+  });
+});
+
+
+describe('migrated working artwork keeps the original owner project key', () => {
+  const scope = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  it('protects both real sizes and refuses other owners, missing copies and held art after cutover', async () => {
+    const path = `u/${OWNER}/p/${scope}/img/older.webp`;
+    const preview = path.replace('.webp','_w480.webp');
+    const doc = createEmptyDoc(scope);
+    doc.cover.render = {status:'ready',history:[],asset:{path,source:'generated',at:1,variants:[{path:preview,w:480,h:720}]}};
+    db.tables.projects.push({id:scope,user_id:OWNER,is_public:true,is_forced_private:false,state:{studioVersion:4}});
+    db.tables.comic_docs.push({project_id:scope,user_id:OWNER,doc});
+    db.migrated=[{project_id:scope,owner_id:OWNER}];
+    for (const key of [path,preview]) {
+      expect((await fetchImage(key)).status).toBe(401);
+      expect((await fetchImage(key,'stranger-token')).status).toBe(403);
+      const response=await fetchImage(key,'owner-token');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+      expect(await response.json()).toMatchObject({path:key,expiresIn:300});
+    }
+    expect(db.signedWith.map(r=>r.bucket)).toEqual(['comic-private','comic-private']);
+    db.missing=[preview];
+    expect((await fetchImage(preview,'owner-token')).status).toBe(404);
+    doc.cover.render.asset!.safety = { quarantined: true, at: 2 };
+    expect((await fetchImage(path,'owner-token')).status).toBe(403);
+    expect(db.signedWith).toHaveLength(2);
   });
 });
