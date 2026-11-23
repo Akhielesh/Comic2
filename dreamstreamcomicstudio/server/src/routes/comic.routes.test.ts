@@ -977,7 +977,10 @@ describe('public reader (GET /api/comic/public/:id)', () => {
 describe('parseStreamRequest', () => {
   it('validates message limits and action names', () => {
     expect(parseStreamRequest({ kind: 'message', text: '  hi  ' })).toEqual({ kind: 'message', text: 'hi' });
-    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array.from({ length: 7 }, () => ({ dataUrl: 'data:image/png;base64,AA' })) })).toThrow('at most 6');
+    const image = { dataUrl: 'data:image/png;base64,AA' };
+    expect(parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(10).fill(image) })).toMatchObject({ attachments: Array(10).fill(image) });
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(11).fill(image) })).toThrow('up to 10');
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: Array(7).fill({ dataUrl: 'data:text/plain;base64,WA==' }) })).toThrow('at most 6');
     expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ dataUrl: 'https://evil' }] })).toThrow('could not be read');
     expect(parseStreamRequest({ kind: 'action', action: { type: 'approve_plan' } })).toEqual({ kind: 'action', action: { type: 'approve_plan' } });
     expect(() => parseStreamRequest({ kind: 'action', action: { type: 'drop_tables' } })).toThrow('Unknown action');

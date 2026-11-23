@@ -372,16 +372,28 @@ export const readStoredQueue = (projectId: string): QueuedNote[] => {
   try {
     const raw = storage()?.getItem(QUEUE_STORAGE_PREFIX + projectId);
     if (!raw || raw.length > MAX_STORED_CHARS) return [];
-    const parsed = JSON.parse(raw) as { v?: unknown; notes?: unknown };
+    const parsed = JSON.parse(raw) as { v?: unknown; notes?: unknown; splitPhotos?: boolean };
     if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.notes)) return [];
     const seen = new Set<string>();
     const out: QueuedNote[] = [];
+    let accepted = 0;
+    const storedLimit = parsed.splitPhotos === true ? QUEUE_LIMITS.notes * 2 : QUEUE_LIMITS.notes;
     for (const item of parsed.notes) {
       const note = sanitizeNote(item);
       if (!note || seen.has(note.id)) continue;
       seen.add(note.id);
       out.push(note);
-      if (out.length >= QUEUE_LIMITS.notes) break;
+      // The previous version saved up to twelve photos on one held note. Keep the surplus and
+      // its assignments in a following held note so reopening a project never drops photos.
+      if (Array.isArray(item?.inboxPaths) && item.inboxPaths.length > QUEUE_LIMITS.inboxPaths) {
+        const continuation = sanitizeNote({
+          ...item, id: `photos-${accepted}-${note.id.slice(0, 60)}`, text: '',
+          inboxPaths: item.inboxPaths.slice(QUEUE_LIMITS.inboxPaths, 12),
+          attachmentTargets: Array.isArray(item.attachmentTargets) ? item.attachmentTargets.slice(QUEUE_LIMITS.inboxPaths, 12) : undefined
+        });
+        if (continuation && !seen.has(continuation.id)) { seen.add(continuation.id); out.push(continuation); }
+      }
+      if (++accepted >= storedLimit) break;
     }
     return out;
   } catch {
@@ -400,7 +412,7 @@ export const writeStoredQueue = (projectId: string, notes: readonly QueuedNote[]
       store.removeItem(key);
       return;
     }
-    const raw = JSON.stringify({ v: 1, notes });
+    const raw = JSON.stringify({ v: 1, notes, ...(notes.length > QUEUE_LIMITS.notes ? { splitPhotos: true } : {}) });
     if (raw.length > MAX_STORED_CHARS) return;
     store.setItem(key, raw);
   } catch {

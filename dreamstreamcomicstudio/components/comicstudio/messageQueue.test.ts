@@ -326,6 +326,20 @@ describe('saved per project in sessionStorage', () => {
     });
   });
 
+  it('keeps every photo and its assignment on held notes from the old twelve-image limit', () => {
+    const paths = Array.from({ length:12 }, (_,i) => 'i/' + i);
+    const targets = paths.map((_,i) => ({ kind:'character', id:'c' + i }));
+    const notes = Array.from({length:10}, (_,i) => ({id:'old' + i, text:'Review these', inboxPaths:paths, attachmentTargets:targets, at:0}));
+    window.sessionStorage.setItem(QUEUE_STORAGE_PREFIX + 'p', JSON.stringify({ v:1, notes }));
+    const restored = readStoredQueue('p');
+    expect(restored).toHaveLength(20);
+    expect(restored[0].inboxPaths).toEqual(paths.slice(0,10));
+    expect(restored[1].inboxPaths).toEqual(paths.slice(10));
+    expect(restored[1].attachmentTargets).toEqual(targets.slice(10));
+    writeStoredQueue('p', restored);
+    expect(readStoredQueue('p')).toEqual(restored);
+  });
+
   it('a blocked storage never breaks the queue', () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     Object.defineProperty(window, 'sessionStorage', {

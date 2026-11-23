@@ -73,6 +73,7 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
         if (detail?.provider === 'openrouter' && (detail.payer === 'personal' || detail.payer === 'platform') && detail.model) setRoute(detail as StandaloneRoute);
         setPaidRequired(true);
       }
+      else if (error.code === 'IMAGE_KEY_MISSING') setSetupHint('Connect a Gemini or OpenRouter key in Settings. Your prompt and references stay here.');
       else setRouteError(userFacingErrorMessage(error, 'The provider will be checked again when you generate.'));
     });
     return () => controller.abort();

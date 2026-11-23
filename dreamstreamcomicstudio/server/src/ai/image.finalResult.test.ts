@@ -4,7 +4,7 @@ vi.mock('./client.js', () => ({ createClient:() => ({ models:google }) }));
 import { generateGeminiImage } from './image.js';
 const ref = 'data:image/jpeg;base64,/9j/';
 const part = (data: string, thought = false) => ({ inlineData:{ mimeType:'image/png', data }, thought });
-beforeEach(() => google.generateContent.mockReset());
+beforeEach(() => { google.generateContent.mockReset(); });
 describe('finished Gemini artwork', () => {
   it('sends ten native reference parts and explicit 2K, and returns the final image after a thought image', async () => {
     google.generateContent.mockResolvedValue({ candidates:[{ content:{ parts:[part('RFJBRlQ=', true), part('RklOQUw=')] } }] });
