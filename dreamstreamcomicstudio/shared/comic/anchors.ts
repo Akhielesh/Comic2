@@ -294,7 +294,7 @@ const styleKeyPageFor = (doc: ComicDoc, page: Page, assumeDrawn?: ReadonlySet<st
   const id = consistencyOf(doc).styleKeyPageId ?? [...doc.pages].sort((a, b) => a.n - b.n)[0]?.id;
   const key = id ? doc.pages.find((p) => p.id === id) : undefined;
   if (!key || key.id === page.id) return undefined;
-  if (key.render.status === 'ready' && visualReferenceQcAllows(key.render.qc) && servable(key.render.asset)) return { page: key, pending: false };
+  if (key.render.status === 'ready' && visualReferenceQcAllows(key.render.qc, false, key.render.asset?.path) && servable(key.render.asset)) return { page: key, pending: false };
   return assumeDrawn?.has(key.id) && !key.render.asset ? { page: key, pending: true } : undefined;
 };
 
@@ -445,7 +445,7 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
         })();
   const prevUsable =
     !!prev &&
-    prev.page.id !== page.id && visualReferenceQcAllows(prev.page.render.qc) &&
+    prev.page.id !== page.id && visualReferenceQcAllows(prev.page.render.qc, false, prev.page.render.asset?.path) &&
     (prev.pending || ((prev.page.render.status === 'ready' || prev.page.render.status === 'stale') && servable(prev.page.render.asset)));
 
   // 3. Style: the board, else (styleKey) the style key page, else the best user style reference.

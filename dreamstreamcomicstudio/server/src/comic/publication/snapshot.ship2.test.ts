@@ -65,7 +65,7 @@ const panelized = (): ComicDoc => {
       },
       parts: { panels: { pn_1_1: { c: 'aaaaaa', a: 'bbbbbb', p: 'cccccc', s: 'dddddd', m: 'eeeeee' } } },
       anchorKeys: ['char:c_maya'],
-      qc: { ...p1.render.qc!, checkV: 2, beats: [1, 2, 3], findings: [{ id: 'f_1', kind: 'identity', panel: 1, severity: 'minor', note: 'PRIVATE-FINDING' }] }
+      qc: { ...p1.render.qc!, legacyReview: { path: take1, checkedAt: 1, notes: [{ index: 0, text: 'PRIVATE-DISMISSED-NOTE' }] }, checkV: 2, beats: [1, 2, 3], findings: [{ id: 'f_1', kind: 'identity', panel: 1, severity: 'minor', note: 'PRIVATE-FINDING' }] }
     }
   };
   doc.pages = [page, doc.pages[1]];

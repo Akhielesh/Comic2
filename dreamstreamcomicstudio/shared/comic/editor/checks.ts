@@ -4,6 +4,7 @@
 // cheap to make here, else as a named fix the editor resolves (checkFixEdit). Runs on every edit: no image reads, no
 // network, no clock; well under 2 ms on a 9-panel page.
 
+import { currentDrawingCheck } from '../reviewNotes.js';
 import { isPageStale, type Box, type ComicDoc, type Line, type LineKind, type Page, type Panel, type PanelDirection, type PanelParts } from '../doc.js';
 import { fitState, hardFitLimit, needMeter, panelFit, type NeedMeter } from '../density.js';
 import { coverCapFor, outlineFill, type LetterPlan } from '../lettering/layout.js';
@@ -236,7 +237,7 @@ function charactersCheck(doc: ComicDoc, page: Page): PageCheck {
   if (!open.length) return check('characters', 'ok', 'Everyone looks like themselves.');
   const f = open[0];
   const panel = page.panels.find((p) => p.n === f.panel);
-  const fixes: CheckFix[] = [{ key: 'looks_fine', label: 'Looks fine', free: true, findingId: f.id, ops: [{ op: 'finding', pageId: page.id, id: f.id, patch: { dismissed: true } }] }];
+  const fixes: CheckFix[] = [{ key: 'looks_fine', label: 'Looks fine', free: true, findingId: f.id, ops: [{ op: 'finding', pageId: page.id, id: f.id, check: currentDrawingCheck(page), patch: { dismissed: true } }] }];
   const offer = f.fix;
   if (offer?.kind === 'accept_state') fixes.push({ key: 'accept_state', label: 'Keep it from here on', free: true, findingId: f.id });
   if (offer?.kind === 'drop_cast') fixes.push({ key: 'drop_cast', label: 'Take them out of the panel', free: true, findingId: f.id });

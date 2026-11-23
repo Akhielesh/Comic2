@@ -9,7 +9,7 @@ import { GhostButton, PrimaryButton } from '../board/ui';
 import { TimelineDialog } from '../timeline/ui';
 import type { StudioController } from '../types';
 import { CORRECTION_FIELDS, correctionOp, detailAt, pageRanges, pagesUsing, type CorrectionField, type Subject } from '../../../shared/comic/pageCorrection';
-import { savedReviewNotes } from './reviewNotes';
+import { currentDrawingCheck, savedReviewNotes, type ReviewNote } from '../../../shared/comic/reviewNotes';
 
 const control = `${FIELD} block min-h-11 w-full min-w-0 px-3 py-2 text-sm`;
 const label = 'grid min-w-0 gap-1 text-sm font-medium';
@@ -44,7 +44,34 @@ export function ContinuityReview({ studio, doc, page, onClose }: { studio: Studi
   const image = original && !failedImages.includes(original) ? original : thumbnail;
   const showImage = image && !failedImages.includes(image);
   const sourcePages = doc.pages.filter(p => page.render.anchorKeys?.includes(`prev:${p.id}`)).sort((a, b) => a.n - b.n);
-  const checks = savedReviewNotes(page.render.asset && !asset ? undefined : page.render.qc, new Map(sourcePages.map(p => [p.id, p.n])));
+  const checks = savedReviewNotes(doc, page);
+  const check = currentDrawingCheck(page);
+  const active = checks.filter(note => !note.dismissed);
+  const dismissed = checks.filter(note => note.dismissed);
+  async function setDismissed(note: ReviewNote, value: boolean) {
+    if (!check || saving.current) return;
+    const op: DocOp = { op: 'finding', pageId: page.id, id: note.id, check, ...(note.issueIndex !== undefined ? { issueIndex: note.issueIndex } : {}), patch: { dismissed: value } };
+    saving.current = true;
+    setPending(true);
+    setNotice('');
+    let failed = false;
+    try {
+      await studio.patch([op], { label: `${value ? 'dismiss' : 'restore'} page ${page.n} finding`, onFailed: () => { failed = true; } });
+    } catch { failed = true; }
+    finally {
+      setNotice(failed ? 'The change could not be confirmed. Review the current drawing before trying again.' :
+        value ? 'Finding dismissed for this drawing.' : 'Finding restored for this drawing.');
+      saving.current = false;
+      setPending(false);
+    }
+  }
+  function noteRow(note: ReviewNote) {
+    const noteId = `${id}-note-${note.issueIndex === undefined ? 'finding' : 'issue'}-${note.id}`;
+    return <li key={noteId} className="space-y-1"><span id={noteId}>{note.text}</span>
+      {check && !note.readOnly && <GhostButton size="sm" aria-describedby={noteId} disabled={pending} onClick={() => void setDismissed(note, !note.dismissed)}>
+        {note.dismissed ? 'Restore finding' : 'Dismiss finding'}
+      </GhostButton>}</li>;
+  }
 
   function reset() { setEdit(null); setNotice(''); }
   async function save(action: 'edit' | 'remove' | 'undo') {
@@ -86,7 +113,9 @@ export function ContinuityReview({ studio, doc, page, onClose }: { studio: Studi
       </div>}
       {!!checks.length && <section aria-labelledby={`${id}-checks`}>
         <h3 id={`${id}-checks`} className="text-sm font-semibold">Review notes on this drawing</h3>
-        <ul aria-labelledby={`${id}-checks`} className={`list-disc space-y-1 pl-4 ${hint}`}>{checks.map(note => <li key={note}>{note}</li>)}</ul>
+        {!!active.length && <ul aria-labelledby={`${id}-checks`} className={`list-disc space-y-2 pl-4 ${hint}`}>{active.map(noteRow)}</ul>}
+        {!!dismissed.length && <details className={hint}><summary className="cursor-pointer py-2">Dismissed findings ({dismissed.length})</summary>
+          <ul aria-label="Dismissed findings" className="list-disc space-y-2 pl-4">{dismissed.map(noteRow)}</ul></details>}
       </section>}
       <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         <label className={label}>Subject<select className={control} value={subjectId} disabled={pending} onChange={e => { setSubjectId(e.target.value); reset(); }}>

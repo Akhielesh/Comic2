@@ -8,6 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyOps, CLIENT_PATCHABLE_OPS, PRO_PAGE_OPS_PATCHABLE, PRO_PAGE_PATCH_OPS, type DocOp } from '../../../../shared/comic/ops.js';
+import { currentDrawingCheck, savedReviewNotes } from '../../../../shared/comic/reviewNotes.js';
+import { visualReferenceQcAllows } from '../../../../shared/comic/visualReferenceQc.js';
+import { previousPageFor } from '../consistency/schedule.js';
 import { inverseOps } from '../../../../shared/comic/undo.js';
 import { emptyRender, findPage, type AssetRef, type Balloon, type ComicDoc, type PanelCuts } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
@@ -466,7 +469,67 @@ describe('the op shapes the editor engine sends are accepted (B9 wave notes; one
 
   it('finding: only `dismissed` (true / false / null)', () => {
     const doc = fixture();
-    expect(sanitize(doc, [{ op: 'finding', pageId: 'pg_1', id: 'f_1', patch: { dismissed: true } }])[0]).toEqual({ op: 'finding', pageId: 'pg_1', id: 'f_1', patch: { dismissed: true } });
-    expect(sanitize(doc, [{ op: 'finding', pageId: 'pg_1', id: 'f_1', patch: { dismissed: null } }])[0]).toEqual({ op: 'finding', pageId: 'pg_1', id: 'f_1', patch: { dismissed: null } });
+    const check = currentDrawingCheck(doc.pages[0]);
+    for (const dismissed of [true, false, null]) {
+      const op = { op: 'finding', pageId: 'pg_1', id: 'f_1', check, patch: { dismissed } };
+      expect(sanitize(doc, [op])).toEqual([op]);
+    }
+    rejects(() => sanitize(doc, [{ op: 'finding', pageId: 'pg_1', id: 'f_1', patch: { dismissed: true } }]), 409);
+  });
+});
+
+describe('reviewing saved observations on an owned original drawing', () => {
+  it('dismisses and restores one legacy statement and makes that exact page eligible across reload and retry', () => {
+    const doc = fixture();
+    const page = doc.pages[0];
+    page.render.qc = { checkedAt: NOW, score: 0.82, issues: ['The character silhouette differs from the design sheet.'] };
+    const note = savedReviewNotes(doc, page)[0];
+    const op = { op: 'finding' as const, pageId: page.id, id: note.id, issueIndex: note.issueIndex, check: currentDrawingCheck(page), patch: { dismissed: true } };
+    expect(previousPageFor(doc, doc.pages[1])).toBeUndefined();
+    const accepted = sanitize(doc, [op]);
+    const changed = applyOps(doc, accepted, NOW);
+    const reloaded: ComicDoc = JSON.parse(JSON.stringify(changed));
+    expect(previousPageFor(reloaded, reloaded.pages[1])?.id).toBe(page.id);
+    expect(savedReviewNotes(reloaded, reloaded.pages[0])[0].dismissed).toBe(true);
+    expect(reloaded.pages[0].render.qc!.issues).toEqual(page.render.qc.issues);
+    expect(reloaded.spend).toEqual(doc.spend);
+    expect(applyOps(reloaded, sanitize(reloaded, [op]), NOW).pages[0].render.qc).toEqual(reloaded.pages[0].render.qc);
+    const inverse = inverseOps(doc, accepted);
+    const restored = applyOps(reloaded, sanitize(reloaded, inverse), NOW);
+    expect(previousPageFor(restored, restored.pages[1])).toBeUndefined();
+    expect(restored.pages[0].render.qc).toEqual(page.render.qc);
+    reloaded.pages[0].render.qc!.issues.push('The costume is wrong.');
+    expect(previousPageFor(reloaded, reloaded.pages[1])).toBeUndefined();
+    reloaded.pages[0].render.qc!.issues.pop();
+    reloaded.pages[0].render.qc!.missingSpeakers = [{ panel: 1, castId:'c_maya' }];
+    expect(previousPageFor(reloaded, reloaded.pages[1])).toBeUndefined();
+  });
+
+  it('refuses stale actions, altered issues, unsafe notes, quarantined and other-owner art', () => {
+    const doc = fixture();
+    const page = doc.pages[0];
+    page.render.qc = { checkedAt: NOW, score: 0.82, issues: ['The palette is wrong.', 'Safety verdict is pending.', 'file:///private/art.webp'] };
+    const note = savedReviewNotes(doc, page)[0];
+    const op = { op: 'finding' as const, pageId: page.id, id: note.id, issueIndex: 0, check: currentDrawingCheck(page), patch: { dismissed: true } };
+    const changed = applyOps(doc, sanitize(doc, [op]), NOW);
+    const q = changed.pages[0].render.qc!;
+    expect(visualReferenceQcAllows(q, false, own('different-art'))).toBe(false);
+    rejects(() => sanitize(doc, [op], sctx({userId:'different-owner'})), 400);
+    const protectedRow = savedReviewNotes(doc, page)[1];
+    rejects(() => sanitize(doc, [{...op, id: protectedRow.id, issueIndex: 1}]), 400);
+    expect(savedReviewNotes(doc, page)).toHaveLength(2);
+    page.render.asset!.path = own('different-art');
+    rejects(() => sanitize(doc, [op]), 409);
+    expect(applyOps(doc, [op], NOW).pages[0].render.qc).toEqual(page.render.qc);
+    page.render.asset!.path = op.check!.path;
+    page.render.qc!.checkedAt += 1;
+    rejects(() => sanitize(doc, [op]), 409);
+    page.render.qc!.checkedAt = NOW;
+    page.render.qc!.issues[0] = 'The outline is incorrect.';
+    rejects(() => sanitize(doc, [op]), 400);
+    page.render.qc!.issues[0] = 'The palette is wrong.';
+    page.render.asset!.safety = { quarantined: true, at: NOW };
+    rejects(() => sanitize(doc, [op]), 400);
+    expect(savedReviewNotes(doc, page)).toEqual([]);
   });
 });

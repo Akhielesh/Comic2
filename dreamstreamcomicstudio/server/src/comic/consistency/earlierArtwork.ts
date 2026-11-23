@@ -125,7 +125,7 @@ function checkedRaster(doc: ComicDoc, page: Page, rating: ContentRating, owns: (
   if (skip.has(anchorKeys.previous(page.id)) || skip.has(anchorKeys.styleKey(page.id))) return false;
   const qc = render.qc;
   if (!qc) return doc.consistency?.styleKeyPageId === page.id;
-  return qc.checkedAt > 0 && qc.score >= QC_NOTICE_SCORE && visualReferenceQcAllows(qc, true);
+  return qc.checkedAt > 0 && qc.score >= QC_NOTICE_SCORE && visualReferenceQcAllows(qc, true, asset.path);
 }
 
 export function earlierArtwork(doc: ComicDoc, page: Page, rating: ContentRating, owns: (path: string) => boolean, attached: ReadonlySet<string>, adjacent?: Page): EarlierArtwork | undefined {

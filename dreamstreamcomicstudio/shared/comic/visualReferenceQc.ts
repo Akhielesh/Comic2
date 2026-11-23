@@ -1,5 +1,6 @@
 // Page drawings may establish a character, setting or style on another page.
 // Lettering and panel layout are taken from the destination page's own script.
+import { legacyIssueDismissed } from './reviewNotes.js';
 import type { ConsistencyFinding, QcReport } from './doc.js';
 
 const lettering = /\b(?:lettering|typeface|typography|font|captions?|balloons?|bubbles?|dialogue|text|spelling|spelled|misspell\w*|punctuation|kerning|legib\w*|illegib\w*)\b/i;
@@ -66,13 +67,14 @@ function blocksVisualReference(finding: ConsistencyFinding) {
 }
 
 /** Unchecked immediate neighbours retain their existing eligibility; older automatic evidence also needs an attested check. */
-export function visualReferenceQcAllows(qc: QcReport | undefined, checkedEvidence = false): boolean {
+export function visualReferenceQcAllows(qc: QcReport | undefined, checkedEvidence = false, sourcePath?: string): boolean {
   if (!qc) return !checkedEvidence;
   if (qc.missingSpeakers?.length) return false;
   const findings = qc.findings ?? [];
   if (findings.some(blocksVisualReference)) return false;
   if (!Array.isArray(qc.issues)) return !checkedEvidence;
-  return qc.issues.every(issue => {
+  return qc.issues.every((issue, index) => {
+    if (legacyIssueDismissed(qc, sourcePath, index)) return true;
     if (findings.some(f => f.dismissed) && dismissedDuplicate(issue, findings)) return true;
     const result = legacyIssue(issue);
     return result !== 'visual-defect' && (!checkedEvidence || result === 'unrelated');

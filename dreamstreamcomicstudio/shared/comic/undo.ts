@@ -14,6 +14,7 @@
 // Pro Edit (PE-0): `motion` and `page_motion` (ops.ts PRO_EDIT_OPS) are inverted exactly from day one; their inverses
 // are the same two ops. While PRO_EDIT_OPS_PATCHABLE is off, isUndoable says false for a batch holding one.
 
+import { legacyIssueDismissed } from './reviewNotes.js';
 import {
   bookOf,
   findPage,
@@ -186,8 +187,12 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
     case 'consistency':
       return [{ op: 'consistency', patch: restoreFull(doc.consistency, after.consistency) }];
     case 'finding': {
-      const prev = findPage(doc, op.pageId)?.render.qc?.findings?.find((f) => f.id === op.id);
-      return prev ? [{ op: 'finding', pageId: op.pageId, id: op.id, patch: { dismissed: prev.dismissed ?? null } }] : [];
+      const qc = findPage(doc, op.pageId)?.render.qc;
+      if (op.issueIndex !== undefined && op.check && qc) {
+        return [{ ...op, patch: { dismissed: legacyIssueDismissed(qc, op.check.path, op.issueIndex) } }];
+      }
+      const prev = qc?.findings?.find((f) => f.id === op.id);
+      return prev ? [{ ...op, patch: { dismissed: prev.dismissed ?? null } }] : [];
     }
     default:
       return null;
