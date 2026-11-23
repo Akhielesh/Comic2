@@ -126,6 +126,22 @@ describe('Comics landing', () => {
     expect(looks.getByText('The Paper Boat · six looks')).toBeInTheDocument();
   });
 
+  it('opens the chosen edition from the hero and keeps the current page on keyboard dismissal', async () => {
+    renderLanding();
+    const opener = screen.getByRole('button', { name: 'Read a sample' });
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog', { name: 'The Last Tram' });
+    expect(within(dialog).getByRole('button', { name: 'Previous sample page' })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: 'End' });
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Page 2 of 2');
+    expect(within(dialog).getByRole('button', { name: 'Next sample page' })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: 'Home' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next sample page' }));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(screen.getByRole('status')).toHaveTextContent('Page 2 of 2');
+  });
+
   it('loads the selected shelf page and restores focus after inspecting the full-size edition', async () => {
     renderLanding();
     const shelf = within(screen.getByRole('group', { name: 'Choose a sample comic' }));

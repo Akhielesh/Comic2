@@ -62,18 +62,19 @@ describe('ComicsHeader', () => {
     }
   });
 
-  it('the lockup reads "Comic Studio" (with the space) inside its accessible name, so axe sees no label mismatch', () => {
+  it('the lockup names the suite and product beside the canonical DreamStream mark', () => {
     render(<ComicsHeader {...props()} />);
-    const home = screen.getByRole('button', { name: 'Comic Studio, home' });
+    const home = screen.getByRole('button', { name: 'DreamStream Comic Studio, home' });
     const visible = (home.textContent ?? '').replace(/\s+/g, ' ').trim();
-    expect(visible).toBe('Comic Studio');
+    expect(visible).toBe('DreamStream Comic Studio');
+    expect(home.querySelector('img')).toHaveAttribute('src', '/stream-studio.svg');
     expect(home.getAttribute('aria-label')?.startsWith(visible)).toBe(true);
   });
 
   it('the lockup is the Comic Studio home link', () => {
     const p = props();
     render(<ComicsHeader {...p} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Comic Studio, home' }));
+    fireEvent.click(screen.getByRole('button', { name: 'DreamStream Comic Studio, home' }));
     expect(p.onGoHome).toHaveBeenCalledTimes(1);
   });
 

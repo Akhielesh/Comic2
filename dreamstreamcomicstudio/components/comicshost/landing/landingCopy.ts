@@ -20,8 +20,7 @@ export const JOIN = { action: 'Create an account', short: 'Sign up' } as const;
 
 /** The hero's words under the title: what the product is, in one look (an AI makes the pages, the creator steers). */
 export const HERO = {
-  lead: 'Give the AI Comic Director a story and get a page plan to review. Draw a standalone image from a prompt or reference, or talk through an idea by text or voice.',
-  invitation: 'Create an account to save your work.'
+  lead: 'Turn a story into a comic with the AI Comic Director. You can also draw a standalone image or talk through an idea by text or voice.'
 } as const;
 
 export const FEATURES_HEAD = {

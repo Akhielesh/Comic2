@@ -69,6 +69,12 @@ export function ComicsLanding({ signedIn, tourAccountId, onSignIn, onRequestAcce
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [edition, setEdition] = useState<(typeof SHELF_EDITIONS)[number]>(SHELF_EDITIONS[0]);
   const [comparing, setComparing] = useState(false);
+  const [reading, setReading] = useState(false);
+  const readerTrigger = useRef<HTMLButtonElement | null>(null);
+  const showReader = (trigger: HTMLButtonElement) => {
+    readerTrigger.current = trigger;
+    setReading(true);
+  };
   const lookTrigger = useRef<HTMLButtonElement | null>(null);
   const goTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), []);
 
@@ -109,20 +115,13 @@ export function ComicsLanding({ signedIn, tourAccountId, onSignIn, onRequestAcce
                   <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={onRequestAccess}>
                     {JOIN.action} <ArrowRight aria-hidden />
                   </Button>
-                  <Button data-testid="comics-hero-read" variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}><BookOpen aria-hidden />Read comics</Button>
+                  <Button data-testid="comics-hero-read" variant="outline" size="lg" className="comics-hero-cta" aria-haspopup="dialog" onClick={event => showReader(event.currentTarget)}><BookOpen aria-hidden />Read a sample</Button>
                 </>
               )}
             </div>
             <button type="button" ref={guide.hero} className={cn('studio-guide-entry', DENSITY.coarse, FOCUS_RING)} aria-haspopup="dialog" onClick={guide.start}>
               <Compass aria-hidden />{guide.label}
             </button>
-            {!signedIn && (
-              <p className="comics-invitation">
-                <span className="comics-invitation-line">{HERO.invitation}</span>
-                Already a member?{' '}
-                <button type="button" className={cn(SQUARE_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onSignIn}>Sign in</button>
-              </p>
-            )}
           </div>
           <div className="comics-shelf" data-edition={edition}>
             <div className="comics-shelf-options" role="group" aria-label="Choose a sample comic">
@@ -133,7 +132,12 @@ export function ComicsLanding({ signedIn, tourAccountId, onSignIn, onRequestAcce
               ))}
             </div>
             <div className="comics-hero-press">
-              <ComicSampleReader key={edition} look={SAMPLE_LOOKS[0]} story={edition} />
+              <ComicSampleReader key={edition} look={SAMPLE_LOOKS[0]} story={edition} reader={{
+                open: reading,
+                show: showReader,
+                close: () => setReading(false),
+                restoreFocus: () => readerTrigger.current?.focus({ preventScroll: true })
+              }} />
             </div>
           </div>
         </section>

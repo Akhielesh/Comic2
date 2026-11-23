@@ -68,6 +68,8 @@ const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
 /** QC score below which a drawn page is flagged for a look (mirrors server jobs.ts LOW_QC_SCORE). */
 export const LOW_QC_SCORE = 0.45;
+/** A page below this confidence prompts a QC notice and cannot establish another page's visual continuity. */
+export const QC_NOTICE_SCORE = 0.75;
 
 /** No force ⇒ undrawn / stale / failed pages with panels, never busy. Sorted by n. */
 export function pageTargets(doc: ComicDoc, opts: { pageIds?: string[]; force?: boolean } = {}): Page[] {

@@ -704,6 +704,9 @@ export interface PageContinuity {
   by?: 'writer' | 'user' | 'fix';
 }
 
+/** Editors may compare this version before replacing part of a page's continuity ledger. */
+export const continuityEditVersion = (page: Pick<Page, 'continuity'>): string => hashString(stableStringify(page.continuity ?? null));
+
 export type DirectionLens = 'wide' | 'normal' | 'long' | 'macro';
 export interface PanelCastDirection {
   expression?: string;

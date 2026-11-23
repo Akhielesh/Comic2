@@ -47,7 +47,9 @@ import {
   type StyleOption
 } from '../../../shared/comic/doc.js';
 import { letteringPresetOf } from '../../../shared/comic/lettering/style.js';
-import { crossesPageScene, resolveContinuity, sceneIndex } from '../../../shared/comic/continuity.js';
+import { CONSISTENCY_LIMITS } from '../../../shared/comic/limits.js';
+import { conflictsWithPageChange, earlierArtwork, mentionsProp, skippedPageSubjects } from './consistency/earlierArtwork.js';
+import { crossesPageScene, itemMatches, resolveContinuity, sceneIndex } from '../../../shared/comic/continuity.js';
 import { DIRECTION_DROP_ORDER, directionPhrases } from '../../../shared/comic/directions.js';
 import {
   nearestAspect,
@@ -861,9 +863,10 @@ export { effectiveLayout, harmonizePanelSizes, layoutConflicts };
 
 // ── References ───────────────────────────────────────────────────────────────
 
-export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
+export type ReferenceKind = 'earlier_page' | 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
 
 export interface PlannedReference {
+  evidencePageId?: string;
   kind: ReferenceKind;
   /** Which model cap the image counts against. */
   slot: 'character' | 'object' | 'style';
@@ -1131,6 +1134,8 @@ const styleReferences = (doc: ComicDoc, spec: ImageModelSpec, budget: { total: n
 
 /** Page-render options beyond CompileOptions. */
 export interface PageCompileOptions extends CompileOptions {
+  /** Bound to the authenticated project by the job runner. Earlier page art needs positive ownership. */
+  ownsPageArt?: (path: string) => boolean;
   /**
    * Attach the PAGE LAYOUT GUIDE as Image 1 (plan C9, C19): it takes one object slot before
    * anything else and the panel blocks name their box "in the layout guide". The job runner sets
@@ -1160,7 +1165,7 @@ export const planPageReferences = (
   previousPage?: Page,
   opts: PageCompileOptions = {}
 ): PlannedReference[] => {
-  const budget = { total: Math.max(0, spec.refs.total), objects: Math.max(0, spec.refs.objects) };
+  const budget = { total: Math.max(0, Math.min(spec.refs.total, doc.consistency?.maxRefs ?? spec.refs.total)), objects: Math.max(0, spec.refs.objects) };
   const guide: PlannedReference[] = [];
   // One object slot, first in the legend (C19) — never a model's ONLY object slot (a legacy-locked
   // comic keeps its style anchor; the layout is still stated in words).
@@ -1178,9 +1183,14 @@ export const planPageReferences = (
   const previous: PlannedReference[] = [];
   const previousAsset = previousPage?.render.asset;
   const previousSafety = safetyStatusOf(previousAsset?.safety, effective);
-  const continues = !!previousPage && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
+  const skipped = new Set(doc.consistency?.skip ?? []);
+  const previousAllowed = previousPage && !skipped.has('prev:' + previousPage.id) &&
+    (!opts.ownsPageArt || (previousAsset?.path && opts.ownsPageArt(previousAsset.path) && !isPageStale(doc, previousPage) &&
+      !previousPage.render.qc?.findings?.some(f => !f.dismissed && f.severity === 'major'))) &&
+    !skippedPageSubjects(doc, previousPage, skipped) && !conflictsWithPageChange(doc, previousPage, page);
+  const continues = !!previousAllowed && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
   const addPrevious = () => {
-    if (!previousPage || previousPage.id === page.id || !previousAsset?.path || budget.objects <= 0 || budget.total <= 0) return;
+    if (!previousAllowed || previousPage.id === page.id || !previousAsset?.path || budget.objects <= 0 || budget.total <= 0) return;
     if (previousPage.render.status !== 'ready' && previousPage.render.status !== 'stale') return;
     if (previousSafety !== 'pass' && (previousSafety !== 'unchecked' || opts.safe)) return;
     previous.push({
@@ -1217,8 +1227,28 @@ export const planPageReferences = (
     budget.total -= 1;
   }
 
-  if (!continues) addPrevious();
-
+  const usedPaths = new Set([...characters, ...places, ...style, ...previous].map(ref => ref.path));
+  const evidence = opts.ownsPageArt && budget.total > 0 && budget.objects > 0
+    ? earlierArtwork(doc, page, effective, opts.ownsPageArt, usedPaths, previous.length ? previousPage : undefined)
+    : undefined;
+  if (evidence) {
+    const names = (items: string[]) => items.slice(0, 3).map(name => clip(safeText(name, opts).replace(/\s+/g, ' '), 32)).filter(Boolean).join(', ');
+    const cast = names(evidence.cast);
+    const settings = names(evidence.places);
+    previous.push({
+      kind: 'earlier_page', slot: 'object', evidencePageId: evidence.page.id,
+      path: evidence.page.render.asset!.path, label: `EARLIER ART — PAGE ${evidence.page.n}`,
+      instruction: [
+        cast && `Match the established appearance of ${cast} only where named in this script.`,
+        settings && `Use the permanent geography of ${settings} only where that location is named.`,
+        'Current wardrobe, props and panel directions override this drawing. Do not copy its action, other cast, lighting, layout or text.'
+      ].filter(Boolean).join(' ')
+    });
+  } else if (!continues && !opts.ownsPageArt) {
+    // Legacy unscoped compiler callers supply their own reference explicitly.
+    // Live jobs use canonical sheets and script when no matching art qualifies.
+    addPrevious();
+  }
   return [...guide, ...characters, ...places, ...style, ...previous];
 };
 
@@ -1228,14 +1258,18 @@ const toJobReferences = (refs: PlannedReference[]) => refs.map((r) => ({ label: 
 const userRefPathsOf = (refs: PlannedReference[]): string[] => [...new Set(refs.filter((r) => r.userRef).map((r) => r.path))];
 
 /** The finished job: model, size, prompt, legend-ordered references and the user ref paths. */
-const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: string, refs: PlannedReference[]): CompiledRenderJob => ({
-  spec: resolved.spec,
-  resolution: resolved.resolution,
-  aspect,
-  prompt,
-  references: toJobReferences(refs),
-  refPaths: userRefPathsOf(refs)
-});
+const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: string, refs: PlannedReference[]): CompiledRenderJob => {
+  const earlier = refs.find(ref => ref.evidencePageId);
+  return {
+    spec: resolved.spec,
+    resolution: resolved.resolution,
+    aspect,
+    prompt,
+    references: toJobReferences(refs),
+    ...(earlier?.evidencePageId ? { earlierPage: { id: earlier.evidencePageId, path: earlier.path } } : {}),
+    refPaths: userRefPathsOf(refs)
+  };
+};
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
@@ -1736,11 +1770,31 @@ const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, s
     const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', change.holding?.join(', ')), named('position', change.where)].filter(Boolean);
     return details.length ? [`- ${name}: ${details.join('; ')}`] : [];
   });
-  const props = Object.entries(state.props).map(([name, prop]) => named(words(name), prop.state)).filter(Boolean);
-  const gone = Object.keys(state.gone).map(words).filter(Boolean);
+  // A long book can accumulate hundreds of prop changes. Current directions
+  // come first, followed by props that actually appear or are held on this page.
+  const held = Object.entries(state.cast).flatMap(([id, actor]) => names.has(id) ? actor.holding ?? [] : []);
+  const currentProps = page.continuity?.props ?? {};
+  const relevantProps = new Set(Object.keys(currentProps));
+  const allProps = [...Object.keys(state.props), ...Object.keys(state.gone)];
+  const propsOnCast = doc.cast.filter(c => names.has(c.id)).flatMap(c => c.look.props ? [c.look.props] : []);
+  for (const name of allProps) {
+    if (relevantProps.size >= CONSISTENCY_LIMITS.propChanges) break;
+    if (held.some(item => itemMatches(item, name)) || propsOnCast.some(item => itemMatches(item, name)) || mentionsProp(doc, page, name)) relevantProps.add(name);
+  }
+  // A prop can be a part of a named subject ("racing tyres" on the car) that
+  // successive panels never rename. Keep nearby facts established in this same scene.
+  if (state.sceneSince !== undefined && relevantProps.size < CONSISTENCY_LIMITS.propChanges) {
+    const since = (name: string) => state.props[name]?.since ?? state.gone[name];
+    for (const name of allProps.sort((a, b) => since(b) - since(a))) {
+      if (relevantProps.size >= CONSISTENCY_LIMITS.propChanges || since(name) < state.sceneSince) break;
+      relevantProps.add(name);
+    }
+  }
+  const props = Object.entries(state.props).filter(([name]) => relevantProps.has(name)).map(([name, prop]) => named(words(name), prop.state)).filter(Boolean);
+  const gone = Object.keys(state.gone).filter(name => relevantProps.has(name)).map(words).filter(Boolean);
   const notes = state.notes.map(words).filter(Boolean).map((note) => `- ${note}`);
   const lines = [sceneDetails && `- Scene: ${sceneDetails}`, ...cast, ...props.map((prop) => `- ${prop}`), gone.length && `- No longer present: ${gone.join(', ')}`, ...notes].filter(Boolean);
-  return lines.length ? ['CONTINUITY — keep these details wherever the current panel does not change them. Do not add anyone or anything to a panel just because it is listed here.', ...lines].join('\n') : '';
+  return lines.length ? ['CONTINUITY — keep these details wherever the current panel does not change them. Do not add anyone or anything to a panel just because it is listed here.', ...(cast.length || props.length || gone.length ? ['These recorded changes override earlier artwork and the default outfits or props on model sheets.'] : []), ...lines].join('\n') : '';
 };
 
 /**
@@ -2128,6 +2182,11 @@ export const compileEdit = (
     total -= 1;
   }
 
+  // A correction uses the current raster/crop as its visual source. Carry the
+  // recorded story state into only the edited scope, with the new instruction authoritative.
+  const editPage = panel ? { ...page, panels: [panel] } : page;
+  const editNames = new Map(rankPageCast(doc, editPage).map(c => [c.id, castLabel(c)]));
+  const editContinuity = continuityBlock(doc, editPage, editNames, args);
   const where = args.hasRegion
     ? `The area to change is outlined in red in Image 2${panel ? ` (in panel ${panel.n})` : ''}.`
     : panel
@@ -2145,6 +2204,7 @@ export const compileEdit = (
     `Keep everything else exactly as it is: page layout, panel borders, every other panel, characters' identities and outfits, ${keepLettering}, colors and art style.` +
       `${args.hasRegion ? ' Do not add a red outline to the result.' : ''} ${args.panelCrop ? 'Output only the complete Image 1 crop at the same framing; never output the full page or add panels.' : 'Output the full page at the same framing.'}`,
     frameSentence(aspect, args.panelCrop ? 'panel crop' : 'page'),
+    editContinuity && `For the edited area only, keep the following story state except where this specific change overrides it.\n${editContinuity}`,
     contentParagraph(doc, args),
     referenceLegend(refs)
   ]

@@ -95,6 +95,22 @@ beforeEach(() => {
 
 describe('Comic Studio idea workspace', () => {
   const options = { comicWorkspace: true, accountId: 'author-a', openNewComic: true };
+  it('adds an illustrated premise to the current draft and waits for the author to start', () => {
+    const { props } = renderDashboard([], options);
+    const script = screen.getByLabelText('Your comic idea or script');
+    const starter = screen.getByRole('button', { name: 'Add The night tram to your script' });
+    fireEvent.click(starter);
+    expect((script as HTMLTextAreaElement).value).toContain('A night tram stops');
+    expect(script).toHaveFocus();
+    fireEvent.change(script, { target: { value: 'Keep this opening.' } });
+    fireEvent.click(starter);
+    expect((script as HTMLTextAreaElement).value).toContain('Keep this opening.\n\nA night tram stops');
+    fireEvent.change(script, { target: { value: 'a'.repeat(200000) } });
+    expect(starter).toBeDisabled();
+    expect(props.onCreateProject).not.toHaveBeenCalled();
+    expect(studioApi.streamStudio).not.toHaveBeenCalled();
+  });
+
   it('waits for the listing before choosing an empty-author entry', () => {
     const first = renderDashboard([], { comicWorkspace: true, projectsLoaded: false, accountId: 'author-a' });
     expect(screen.queryByLabelText('Your comic idea or script')).toBeNull();

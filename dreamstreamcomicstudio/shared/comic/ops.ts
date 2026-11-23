@@ -26,6 +26,7 @@ import {
   archiveOf,
   bookOf,
   collectAssetPaths,
+  continuityEditVersion,
   emptyRender,
   getRender,
   letterStyleOf,
@@ -290,7 +291,7 @@ export type DocOp =
   /** Upsert (patch; null clears a key) or delete (patch null) one overlay ('ly_…'); index places a new one. */
   | { op: 'layer'; pageId: string; id: string; patch: LayerPatch | null; index?: number }
   /** Merge into the page's continuity (null clears a key); patch null removes it. */
-  | { op: 'continuity'; pageId: string; patch: ContinuityPatch | null }
+  | { op: 'continuity'; pageId: string; patch: ContinuityPatch | null; ifUnchanged?: string }
   /** Upsert (patch) or delete (null) one scene; index places a new one. */
   | { op: 'scene'; id: string; patch: ScenePatch | null; index?: number }
   /** Book-wide consistency settings (null clears a key). */
@@ -1885,7 +1886,7 @@ const mergedThrough = <T>(prev: object | undefined, patch: Record<string, unknow
 
 const applyContinuity = (doc: ComicDoc, op: Extract<DocOp, { op: 'continuity' }>): ComicDoc => {
   const page = findPageById(doc, op.pageId);
-  if (!page) return doc;
+  if (!page || (op.ifUnchanged !== undefined && op.ifUnchanged !== continuityEditVersion(page))) return doc;
   let value: PageContinuity | undefined;
   if (op.patch === null || op.patch === undefined) value = undefined;
   else if (!isObject(op.patch)) return doc;

@@ -168,6 +168,7 @@ import { compileFixPanel, finishFixPanel, fixPanelJobs, fixPanelMeta, fixPanelPr
 import { enrichPagesQuote } from './actions/consistency.js';
 import { boardForCheck, boardImage } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
+import { isProjectPageArt } from './assets.js';
 import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
 import { cropForPanel, cropPanelContext, panelContextBox, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
 import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
@@ -2767,7 +2768,12 @@ class RenderRun {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
         // The nearest eligible image is read after the scheduled predecessor has settled.
-        return compilePage(doc, page, { previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
+        return compilePage(doc, page, {
+          ...this.compileOpts(opts),
+          previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }),
+          ownsPageArt: path => isProjectPageArt(path, this.ctx.userId, this.ctx.projectId),
+          ...(opts.layoutGuide ? { layoutGuide: true } : {})
+        });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
       qcPageId: p.id,
@@ -4215,7 +4221,9 @@ class RenderRun {
         layoutGuide: guide,
         previousPage: previousPage ?? null
       });
-      return plan.attached.filter((a) => (a.source === 'guide' ? guide : !!a.path && attached.has(a.path))).map((a) => a.key).slice(0, CONSISTENCY_LIMITS.anchorKeys);
+      const keys = plan.attached.filter((a) => (a.source === 'guide' ? guide : !!a.path && attached.has(a.path))).map((a) => a.key);
+      if (compiled.earlierPage && attached.has(compiled.earlierPage.path)) keys.unshift('prev:' + compiled.earlierPage.id);
+      return [...new Set(keys)].slice(0, CONSISTENCY_LIMITS.anchorKeys);
     } catch (err) {
       logger.warn('comic_anchor_keys_failed', { projectId: this.ctx.projectId, pageId: page.id, message: (err as Error)?.message });
       return undefined;

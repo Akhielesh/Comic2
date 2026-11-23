@@ -13,6 +13,7 @@
 // earlier in the same batch exists for a continuity op after it.
 
 import {
+  continuityEditVersion,
   normalizeConsistencySettings,
   normalizePageContinuity,
   normalizePanelDirection,
@@ -236,6 +237,9 @@ const continuity: OpSanitizer<Op<'continuity'>> = {
   op: 'continuity',
   sanitize(doc, op, ctx) {
     const page = pageOf(doc, op.pageId);
+    if (op.ifUnchanged !== undefined && op.ifUnchanged !== continuityEditVersion(page)) {
+      throw new StudioError('CONFLICT', 'These continuity details changed. Review the updated page before saving.', { status: 409 });
+    }
     if (op.patch === null) return { op: 'continuity', pageId: page.id, patch: null };
     const patch = continuityPatchOf(doc, op.patch, ctx);
     // The merged value must normalize (a patch that leaves nothing valid is a clear, which the op does itself).

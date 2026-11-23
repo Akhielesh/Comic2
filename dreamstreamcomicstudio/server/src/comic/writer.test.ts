@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { resolveContinuity } from '../../../shared/comic/continuity.js';
+import { longStorySource } from './storySource.js';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Page } from '../../../shared/comic/doc.js';
 import { STYLE_PRESETS } from '../../../shared/comic/stylePresets.js';
 import {
@@ -451,6 +453,60 @@ describe('writePagePlan — long plans', () => {
     const kaleId = out.newCast[0].id;
     expect(out.pages.every((p) => p.panels[0].castIds.includes(kaleId))).toBe(true);
     expect(out.costUsd).toBeCloseTo(0.04);
+  });
+
+  it('carries a quoted wardrobe and prop change through a 20-page book, including resets, without another model call', async () => {
+    const doc = baseDoc(d => { d.format.pageCount = 20; });
+    const beats = Array.from({ length: 20 }, (_, i) => {
+      const n = i + 1;
+      const events: Record<number, [string, string, string, string[]]> = {
+        3: ['Maya swaps her red kurta for an indigo coat.', 'Maya Rao', 'outfit', ['indigo coat']],
+        4: ['The market clock loses its hands.', 'Market clock', 'prop', ['missing hands']],
+        8: ['Maya holds a paper kite.', 'Maya Rao', 'holding', ['paper kite']],
+        14: ['The market clock is removed.', 'Market clock', 'prop', []],
+        18: ['Maya puts her original clothes back on.', 'Maya Rao', 'outfit', []]
+      };
+      const event = events[n];
+      const summary = event?.[0] || `Maya checks the clues at stop ${n}.`;
+      const changes: unknown[] = event ? [{ subject: event[1], field: event[2], values: event[3], evidence: summary }] : [];
+      if (n === 10) changes.push({ subject: 'Maya Rao', field:'outfit', values:['invented armor'], evidence:'An absent passage about armor.' });
+      return { n, summary, place: n <= 10 ? 'Spice Market' : 'Station', characters:['Maya Rao'], turnHook:'', changes };
+    });
+    const { llm, calls } = scriptedLlm((req, user) => {
+      if (req.jsonSchema?.name === 'comic_page_outline') return { pages: beats, newCast:[] };
+      const [, from, to] = /write pages (\d+)–(\d+)/.exec(user)!;
+      return plan(beats.slice(Number(from) - 1, Number(to)).map(beat => rawPage(beat.n, [
+        rawPanel({ action:beat.summary, castIds:['ch_maya'] }), rawPanel({ n:2, action:`Maya inspects stop ${beat.n}.` })
+      ], { summary:beat.summary })));
+    });
+    const result = await writePagePlan({doc, llm});
+    doc.pages = result.pages;
+    expect(calls).toHaveLength(5);
+    const handoff = String(calls.find(c => String(c.messages[1].content).includes('write pages 11–15'))!.messages[1].content);
+    expect(handoff).toContain('Page 3 · Maya Rao · outfit · indigo coat');
+    expect(handoff).toContain('Page 4 · Market clock · prop · missing hands');
+    expect(handoff).not.toContain('· holding · paper kite');
+    expect(handoff).not.toContain('invented armor');
+    expect(resolveContinuity(doc, doc.pages[11])).toMatchObject({cast:{ch_maya:{outfit:'indigo coat'}}, props:{'market clock':{state:'missing hands'}}});
+    expect(resolveContinuity(doc, doc.pages[17])!.cast.ch_maya?.outfit).toBeUndefined();
+    expect(resolveContinuity(doc, doc.pages[19])!.gone['market clock']).toBe(14);
+    const corrected = { ...doc.pages[2], continuity: { by: 'user' as const, cast:{ch_maya:{outfit:'teal raincoat'}} } };
+    expect(mergeRevisedPages([corrected], [doc.pages[2]])[0].continuity).toEqual(corrected.continuity);
+  });
+
+  it('gives the middle writer its manuscript pages and keeps the outline within the original source budget', () => {
+    const sections = Array.from({ length: 20 }, (_, i) => `Page ${i + 1}: Crossing ${i + 1}\n` + 'The train crosses the pass. '.repeat(180) + `Meeting place ${i + 1} confirmed.\n`);
+    const script = 'Character notes for the whole book.\n' + sections.join('');
+    const outline = longStorySource(script, 20, WRITER_SOURCE_LIMIT);
+    expect(outline.length).toBeLessThanOrEqual(WRITER_SOURCE_LIMIT);
+    for (const [i] of sections.entries()) expect(outline).toContain(`Page ${i + 1}: Crossing`);
+    const middle = longStorySource(script, 20, WRITER_SOURCE_LIMIT, [11,12,13,14,15]);
+    expect(middle).toContain(sections[12].trim());
+    expect(middle).toContain('Character notes for the whole book');
+    expect(middle).not.toContain('Meeting place 1 confirmed');
+    const prose = longStorySource(script.replace(/^Page (\d+): /gm, ''), 20, WRITER_SOURCE_LIMIT, [11,12,13,14,15]);
+    expect(prose).toContain('Meeting place 13 confirmed');
+    expect(prose.length).toBeLessThanOrEqual(WRITER_SOURCE_LIMIT);
   });
 
   it('keeps a shuffled numbered 20-page outline chronological across chunk handoffs', async () => {

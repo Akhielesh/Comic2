@@ -19,6 +19,15 @@ const plan = () => ({ pages: plannedDoc().pages, newCast: [], model: 'test-write
 beforeEach(() => { vi.mocked(writePagePlan).mockReset().mockResolvedValue(plan()); });
 
 describe('the explicitly requested director draft', () => {
+  it.each([
+    ['A twenty-four-page graphic novel about a courier.', 24],
+    ['Create a comic with thirty two pages.', 32],
+    ['Draw a 16-page historical mystery about a storm.', 16]
+  ])('uses the requested book length in the normal writer call: %s', async (brief, pages) => {
+    const {ctx} = setup();
+    await runDirectorDraft(ctx, brief as string);
+    expect(vi.mocked(writePagePlan).mock.calls[0][0].doc.format.pageCount).toBe(pages);
+  });
   it('stores the complete source, drafts a free look and quotes every planned page and the cover even with confirmations off', async () => {
     const { ctx, session } = setup();
     const script = idea + '\n\n' + 'A long scene. '.repeat(5000);

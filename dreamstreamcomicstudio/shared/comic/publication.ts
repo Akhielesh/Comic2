@@ -145,7 +145,7 @@ export interface PublicationOwnerView {
    * What link previews actually show (live rows): the FROZEN card's title and description in the
    * default language, and the published cover copy (the og:image fallback). Not the live doc's text.
    */
-  card?: { title: string; description: string; coverUrl?: string };
+  card?: { title: string; description: string; coverUrl?: string; pageCount?: number };
 }
 
 /** The preview text with the rating appended ("… · Rated PG-13"): what every link preview carries. */

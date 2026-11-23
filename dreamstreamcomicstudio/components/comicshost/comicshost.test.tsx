@@ -218,7 +218,7 @@ describe('ComicsLanding', () => {
   });
   const heroOf = () => screen.getByTestId('comics-hero-cta').closest('section') as HTMLElement;
 
-  it('routes signed-out visitors to public signup, the Library and sign-in', () => {
+  it('routes signed-out visitors to signup, an in-place sample, the Library and sign-in', () => {
     const h = handlers();
     const scroll = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
@@ -230,12 +230,15 @@ describe('ComicsLanding', () => {
       fireEvent.click(cta);
       expect(h.onRequestAccess).toHaveBeenCalledOnce();
       expect(h.onSignIn).not.toHaveBeenCalled();
-      fireEvent.click(within(heroOf()).getByRole('button', { name: 'Read comics' }));
-      expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
-      // Members keep a clear Sign in: in the header and under the hero's actions.
+      fireEvent.click(within(heroOf()).getByRole('button', { name: 'Read a sample' }));
+      const sample = screen.getByRole('dialog', { name: 'The Last Tram' });
+      expect(h.onBrowseGallery).not.toHaveBeenCalled();
+      fireEvent.click(within(sample).getByRole('button', { name: 'Close enlarged page' }));
+      fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Library' }));
+      expect(h.onBrowseGallery).toHaveBeenCalledOnce();
+      // Returning members can sign in from the persistent header.
       fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Sign in' }));
-      fireEvent.click(within(heroOf()).getByRole('button', { name: 'Sign in' }));
-      expect(h.onSignIn).toHaveBeenCalledTimes(2);
+      expect(h.onSignIn).toHaveBeenCalledOnce();
       expect(within(heroOf()).queryByRole('button', { name: 'Start a comic' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
     } finally {

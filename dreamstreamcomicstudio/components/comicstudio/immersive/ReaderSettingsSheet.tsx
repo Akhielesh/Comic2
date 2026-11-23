@@ -22,6 +22,8 @@ export interface ReaderSettingsSheetProps {
   onShortcuts(): void;
   onClose(): void;
   onShare?: () => void;
+  pageNumber?: number;
+  onCopyPageLink?(n: number): void;
   onDownload?: () => void;
   downloadBusy?: boolean;
 }
@@ -99,6 +101,11 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
         </HudButton>
       </div>
       <div className="space-y-4">
+        {p.onCopyPageLink && !!p.pageNumber && p.pageNumber > 0 && (
+          <button type="button" onClick={() => p.onCopyPageLink?.(p.pageNumber!)} className="press min-h-11 w-full rounded-xl bg-[var(--ds-reader-hud-hover)] text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
+            Copy link to page {p.pageNumber}
+          </button>
+        )}
         {p.compact && (p.onShare || p.onDownload) && (
           <div className="flex gap-2">
             {p.onShare && (

@@ -541,7 +541,7 @@ describe('publish', () => {
     const { getPublicationView } = await import('./index.js');
     const view = await publish(ctx, { visibility: 'unlisted' });
     const row = store.rows.get('proj-1')!;
-    expect(view.card).toEqual({ title: 'Spice Run', description: expect.any(String), coverUrl: (row.card as ShareCard).coverUrl });
+    expect(view.card).toEqual({ title: 'Spice Run', pageCount: 3, description: expect.any(String), coverUrl: (row.card as ShareCard).coverUrl });
     expect(view.card!.coverUrl).toMatch(/^https:\/\/cdn\.test\/pub\//);
     ctx.session.commit([{ op: 'brief', patch: { title: 'Brand new title nobody has seen', logline: 'Not published yet.' } }], { origin: 'user' });
     const later = await getPublicationView(ctx);
@@ -551,7 +551,7 @@ describe('publish', () => {
     store.forcePrivate('proj-1');
     const paused = await getPublicationView(ctx);
     expect(paused.status).toBe('suspended');
-    expect(paused.card).toEqual({ title: 'Spice Run', description: view.card!.description });
+    expect(paused.card).toEqual({ title: 'Spice Run', pageCount: 3, description: view.card!.description });
     await unpublish(ctx);
     expect((await getPublicationView(ctx)).card).toBeUndefined();
   });
@@ -621,6 +621,18 @@ describe('publish', () => {
     store.statsRows.set(id, [{ day: today, views: 4, uniques: 3, completes: 1, byChannel: { whatsapp: 3, direct: 1 } }]);
     const stats = (await getPublicationView(ctx)).stats!;
     expect(stats).toMatchObject({ uniques7d: 3, completes7d: 1, byChannel7d: { whatsapp: 3, direct: 1 }, daily: [{ day: today, views: 4 }] });
+  });
+
+  it('counts channel opens and finish events across exactly seven UTC dates', async () => {
+    const { getPublicationView } = await import('./index.js');
+    await publish(ctx, { visibility: 'unlisted' });
+    const id = store.rows.get('proj-1')!.id!;
+    const at = (daysAgo: number) => new Date(clock - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    store.statsRows.set(id, [7, 6, 0].map((n) => ({
+      day: at(n), views: 2, uniques: 1, completes: 2, byChannel: { email: 2 }
+    })));
+    const stats = (await getPublicationView(ctx)).stats!;
+    expect(stats).toMatchObject({ uniques7d: 2, completes7d: 4, byChannel7d: { email: 4 } });
   });
 
   it('settings: visibility flips the mirror (public re-runs the gate); defaults must be published languages', async () => {

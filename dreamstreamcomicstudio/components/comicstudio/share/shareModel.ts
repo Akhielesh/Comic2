@@ -4,7 +4,7 @@
 import { stageAllows, type FlagStage } from '../../../shared/comic/capabilities';
 import type { AspectRatio, ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
-import { buildShareUrl, type PublicationMirror, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
+import { buildShareUrl, SLUG_RE, type PublicationMirror, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
 import { COMICS_ORIGIN } from '../../../services/productHost';
 
 export type IntentChannel = Extract<ShareChannel, 'whatsapp' | 'x' | 'telegram' | 'email' | 'facebook'>;
@@ -27,8 +27,17 @@ export function shareLinkFor(
   view: Pick<PublicationOwnerView, 'slug' | 'defaultLang' | 'startPage'> | null | undefined,
   opts: ShareLinkOptions = {}
 ): string | null {
-  if (!view?.slug) return null;
+  if (!view?.slug || !SLUG_RE.test(view.slug)) return null;
   return buildShareUrl(COMICS_ORIGIN, view.slug, opts, { defaultLang: view.defaultLang, startPage: view.startPage ?? null });
+}
+
+/** Only the latest known live publication can be distributed from a conversation card. */
+export function liveShareTarget(view: PublicationOwnerView | null | undefined, mirror: PublicationMirror | null | undefined) {
+  const current = view ?? mirror;
+  if (!current || current.status !== 'live' || current.visibility === 'private') return null;
+  const url = shareLinkFor(current);
+  if (!url) return null;
+  return { url, title: view?.card?.title || 'Read this comic', visibility: current.visibility, slug: current.slug! };
 }
 
 /** Channel intent URL (every part URI-encoded). */

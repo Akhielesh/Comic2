@@ -36,6 +36,7 @@
 // held-back notice posted beside the gate carries "Draw page N anyway (with the rest)", which extends that run.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { StoryMap } from './StoryMap';
 import {
   BookOpen,
   ChevronDown,
@@ -584,6 +585,10 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   });
 
   const select = (key: string, focus = false) => {
+    if (focus && key === selectedKey) {
+      tileRefs.current.get(key)?.focus();
+      return;
+    }
     if (focus) focusKey.current = key;
     setSelectedKey(key);
   };
@@ -938,6 +943,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         <p className="mb-2 text-[12px] text-[var(--ds-muted)]">The pages this card showed are no longer in the book — here is the whole book.</p>
       )}
       {strip}
+      {doc.pages.length > 10 && !subset && <StoryMap doc={doc} onPage={id => select(id, true)} />}
       {view === 'cost' && (
         <CostInsights
           doc={doc}

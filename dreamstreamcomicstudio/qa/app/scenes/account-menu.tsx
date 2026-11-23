@@ -14,8 +14,7 @@ import { AccountMenu } from '../../../components/account/AccountMenu';
 import { AccountProvider, type AccountContextValue } from '../../../components/account/AccountContext';
 import { useAccountSettingsListener } from '../../../components/account/accountNav';
 import { useComicTheme } from '../../../components/comicstudio/useComicTheme';
-import { ComicsMark } from '../../../components/comicshost/ComicsMark';
-import { BrandLockup } from '../../../components/layout/BrandLockup';
+import { ComicStudioBrand } from '../../../components/comicshost/ComicStudioBrand';
 import { HEADING, MUTED, TEXT_3XL } from '../../../components/chat/studioDesign';
 import { cn } from '../../../lib/utils';
 import type { QaAppScene } from '../index';
@@ -51,7 +50,7 @@ function AccountMenuScene() {
     <AccountProvider value={value}>
       <div data-comic-theme={theme} className="flex min-h-[100dvh] flex-col bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
         <header className="flex h-14 items-center gap-2 border-b border-[var(--ds-hairline-soft)] px-2 medium:px-3">
-          <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways label="Comic Studio, home" onClick={() => undefined} />
+          <ComicStudioBrand onHome={() => undefined} />
           <span className="flex-1" />
           <AccountMenu paper resume="new-comic" presentation={param('sheet') === '1' ? 'sheet' : 'anchored'} />
         </header>

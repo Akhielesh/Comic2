@@ -22,6 +22,7 @@ export interface ShareTarget {
   title: string;
   text?: string;
   coverUrl?: string;
+  onShared?: ReaderShareProps['onShared'];
 }
 
 export interface ShareButtonProps {
@@ -79,7 +80,7 @@ const ReaderShareTarget: React.FC<{ target: ShareTarget; compact?: boolean }> = 
       live = false;
     };
   }, [View, attempt]);
-  if (View) return <View url={target.url} title={target.title} text={target.text} compact={compact} defaultOpen={tapped} />;
+  if (View) return <View url={target.url} title={target.title} text={target.text} onShared={target.onShared} compact={compact} defaultOpen={tapped} />;
   return (
     <button
       type="button"

@@ -95,6 +95,8 @@ export interface ComicReaderViewProps {
   initialPage?: number | 'cover';
   /** Settled on a page (1-based; 0 = cover). */
   onPageChange?(n: number): void;
+  onCopyPageLink?(n: number): Promise<boolean>;
+  onPublicShare?(channel: 'native' | 'copy'): void;
   /** Write ?p= (and keep ?lang=) with history.replaceState as the reader settles (public reader only). */
   syncUrl?: boolean;
   /** A shared reader can sync the page while keeping its language choice local to the visit. */
@@ -327,6 +329,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   autoFocus = true,
   initialPage,
   onPageChange,
+  onCopyPageLink,
+  onPublicShare,
   syncUrl = false,
   syncLanguageInUrl = true,
   language,
@@ -1363,6 +1367,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           syncUrl={syncUrl}
           syncLanguageInUrl={syncLanguageInUrl}
           onImageError={onImageError}
+          onCopyPageLink={onCopyPageLink}
+          onPublicShare={onPublicShare}
           onPageChange={(n) => {
             immersivePage.current = n;
             onPageChangeRef.current?.(n);

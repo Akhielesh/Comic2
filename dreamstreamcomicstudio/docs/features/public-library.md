@@ -36,6 +36,14 @@ schema change, not part of this release).
 Nothing about them changes, and a direct link (`/?view=read&id=…`, `getPublicProject`) still opens one. Setting the
 constant to true brings back the old rule (public and not held) for every list at once.
 
+## Discover and reading progress
+
+Discover is the default Library order. It recommends up to three comics from the first 48 eligible results. Likes and completed or unfinished reads can match another story through words shared by its published title and synopsis. A recommendation explains which comic prompted it. The remaining entries keep their catalog order. Without a match, Discover mixes popular and newer publications, preferring different creators and rating categories when available. The standard Trending and Recent orders, title search and Kids-friendly filter are also available.
+
+Actual page changes in the public share reader save the slug, last displayed page, final page and time. Guest activity stays in the current browser tab. Member progress stays with that account on the device, while account likes already stored in the cloud can inform another device. The Library retains up to 24 positions for 30 days and offers **Clear reading history**. Owner previews, embeds and unlisted links do not write new discovery history. The reader’s earlier bookmark storage is never imported.
+
+An unfinished comic can open directly at its saved page. An older read outside the first page and recently liked comics are looked up through the public listing rules before use. A former title, slug, deleted comic or moderation hold cannot supply a card or an explanation from local storage. A failed history lookup still leaves the main catalog usable. No recommendation RPC or migration is required.
+
 ## A small Library
 
 With `LIBRARY_TOOLS_MIN` (6) comics or fewer the Library shows the comics and nothing else: no search box, sort,

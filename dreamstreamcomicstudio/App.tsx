@@ -1452,6 +1452,7 @@ const App: React.FC = () => {
                   source={{ kind: 'slug', slug: publicComicRoute.slug, embed: publicComicRoute.embed }}
                   isOwner={publicComicIsOwner}
                   identityReady={publicComicIdentityReady}
+                  libraryReaderId={user?.id ?? null}
                 />
               </Suspense>
             </div>

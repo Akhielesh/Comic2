@@ -226,7 +226,7 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
 
     async stats(id, days) {
       if (!id) return [];
-      const since = dayIso(now() - Math.max(1, days) * 86_400_000);
+      const since = dayIso(now() - (Math.max(1, days) - 1) * 86_400_000);
       const { data, error } = await admin()
         .from('comic_publication_stats')
         .select('day, views, uniques, completes, by_channel')
@@ -235,7 +235,7 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
         .order('day', { ascending: true });
       if (error) {
         logger.warn('comic_publication_stats_failed', { code: pgCode(error) });
-        return [];
+        throw new Error('Reader activity is unavailable');
       }
       return (Array.isArray(data) ? data : []).map((r) => statsFromDb(r as Record<string, unknown>));
     },

@@ -43,6 +43,25 @@ const renderCard = (card: BreakdownCardProps['card'], studio: Studio = makeFakeS
   return { ...utils, studio };
 };
 
+it('finds a late page by a prop or dialogue in the page plan without opening an editor or spending', async () => {
+  const doc = makeSampleDoc();
+  const template = doc.pages[0];
+  doc.pages = Array.from({length:16}, (_, i) => ({
+    ...template, id:`story_${i+1}`, n:i+1, summary:`Night train beat ${i+1}`,
+    continuity: i === 13 ? { props:{'station clock':'stopped'} } : undefined
+  }));
+  const studio = makeFakeStudio({doc});
+  renderCard(bd(), studio);
+  fireEvent.click(screen.getByText('Find a page in this story'));
+  fireEvent.change(await screen.findByRole('searchbox', {name:'Search the page plan'}), {target:{value:'station stopped'}});
+  const entries = screen.getByRole('list', {name:'Matching story pages'});
+  expect(within(entries).getAllByRole('button')).toHaveLength(1);
+  fireEvent.click(within(entries).getByRole('button', {name:/Page 14/}));
+  expect(document.activeElement?.textContent).toContain('Page 14');
+  expect(studio.act).not.toHaveBeenCalled();
+  expect(studio.patch).not.toHaveBeenCalled();
+});
+
 /** Sample doc with every page drawn and current. */
 const drawnDoc = (): ComicDoc => {
   const doc = makeSampleDoc();

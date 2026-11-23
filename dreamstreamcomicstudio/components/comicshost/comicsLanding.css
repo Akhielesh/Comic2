@@ -102,10 +102,28 @@
 .comics-shelf[data-edition='a-small-giant'] { --press-tint: color-mix(in srgb, var(--ds-hue-4) 18%, var(--ds-canvas)); }
 .comics-shelf-page .comics-sample-art img { position: absolute; inset: 0; }
 .comics-shelf .comics-sample-viewport:focus-visible .comics-sample-art { outline: 2px solid var(--ds-focus); outline-offset: -3px; }
-.comics-expanded-page { max-width: min(100%, 1200px); padding: 18px; }
-.comics-expanded-page h2 { padding-right: 44px; }
-.comics-expanded-page .comics-sample-art { display: block; aspect-ratio: auto; border: 0; padding: 0; }
-.comics-expanded-page .comics-sample-art img { width: 100%; height: auto; }
+.comics-expanded-page {
+  max-width: min(100%, 1040px);
+  padding: 0;
+  gap: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.comics-reader-mast { padding: 14px 64px 14px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 16px; border-bottom: 1px solid var(--ds-hairline); }
+.comics-reader-mast h2 { margin: 0; font-family: var(--ds-font-display); font-size: clamp(21px, 2.4vw, 34px); line-height: 1.15; letter-spacing: -.04em; }
+.comics-reader-tools { display: flex; align-items: center; gap: 4px; }
+.comics-reader-tools > span { margin-inline-end: 8px; font-size: var(--ds-text-sm); font-variant-numeric: tabular-nums; }
+.comics-reader-tools > button { min-width: 44px; min-height: 44px; }
+.comics-reader-leaf { min-height: 0; overflow-y: auto; padding: clamp(8px, 1.6vw, 20px); touch-action: pan-y pinch-zoom; }
+.comics-reader-leaf:focus-visible { outline: 2px solid var(--ds-focus); outline-offset: -3px; }
+.comics-expanded-page .comics-sample-art { display: block; aspect-ratio: auto; border: 1px solid var(--ds-hairline); padding: 0; }
+.comics-expanded-page .comics-sample-art img { display: block; width: 100%; height: auto; }
+.comics-reader-leaf > p { margin-top: 10px; }
+@media (max-width: 480px) { .comics-reader-mast { padding: 12px 56px 8px 12px; } }
+@media (prefers-reduced-motion: no-preference) {
+  .comics-reader-leaf > div { animation: comics-leaf-arrive var(--ds-motion-fast) var(--ds-ease); }
+  @keyframes comics-leaf-arrive { from { transform: translateY(3px); } to { transform: none; } }
+}
 @media (max-width: 480px) {
   .comics-hero-press .comics-sample-caption { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
   .comics-hero-press .comics-sample-count { grid-column: 1; grid-row: 2; font-size: 12px; }
@@ -174,15 +192,7 @@
   background: transparent;
 }
 
-.comics-invitation {
-  margin: clamp(18px, 2vw, 30px) 0 0;
-  font-size: clamp(13px, 1.2vw, 17px);
-  line-height: 1.5;
-  color: var(--ds-muted);
-}
 
-.comics-invitation-link { min-height: 44px; background-image: none; }
-.comics-invitation-line { display: block; }
 
 .comics-sample {
   min-width: 0;
@@ -305,7 +315,6 @@
   .comics-hero { gap: 24px; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
   .comics-hero-cta { min-height: 44px; padding-inline: 16px; font-size: 14px; }
   .comics-hero-actions { gap: 10px; margin-top: 24px; }
-  .comics-invitation { margin-top: 16px; font-size: 13px; }
   .comics-sample-caption { gap: 10px; padding-inline: 12px; }
   .comics-sample-controls { gap: 5px; }
   .comics-sample-controls > button { width: 36px; height: 36px; }
@@ -318,7 +327,6 @@
   .comics-lead { max-width: 32rem; margin-top: 16px; font-size: 17px; }
   .comics-hero-actions { margin-top: 22px; gap: 10px; }
   .comics-hero-cta { flex: 1 1 auto; min-height: 46px; padding-inline: 16px; font-size: 15px; }
-  .comics-invitation { margin-top: 14px; font-size: 13px; }
   .comics-sample-name h2 { font-size: 14px; }
   .comics-sample-controls > button { width: 44px; height: 44px; }
   .comics-looks { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 12px; }
@@ -343,7 +351,6 @@
   .comics-lead { margin-top: 14px; font-size: 17px; }
   .comics-hero-actions { margin-top: 20px; }
   .comics-hero-cta { min-height: 44px; font-size: 14px; padding-inline: 18px; }
-  .comics-invitation { margin-top: 12px; font-size: 12px; }
   .comics-style-dialog { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: 12px 20px; }
   .comics-style-dialog-heading { grid-column: 2; grid-row: 1; padding-right: 24px; }
   .comics-style-dialog .comics-sample { grid-column: 1; grid-row: 1 / span 2; max-width: min(100%, calc((100dvh - 157px) * 1.4)); }

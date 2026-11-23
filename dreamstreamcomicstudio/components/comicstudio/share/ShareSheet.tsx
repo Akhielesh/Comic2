@@ -25,6 +25,8 @@ import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
+import { ReleaseKit } from './ReleaseKit';
+import { withVia } from './shareTargets';
 import { comicTitle, editionOnLinkOn, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, languageEndonyms, languageNames, LIBRARY_HREF, pageIdsFor, readyOffLink, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
 import { ChangesSincePublishLink } from '../history/ChangesSincePublishLink';
 
@@ -253,6 +255,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   if (!open || !doc || typeof document === 'undefined') return null;
 
   const title = comicTitle(doc);
+  const publishedTitle = view?.card?.title || 'Read this comic';
+  const publishedDescription = ratedDescription(view?.card?.description || '', view?.rating);
   const live = !!view?.slug && view.status === 'live';
   // Until the owner view arrives (or when it could not be fetched), the doc's own mirror says whether the comic is
   // published, as the header's Share button reads it: a published comic never shows as "Private" in between. Once the
@@ -410,15 +414,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       )
     );
 
-  const fallback = fallbackUrl && (
+  const fallback = fallbackUrl && fallbackUrl.split('?')[0] === url && (
     <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3">
       <p className="m-0 mb-2 text-[13px] text-[var(--ds-muted)]">Share it with:</p>
       <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
         {INTENT_CHANNELS.map((ch) => (
           <li key={ch}>
             <a
-              href={intentUrl(ch, shareLinkFor(view, { via: ch }) || fallbackUrl, title)}
-              target="_blank"
+              href={intentUrl(ch, withVia(fallbackUrl, ch), publishedTitle)}
+              target={ch === 'email' ? undefined : '_blank'}
               rel="noopener noreferrer"
               className="inline-flex min-h-[44px] items-center rounded-full border border-[var(--ds-hairline)] px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
             >
@@ -437,7 +441,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           <QrIcon className="h-4 w-4" aria-hidden /> Show QR code
         </button>
       ) : (
-        <QrCode value={shareLinkFor(view, { via: 'qr' }) || url} title={title} size={layout === 'bottom' ? 168 : 176} downloadable />
+        <QrCode value={shareLinkFor(view, { via: 'qr' }) || url} title={publishedTitle} size={layout === 'bottom' ? 168 : 176} downloadable />
       )}
       <p className="m-0 mt-1 text-center text-[12px] text-[var(--ds-muted)]">Let someone scan it from your screen.</p>
     </div>
@@ -447,8 +451,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // fallback), never the live doc's text — edits stay private until Update (functions/_shared/shareHead.ts).
   const preview = live && view && (
     <LinkPreviewMock
-      title={view.card?.title || title}
-      description={ratedDescription(view.card ? view.card.description : doc.brief?.logline || doc.cover?.tagline || '', view.rating) || undefined}
+      title={publishedTitle}
+      description={publishedDescription || undefined}
       imageUrl={view.ogImageUrl || view.card?.coverUrl}
       url={url}
     />
@@ -458,7 +462,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // The wide dialog keeps its QR in the left column; every other layout shows it here, ahead of the choices.
   const linkFirst = live && view && !publishAs && (
     <>
-      <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />
+      <ShareLinkCard view={view} title={publishedTitle} description={publishedDescription} onFallback={setFallbackUrl} pageCount={view.card?.pageCount} />
       {fallback}
       {layout !== 'wide' && qr}
       {current === 'public' && (
@@ -581,7 +585,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             </section>
           )}
           {!live && !suspended && !mirror && (
-            <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.</p>
+            <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. {view?.readiness && `${view.readiness.drawnPages} of ${view.readiness.plannedPages} planned pages have artwork. `}Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.</p>
           )}
           {checking && (
             <p role="status" tabIndex={-1} data-check-status className="m-0 text-[13px] text-[var(--ds-muted)] focus:outline-none">
@@ -594,7 +598,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
               {error}
             </p>
           )}
-          {live && view?.allowEmbed && <EmbedSnippet url={url} title={title} aspect={doc.format?.pageAspect} />}
+          {live && view?.allowEmbed && <EmbedSnippet url={url} title={publishedTitle} aspect={doc.format?.pageAspect} />}
+          {live && view && <ReleaseKit key={view.slug} view={view} />}
           {live && (
             <section aria-label="Reader stats" className="min-w-0">
               <div className={cx('mb-1.5', OVERLINE)}>Readers</div>
