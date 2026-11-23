@@ -5,7 +5,7 @@ import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
 import { DirectorDraftControl } from './DirectorDraftControl';
 
 const empty = () => createEmptyDoc('project-17', 'The Moon Ferry', 10);
-const open = () => fireEvent.click(screen.getByRole('button', { name: /Drafting mode:/ }));
+const open = () => fireEvent.click(screen.getByRole('button', { name: /^Drafting ·\s*(Hands-on|Director-led)$/ }));
 
 describe('project Director drafting control', () => {
   it('reuses the composed idea, charges only on the explicit action, and sends the displayed revision', async () => {

@@ -70,7 +70,7 @@ export function DirectorDraftControl({ studio, readComposerDraft }: Props) {
   return (
     <div className="shrink-0 border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-canvas)]">
       <div className="mx-auto flex min-h-10 w-full max-w-3xl flex-wrap items-center justify-between gap-x-2 px-3 sm:px-5">
-        <button type="button" ref={anchor} aria-label={`Drafting mode: ${mode}`} aria-haspopup="dialog" aria-expanded={open}
+        <button type="button" ref={anchor} aria-haspopup="dialog" aria-expanded={open}
           onClick={openControl}
           className={`flex min-h-10 items-center gap-2 rounded-md px-1.5 text-[13px] text-[var(--ds-ink)] coarse:min-h-[44px] ${FOCUS_RING}`}>
           <Feather size={15} aria-hidden /><span><span className="text-[var(--ds-muted)]">Drafting · </span>{mode}</span><ChevronDown size={13} aria-hidden />
