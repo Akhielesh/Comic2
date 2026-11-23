@@ -212,7 +212,7 @@ begin
     select null::uuid, e->>'slug',
            jsonb_build_object(
              'slug', e->>'slug', 'title', e->>'title', 'description', e->>'description',
-             'kind', 'comic', 'pageCount', e->'pageCount', 'aspect', e->>'aspectRatio',
+             'kind', coalesce(e->>'kind','comic'), 'pageCount', e->'pageCount', 'aspect', e->>'aspectRatio',
              'cover', jsonb_build_object('w480', e->>'coverPath','w1080', e->>'coverPath'),
              'rating', e->>'rating', 'languages', jsonb_build_array(e->>'language'),
              'publishedAt', e->'updatedAt', 'firstPublishedAt', e->'publishedAt', 'likes', 0,
@@ -228,7 +228,7 @@ begin
             or e->>'description' ilike v_pattern escape '\' or e->>'creator' ilike v_pattern escape '\')
        and (p_rating is null or (p_rating='kids' and e->>'rating' in ('G','PG')) or e->>'rating'=p_rating)
        and (v_lang is null or lower(e->>'language')=v_lang)
-       and (p_kind is null or p_kind='comic')
+       and (p_kind is null or p_kind=coalesce(e->>'kind','comic'))
        and (v_min_pages is null or (e->>'pageCount')::integer between v_min_pages and v_max_pages)
        -- Editorial books have no member read counters or staff ranks.
        and (not v_week or p_sort='most_read' or
