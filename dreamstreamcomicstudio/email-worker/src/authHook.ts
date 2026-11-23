@@ -18,6 +18,7 @@ import {
   type EmailParams,
   type EmailTemplateName
 } from '../../shared/email';
+import { COMICS_ORIGIN, isComicsHost } from '../../services/productHost';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamHost } from '../../shared/streamHost';
 
 // ── Standard Webhooks signature ────────────────────────────────────────────────
@@ -202,11 +203,15 @@ export const STREAM_STUDIO_NAME = 'Stream Studio';
 
 /** True when the (GoTrue-validated) redirect lands in the live app: /live, /live/…, /live.html,
  *  or anywhere on Stream Studio's own host (stream.dreamstreamstudio.ai). */
-export const isLiveRedirect = (redirectTo: string | undefined): boolean => {
+export const isLiveRedirect = (redirectTo: string | undefined, appUrl = DEFAULT_BRAND.appUrl): boolean => {
   if (!redirectTo) return false;
   try {
     const url = new URL(redirectTo);
-    return isStreamHost(url.hostname) || /^\/live(?:\.html)?(?:\/|$)/.test(url.pathname);
+    if (url.username || url.password) return false;
+    if (url.protocol === 'https:' && !url.port && isStreamHost(url.hostname)) return true;
+    const localDev = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    const onMain = url.origin === new URL(appUrl).origin;
+    return (localDev || onMain) && /^\/live(?:\.html)?(?:\/|$)/.test(url.pathname);
   } catch {
     return false;
   }
@@ -219,16 +224,27 @@ export const streamStudioBrand = (appUrl?: string, streamHostOn: boolean = STREA
   appUrl: streamHostOn ? STREAM_ORIGIN : `${(appUrl || DEFAULT_BRAND.appUrl).replace(/\/+$/, '')}/live`
 });
 
-/** Brand overrides for this send: Stream Studio for live-app flows, the env brand otherwise. */
-export const brandForRedirect = (redirectTo: string | undefined, appUrl?: string): Partial<BrandConfig> =>
-  isLiveRedirect(redirectTo) ? streamStudioBrand(appUrl) : {};
+const comicStudioBrand: Partial<BrandConfig> = { productName: 'Comic Studio', appUrl: COMICS_ORIGIN };
+
+/** A comic auth event uses the canonical product home, including when the callback used its alias. */
+export const brandForRedirect = (redirectTo: string | undefined, appUrl?: string): Partial<BrandConfig> => {
+  if (!redirectTo) return {};
+  try {
+    const target = new URL(redirectTo);
+    if (target.protocol === 'https:' && !target.port && !target.username && !target.password && isComicsHost(target.hostname)) {
+      return comicStudioBrand;
+    }
+  } catch {
+    return {};
+  }
+  return isLiveRedirect(redirectTo, appUrl) ? streamStudioBrand(appUrl) : {};
+};
 
 /**
- * Brand a backend `/send` may ask for by name (`body.brand`). Only 'stream-studio' exists —
- * the backend's own auth emails for the live app; anything else keeps the env brand.
+ * Only the two named product brands are accepted from signed backend sends.
  */
 export const brandForSend = (brand: unknown, appUrl?: string): Partial<BrandConfig> =>
-  brand === 'stream-studio' ? streamStudioBrand(appUrl) : {};
+  brand === 'comic-studio' ? comicStudioBrand : brand === 'stream-studio' ? streamStudioBrand(appUrl) : {};
 
 /**
  * `{base}/auth/v1/verify?token=<token_hash>&type=<type>&redirect_to=<redirect>` — the link

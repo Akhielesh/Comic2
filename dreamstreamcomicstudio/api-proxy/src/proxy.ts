@@ -152,7 +152,11 @@ export default {
     // AI agents never reach the backend: they get a pointer to the check-in instead.
     const agent = detectAgent(req, 'api');
     if (agent) {
-      ctx.waitUntil(logVisit(env.AGENT_DB, req, agent, crypto.randomUUID(), newCanary(), url.pathname));
+      // A receipt URL is private even when an automated client follows it. Keep the gate
+      // response but omit the IP, headers and visit record for these message-specific paths.
+      if (!/^\/+api\/+email\/+(?:ack|o)\//i.test(url.pathname)) {
+        ctx.waitUntil(logVisit(env.AGENT_DB, req, agent, crypto.randomUUID(), newCanary(), url.pathname));
+      }
       return json(
         { error: 'Automated AI agents may not use the DreamStream API.', checkin: `${url.origin}${GATE_PATH}`, questions: `${url.origin}${CHECKIN_PATH}` },
         403,

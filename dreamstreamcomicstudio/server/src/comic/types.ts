@@ -270,7 +270,7 @@ export interface DocStore {
   /** Create the projects row + comic_docs row. */
   create(args: { projectId: string; userId: string; doc: ComicDoc }): Promise<void>;
   /** Persist the doc (and mirror the listing summary onto the projects row). */
-  save(args: { projectId: string; userId: string; doc: ComicDoc; summary: ProjectRowSummary }): Promise<void>;
+  save(args: { projectId: string; userId: string; doc: ComicDoc; summary: ProjectRowSummary; expectedRev?: number }): Promise<void>;
   /** Public (published) read; null unless the project is public and not force-private. */
   loadPublic(projectId: string): Promise<ComicDoc | null>;
   /** Legacy ComicState for "open in the new studio" import (owner only). */

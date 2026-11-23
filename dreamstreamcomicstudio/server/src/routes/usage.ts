@@ -2,9 +2,12 @@
 // counts, error rates, budgets and health flags. Counts only: no API keys, no
 // queries, no user data ever leave this endpoint.
 
+import { accountProviderUsage } from '../services/accountProviderUsage.js';
 import { Router } from 'express';
 import { getProviderUsageSnapshot } from '../lib/providerUsage.js';
 import { isSharedKeyCapped, sharedKeyCappedForMs } from '../ai/providerCircuit.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
+import { allowedProviderFilter } from '../middleware/keys.js';
 import { requireAuth } from '../middleware/auth.js';
 import { accountKeyProviders } from '../middleware/accountKeys.js';
 import {
@@ -20,7 +23,15 @@ import {
 
 export const usageRouter = Router();
 
-usageRouter.get('/providers', (_req, res) => {
+usageRouter.get('/account-providers', requireAuth, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await accountProviderUsage(req.user!.id, new Date(), allowedProviderFilter(req)));
+  } catch (error) { next(error); }
+});
+
+usageRouter.get('/providers', requireAuth, requireAdmin, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     generatedAt: new Date().toISOString(),
     providers: getProviderUsageSnapshot(),
@@ -75,7 +86,7 @@ export const toAllowanceResponse = (status: AllowanceStatus, prefs: BillingPrefs
 
 // Per-user usage left — PERCENT ONLY plus friendly units ("about 150 standard comic pages
 // left"). The budget and spend in dollars are server-only and never appear here. This router
-// mounts before the global requireAuth (it serves the public /providers snapshot), so auth is
+// mounts before the global requireAuth (each report has its own access control), so auth is
 // enforced per-route. Read on demand (mount / focus / after a render) — never polled.
 usageRouter.get('/allowance', requireAuth, async (req, res, next) => {
   try {

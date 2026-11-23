@@ -3,7 +3,7 @@
 //
 // Where a link may point is the security-critical part: whoever opens a recovery or magic
 // link is signed in as that account. So the origin comes from a STRICT allowlist —
-// APP_PUBLIC_URL's origin plus the exact origins in AUTH_LINK_ORIGINS — and the request's
+// APP_PUBLIC_URL's origin, the production comic host on the production suite, and exact AUTH_LINK_ORIGINS — and the request's
 // Origin header is only used when it matches one of those exactly. Never isAllowedOrigin():
 // its `*.dreamstreamstudio.ai` wildcard includes user-controlled Studio preview hosts.
 //
@@ -17,6 +17,7 @@
 // new-password screen lives. So the full set of origins a link can name is APP_PUBLIC_URL's,
 // AUTH_LINK_ORIGINS, and STREAM_ORIGIN for Stream Studio links only.
 
+import { COMICS_ORIGIN, MAIN_ORIGIN } from '../../../services/productHost.js';
 import { APP_PUBLIC_URL, AUTH_LINK_ORIGINS } from '../config.js';
 import {
   STREAM_HOST_ON,
@@ -73,7 +74,9 @@ const originOf = (raw: string): string | null => {
 
 /** The allowlist: APP_PUBLIC_URL's origin first (the default), then the extra exact origins. */
 export const buildLinkOriginAllowlist = (appPublicUrl: string, extraOrigins: readonly string[] = []): string[] => {
-  const all = [originOf(appPublicUrl), ...extraOrigins.map(originOf)].filter((o): o is string => Boolean(o));
+  const primary = originOf(appPublicUrl);
+  const comicOrigins = primary === MAIN_ORIGIN ? [COMICS_ORIGIN] : [];
+  const all = [primary, ...comicOrigins, ...extraOrigins.map(originOf)].filter((o): o is string => Boolean(o));
   return [...new Set(all)];
 };
 

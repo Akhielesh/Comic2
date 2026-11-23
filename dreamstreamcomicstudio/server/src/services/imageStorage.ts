@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import sharp from 'sharp';
 import type { ImageResolution } from '../../../types.js';
-import { STORAGE_BUCKET } from '../config.js';
+import { COMIC_PRIVATE_BUCKET, STORAGE_BUCKET } from '../config.js';
 import { getSupabaseAdmin } from './supabase.js';
 
 type PersistGeneratedImageArgs = {
@@ -11,6 +11,7 @@ type PersistGeneratedImageArgs = {
   source: 'gemini' | 'flux' | 'openrouter' | 'nvidia' | 'ideogram' | 'upload' | 'migration';
   resolution?: ImageResolution | string;
   cropToRatio?: string;
+  standalone?: boolean;
   bucket?: string;
 };
 
@@ -104,7 +105,8 @@ export const persistGeneratedImage = async ({
   source,
   resolution,
   cropToRatio,
-  bucket = STORAGE_BUCKET
+  standalone = false,
+  bucket = standalone ? COMIC_PRIVATE_BUCKET : STORAGE_BUCKET
 }: PersistGeneratedImageArgs): Promise<PersistGeneratedImageResult> => {
   const start = Date.now();
   const supabaseAdmin = getSupabaseAdmin();
@@ -117,7 +119,7 @@ export const persistGeneratedImage = async ({
     .toBuffer({ resolveWithObject: true });
 
   const imageId = crypto.randomUUID();
-  const path = buildStoragePath(userId, imageId, projectId);
+  const path = standalone ? `u/${userId}/standalone/${imageId}.webp` : buildStoragePath(userId, imageId, projectId);
   const mimeType = 'image/webp';
   const uploadBuffer = webp.data;
 
@@ -152,14 +154,21 @@ export const persistGeneratedImage = async ({
     throw metadataError;
   }
 
-  const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(path);
+  let imageUrl: string;
+  if (standalone) {
+    const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUrl(path, 3600);
+    if (error || !data?.signedUrl) throw new Error('Image saved. Reload your image history to open it.');
+    imageUrl = data.signedUrl;
+  } else {
+    imageUrl = supabaseAdmin.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  }
   const originalBytes = rawBuffer.byteLength;
   const storedBytes = uploadBuffer.byteLength;
   const compressionRatio = originalBytes > 0 ? storedBytes / originalBytes : 1;
 
   return {
     imageId: path,
-    imageUrl: data.publicUrl,
+    imageUrl,
     mimeType,
     saveMs: Date.now() - start,
     originalBytes,

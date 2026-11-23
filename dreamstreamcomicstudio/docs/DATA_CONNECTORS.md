@@ -74,7 +74,7 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
 - **Open:** budgets are shared by everyone. A per-anonymous-caller share cap (signed-out
   visitors may spend at most a slice of a keyed provider's day) needs a caller identity the
   helper does not have yet — see `docs/infrastructure/SECURITY_FINDINGS.md` (abuse-ops-6).
-- Live view: Settings → Tools → "Provider usage today", or `GET /api/usage/providers`.
+- Administrators see platform usage in Settings → Tools and through `GET /api/usage/providers`. Signed-in members can read their own current-month activity through `GET /api/usage/account-providers`.
 - **Account-wise cloud log**: per-(account, provider, day) call/error/blocked deltas
   flush every ~60 s to Supabase `provider_usage_log` (append-only; daily totals in
   the `provider_usage_daily` view; RLS server-only). Account attribution comes from

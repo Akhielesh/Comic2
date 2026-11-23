@@ -20,6 +20,7 @@ import {
   CAST_KINDS,
   collectAssetPaths,
   createEmptyDoc,
+  DIRECTOR_DRAFT_IDEA_LIMIT,
   displayAssetPaths,
   LAYER_ID_RE,
   newId,
@@ -63,10 +64,11 @@ import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
 import { createStudioContext, signAssetPaths, type OrchestratorContext, type StudioContextDeps } from '../comic/context.js';
 import { notAvailableError } from '../comic/extensions.js';
 import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
+import { delegatedIdea, delegatesComic, runDirectorDraft } from '../comic/directorDraft.js';
 import { recordOptionAnswer, runDirectorTurn, type OptionAnswerRef } from '../comic/director.js';
 import { settledCardsOn } from '../../../shared/comic/settle.js';
 import { canFastPath, dialogueFastIntent, parseIntent, routeIntent } from '../comic/intents.js';
-import { ASPECT_RATIOS, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
+import { ASPECT_RATIOS, offerDirectorDraftBook, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { loadPublicByProjectId } from '../comic/publication/index.js';
 import { applyAttachmentTargets, takeInbox } from '../comic/refs/index.js';
@@ -83,6 +85,8 @@ import { composeTurnReply } from '../comic/replies.js';
 import {
   LONG_MESSAGE_CHARS,
   getStudioSession,
+  DIRECTOR_DRAFT_LEASE_MS,
+  listRenderTargets,
   peekStudioSession,
   scheduleVariantBackfill,
   type SteerNote,
@@ -100,6 +104,7 @@ import { legacyVersionImport, notifyImported, parseFromVersionId } from './comic
 
 // ── Limits ───────────────────────────────────────────────────────────────────
 
+const activeDirectorDrafts = new WeakSet<StudioSession>();
 export const MAX_MESSAGE_CHARS = 60_000;
 /** Legacy data-URL items per message (old tabs; images + text files). */
 export const MAX_ATTACHMENTS = 6;
@@ -254,6 +259,7 @@ export interface ComicRouterDeps {
   safety?: Partial<RouteSafetyDeps>;
   /** Free intent router (default: intents.routeIntent; no model call). */
   routeIntent?: typeof routeIntent;
+  draftExecutor?: typeof runDirectorDraft;
   heartbeatMs?: number;
   /**
    * The user's usage snapshot for caps.usage (percentages only — never dollars). Default: the cached
@@ -533,6 +539,23 @@ export function parseOptionAnswer(raw: unknown): OptionAnswerRef | undefined {
   return { id: raw.id, ...(choiceIds.length ? { choiceIds } : {}), ...(custom ? { custom } : {}) };
 }
 
+function draftIdea(value: unknown): string {
+  const idea = typeof value === 'string' ? value.trim() : '';
+  if (!idea || idea.length > DIRECTOR_DRAFT_IDEA_LIMIT || idea.includes('\u0000')) {
+    throw new StudioError('BAD_REQUEST', 'Enter an idea or a script of up to 200,000 characters.', { status: 400 });
+  }
+  return idea;
+}
+
+function ensureDraftCanStart(doc: ComicDoc, expectedRev: number): void {
+  if (doc.rev !== expectedRev) throw new StudioError('CONFLICT', 'This comic changed. Reopen it before starting a draft.', { status: 409 });
+  if (doc.directorDraft?.status === 'planning' || doc.directorDraft?.status === 'review' ||
+      doc.pages.length || doc.planStatus !== 'none' || doc.gate?.status === 'open' ||
+      listRenderTargets(doc).some(({ render }) => render.status === 'queued' || render.status === 'rendering')) {
+    throw new StudioError('CONFLICT', 'Finish or review the existing work before starting a director draft.', { status: 409 });
+  }
+}
+
 /** Validate the body of POST /stream. Throws BAD_REQUEST with a user-safe message. */
 export function parseStreamRequest(body: unknown): StreamRequest {
   const bad = (message: string) => new StudioError('BAD_REQUEST', message, { status: 400 });
@@ -590,6 +613,12 @@ export function parseStreamRequest(body: unknown): StreamRequest {
     if (!isObject(action) || typeof action.type !== 'string') throw bad('Unknown action.');
     // History actions exist only while Comic History is on; off, they are as unknown as before it shipped.
     if (!STREAM_ACTION_TYPES.has(action.type) || historyActionOff(action.type)) throw bad(`Unknown action "${action.type.slice(0, 40)}".`);
+    if (action.type === 'start_director_draft') {
+      if (typeof action.expectedRev !== 'number' || !Number.isSafeInteger(action.expectedRev) || action.expectedRev < 0) {
+        throw bad('Reopen this comic before starting a director draft.');
+      }
+      return { kind: 'action', action: { type: action.type, idea: draftIdea(action.idea), expectedRev: action.expectedRev } };
+    }
     const tz = normalizeTimeZone(body.tz);
     return { kind: 'action', action: action as unknown as StudioAction, ...(tz ? { tz } : {}) };
   }
@@ -734,7 +763,7 @@ export const isCostlyRequest = (request: StreamRequest): boolean => {
   if (request.kind === 'message') return true;
   const action = request.action;
   if (isSpendAction(action)) return true;
-  if (action.type === 'approve_gate' || action.type === 'plan_pages') return true;
+  if (action.type === 'approve_gate' || action.type === 'plan_pages' || action.type === 'start_director_draft') return true;
   return action.type === 'relayout_balloons' && !!action.useVision;
 };
 
@@ -742,7 +771,7 @@ export const isCostlyRequest = (request: StreamRequest): boolean => {
 export const restrictedRefusal = (request: StreamRequest): string | null => {
   if (request.kind === 'message') return hasLegacyImageUpload(request) ? RESTRICTED_UPLOAD_MESSAGE : null;
   const action = request.action;
-  if (isSpendAction(action) || action.type === 'approve_gate') return RESTRICTED_SPEND_MESSAGE;
+  if (isSpendAction(action) || action.type === 'approve_gate' || action.type === 'start_director_draft') return RESTRICTED_SPEND_MESSAGE;
   // The legacy paid re-check alias (it becomes a recheck_page spend) is a spend too.
   if (action.type === 'relayout_balloons' && action.useVision) return RESTRICTED_SPEND_MESSAGE;
   // regenerate_link re-publishes under a new slug (POST /publication/regenerate is refused too).
@@ -775,6 +804,7 @@ const MAX_SCREENED_DIRECTIONS = 8;
 export function actionInputText(doc: ComicDoc, action: StudioAction): string {
   if (!isObject(action)) return '';
   const a = action as Record<string, unknown>;
+  if (action.type === 'start_director_draft') return action.idea;
   if (a.type === 'edit_page') return flatText(a.instruction, ACTION_TEXT_LIMITS.instruction);
   if (a.type === 'plan_pages') return flatText(a.instructions, ACTION_TEXT_LIMITS.instructions);
   if (a.type === 'render_style_options') {
@@ -1171,8 +1201,16 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     owned(async (req, res) => {
       const userId = requireUser(req);
       const body = isObject(req.body) ? req.body : {};
-      const projectId = randomUUID();
+      const idea = body.directorIdea === undefined ? undefined : draftIdea(body.directorIdea);
+      if (idea && body.importFromProjectId) throw new StudioError('BAD_REQUEST', 'Import the existing comic before choosing a draft.', { status: 400 });
+      if (body.creationId !== undefined && (!idea || typeof body.creationId !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.creationId))) {
+        throw new StudioError('BAD_REQUEST', 'Invalid creation request. Open the new comic form again.', { status: 400 });
+      }
+      const creationId = typeof body.creationId === 'string' ? body.creationId.toLowerCase() : undefined;
+      const projectId = creationId ?? randomUUID();
       let doc = createEmptyDoc(projectId, str(body.title, 200) || 'Untitled comic');
+      if (idea) doc.directorDraft = { status: 'ready', idea };
       /** Private copies made for an import: removed again if the comic is never created. */
       let importedPaths: string[] = [];
       const importFrom = typeof body.importFromProjectId === 'string' ? body.importFromProjectId.trim() : '';
@@ -1219,7 +1257,14 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const { byok } = keysFor(req);
       const created = store()
         .create({ projectId, userId, doc })
-        .catch((err: unknown) => {
+        .catch(async (err: unknown) => {
+          if (creationId && err instanceof StudioError && err.status === 409) {
+            const previous = await store().load(creationId, userId);
+            if (previous?.directorDraft?.idea === idea) {
+              doc = previous;
+              return;
+            }
+          }
           if (importedPaths.length) void assets().remove(importedPaths).catch(() => undefined);
           throw err;
         });
@@ -1408,7 +1453,11 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     // The BUSY check and the turn reservation are one synchronous step (G19): a second message that arrives while this
     // one awaits its cooldown lookup, caps or upload is BUSY, instead of passing the check and waiting unseen on the
     // turn lock. The reservation is released once this message's turn is over, or on any refusal or failure before.
-    if (request.kind === 'message') {
+    const startsDraft = request.kind === 'action' && request.action.type === 'start_director_draft';
+    if (request.kind === 'action' && request.action.type === 'start_director_draft') {
+      ensureDraftCanStart(session.doc, request.action.expectedRev);
+    }
+    if (request.kind === 'message' || startsDraft) {
       const reservation = session.reserveTurn();
       if (reservation) turn.release = reservation;
       else refusal = { code: 'BUSY', message: BUSY_MESSAGE };
@@ -1416,7 +1465,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     const releaseTurn = () => turn.release();
     // From here to the end of the request (every path closes it): a message that will run is a
     // director turn in flight for Stop, under its own controller (see StopScope).
-    const stops = openStopScope(session, request.kind === 'message' && !refusal);
+    const stops = openStopScope(session, (request.kind === 'message' || startsDraft) && !refusal);
     const sessionSignal = session.abort.signal;
     if (!refusal && isCostlyRequest(request)) {
       const cooldown = await safety.cooldownFor(userId).catch((err) => {
@@ -1518,7 +1567,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       try {
         if (request.kind === 'message') {
           try {
-            await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape));
+            await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape, session, () => turnAbort.abort()));
           } finally {
             // The turn is over (its reply is in): from now on Stop is "Stop drawing" for its renders, and the
             // next message may run (the turn lock is free; the reservation goes with it).
@@ -1527,6 +1576,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           }
         } else {
           let action = request.action;
+          let screenNote: string | undefined;
           // Free text a user typed into an action (edit instruction, plan notes, style directions) goes
           // through the SAME screen as a chat message — prefilter, capped classifier, strikes, cooldown,
           // restriction — before anything is gated, queued or spent (S15). Director-issued actions come
@@ -1550,22 +1600,37 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
               const crisis = typeof screened.note === 'string' && screened.note.includes(CRISIS_LINE) ? ` ${CRISIS_LINE}` : '';
               throw new StudioError('CONTENT_POLICY', `${ACTION_BLOCKED_MESSAGE}${crisis}`, { status: 422 });
             }
+            screenNote = screened.note;
             // An adapt verdict draws the edit as the safer take (softened wording + the safe-take line).
             if (screened.decision === 'adapt' && action.type === 'edit_page') action = { ...action, safe: true };
           }
-          const runnable = action;
-          // A `cancel` action is the same Stop as POST /cancel (scoped; see StopScope).
-          if (runnable.type === 'cancel') stopSessionWork(session);
-          // A click on a spend button IS the confirmation; the budget cap still applies.
-          const run = () =>
-            runAction(turnCtx, runnable, {
-              confirmed: isSpendAction(runnable) || runnable.type === 'approve_gate',
-              ...(turnCtx.caps ? { caps: turnCtx.caps } : {}),
-              // A UI click: its edits undo as the user's own (contract §7 ops origin).
-              origin: 'user'
-            });
-          if (runnable.type === 'plan_pages') await session.runExclusive(run);
-          else await run();
+          if (action.type === 'start_director_draft') {
+            const { idea, expectedRev } = action;
+            await session.runExclusive(() => startDelegatedDraft(turnCtx, session, idea, expectedRev, screenNote, () => turnAbort.abort()));
+          } else if (action.type === 'take_over_director_draft') {
+            const draft = session.doc.directorDraft;
+            if (draft && draft.status !== 'hands_on') {
+              if (draft.status === 'planning') {
+                if (!activeDirectorDrafts.has(session)) throw new StudioError('BUSY', 'This draft is still running. Reopen the comic in a moment.', { status: 409 });
+                stopSessionWork(session);
+              }
+              session.commit([{ op: 'director_draft', draft: { ...draft, status: 'hands_on' } }], { origin: 'user' });
+            }
+          } else {
+            const runnable = action;
+            // A `cancel` action is the same Stop as POST /cancel (scoped; see StopScope).
+            if (runnable.type === 'cancel') stopSessionWork(session);
+            // A click on a spend button IS the confirmation; the budget cap still applies.
+            const run = () =>
+              runAction(turnCtx, runnable, {
+                confirmed: isSpendAction(runnable) || runnable.type === 'approve_gate',
+                ...(turnCtx.caps ? { caps: turnCtx.caps } : {}),
+                // A UI click: its edits undo as the user's own (contract §7 ops origin).
+                origin: 'user'
+              });
+            if (runnable.type === 'plan_pages') await session.runExclusive(run);
+            else await run();
+          }
         }
       } catch (err) {
         const error = err instanceof StudioError ? err : null;
@@ -1601,8 +1666,32 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
    * One user message, under the session lock: safety screen → (blocked: deterministic reply,
    * no model call) → quick-assign → free intent router (no model call) → director.
    */
-  async function runMessage(req: Request, ctx: OrchestratorContext, prepared: PreparedMessage, shape: Pick<RefusalLog, 'kind' | 'action'>) {
-    const session = ctx.session;
+  async function startDelegatedDraft(turnCtx: OrchestratorContext, session: StudioSession, idea: string, expectedRev: number, screenNote: string | undefined, abort: () => void) {
+    ensureDraftCanStart(session.doc, expectedRev);
+    if (turnCtx.signal.aborted) return;
+    await session.claimDirectorDraft(expectedRev, idea);
+    activeDirectorDrafts.add(session);
+    const deadline = setTimeout(abort, DIRECTOR_DRAFT_LEASE_MS - 60_000);
+    deadline.unref?.();
+    try {
+      if (turnCtx.signal.aborted) throw new StudioError('CANCELLED', 'Draft stopped.');
+      const result = await (deps.draftExecutor ?? runDirectorDraft)(turnCtx, idea, screenNote);
+      if (session.doc.directorDraft?.status === 'planning') {
+        session.commit([{ op: 'director_draft', draft: { idea, status: turnCtx.signal.aborted ? 'interrupted' : 'review',
+          ...(result.pageId ? { pageId: result.pageId } : {}) } }], { origin: 'job' });
+      }
+    } catch (err) {
+      if (session.doc.directorDraft?.status === 'planning') {
+        session.commit([{ op: 'director_draft', draft: { idea, status: 'interrupted' } }], { origin: 'job' });
+      }
+      throw err;
+    } finally {
+      clearTimeout(deadline);
+      activeDirectorDrafts.delete(session);
+    }
+  }
+
+  async function runMessage(req: Request, ctx: OrchestratorContext, prepared: PreparedMessage, shape: Pick<RefusalLog, 'kind' | 'action'>, session: StudioSession, abort: () => void) {
     const rating = ctx.rating ?? effectiveRating(session.doc, ctx.caps?.ratingCeiling).rating;
     let screened: ScreenResult;
     try {
@@ -1653,6 +1742,24 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     }
     if (blockedPaths.size) text = [text, `[${blockedPaths.size === 1 ? 'One image was' : `${blockedPaths.size} images were`} removed — it didn't fit the content rules.]`].filter(Boolean).join('\n\n');
     if (ops.length) session.commit(ops);
+
+    // A delegated creative choice still needs the creator's approval of the drawing quote.
+    if (!prepared.focus && !prepared.answer && !attachments.length && delegatesComic(prepared.text)) {
+      if (ctx.spendBlocked) throw new StudioError('FORBIDDEN', ctx.spendBlocked, { status: 403 });
+      const idea = delegatedIdea(session.doc, text);
+      session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'user', text, at: Date.now() } }]);
+      if (session.doc.gate?.status === 'open') {
+        session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'assistant', text: 'Your drawing estimate is ready. Approve it when you’re ready to use your allowance.', at: Date.now(), cards: [{ type: 'gate', id: newId('card'), gateId: session.doc.gate.id }] } }]);
+      } else if (!session.doc.pages.length) {
+        await startDelegatedDraft(ctx, session, idea, session.doc.rev, screened.note, abort);
+      } else {
+        session.commit([{ op: 'director_draft', draft: { status: 'review', idea } }], { origin: 'director' });
+        await offerDirectorDraftBook(ctx, () => {
+          if (ctx.signal.aborted || session.doc.gate?.status === 'open') throw new StudioError('CONFLICT', 'Open the current plan to continue.');
+        });
+      }
+      return;
+    }
 
     // Free, read-only answers ("show me the pages", "what's left?") — no model call, $0.
     // Skipped when the screen left a note for the director (adapt / IP steering).

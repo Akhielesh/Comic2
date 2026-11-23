@@ -80,7 +80,8 @@ const trimCutRun = (out: string): string => {
   return out;
 };
 
-const applyPatterns = (s: string): string => {
+/** Preserve a complete input or reply whose size has already been bounded by the conversation API. */
+export const redactConversationKeys = (s: string): string => {
   let out = s;
   for (const pattern of WHOLE) out = out.replace(pattern, REDACTED);
   for (const [pattern, replacement] of PREFIXED) out = out.replace(pattern, replacement);
@@ -91,9 +92,9 @@ const applyPatterns = (s: string): string => {
 export const redactSecrets = (text: string): string => {
   if (text === undefined || text === null) return '';
   const s = typeof text === 'string' ? text : String(text);
-  if (s.length <= REDACT_MAX_CHARS) return applyPatterns(s);
+  if (s.length <= REDACT_MAX_CHARS) return redactConversationKeys(s);
   const windowEnd = REDACT_MAX_CHARS + REDACT_LOOKAHEAD;
-  const w = applyPatterns(s.slice(0, windowEnd));
+  const w = redactConversationKeys(s.slice(0, windowEnd));
   // The first character past the kept text: inside the redacted window, or past the window itself.
   const cutInsideWindow = w.length > REDACT_MAX_CHARS;
   let out = cutInsideWindow ? w.slice(0, REDACT_MAX_CHARS) : w;

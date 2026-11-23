@@ -1,7 +1,7 @@
 // Mailer — the backend's single entry point for sending branded transactional email.
 //
-// It does the safety + bookkeeping, then hands the actual send to the email-worker over an
-// HMAC-signed POST (the worker owns Cloudflare Email Sending + template rendering):
+// It handles consent and logging before sending transactional mail to the HMAC-authenticated
+// email-worker, or a confirmed subscriber's product update to the configured Broadcast stream:
 //   1. dormant unless configured (EMAIL_WORKER_URL + EMAIL_HMAC_SECRET) — never throws;
 //   2. marketing suppression — refuses 'marketing' mail to opted-out addresses;
 //   3. HARD cost cap — refuses to send past EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH (defaults
@@ -22,8 +22,9 @@ import {
   EMAIL_REQUEST_TIMEOUT_MS,
   EMAIL_WORKER_URL
 } from '../config.js';
-import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
-import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { RECEIPT_TEMPLATES, TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
+import { broadcastReadiness, deliverProductUpdate } from './postmarkBroadcast.js';
+import { receiptHash, getUsage, hasConfirmedUpdates, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
 
 export { APP_PUBLIC_URL };
 
@@ -38,14 +39,14 @@ export const unsubscribeToken = (email: string): string =>
   crypto.createHmac('sha256', EMAIL_HMAC_SECRET).update(`unsub:${normalizeEmail(email)}`).digest('hex');
 
 export const verifyUnsubscribeToken = (email: string, token: string): boolean => {
-  if (!token) return false;
+  if (!EMAIL_HMAC_SECRET || !token) return false;
   const expected = unsubscribeToken(email);
   const a = Buffer.from(expected);
   const b = Buffer.from(token);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-export type SendSkipReason = 'not_configured' | 'suppressed' | 'rate_limited' | 'no_unsub_base';
+export type SendSkipReason = 'not_configured' | 'suppressed' | 'rate_limited' | 'no_unsub_base' | 'no_confirmed_subscription';
 
 export interface SendResult {
   ok: boolean;
@@ -64,9 +65,9 @@ export interface SendOptions {
   requestId?: string | null;
   /**
    * Render with a sub-brand instead of the worker's env brand (subject, header, From name).
-   * 'stream-studio' = live-app auth mail. An older worker ignores it and uses DreamStream.
+   * Signed backend requests for Stream Studio and Comic Studio use their respective identities.
    */
-  brand?: 'stream-studio';
+  brand?: 'stream-studio' | 'comic-studio';
   /** false ⇒ no read-receipt pixel. Auth mail opts out: it carries sign-in links, not campaigns. */
   track?: boolean;
 }
@@ -77,13 +78,14 @@ export const getEmailUsageStatus = async () => {
   const pct = (n: number, max: number) => (max > 0 ? Math.round((n / max) * 100) : 0);
   return {
     configured: mailerConfigured(),
+    broadcast: broadcastReadiness(),
     day: usage.day,
     month: usage.month,
     maxPerDay: EMAIL_MAX_PER_DAY,
     maxPerMonth: EMAIL_MAX_PER_MONTH,
     dayPct: pct(usage.day, EMAIL_MAX_PER_DAY),
     monthPct: pct(usage.month, EMAIL_MAX_PER_MONTH),
-    // Cloudflare bills $0.35/1k only past 3,000/mo; under that it's free.
+    // Legacy client field: conservative lower bound based on aggregate accepted sends.
     freeTierRemaining: Math.max(0, 3000 - usage.month)
   };
 };
@@ -97,11 +99,12 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   const to = normalizeEmail(opts.to);
   const template = opts.template;
   const kind = TEMPLATE_KIND[template];
+  const campaign = template === 'product-update';
   const params: EmailParams = { ...(opts.params ?? {}) };
   const baseLog = { toEmail: to, template, kind, userId: opts.userId ?? null, requestId: opts.requestId ?? null };
 
   // (1) dormant — still leave an audit row, otherwise "no email and no trace" is undebuggable.
-  if (!mailerConfigured()) {
+  if (campaign ? !broadcastReadiness().configured : !mailerConfigured()) {
     await logSend({ ...baseLog, status: 'skipped', error: 'not_configured' });
     return { ok: false, skipped: 'not_configured' };
   }
@@ -112,6 +115,11 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     return { ok: false, skipped: 'suppressed' };
   }
 
+  if (campaign && !(await hasConfirmedUpdates(to))) {
+    await logSend({ ...baseLog, status: 'skipped', error: 'no_confirmed_subscription' });
+    return { ok: false, skipped: 'no_confirmed_subscription' };
+  }
+
   // (3) hard cost cap — never exceed the configured ceiling
   const usage = await getUsage();
   const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
@@ -120,21 +128,18 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     console.error(
       `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
         `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${to}. ` +
-        `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
+        `Review EMAIL_MAX_PER_* before increasing limits.`
     );
     await logSend({ ...baseLog, status: 'rate_limited' });
     return { ok: false, skipped: 'rate_limited' };
   }
   // Honest early warning at 80% of the monthly cap.
   if (EMAIL_MAX_PER_MONTH > 0 && usage.month >= Math.floor(EMAIL_MAX_PER_MONTH * 0.8)) {
-    console.warn(
-      `[email][COST] ${usage.month}/${EMAIL_MAX_PER_MONTH} emails this month (≥80%). ` +
-        `Cloudflare's free tier is 3,000/mo, then $0.35/1,000.`
-    );
+    console.warn(`[email][COST] ${usage.month}/${EMAIL_MAX_PER_MONTH} emails this month (≥80%).`);
   }
 
   // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
-  let unsubscribeUrl = params.unsubscribeUrl;
+  let unsubscribeUrl = campaign ? undefined : params.unsubscribeUrl;
   if (kind === 'marketing' && !unsubscribeUrl) {
     if (!EMAIL_PUBLIC_BASE_URL) {
       console.warn(`[email] Refusing marketing send (${template}) — EMAIL_PUBLIC_BASE_URL unset; cannot build unsubscribe link.`);
@@ -145,13 +150,20 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   }
   if (unsubscribeUrl) params.unsubscribeUrl = unsubscribeUrl;
 
-  // (4) log 'queued' first so we have an id for the read-receipt pixel
-  const logId = await logSend({ ...baseLog, status: 'queued' });
-  if (opts.track === false) {
-    delete params.pixelUrl;
-  } else if (logId && EMAIL_PUBLIC_BASE_URL) {
-    params.pixelUrl = `${EMAIL_PUBLIC_BASE_URL}/api/email/o/${logId}.gif`;
-  }
+  // Only receipts generated for this send can enter a delivered template. An administrator's
+  // preview/test parameters and a user-supplied URL must never inject a third-party pixel.
+  delete params.pixelUrl;
+  delete params.ackUrl;
+  const eligible = opts.track !== false && RECEIPT_TEMPLATES.includes(template) && EMAIL_PUBLIC_BASE_URL.startsWith('https://');
+  const ackToken = eligible && process.env.EMAIL_ACKNOWLEDGEMENTS !== 'off' ? crypto.randomBytes(32).toString('base64url') : undefined;
+  const openToken = eligible && process.env.EMAIL_OPEN_SIGNALS === 'on' ? crypto.randomBytes(32).toString('base64url') : undefined;
+  const logId = await logSend({
+    ...baseLog, status: 'queued',
+    ...(ackToken ? { ackReceiptHash: receiptHash(ackToken) } : {}),
+    ...(openToken ? { openReceiptHash: receiptHash(openToken) } : {})
+  });
+  if (logId && ackToken) params.ackUrl = `${EMAIL_PUBLIC_BASE_URL}/api/email/ack/${ackToken}`;
+  if (logId && openToken) params.pixelUrl = `${EMAIL_PUBLIC_BASE_URL}/api/email/o/${openToken}.gif`;
 
   const body = JSON.stringify({
     template,
@@ -164,6 +176,11 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EMAIL_REQUEST_TIMEOUT_MS);
   try {
+    if (campaign) {
+      const messageId = await deliverProductUpdate(to, params, controller.signal, opts.subject);
+      if (logId) await patchLog(logId, { status: 'sent', messageId });
+      return { ok: true, messageId };
+    }
     const res = await fetch(`${EMAIL_WORKER_URL.replace(/\/+$/, '')}/send`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-email-signature': sign(body) },
@@ -190,7 +207,8 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
 };
 
 // ── Typed convenience wrappers ──────────────────────────────────────────────────
-const meta = (req?: { userId?: string | null; requestId?: string | null }) => ({
+const meta = (req?: { userId?: string | null; requestId?: string | null; brand?: SendOptions['brand'] }) => ({
+  ...(req?.brand ? { brand: req.brand } : {}),
   userId: req?.userId ?? null,
   requestId: req?.requestId ?? null
 });

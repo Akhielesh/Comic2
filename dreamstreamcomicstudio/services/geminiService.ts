@@ -309,7 +309,8 @@ export const checkDeploymentParity = async (): Promise<DeploymentParityStatus> =
 export const queryUniversalAssistant = async (
   message: string,
   history: AssistantMessage[] = [],
-  context?: UniversalAssistantRequest['context']
+  context?: UniversalAssistantRequest['context'],
+  options?: { signal?: AbortSignal; expectedAccountId?: string }
 ): Promise<UniversalAssistantResponse> => {
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'assistant_chat', lastError: undefined });
   try {
@@ -317,7 +318,7 @@ export const queryUniversalAssistant = async (
       post<UniversalAssistantRequest, UniversalAssistantResponse>(
         '/api/assistant/chat',
         { message, history, context },
-        { apiKey, modelId }
+        { apiKey, modelId, ...options }
       )
     );
   } catch (e) {

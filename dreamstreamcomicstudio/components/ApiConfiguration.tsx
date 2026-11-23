@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight,
   Power, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw, Gauge, Server, Wallet, BookOpen, Sparkles
@@ -28,6 +28,8 @@ import { validateApiKey, KEY_CHECK_UNAVAILABLE_COPY, type KeyValidationStatus } 
 import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpServers';
 import type { McpServerConfig } from '../apiTypes';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
+import { PersonalProviderBalance, ProviderActivityPanel, useProviderActivity } from './usage/ProviderActivity';
+import type { ProviderBalanceReport } from '../shared/providerBalances';
 import { useAuth } from '../contexts/AuthContext';
 import { reconcileProviderMirror } from '../services/byokSync';
 import {
@@ -227,26 +229,22 @@ const ValidationBadge: React.FC<{ k: ManagedApiKey; checking: boolean }> = ({ k,
 const mask = (key: string) => (key.length > 8 ? `${key.slice(0, 3)}••••${key.slice(-4)}` : '••••');
 const usageColor = (frac: number) => (frac >= 1 ? TONE_FILL.danger : frac >= 0.8 ? TONE_FILL.warning : TONE_FILL.success);
 
-const UsageMeter: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null }> = ({ k, fundsUrl }) => {
+const UsageMeter: React.FC<{ k: ManagedApiKey }> = ({ k }) => {
   if (!k.limitUsd || k.limitUsd <= 0) {
-    return <div className={`text-[11px] ${MUTED}`}>No limit · ${k.usedUsd.toFixed(2)} used this month</div>;
+    return <div className={`text-[11px] ${MUTED}`}>Device spending cap off · ${k.usedUsd.toFixed(2)} recorded on this device this month</div>;
   }
   const frac = usageFraction(k);
   const pct = Math.min(100, Math.round(frac * 100));
   return (
-    <div className="space-y-1" title={`$${k.usedUsd.toFixed(4)} of $${k.limitUsd.toFixed(2)} used this month (${Math.round(frac * 100)}%)`}>
+    <div className="space-y-1" title={`Device spending cap: $${k.usedUsd.toFixed(4)} of $${k.limitUsd.toFixed(2)} used this month (${Math.round(frac * 100)}%)`}>
       <div className="h-1.5 w-full bg-[var(--ds-well-strong)] rounded-full overflow-hidden">
         <div className={`h-full ${usageColor(frac)}`} style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
       <div className={`flex items-center justify-between text-[11px] ${MUTED}`}>
-        <span className="tabular-nums">${k.usedUsd.toFixed(2)} / ${k.limitUsd.toFixed(2)}</span>
+        <span className="tabular-nums">Device spending cap · ${k.usedUsd.toFixed(2)} / ${k.limitUsd.toFixed(2)}</span>
         <span className="flex items-center gap-1.5">
           <span className={cn('tabular-nums', frac >= 1 && `font-semibold ${TONE_TEXT.danger}`)}>{Math.round(frac * 100)}%{frac >= 1 ? ' · blocked' : ''}</span>
-          {frac >= 0.8 && fundsUrl && (
-            <a href={fundsUrl} target="_blank" rel="noreferrer" className={cn('inline-flex items-center gap-0.5 font-semibold text-[var(--ds-ink)] underline-offset-2 hover:underline', RADIUS_CONTROL, FOCUS_RING)}>
-              <Wallet className="w-3 h-3" /> Add funds
-            </a>
-          )}
+
         </span>
       </div>
     </div>
@@ -257,10 +255,9 @@ const UsageMeter: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null }> = ({ 
 
 const KeyRow: React.FC<{
   k: ManagedApiKey;
-  fundsUrl?: string | null;
   onChange: () => void;
   onActiveKeyChange: () => void;
-}> = ({ k, fundsUrl, onChange, onActiveKeyChange }) => {
+}> = ({ k, onChange, onActiveKeyChange }) => {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(k.label);
   const [limit, setLimit] = useState(k.limitUsd != null ? String(k.limitUsd) : '');
@@ -360,7 +357,7 @@ const KeyRow: React.FC<{
                 <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="none" className={`${FIELD} w-24 px-2 py-1 font-mono text-base md:text-[length:var(--ds-text-base)] ${DENSITY.coarse}`} />
               </label>
             ) : (
-              <UsageMeter k={k} fundsUrl={fundsUrl} />
+              <UsageMeter k={k} />
             )}
           </div>
         </div>
@@ -573,10 +570,12 @@ const ProviderCard: React.FC<{
   provider: ApiKeyProvider;
   keys: ManagedApiKey[];
   count?: number;
+  savedBalance?: ProviderBalanceReport;
+  onSavedBalance: () => void;
   open: boolean;
   onToggleOpen: () => void;
   onChange: () => void;
-}> = ({ provider, keys, count, open, onToggleOpen, onChange }) => {
+}> = ({ provider, keys, count, savedBalance, onSavedBalance, open, onToggleOpen, onChange }) => {
   const { user } = useAuth();
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'failed' | null>(null);
   const [accountCheck, setAccountCheck] = useState<string | null>(null);
@@ -591,6 +590,9 @@ const ProviderCard: React.FC<{
   const hasKey = providerKeys.length > 0 || accountMeta.some((m) => m.provider === provider);
   const overLimit = active ? isOverLimit(active) : false;
   const accountSuffix = accountMeta.find((entry) => entry.provider === provider)?.suffix;
+
+  // A new local credential, account mirror, or governance selection invalidates in-flight readings.
+  const balanceScope = useMemo(() => ({}), [active?.key, accountSuffix, enabled]);
 
   useEffect(() => {
     accountValidationRun.current += 1;
@@ -684,7 +686,9 @@ const ProviderCard: React.FC<{
               Add a {meta.label} key to unlock its models. {def?.freeTier ? 'This provider has a free tier.' : 'Usage is billed to your key.'}
             </div>
           )}
-          {providerKeys.map((k) => <KeyRow key={k.id} k={k} fundsUrl={def?.fundsUrl} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />)}
+          {user && <PersonalProviderBalance ownerId={user.id} provider={provider} hasKey={hasKey} enabled={enabled}
+            scope={balanceScope} saved={accountSuffix ? savedBalance : undefined} onSaved={onSavedBalance} />}
+          {providerKeys.map((k) => <KeyRow key={k.id} k={k} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />)}
           {!active && accountSuffix && (
             <div className={`space-y-2 text-xs ${MUTED}`}>
               <p>Your account has a saved key ending in {accountSuffix}. Each studio shows the models it supports.</p>
@@ -716,12 +720,19 @@ const ProviderCard: React.FC<{
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 export const ApiConfiguration: React.FC = () => {
+  const { user } = useAuth();
+  return <AccountApiConfiguration key={user?.id ?? 'signed-out'} ownerId={user?.id} />;
+};
+
+const AccountApiConfiguration: React.FC<{ ownerId?: string }> = ({ ownerId }) => {
   const [keys, setKeys] = useState<ManagedApiKey[]>(() => listKeys());
   const [, setGovVersion] = useState(0);
   const [open, setOpen] = useState<ApiKeyProvider | null>(() => {
     const initial = listKeys();
     return ALL_PROVIDERS.find((p) => !initial.some((k) => k.provider === p)) ?? null;
   });
+  const accountKeySet = getAccountKeyMeta().map(({ provider, suffix }) => `${provider}=${suffix}`).sort().join('|');
+  const activity = useProviderActivity(ownerId, accountKeySet);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const refresh = () => { setKeys(listKeys()); setGovVersion((v) => v + 1); };
 
@@ -762,8 +773,8 @@ export const ApiConfiguration: React.FC = () => {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className={`text-sm ${MUTED} max-w-xl`}>
-          Connect a provider to use its models. Bring your own key — pick the <span className={`font-semibold ${INK}`}>active</span> one,
-          set an optional monthly limit, and turn any source on or off. Keys stay on this device (and sync to your account, encrypted).
+          Choose a provider below to get an API key, manage billing and check its limits. Paste the key here and select it as active.
+          Your active key syncs to your account encrypted. You can set a monthly spending cap on this device.
         </p>
         <div className="flex flex-wrap items-center gap-1.5" aria-label="Configuration summary">
           <span className={chip(`${connected} saved`, 'muted')}>{connected} providers with keys</span>
@@ -773,6 +784,7 @@ export const ApiConfiguration: React.FC = () => {
       </div>
 
       <DreamStreamAllowancePanel />
+      {ownerId && <ProviderActivityPanel {...activity} />}
 
       <div className={SECTION_LABEL}>Providers</div>
       <div className="space-y-2">
@@ -782,6 +794,8 @@ export const ApiConfiguration: React.FC = () => {
             provider={provider}
             keys={keys}
             count={counts[provider]}
+            savedBalance={activity.report?.balanceReports.find(entry => entry.provider === provider)}
+            onSavedBalance={activity.refresh}
             open={open === provider}
             onToggleOpen={() => setOpen(open === provider ? null : provider)}
             onChange={refresh}

@@ -352,7 +352,8 @@ const runDeepResearchWith = async (p: DeepResearchParams, usageParts: ApiUsage[]
   const synth = await runChat({
     ...baseReq,
     model: p.model,
-    systemOverride: [SYNTH, p.systemPrompt?.trim()].filter(Boolean).join('\n\n'),
+    systemOverride: SYNTH,
+    conversationPreferences: p.systemPrompt,
     messages: [...(p.priorMessages || []), { role: 'user', content: synthUser }],
     temperature: 0.4,
     maxTokens: cfg.synthTokens,

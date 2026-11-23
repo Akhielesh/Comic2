@@ -1,15 +1,9 @@
 # Register your interest
 
-Sign-up is closed while the beta is small. A newcomer who tries to join is guided to
-**Register interest** (the sign-in card's second tab, `AuthPage` mode `request-access`, and the
-comics landing's Register section, `components/comicshost/landing/RegisterFaq.tsx`), leaves an email
-and, if they like, answers a few questions so the product can be shaped around what people want.
-Nobody is emailed for registering.
+Comic Studio offers public account creation at `/?view=auth&mode=signup`. The landing’s optional “Tell us what you’d like to make” form collects interest and product feedback separately. Someone who registered interest can create an account with the same address. The backend controls acknowledgments with the interest email setting.
 
 ## What the person sees
 
-- Card title "Register your interest", a "Private beta" chip and one short sentence about the beta.
-  Only the words of that mode changed; `SIGNUPS_ENABLED`, the invite path and every auth call are as before.
 - `components/WaitlistForm.tsx` (kind `access`), built from the `components/ds` primitives
   (Field, Input, Textarea, Select, Checkbox, Button, and the kit's filter-chip shape) on the page tokens,
   light and dark, 320 px up. Only questions a visitor can answer without knowing the product:
@@ -22,13 +16,13 @@ Nobody is emailed for registering.
   4. "How did you hear about us?" (optional, one native select): LinkedIn, a friend, search, social
      media, other.
   5. One box, unticked by default: "Keep me updated about Comic Studio news and new DreamStream
-     studios.", with the line "Nothing is sent yet; this only records that you would like updates."
-  - One line: sign-up is not open yet and the answers shape what gets built next.
+     studios.", with the line "Choose this if you would like to hear about future releases."
+  - One line: the answers help shape what gets built next.
 - There is no question about other studios (nothing on the page says what they are) and no vague
   "something else" field. Both were asked until the question set changed (stored rows keep them,
   `answers.v: 1`).
 - Success: "Thank you, you are on the list.", plus "Your answers help shape what we build next." only
-  when answers were sent, plus "Nothing is sent yet; we will let you know when updates start." only when
+  when answers were sent, plus "Your preference for updates is saved." only when
   the box was ticked. Each depends on what was sent, never on the address. It promises no email and
   takes focus; the card's intro sentence goes away once it shows.
 - A bad or empty email is shown at the field (the form is `noValidate`, so the browser's own bubbles
@@ -39,8 +33,7 @@ Nobody is emailed for registering.
   follows the page's light or dark theme.
 - Kind `updates` (the main site's list card, `UPDATES_CARD` in `shared/interest.ts`) is one email field
   (its label for assistive tech only, as before) and the button "Add me to the list", with the plain
-  "Thank you, you are on the list." While interest emails are off the card says that no emails are
-  sent yet; it promises no updates, invites or launch notes. It has no consent box and stores none.
+  "Thank you, you are on the list." The card confirms list registration independently of the delivery setting. It has no consent box and stores none.
 
 ## One vocabulary, one stored shape (`shared/interest.ts`)
 
@@ -81,7 +74,7 @@ same whichever path wrote it.
 | Malformed email, or an answer over its limit or of the wrong type | `400 { ok: false, status: 'invalid', message }` |
 | Bot check failed | `400 { ok: false, status: 'verify', message }` |
 | Too many requests | `429` (the existing `systemRateLimit` on `/api/newsletter`) |
-| Nothing was stored (no service role, or the database refused) | `503 { ok: false, status: 'unavailable', message }`; the form then saves the row itself |
+| Nothing was stored (no service role, or the database refused) | `503 { ok: false, status: 'unavailable', message }`. Deployed forms keep the input and offer a retry |
 
 - No account lookup and no invite re-send on this path, so nothing about the address reaches the
   caller. An invited person uses the link in their invite email; an admin can re-send it.
@@ -101,8 +94,8 @@ same whichever path wrote it.
   them is present, the name and note that are stored carry `answers.v: 1`, since the old set asked them.
 - Where answers are stored: the existing `metadata` jsonb column of `waitlist_signups`
   (`metadata.answers` and `metadata.consent`). The server also copies the note into the existing
-  `feedback` column; `product_interests` is no longer written (older rows keep theirs). **No schema
-  change is needed.**
+  `feedback` column. Apply the idempotent `server/sql/email_system.sql` after `waitlist_signups.sql`
+  to add that column and restrict browser inserts to the public registration fields. Older rows keep their answers.
 - The store (`server/src/services/emailStore.ts` `upsertSubscriber`) reads every error supabase-js
   returns and throws when nothing was stored, so a failed save is never answered as a saved one. A
   unique violation on insert (two requests at once) counts as already on the list.
@@ -113,18 +106,19 @@ same whichever path wrote it.
     from before the box): only `metadata.consent` is set to the new yes, with its time and wording. A
     stored yes is never turned back into a no. This adds nothing a stranger could not already do with a
     new row, and the yes is unverified either way (above).
-  - an unconfirmed `updates` row while interest emails are on: a fresh confirm token, which the confirm
-    email then carries.
+  - an unconfirmed `updates` row can receive a replacement for an expired or missing token when emails are on.
+    A matching live token stays valid. An unsubscribed row keeps its opt-out.
 
-## The form's direct save (`services/waitlist.ts`)
+## Submission and retry
 
-If the server cannot answer within 8 s, answers 5xx, or refuses the bot check while the page shows
-no check, the client saves the row directly (insert-only under RLS, the same write the public key
-already allows) with the same `metadata`, and gives the same thank-you. A repeat on that path is a
-unique violation and gets the same thank-you, except that a ticked box there gets no "we will let you
-know" line: the direct save may only insert, so it cannot add the yes to the stored row. (Anyone with the
-public key already sees that unique violation, so the shorter line tells them nothing new.) With a check on
-the page, a refused check asks the person to try again. The direct save sends nothing.
+The deployed form sends a same-origin request to `/api/newsletter/subscribe` when the API base is empty.
+A timeout after eight seconds, a server failure or a verification refusal leaves the input in place so the visitor can retry.
+A retry uses the same normalized address and registration kind.
+
+A local development build with its widget disabled can still save directly through Supabase if the API is unavailable.
+An explicit verification refusal or other 4xx response stops that fallback. A local direct insert sends no mail.
+An existing row keeps its original answers. If the insert reports a duplicate, the thank-you confirms registration
+and omits the update-preference acknowledgment because the local insert could not update that preference.
 
 ## The email switch: `INTEREST_EMAILS`
 
@@ -133,9 +127,11 @@ Off unless the backend variable is exactly `on`. Leave it unset; it is deliberat
 
 - Off: registering stores the row and sends nothing, and an existing row's confirm token is left as
   it is, so the confirm link in older emails still confirms (without the welcome email).
-- On: a new `access` row gets `access-requested`; a new or unconfirmed `updates` row gets a fresh
-  confirm token and `newsletter-confirm` (sent only with a token the store just wrote); the confirm
-  link sends `newsletter-welcome`. The answer to the caller does not change.
+- When enabled, a newly recorded access request triggers a receipt. For updates, the backend attempts a confirmation
+  email using the stored live token. It uses the configured public origin for the link. Only the first valid click
+  consumes that token and triggers a welcome. An expired, consumed or unsubscribed link opens the invalid-link page.
+  Registration success records the database write. Delivery outcomes are logged separately in `email_log`.
+  The database queues optional messages in the same transaction as registration or confirmation. The API returns after that write. A background runner retries temporary failures and checks the stored consent state before sending. Apply `server/sql/email_lifecycle.sql` after `email_system.sql`. See the lifecycle delivery section of the [email setup guide](../email/SETUP.md#lifecycle-delivery).
 - Never governed by it: admin invites (`beta-invite`), auth emails, member notifications.
 - `updates` rows stored while it is off are unconfirmed and must not be mailed as marketing.
 - News about Comic Studio or new studios goes, if it ever goes, only to `access` rows whose

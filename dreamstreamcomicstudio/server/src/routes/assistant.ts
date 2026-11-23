@@ -4,8 +4,6 @@ import { queryUniversalAssistant } from '../ai/assistant.js';
 import { NoFreeModelAvailableError, pickTextModel } from '../ai/autoRouter.js';
 import {
   ASSISTANT_POLICY_SCOPE,
-  buildOffTopicResponse,
-  isPlatformScopedMessage,
   sanitizeAssistantContext,
   sanitizeAssistantHistory
 } from '../ai/assistantPolicy.js';
@@ -84,7 +82,8 @@ export const resolveSafeAccountSummary = async (
         availableCt: usageResult.wallet.availableCt,
         isPremium: tier === 'pro' || tier === 'studio' || tier === 'admin'
       };
-      account.billing = usageResult;
+      // The provider only receives the allowlisted usage and tier above. The billing
+      // summary also contains payment preferences and external subscription identifiers.
     } else {
       account.planTier = 'free';
       account.isAdmin = false;
@@ -123,20 +122,6 @@ assistantRouter.post('/chat', async (req, res, next) => {
     context.account = isAuthenticated
       ? await resolveSafeAccountSummary({ id: req.user!.id, email: req.user!.email })
       : { isAuthenticated: false };
-
-    if (!isPlatformScopedMessage(message)) {
-      const blocked: UniversalAssistantResponse = {
-        text: buildOffTopicResponse(),
-        model: 'policy/platform-only',
-        limitInfo: req.assistantLimitInfo,
-        policy: {
-          scope: ASSISTANT_POLICY_SCOPE,
-          offTopicBlocked: true,
-          reason: 'NON_PLATFORM'
-        }
-      };
-      return res.json(blocked);
-    }
 
     // S10: on the PLATFORM key the assistant only ever runs free models — a free-only pick (never
     // the cheapest paid model or the catalog-down TEXT_FALLBACK) and no paid retry — so the
@@ -177,10 +162,10 @@ assistantRouter.post('/chat', async (req, res, next) => {
             req,
             operation: 'assistant.chat',
             provider: 'openrouter',
-            model: effectiveModel,
+            model: result.model,
             seed: {
               provider: 'openrouter',
-              model: effectiveModel,
+              model: result.model,
               operation: 'assistant.chat',
               stage: 'assistant',
               byok: reserve.reservation.byokBypass
@@ -193,9 +178,12 @@ assistantRouter.post('/chat', async (req, res, next) => {
           })
         : null;
 
+      // The account report uses the settled provider cost. The public assistant response
+      // contains token usage only, including on its unauthenticated route.
+      const { providerCostUsd: _cost, partialProviderCostUsd: _partial, ...publicUsage } = result.usage;
       const payload: UniversalAssistantResponse = {
         text: result.text,
-        usage: result.usage,
+        usage: publicUsage,
         model: result.model,
         limitInfo: req.assistantLimitInfo,
         policy: {

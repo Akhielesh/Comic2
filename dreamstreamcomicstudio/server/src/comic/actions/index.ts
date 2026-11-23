@@ -33,12 +33,13 @@ import { CONFLICT_ACTIONS } from './conflict.js';
  */
 const knownActionType = (type: string): boolean => SPEND_ACTION_TYPES.has(type) || NON_SPEND_ACTION_TYPES.has(type);
 
-/** Action types handled by jobs.ts itself. fix_panel (Ship 2) is an image spend on the core spend pipeline: its gate,
- *  budget, lock, preflight and reservation are jobs.ts's; actions/panelFix.ts supplies the hooks. */
+/** Built-in actions reserved from feature registration. jobs.ts handles the ordinary jobs.
+ *  The authenticated stream route owns the draft reservation, takeover and cancellation. */
 export const CORE_ACTION_TYPES: ReadonlySet<string> = new Set([
   'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover',
   'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
   'relayout_balloons', 'recheck_page', 'cancel',
+  'start_director_draft', 'take_over_director_draft',
   ...['fix_panel'].filter(knownActionType)
 ]);
 

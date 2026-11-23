@@ -317,8 +317,8 @@ export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL
 export const REDIS_URL = process.env.REDIS_URL || '';
 
 // --- Transactional email (Cloudflare Email Sending via email-worker) --------------
-// The backend never talks to the email service directly — it signs requests to the
-// email-worker (HMAC, mirroring the Studio worker). EMPTY EMAIL_WORKER_URL or
+// Transactional requests are HMAC-signed for the email-worker. Product updates use
+// a separately configured broadcast provider. Empty EMAIL_WORKER_URL or
 // EMAIL_HMAC_SECRET ⇒ the mailer is dormant (sends are skipped, nothing breaks).
 export const EMAIL_WORKER_URL = process.env.EMAIL_WORKER_URL || '';
 export const EMAIL_HMAC_SECRET = process.env.EMAIL_HMAC_SECRET || '';

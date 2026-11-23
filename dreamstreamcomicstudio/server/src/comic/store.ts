@@ -236,7 +236,7 @@ const publicI18n = (i18n: unknown): unknown => {
  * trash, unsorted ref uploads, the server-only safety record (moderation categories, notes,
  * source screening), the server-only publication mirror and the planner fingerprint.
  */
-const PRIVATE_DOC_KEYS = ['memory', 'archive', 'trash', 'refInbox', 'safety', 'publication', 'planInputHash'] as const;
+const PRIVATE_DOC_KEYS = ['directorDraft', 'memory', 'archive', 'trash', 'refInbox', 'safety', 'publication', 'planInputHash'] as const;
 
 /**
  * Strip everything private from a published doc (idempotent; the input is not mutated).
@@ -504,23 +504,24 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     rememberMirror(projectId, hashString(JSON.stringify([name, state])));
   };
 
-  const save: DocStore['save'] = async ({ projectId, userId, doc, summary }) => {
+  const save: DocStore['save'] = async ({ projectId, userId, doc, summary, expectedRev }) => {
     const db = admin();
     const rev = typeof doc.rev === 'number' ? doc.rev : 0;
     const stamp = new Date(now()).toISOString();
     const payload = { doc: jsonbSafe({ ...doc, id: projectId }), rev, updated_at: stamp };
 
     // Owner-scoped, never-backwards update. Zero rows → missing, stale, or not ours.
-    const { data: updated, error } = await db
+    const write = db
       .from('comic_docs')
       .update(payload)
       .eq('project_id', projectId)
-      .eq('user_id', userId)
-      .lte('rev', rev)
-      .select('project_id');
+      .eq('user_id', userId);
+    const guarded = expectedRev === undefined ? write.lte('rev', rev) : write.eq('rev', expectedRev);
+    const { data: updated, error } = await guarded.select('project_id');
     if (error) throw storeError(error, 'save');
 
     if (!Array.isArray(updated) || updated.length === 0) {
+      if (expectedRev !== undefined) throw new StudioError('CONFLICT', 'This comic changed. Reopen it before starting a draft.', { status: 409 });
       const { data: existing, error: readError } = await db
         .from('comic_docs')
         .select('user_id, rev')
@@ -659,11 +660,12 @@ export function createMemoryDocStore(): MemoryDocStore {
         rev: doc.rev || 0
       });
     },
-    async save({ projectId, userId, doc, summary }) {
+    async save({ projectId, userId, doc, summary, expectedRev }) {
       const row = rows.get(projectId);
       if (!row) throw new StudioError('NOT_FOUND', 'This comic no longer exists.', { status: 404 });
       if (row.userId !== userId) throw new StudioError('FORBIDDEN', "You don't have access to this comic.", { status: 403 });
       const rev = doc.rev || 0;
+      if (expectedRev !== undefined && row.rev !== expectedRev) throw new StudioError('CONFLICT', 'This comic changed. Reopen it before starting a draft.', { status: 409 });
       if (row.doc && row.rev > rev) return; // stale writer never clobbers a newer doc
       // The same jsonb-safe write as the Supabase store, so tests read back what production stores.
       row.doc = clone(jsonbSafe({ ...doc, id: projectId }));

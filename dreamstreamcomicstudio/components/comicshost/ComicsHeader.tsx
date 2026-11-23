@@ -26,11 +26,11 @@ export interface ComicsHeaderProps {
   signedIn: boolean;
   /** 'home' shows the in-page section links; 'other' (sign-in, Privacy, Terms, Library) shows the Library only. */
   page: 'home' | 'other';
-  /** On `page="other"`, the view under the header: 'auth' hides "Sign in" and "Register interest", 'gallery' marks the Library link. */
+  /** On `page="other"`, the view under the header: 'auth' hides "Sign in" and "Sign up", 'gallery' marks the Library link. */
   current?: ComicsHeaderCurrent;
   onGoHome: () => void;
   onSignIn: () => void;
-  /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's Register interest tab. */
+  /** Signed out: on the landing, the account creation form. */
   onRequestAccess: () => void;
   onOpenComics: () => void;
   // Signed in, the header's AccountMenu opens Settings through components/account/accountNav.ts, which App answers with
@@ -116,8 +116,8 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
       ? // Below 600 the header's My comics steps aside (comicsShell.css), so the menu carries it there and only there.
         [{ label: 'My comics', run: onOpenComics, separated: true, className: 'medium:hidden' }]
       : onSignInPage
-        ? [] // the sign-in card itself switches between Sign in and Register interest
-        : [{ label: 'Register interest', run: onRequestAccess, separated: true }])
+        ? [] // the sign-in card itself switches between Sign in and Sign up
+        : [{ label: 'Sign up', run: onRequestAccess, separated: true }])
   ];
 
   const brand = (
@@ -161,18 +161,18 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
         </Button>
       ) : (
         <>
-          {/* Not on the sign-in page: its card already switches to Register interest (pressing this there remounted the
+          {/* Not on the sign-in page: its card already switches to Sign up (pressing this there remounted the
               card and wiped what was typed). */}
           {!home && !onSignInPage && (
             <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden expanded:inline-flex')} onClick={onRequestAccess}>
-              Register interest
+              Sign up
             </Button>
           )}
           {/* The landing's join action stays one press away once the hero has scrolled off: a ghost, never a fill (the
               hero's button is the page's one filled action). Below lg the menu carries the same row. */}
           {home && (
             <Button variant="ghost" className={cn(RADIUS_ROUND, 'comics-header-register hidden lg:inline-flex')} onClick={onRequestAccess}>
-              Register interest
+              Sign up
             </Button>
           )}
           {onSignInPage ? null : (

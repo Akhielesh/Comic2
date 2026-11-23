@@ -11,6 +11,8 @@ See `COST_RUNBOOK.md` for the optimization playbook.
 > (not just the docs) on the verify date. Anything that is *target design, not
 > current state* is called out explicitly in §10.
 
+**Artwork verification on 2026-11-23.** The `dreamstream-comic-artwork-backup` Worker runs through Cloudflare Cron and a private queue. Database backups cover Postgres records and Storage metadata. R2 holds independent copies of the image bytes. See the [production recovery procedure](../production/comic-artwork-backups.md).
+
 ---
 
 ## 0. Topology in one line
@@ -23,7 +25,7 @@ Browser
         every page → live.html; /api/* + /live-api/* routed as below) — §2a
   → /api/*  →  dreamstream-api Worker  →  Backend Container (Express)     [billed only while awake]
                   (BACKEND_TARGET=origin → Railway instead: dormant fallback)
-                  backend → Supabase  (Postgres + Auth + Storage)          [free tier]
+                  backend → Supabase  (Postgres + Auth + Storage)          [Pro]
                   backend → LLM providers (OpenRouter / NVIDIA / Gemini / BYOK)
                   backend → data-connector APIs (budget-metered)
                        ↳ Yahoo / Stooq / FiscalData → dreamstream-data-egress Worker
@@ -66,14 +68,14 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 > 2026-06-16. Project ID `c3320fd3-b01e-4d59-95ec-3408a65446c9`, env `production`
 > (`3283480e-…`), service `dccc0663-…`.
 
-### Supabase (org plan: **free** → $0)
+### Supabase (org plan verified Pro on 2026-11-23)
 
 | Item | Value |
 |---|---|
 | Active project | **"Comic"** ref `bdjfmxfmhqhzvgrhbbzm`, region `us-west-2`, `ACTIVE_HEALTHY` |
 | Tables | ~90 (public schema), all RLS-enabled. Heaviest rows: `token_ledger_entries` 2392, `artifacts` 1000, `connector_items` 987, `image_assets` 602, `model_catalog_cache` 479, `provider_usage_log` 454. |
-| Storage bucket | `comic-assets` (public; WebP via sharp; service-role writes) |
-| Edge functions | **none** (email runs on the Cloudflare email-worker) |
+| Comic storage | `comic-assets` holds generated artwork. `comic-private` holds private references and quarantine. Both are included in the artwork backup. |
+| Artwork backup source | `comic-artwork-backup-source` requires a project JWT and a scoped reader secret. It signs short-lived reads in the two Comic buckets. |
 | Other projects | 9 more, all `INACTIVE` (free-tier auto-pause) — D&D, NovaPDF, Desk, Data Profiler, Global Financial, Sudoku, Budget, **AtlasD**, Comic. |
 
 ### Cloudflare (account: akhielesh)
@@ -81,10 +83,10 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 | Item | Value |
 |---|---|
 | Plan | **Workers Paid** ($5/mo) — required for Containers (the `Backend` container in `dreamstream-api`). |
-| Workers (DreamStream) | **4**: `dreamstream-api` (+ the backend container), `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email` (`dreamstream-studio` retired 2026-10-22, see §2) |
+| Workers in the October inventory | `dreamstream-api` (+ the backend container), `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email` (`dreamstream-studio` retired 2026-10-22, see §2) |
 | Containers | `Backend` (dreamstream-api, `basic` 1/4 vCPU · 1 GiB · 4 GB, max 2) — the Express backend |
 | Workers (other, NOT in this repo) | `akhieleshpersonalwebsite`, `atlasd` — separate projects on the same account |
-| R2 buckets | **1**: `dreamstream-live` (ENAM, Standard) — live-stream segments only |
+| R2 used by this repository | `dreamstream-live` holds live segments. `dreamstream-comic-artwork-backup` is a private Standard bucket in WNAM for versioned artwork copies. |
 | D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
 | Durable Objects | `EventRoom`, `MonitorRoom`, `UserLine`, `CallRoom` (live-worker), `Backend` (api-proxy, container-backed) — all SQLite |
@@ -272,8 +274,7 @@ Container in 2026-10 (`adminak/` in `Akhielesh/Akhielesh`); the site Worker fall
 - **Schema:** 65 idempotent `server/sql/*.sql` files, applied **manually** (no runner).
   Several tables predate their SQL files (`user_settings`, `projects`, `profiles`,
   `studio_runs`, `user_api_keys`) — reconcile against live, don't assume a blank slate.
-- **Storage:** single `comic-assets` bucket via **service-role only** (`imageStorage.ts`).
-  The backend uses **Supabase Storage** for assets, **not R2** (R2 is live-worker only).
+- **Storage:** Supabase Storage holds live Comic artwork and private references. The dedicated backup Worker copies both buckets to a private Cloudflare R2 archive every six hours.
 - **RLS:** every table has RLS on, in three tiers — owner-scoped (client-direct OK),
   public-read, and service-role-only (`revoke all from anon, authenticated`).
 - **Settings › Contact (CONTACT-1):** the browser never writes `public.contact_messages`
@@ -412,7 +413,7 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 The `docs/ventures/**` specs describe a rich Workers + Workflows + KV + D1 +
 Hyperdrive + Queues platform. **None of that is live** (the move off Railway happened, but
 as a straight container lift, not that redesign). As of 2026-10-29 DreamStream uses: **4
-Workers, 1 Container (`Backend`), 1 R2 bucket, 5 Durable Object classes (`EventRoom`,
+Workers, 1 Container (`Backend`), the historical live-stream R2 bucket, 5 Durable Object classes (`EventRoom`,
 `MonitorRoom`, `UserLine`, `CallRoom`, `Backend`), Analytics Engine datasets (`stream_usage`, and
 `csp_reports` once bound), 1 DreamStream-owned D1 (`dreamstream-backend-env`, secrets only),
 Supabase Postgres** (plus the shared agent-log D1 tables above). There is **no KV, no Hyperdrive, no Queues, no Workflows,

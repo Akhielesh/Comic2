@@ -29,7 +29,12 @@ import { getAllowanceStatus, isUsageExemptAdmin, meteringEnabled } from '../serv
 import { IMAGE_MODELS } from '../../../shared/comic/models.js';
 import type { BillingPlanTier, ReservationState } from '../../../shared/types/billing.js';
 
+import { listStandaloneImages, requireImageWorkspace, validateImageWorkspaceRequest } from './standaloneImage.js';
+
 export const imageRouter = Router();
+imageRouter.use('/standalone', requireImageWorkspace);
+imageRouter.get('/standalone', listStandaloneImages);
+imageRouter.post('/standalone', validateImageWorkspaceRequest);
 
 type IdempotencyResult = Record<string, unknown>;
 type IdempotencyRecord = {
@@ -400,7 +405,7 @@ const settleSpentQuietly = async (operation: string, settle: () => Promise<Settl
   }
 };
 
-imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
+imageRouter.post(['/gemini', '/standalone'], checkLimits('gemini'), async (req, res, next) => {
   try {
     const apiKey = requireGeminiKey(req, res);
     if (!apiKey) return;
@@ -422,7 +427,8 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
       return res.status(401).json({ error: { message: 'User not authenticated for image persistence' } });
     }
 
-    const payload = await withIdempotency(req, res, 'image:gemini', async () => {
+    const standalone = res.locals.standaloneImage === true;
+    const payload = await withIdempotency(req, res, standalone ? 'image:standalone' : 'image:gemini', async () => {
       const effectiveModel = modelId || IMAGE_MODEL;
       const access = await resolveImageModelAccess(req, { byok: hasByokForProvider(req, 'gemini') });
       assertImageModelAllowed(access, effectiveModel);
@@ -485,7 +491,10 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
 
       let generated: Awaited<ReturnType<typeof generateGeminiImage>>;
       try {
-        generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], effectiveModel);
+        // Gemini accepts a request without an imageConfig. For an open-ended standalone brief,
+        // it can compose around the prompt and any input images without an imposed square crop.
+        const providerRatio = standalone && aspectRatio === 'auto' ? '' : aspectRatio;
+        generated = await generateGeminiImage(apiKey, prompt, providerRatio, resolution, referenceImages || [], effectiveModel);
       } catch (error) {
         // Nothing came back from the provider: free the hold.
         await releaseHold((error as Error)?.message || 'generation_failed');
@@ -529,6 +538,7 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
             projectId,
             dataUrl: generated.dataUrl,
             source: 'gemini',
+            ...(standalone ? { standalone: true } : {}),
             resolution,
             cropToRatio
           });
@@ -539,7 +549,7 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
             imageUrl: saved.imageUrl,
             mimeType: saved.mimeType,
             timings: buildTimings(apiMs, saved.saveMs),
-            dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
+            dataUrl: !standalone && IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
           };
 
           if (process.env.NODE_ENV !== 'production') {

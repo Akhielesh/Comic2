@@ -1,0 +1,47 @@
+.image-workspace { max-width: 76rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); color: var(--ds-ink); }
+.image-workspace-header > button { margin-inline-start: -.5rem; }
+.image-workspace h1, .image-workspace h2, .image-workspace p { margin: 0; }
+.image-workspace h1 { margin: 1rem 0 .35rem; font-size: clamp(2rem, 4vw, 3rem); font-weight: 650; line-height: 1.12; letter-spacing: -.045em; }
+.image-workspace-header p, .image-reference-input small, .image-usage, .image-history-status { color: var(--ds-muted); }
+.image-workspace-body { display: grid; grid-template-columns: minmax(15rem, .85fr) minmax(0, 1.4fr); gap: clamp(1.25rem,4vw,3rem); margin-block: 2rem; align-items: start; }
+.image-workspace-form, .image-reference-input { display: grid; gap: 1.3rem; min-width: 0; }
+.image-reference-input { gap: .5rem; justify-items: start; }
+.image-usage, .image-reference-input small { font-size: .85rem; line-height: 1.45; }
+.image-workspace-error { color: var(--ds-danger-text); overflow-wrap: anywhere; }
+.image-result { position: relative; min-height: 24rem; background: var(--ds-surface-soft); border: 1px solid var(--ds-hairline); border-radius: 1rem; padding: .75rem; display: grid; align-content: center; justify-items: center; }
+.image-output { display: block; max-height: 34rem; max-width: 100%; object-fit: contain; border-radius: .5rem; }
+.image-output-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; padding-top: .75rem; }
+.image-placeholder { display: grid; justify-items: center; gap: .8rem; text-align: center; color: var(--ds-muted); padding: 1rem; }
+.image-reference-list, .image-history ul { list-style: none; margin: 0; padding: 0; }
+.image-reference-list { width: 100%; }
+.image-reference-list li { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.image-reference-list li > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-reference-list img { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: .35rem; }
+.image-history { border-top: 1px solid var(--ds-hairline); padding-top: 1rem; }
+.image-history-heading { display: flex; align-items: center; justify-content: space-between; }
+.image-history h2 { font-size: 1.35rem; font-weight: 600; }
+.image-history ul { display: grid; grid-template-columns: repeat(auto-fill,minmax(6.5rem,1fr)); gap: .7rem; margin-block: .8rem; }
+.image-history li button { display: block; width: 100%; border: 2px solid transparent; padding: 2px; border-radius: .6rem; }
+.image-history li button[aria-pressed=true], .image-history button:focus-visible { outline: 2px solid var(--ds-focus); outline-offset: 1px; }
+.image-history img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: .4rem; }
+@media(max-width:720px) { .image-workspace-body { grid-template-columns: 1fr; } .image-result { min-height: 14rem; } }
+
+.image-reference-sheet {
+  width: min(100%, 38rem);
+  margin: 0;
+  padding: clamp(.65rem, 2vw, 1.1rem);
+  border: 1px solid var(--ds-hairline);
+  background: var(--ds-canvas);
+  box-shadow: 0 3px 10px rgb(0 0 0 / .07);
+}
+.image-reference-sheet img { width: 100%; max-height: 19rem; object-fit: contain; display: block; }
+.image-reference-sheet figcaption { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; padding-top: .7rem; }
+.image-reference-sheet strong, .image-reference-sheet span { display: block; }
+.image-reference-sheet span { color: var(--ds-muted); font-size: .8rem; overflow-wrap: anywhere; }
+
+.image-compose-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
+.image-format-options { border-block: 1px solid var(--ds-hairline); padding-block: .2rem; }
+.image-format-options summary { cursor: pointer; padding-block: .65rem; font-weight: 600; }
+.image-format-options summary span { margin-inline-start: .5rem; color: var(--ds-muted); font-size: .875rem; font-weight: 400; }
+.image-format-options[open] [data-slot="field"] { margin: .25rem 0 .85rem; }
+.image-format-options summary:focus-visible { outline: 2px solid var(--ds-focus); outline-offset: 2px; }

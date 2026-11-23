@@ -44,9 +44,9 @@ describe('the questions', () => {
     expect(asked.join(' ')).not.toMatch(/Chat Studio|Stream Studio|Dashboards|Code Studio|other studios|something else/i);
   });
 
-  it('the keep-me-updated box names what it is for and says nothing is sent yet', () => {
+  it('the keep-me-updated box names what it is for and describes the optional updates', () => {
     expect(INTEREST_UPDATES.label).toBe('Keep me updated about Comic Studio news and new DreamStream studios.');
-    expect(INTEREST_UPDATES.hint).toMatch(/Nothing is sent yet/);
+    expect(INTEREST_UPDATES.hint).toMatch(/future releases/);
   });
 
   it('keeps known ids once, in order', () => {
@@ -69,11 +69,10 @@ describe('the questions', () => {
     expect(interestThanks('updates', { comment: 'Hi' })).toBe('Thank you, you are on the list.');
   });
 
-  it('a ticked box gets a truthful line: nothing is sent yet, they hear when updates start', () => {
+  it('a ticked box confirms only the saved preference', () => {
     const ticked = interestThanks('access', { keepUpdated: true });
     expect(ticked).toBe(`Thank you, you are on the list. ${INTEREST_THANKS.keptUpdated}`);
-    expect(INTEREST_THANKS.keptUpdated).toMatch(/^Nothing is sent yet/);
-    expect(INTEREST_THANKS.keptUpdated).toMatch(/when updates start/);
+    expect(INTEREST_THANKS.keptUpdated).toMatch(/preference for updates is saved/i);
     expect(interestThanks('access', { keepUpdated: true, comment: 'Hi' })).toBe(
       `${INTEREST_THANKS.accessWithAnswers} ${INTEREST_THANKS.keptUpdated}`
     );
@@ -154,10 +153,10 @@ describe('interestMetadata', () => {
 });
 
 describe('the main site\'s list card (kind "updates")', () => {
-  it('promises no email, update or invite while none are sent, and says so', () => {
+  it('describes joining the list independently of delivery settings', () => {
     const all = Object.values(UPDATES_CARD).join(' ');
     expect(all).not.toMatch(/keep me posted|stay updated|no spam|invite|launch notes|early access|heads-up|we will email|we'll email/i);
-    expect(UPDATES_CARD.body).toMatch(/not sending any emails yet/);
+    expect(UPDATES_CARD.body).toMatch(/join the Stream Studio interest list/);
   });
 
   it('is what the main front page shows (no older promise left in it)', async () => {

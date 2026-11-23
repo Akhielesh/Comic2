@@ -6,7 +6,7 @@
 // plan name or date; no promise of an email, a reply, early access or a time; numbers and model names are never typed:
 // a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`. The interest form is the
 // app's own (components/WaitlistForm.tsx) with its own questions and thank-you, which promise nothing either: its one
-// box records that a person wants to be kept updated, and nothing is sent because of it.
+// box records a preference for updates. Access and account creation are separate steps.
 
 /** Fill `{NAME}` placeholders. A missing value throws, so a typo never ships as a literal brace. */
 export const fill = (text: string, values: Readonly<Record<string, string | number>> = {}): string =>
@@ -16,12 +16,12 @@ export const fill = (text: string, values: Readonly<Record<string, string | numb
   });
 
 /** The join action, named the same everywhere on the page. */
-export const JOIN = { action: 'Register your interest', short: 'Register interest' } as const;
+export const JOIN = { action: 'Create an account', short: 'Sign up' } as const;
 
 /** The hero's words under the title: what the product is, in one look (an AI makes the pages, the creator steers). */
 export const HERO = {
-  lead: 'Start with an idea or a script. The Comic Director, an AI, plans, draws and letters your pages with you.',
-  invitation: 'New accounts are by invitation while we’re in beta.'
+  lead: 'Give the AI Comic Director a story and get a page plan to review. Draw a standalone image from a prompt or reference, or talk through an idea by text or voice.',
+  invitation: 'Create an account to save your work.'
 } as const;
 
 export const FEATURES_HEAD = {
@@ -72,8 +72,8 @@ export const HOW = {
   eyebrow: 'How it works',
   title: 'Three steps to a finished comic',
   steps: [
-    { title: 'Tell the Director your idea', body: 'Type it, paste a script or attach one. The Director asks what matters and writes the plan.' },
-    { title: 'Agree the plan and the look', body: 'Settle the pages, cast and look together. Character sheets and a locked look help keep faces and outfits consistent.' },
+    { title: 'Tell the Director your idea', body: 'Describe a scene or paste your script. Choose “Draft it for me” for a first pass, or work through the story with the Director.' },
+    { title: 'Agree the plan and the look', body: 'Review the panels and the chosen look. Change the pacing, dialogue or cast before you approve the first drawing.' },
     { title: 'Draw, letter and share', body: 'Approve the drawing, fix any words in the editor, then publish a link or export it.' }
   ]
 } as const;
@@ -109,10 +109,9 @@ export const MODELS = {
 export const PRICING = {
   title: 'Pricing',
   lines: [
-    'Comic Studio is in an invite-only beta.',
-    'Sign-up is not open yet.',
-    'Prices have not been announced.',
-    'Registering your interest costs nothing.'
+    'Creating a Comic Studio account costs nothing.',
+    'In Settings, open API keys to connect a provider. Your provider bills usage on your key.',
+    'Add funds or update billing with that provider when needed. Studio usage limits still apply.'
   ]
 } as const;
 
@@ -128,7 +127,7 @@ export const READ = {
 
 export const REGISTER = {
   title: JOIN.action,
-  line: 'New accounts are by invite while Comic Studio is in beta. Registering your interest costs nothing.',
+  line: 'Create your studio account. You can set up a provider before your first generation.',
   memberAsk: 'Already a member?',
   signIn: 'Sign in',
   signedInTitle: 'You’re a member',
@@ -150,15 +149,15 @@ export const FAQ: readonly FaqCopy[] = [
   },
   {
     q: 'How do I get an account?',
-    a: 'New accounts are by invite during the beta. Register your interest on this page. If you receive an invite link, open it to create your account.'
+    a: 'Choose Sign up and follow the verification step to open your studio. If someone sent you a studio invitation, open that link to claim it.'
   },
   {
     q: 'What happens after I register my interest?',
-    a: 'Your interest is recorded, with any answers you add. Nobody is emailed for registering. If you ticked the box to be kept updated, we will let you know when updates start. Accounts open by invite, and there is no date yet.'
+    a: 'We save your answers and your updates preference. You can create an account at any time using the same email. If you already created one, sign in.'
   },
   {
     q: 'Does it cost anything?',
-    a: 'Prices have not been announced. Registering your interest costs nothing.'
+    a: 'Account creation costs nothing. When you connect a provider API key, that provider bills your AI usage. Studio usage limits also apply.'
   },
   {
     q: 'Which models draw the pictures?',

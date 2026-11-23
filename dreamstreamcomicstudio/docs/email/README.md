@@ -18,8 +18,8 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 | Admin announcement / notice | `announcement` | essential | admin Email Console / `sendAnnouncement(...)` |
 | Beta invite / referral | `beta-invite` | essential | `/api/admin/email/invite`, `/api/invites/referral/send` |
 | Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access), new rows only, **only while `INTEREST_EMAILS=on`** |
-| Account welcome (fuller onboarding) | `welcome` | essential | `sendWelcome(...)` |
-| New sign-in alert | `signin-alert` | essential | `sendSigninAlert(...)` |
+| Account welcome | `welcome` | essential | A newly verified account, when the database onboarding switch is enabled. A durable job sends it once per account. |
+| New sign-in alert | `signin-alert` | essential | Supabase sign-in security hook → Worker `/security`. |
 | Confirm signup / resend / password reset / magic link | `auth-confirm-signup`, `auth-recovery`, `auth-magic-link` | essential | `POST /api/auth/email/*` (backend `generateLink` + `/send`; see [SETUP](./SETUP.md#auth-emails-go-through-the-backend-default-since-2026-10-22)) |
 | Email change / reauthentication / security notices (+ auth fallback) | `auth-*` | essential | Supabase **Send Email Hook** |
 
@@ -53,7 +53,7 @@ no-reply message it lands somewhere a human can see.
         │  POST /api/newsletter/{subscribe,confirm,unsubscribe}
         │  POST /api/auth/email/{signup,resend,recovery,magiclink}  (→ GoTrue admin generateLink)
         ▼
- Railway backend (Express)
+ Cloudflare Container (Express)
    server/src/routes/newsletter.ts, authEmail.ts ─┐
    server/src/services/mailer.ts    │  caps + suppression + log + unsubscribe/pixel links
         │  HMAC-signed POST /send   │
@@ -65,11 +65,11 @@ no-reply message it lands somewhere a human can see.
         ▼
  Cloudflare Email Sending ──▶ recipient inbox
         ▲
-        └─ open pixel → GET /api/email/o/:id.gif → email_log.opened_at
+        ├─ optional image → GET /api/email/o/:token.gif → email_log.opened_at
+        └─ voluntary acknowledgement → confirmation page → POST → email_log.acknowledged_at
 ```
 
-The backend **never** touches the email service directly — it only ever signs a request to
-the worker, so authentication, branding and abuse-control live in one auditable place.
+The backend signs transactional requests to the email Worker. When an operator enables the optional Postmark Broadcast transport, product campaigns use its designated stream after consent, suppression and stream checks.
 
 ## Where things live
 
@@ -82,14 +82,15 @@ the worker, so authentication, branding and abuse-control live in one auditable 
 | `server/src/routes/newsletter.ts` | Public subscribe / confirm / unsubscribe (one-click GET + RFC 8058 POST). |
 | `server/src/routes/authEmail.ts` | Public auth emails (`/api/auth/email/{signup,resend,recovery,magiclink}`): GoTrue `generateLink` + our templates, Turnstile, per-recipient throttle. |
 | `server/src/services/authEmailLinks.ts` | Pure link builder + the strict link-origin allowlist (`APP_PUBLIC_URL` + `AUTH_LINK_ORIGINS`). |
-| `server/src/routes/email.ts` | Public open-tracking pixel. |
+| `server/src/routes/email.ts` | First-party image signal plus an optional acknowledgement page and confirmation POST. |
+| `server/sql/email_lifecycle.sql` | Atomic registration and account-verification triggers, retry queue, leases and optional container wake schedule. |
 | `server/sql/email_system.sql` | DB migration (log + suppression + double opt-in columns). |
 | `scripts/email-preview.ts` | Renders every template to `docs/email/previews/`. |
 
 ## Storage & logging
 
 Every send attempt writes a row to **`email_log`** (`queued → sent | failed | suppressed |
-rate_limited | skipped`, with `message_id`, `error`, `opened_at`). This is the audit trail,
+rate_limited | skipped`, with `message_id`, `error`, `opened_at` and `acknowledged_at`). This is the audit trail,
 the read-receipt store, and the source of truth for the cost cap. Opt-outs live in
 **`email_suppressions`**. Both tables are **service-role only** — no client can read them.
 

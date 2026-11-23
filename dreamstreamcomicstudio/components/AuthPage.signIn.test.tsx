@@ -3,7 +3,7 @@
 // asked for earlier (a "Forgot password" email, say) — nothing here waits for a link any more, so
 // no link opened later may skip the "Finish signing in?" step on its account.
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ signInWithPassword: vi.fn(), signOut: vi.fn() }));
@@ -13,6 +13,7 @@ vi.mock('../services/supabase', () => ({
   setAuthPersistMode: vi.fn(),
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
+vi.mock('../services/googleSignIn', () => ({ googleSignInAvailable: vi.fn(async () => false), startGoogleSignIn: vi.fn(), pendingGoogleSignIn: () => null, completeGoogleSignIn: vi.fn(), cancelGoogleSignIn: vi.fn() }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
 vi.mock('./WaitlistForm', () => ({ WaitlistForm: () => null }));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
@@ -48,4 +49,55 @@ describe('AuthPage — password sign-in', () => {
     expect(auth.signInWithPassword).toHaveBeenLastCalledWith(expect.objectContaining({ email: 'ada@example.com' }));
     expect(hasFreshSignInIntent()).toBe(false);
   });
+});
+
+
+it.each([true, false])('passes the standalone image destination on magic link requests only when requested (%s)', async (returnToImages) => {
+  const sent = vi.fn(async (_url: string, _options: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  vi.stubGlobal('fetch', sent);
+  try {
+    render(<AuthPage returnToWorkspace={returnToImages ? 'images' : undefined} onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in link' }));
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), { target: { value: 'fixture@example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send the link' }));
+    await waitFor(() => expect(sent).toHaveBeenCalledOnce());
+    const [url, options] = sent.mock.calls[0];
+    expect(url).toBe('/api/auth/email/magiclink');
+    const body = JSON.parse(String(options.body));
+    expect(body.sn).toBeTruthy();
+    expect(body.returnToWorkspace).toBe(returnToImages ? 'images' : undefined);
+    expect(await screen.findByText('Sign-in link sent. Check your email to continue.')).toBeInTheDocument();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('creates an ordinary account without an invitation and can resend verification from the same workspace', async () => {
+  const post = vi.fn(async (_url: string, _options: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  vi.stubGlobal('fetch', post);
+  const onLoginSuccess = vi.fn();
+  try {
+    window.history.replaceState({}, '', '/?view=images&ref=' + 'a'.repeat(32));
+    render(<AuthPage initialMode="signup" returnToWorkspace="images" onLoginSuccess={onLoginSuccess} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    for (const [label, value] of [
+      [/^Username/, 'public_creator'], [/^First name/, 'Ada'], [/^Email/, 'ada@example.test'], [/^Date of birth/, '2000-03-14'],
+      [/^Password/, 'fixture-passphrase'], [/^Confirm password/, 'fixture-passphrase'],
+    ] as const) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText(/open the verification link/);
+    expect(onLoginSuccess).not.toHaveBeenCalled();
+    expect(post.mock.calls[0][0]).toBe('/api/auth/email/signup');
+    expect(JSON.parse(String(post.mock.calls[0][1].body))).toMatchObject({
+      app: 'main', email: 'ada@example.test', returnToWorkspace: 'images', data: { username: 'public_creator', terms_accepted: true, marketing_consent: false, referral_code: 'a'.repeat(32) },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Resend verification email' }));
+    await screen.findByText(/Verification email sent/);
+    expect(post.mock.calls[1][0]).toBe('/api/auth/email/resend');
+    expect(JSON.parse(String(post.mock.calls[1][1].body))).toMatchObject({ email: 'ada@example.test', returnToWorkspace: 'images' });
+  } finally {
+    window.history.replaceState({}, '', '/');
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+  }
 });

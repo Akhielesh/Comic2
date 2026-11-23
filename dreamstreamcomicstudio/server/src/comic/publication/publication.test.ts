@@ -76,6 +76,7 @@ const ready = (name: string, extra: Partial<AssetRef> = {}): RenderState => ({
 /** plannedDoc enriched with every kind of private data, 3 drawn pages + cover. */
 function richDoc(): ComicDoc {
   const doc = plannedDoc('proj-1');
+  doc.directorDraft = { status: 'ready', idea: 'PRIVATE-DIRECTOR-DRAFT' };
   doc.brief = { ...doc.brief, premise: PRIVATE.premise, notes: ['PRIVATE-NOTE'], audience: 'kids 8+' };
   doc.style = { ...doc.style, status: 'locked', spec: PRIVATE.spec, palette: ['#fff'], refs: [{ ...asset('style-ref'), path: `u/${USER}/p/proj-1/ref/style.webp` }], options: [] };
   doc.cast = doc.cast.map((c) => ({ ...c, look: { ...c.look, summary: PRIVATE.look }, personality: 'PRIVATE-PERSONALITY', voice: 'PRIVATE-VOICE', refs: [{ ...asset('face'), path: `u/${USER}/p/proj-1/ref/face.webp` }], sheet: ready(`sheet-${c.id}`) }));
@@ -199,6 +200,7 @@ describe('buildPublicSnapshot (allow-list, exact key sets)', () => {
     expect(keys(snapshot)).toEqual(
       ['book', 'brief', 'cast', 'conversation', 'cover', 'createdAt', 'format', 'gate', 'i18n', 'id', 'letterStyle', 'pages', 'places', 'planStatus', 'reader', 'rev', 'settings', 'source', 'spend', 'style', 'updatedAt', 'v'].sort()
     );
+    expect(JSON.stringify(snapshot)).not.toContain('PRIVATE-DIRECTOR-DRAFT');
     expect(snapshot.id).toBe('pub-uuid');
     expect([snapshot.createdAt, snapshot.updatedAt, snapshot.rev]).toEqual([77, 77, 9]);
     // The brief's audience is a category word only ('kids 8+' → 'children': the kids' coverage cap reaches the reader).

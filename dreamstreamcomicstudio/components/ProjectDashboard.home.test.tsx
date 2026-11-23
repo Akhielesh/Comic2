@@ -93,6 +93,13 @@ describe('ProjectDashboard in Comic Studio: the brand opens your comics', () => 
     expect(props.onNavigate).not.toHaveBeenCalled();
   });
 
+  it('opens standalone images from the creator navigation without starting a comic', () => {
+    const { props } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Standalone images' }));
+    expect(props.onNavigate).toHaveBeenCalledWith('images');
+    expect(props.onCreateProject).not.toHaveBeenCalled();
+  });
+
   it('from All comics, the brand stays on All comics', () => {
     const { props } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
     expect(screen.getByRole('heading', { level: 1, name: 'My comics' })).toBeInTheDocument();
@@ -115,7 +122,7 @@ describe('ProjectDashboard in Comic Studio: the brand opens your comics', () => 
     const onCreateProject = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
     renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true, openNewComic: true, onCreateProject });
     fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'A lighthouse keeper finds a map.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Work step by step' }));
     expect(onCreateProject).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: 'Preparing…' })).toBeDisabled();
     fireEvent.click(brand());

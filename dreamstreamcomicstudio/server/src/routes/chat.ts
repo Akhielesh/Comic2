@@ -12,7 +12,7 @@ import {
   type ChatAttachmentInput,
   type TurnBudget
 } from '../ai/chat.js';
-import { spentUsageOf } from '../ai/usage.js';
+import { spentUsageOf, type MeteredUsage } from '../ai/usage.js';
 import { CHAT_TOOL_OUTPUT_MAX } from '../ai/tools/capToolOutput.js';
 import { buildSettleEstimateFromUsage } from '../services/costEstimator.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
@@ -44,6 +44,7 @@ import {
   isMemoryEnabled,
   setMemoryEnabled
 } from '../services/userMemory.js';
+import { recordUnreservedHelperUsage } from '../services/billingLedger.js';
 import { recordModelUsage } from '../services/modelStats.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
@@ -1171,7 +1172,7 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   apiKey: p.resolved.apiKey,
   model: p.model,
   messages: p.messages,
-  systemPrompt: p.systemPrompt,
+  conversationPreferences: p.systemPrompt,
   reasoningLevel: p.reasoningLevel,
   webSearch: p.webSearch,
   temperature: p.temperature,
@@ -1723,6 +1724,17 @@ export const runHeldHelper = async (
   input: { operation: string; provider: AIProviderId; model: string },
   call: () => Promise<RunChatResult>
 ): Promise<RunChatResult> => {
+  const observeUnreserved = async (model: string, usage: MeteredUsage | undefined, failed: boolean) => {
+    if (!hold.req.user?.id) return;
+    try {
+      await recordUnreservedHelperUsage({
+        userId: hold.req.user.id, operation: input.operation, provider: input.provider, model,
+        byok: hasByokForProvider(hold.req, input.provider), failed, usage
+      });
+    } catch {
+      logger.warn('chat_helper_usage_record_failed', { operation: input.operation });
+    }
+  };
   let result: RunChatResult;
   try {
     result = await call();
@@ -1738,6 +1750,9 @@ export const runHeldHelper = async (
         seed: { ...hold.reserve.seed, model: input.model },
         reason: 'chat_helper_failed'
       }).catch(() => undefined);
+    } else {
+      const spent = spentUsageOf(err);
+      if (spent) await observeUnreserved(input.model, spent, true);
     }
     throw err;
   }
@@ -1751,6 +1766,8 @@ export const runHeldHelper = async (
       seed: { ...hold.reserve.seed, model: result.model || input.model },
       usage: result.usage
     }).catch((err) => logger.error('chat_helper_settle_failed', { operation: input.operation, message: (err as Error)?.message }));
+  } else {
+    await observeUnreserved(result.model || input.model, result.usage, false);
   }
   return result;
 };

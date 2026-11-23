@@ -2,6 +2,18 @@
 
 Use this checklist to make signup verification and account policies work in production.
 
+## Public signup
+
+The Comic Studio landing opens `/?view=auth&mode=signup`. Ordinary creators can register with email or Google. Existing invitations continue to grant their assigned studios after sign-in.
+
+Email signup uses `/api/auth/email/signup` and the transactional mail Worker. Set the frontend Supabase URL and anon key, backend service role, `EMAIL_WORKER_URL`, and the matching `EMAIL_HMAC_SECRET`. Configure `VITE_TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` together when bot protection is enabled.
+
+Google login uses the backend Google OAuth web client and its existing exact `GOOGLE_OAUTH_REDIRECT_URL`, ending in `/api/connectors/oauth/callback`. The client ID and secret come from `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`. Register this URI in the Google Cloud OAuth client and allow public users on the consent screen. Login requests only OpenID, email and profile scopes. Connector consent remains independent.
+
+Apply `member_referrals.sql`, `google_login_accounts.sql` and `google_login_flows.sql` under `server/sql/`. The API encrypts short-lived OAuth state with the server’s configured service-role secret and binds it to the initiating browser tab. `GET /api/auth/google/status` returns `{"enabled":true}` when the credentials, storage and account lookup are configured. The sign-in form shows Google only when the backend reports readiness. A real sign-in also requires the registered callback to match Google Cloud and the selected Google account to be permitted by the consent screen.
+
+Existing accounts use their established sign-in method unless they already have a matching verified Google subject. New Google users provide a username, date of birth and agreement to the terms. New users with non-Gmail addresses outside a Google Workspace domain verify ownership by email.
+
 ## Auth Console Configuration
 
 1. Open Supabase Dashboard > `Authentication` > `URL Configuration` (project "Comic",

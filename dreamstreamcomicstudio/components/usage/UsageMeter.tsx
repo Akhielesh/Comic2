@@ -234,6 +234,9 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
           {status.pctLeft < 30 && ' Draft quality and the editor’s free tools stretch it furthest.'}
         </p>
       )}
+      {!status.exhausted && <a href={API_KEYS_HREF} className={cn('mt-2 inline-flex items-center py-1 text-xs font-semibold underline underline-offset-2 coarse:min-h-11', FOCUS_RING)}>
+        Provider activity and balances
+      </a>}
     </div>
   );
 };

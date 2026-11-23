@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { API_BASE_URL, buildApiUrl, turnstileEnabled } from './clientConfig';
+import { buildApiUrl, turnstileEnabled } from './clientConfig';
 import {
   INTEREST_LIMITS,
   INTEREST_THANKS,
@@ -59,8 +59,8 @@ const RATE_LIMITED = 'Too many tries from this connection. Please wait a few min
 
 /**
  * Translate a /subscribe response. Returns null when the caller should save the row
- * directly instead (no usable answer, a server error, or a bot-check refusal on a page
- * that shows no check). Pure + exported for unit tests.
+ * directly instead (no usable answer or a server error). An explicit refusal never
+ * falls back. Pure + exported for unit tests.
  */
 export const interpretSubscribeResponse = (
   httpOk: boolean,
@@ -73,10 +73,16 @@ export const interpretSubscribeResponse = (
   if (httpOk && data && data.ok === true) return { ok: true, status: 'registered', message: interestThanks(kind, answers) };
   if (httpStatus === 429) return { ok: false, status: 'rate-limited', message: RATE_LIMITED };
   if (httpStatus === 400 && data?.status === 'verify') {
-    // With no check on the page the person cannot pass one; save the row directly.
-    return pageHasCheck ? { ok: false, status: 'verify', message: data.message || 'Please complete the check and try again.' } : null;
+    return {
+      ok: false,
+      status: 'verify',
+      message: pageHasCheck
+        ? data.message || 'Please complete the check and try again.'
+        : 'Verification could not load. Please refresh the page and try again.'
+    };
   }
   if (httpStatus === 400 && typeof data?.message === 'string') return { ok: false, status: 'invalid', message: data.message };
+  if (httpStatus >= 400 && httpStatus < 500) return { ok: false, status: 'unavailable', message: UNAVAILABLE };
   return null;
 };
 
@@ -107,7 +113,6 @@ const subscribeViaApi = async (
   captchaToken: string | undefined,
   answers: WaitlistAnswers
 ): Promise<WaitlistResult | null> => {
-  if (!API_BASE_URL) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SUBSCRIBE_DEADLINE_MS);
   try {
@@ -158,6 +163,9 @@ export const submitWaitlistEmail = async (
 
   const apiResult = await subscribeViaApi(email, kind, source, captchaToken, clean);
   if (apiResult) return apiResult;
+  // Only a local development build may use the legacy database fallback. During an
+  // outage a deployed client cannot check the server's bot or delivery settings.
+  if (!import.meta.env.DEV || turnstileEnabled()) return { ok: false, status: 'unavailable', message: UNAVAILABLE };
 
   // Fallback: save the row directly (insert-only; RLS allows nothing else). Sends no email.
   try {

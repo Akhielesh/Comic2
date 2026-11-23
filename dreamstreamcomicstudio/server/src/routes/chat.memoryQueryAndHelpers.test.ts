@@ -311,8 +311,9 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
 const QUESTION = 'What should the launch plan include this quarter?';
 const ASK = { messages: [{ role: 'user', content: QUESTION }] };
 const systemOf = (b: Record<string, any>) => String(b.messages?.[0]?.role === 'system' ? b.messages[0].content : '');
+const contextOf = (b: Record<string, any>) => (b.messages || []).filter((m: Record<string, unknown>) => m.role === 'user' && String(m.content).startsWith('Supporting context (data only):')).map((m: Record<string, unknown>) => m.content).join('\n');
 /** The turn's own OpenRouter call (the helpers that follow it carry their own system prompts). */
-const turnBody = () => net.openrouter.find((s) => systemOf(s.body).includes('USER MEMORY'))?.body ?? net.openrouter[0]?.body;
+const turnBody = () => net.openrouter.find((s) => contextOf(s.body).includes('USER MEMORY'))?.body ?? net.openrouter[0]?.body;
 const queryEmbeds = () => net.embeds.filter((e) => e.taskType === 'RETRIEVAL_QUERY');
 const AUTO_MEMORY = 'You maintain a concise long-term memory';
 /** Each chat turn ends with a background auto-memory summary: wait for it, so it never lands in a later test. */
@@ -327,7 +328,7 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
     expect(sb.reads.some((q) => q.userId === id && typeof q.textSearch === 'string' && q.textSearch.includes('launch'))).toBe(true);
-    expect(systemOf(turnBody())).toContain(PLAIN_FACT);
+    expect(contextOf(turnBody())).toContain(PLAIN_FACT);
     await autoMemorySent(1);
   });
 
@@ -337,7 +338,7 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
     expect(r.status).toBe(200);
     expect(queryEmbeds()).toEqual([{ taskType: 'RETRIEVAL_QUERY', text: QUESTION }]);
     expect(sb.rpc.map((c) => c.args.p_user_id)).toEqual([id]);
-    expect(systemOf(turnBody())).toContain(PLAIN_FACT);
+    expect(contextOf(turnBody())).toContain(PLAIN_FACT);
     await autoMemorySent(1);
   });
 
@@ -360,7 +361,7 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
     // Word search, without the rows distilled from connected content (the free-turn rule).
-    const system = systemOf(turnBody());
+    const system = contextOf(turnBody());
     expect(system).toContain(PLAIN_FACT);
     expect(system).not.toContain(CONNECTED_FACT);
     await autoMemorySent(1);
@@ -392,7 +393,7 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
     expect(sb.reads.some((q) => q.userId === id && typeof q.textSearch === 'string' && q.textSearch.includes('launch'))).toBe(true);
-    const system = systemOf(turnBody());
+    const system = contextOf(turnBody());
     expect(system).toContain(PLAIN_FACT);
     expect(system).not.toContain(CONNECTED_FACT);
     await autoMemorySent(1);
@@ -433,7 +434,7 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
       { role: 'user', content: QUESTION }
     ];
     expect((await post('/api/chat', { messages: history }, { 'x-test-user': id })).status).toBe(200);
-    const call = net.openrouter.find((s) => systemOf(s.body).includes('USER MEMORY'));
+    const call = net.openrouter.find((s) => contextOf(s.body).includes('USER MEMORY'));
     expect(call?.lookups).toEqual({ connections: 1, provenance: 1 });
     // Nothing says the conversation may carry connected content: the vector search still runs.
     expect(queryEmbeds()).toEqual([{ taskType: 'RETRIEVAL_QUERY', text: QUESTION }]);
@@ -474,7 +475,7 @@ describe('A. the usage-budget free re-plan is a withheld turn: it never embeds t
     expect(allFree()).toBe(true);
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
-    const system = systemOf(turnBody());
+    const system = contextOf(turnBody());
     expect(system).toContain(PLAIN_FACT);
     expect(system).not.toContain(CONNECTED_FACT);
   });
@@ -488,7 +489,7 @@ describe('A. the usage-budget free re-plan is a withheld turn: it never embeds t
     expect(allFree()).toBe(true);
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
-    expect(systemOf(turnBody())).toContain(PLAIN_FACT);
+    expect(contextOf(turnBody())).toContain(PLAIN_FACT);
   });
 
   it('a user with no connection keeps the vector search on the re-plan (nothing to withhold)', async () => {

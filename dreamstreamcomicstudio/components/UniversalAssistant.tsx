@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, Bot, BookmarkPlus, Check, RotateCcw, Send, Sparkles, X } from 'lucide-react';
 import { AssistantMessage, AssistantLimitInfo, UniversalAssistantContext } from '../apiTypes';
+import { DictationButton } from './chat/DictationButton';
+import { ReadReplyAloud } from './chat/ReadReplyAloud';
 import { MessageCard } from './MessageCard';
 import { queryUniversalAssistant } from '../services/geminiService';
 import { ApiError } from '../services/apiClient';
 import { Project } from '../types';
 import { buildProjectSnapshot, summarizeAllProjects, summarizeProject } from '../services/assistantContext';
-import { getUsageLimits, getUserProfile, loadArtifactsForProject } from '../services/db';
+import { loadArtifactsForProject } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { captureError, captureEvent } from '../services/telemetry';
 import { detectSentiment, submitFeedback } from '../services/feedback';
@@ -53,14 +55,6 @@ type UniversalAssistantProps = {
   hideLauncher?: boolean;
 };
 
-const maskEmail = (email?: string | null) => {
-  if (!email || !email.includes('@')) return undefined;
-  const [name, domain] = email.split('@');
-  if (!name || !domain) return undefined;
-  const prefix = name.length <= 2 ? name[0] : name.slice(0, 2);
-  return `${prefix}***@${domain}`;
-};
-
 const buildRateLimitMessage = (error: ApiError) => {
   const details = (error.details || {}) as Record<string, unknown>;
   const scope = typeof details.scope === 'string' ? details.scope : 'assistant';
@@ -96,7 +90,7 @@ const getArtifactSummary = (artifacts: Array<{ stage?: string; type?: string; mo
 };
 
 const SUGGESTIONS: Array<{ label: string; prompt: string }> = [
-  { label: 'What can I do here?', prompt: 'Give me a quick tour: what can I do in DreamStream Comic Studio?' },
+  { label: 'Explain a concept', prompt: 'Explain how rainbows form in everyday language.' },
   { label: 'Tokens & limits', prompt: 'How do tokens, plans, and usage limits work on my account?' },
   { label: 'Fix my API keys', prompt: 'Help me check and fix my API key configuration.' }
 ];
@@ -127,6 +121,9 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [input, setInput] = useState('');
+  const dictationBase = useRef('');
+  const insertDictation = (spoken: string) => setInput([dictationBase.current, spoken].filter(Boolean).join(' '));
+  const [shareWorkspace, setShareWorkspace] = useState(false);
   const [savedMsgIds, setSavedMsgIds] = useState<Set<string>>(new Set());
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [lastLimitInfo, setLastLimitInfo] = useState<AssistantLimitInfo | undefined>(undefined);
@@ -135,6 +132,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isAuthenticated = !!user;
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
 
   useEffect(() => {
     const updateIsMobile = () => setIsMobile(window.innerWidth < 640);
@@ -157,19 +156,10 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   );
 
   const buildContext = async (): Promise<UniversalAssistantContext> => {
-    const base: UniversalAssistantContext = {
-      view: currentView,
-      publicHints: [
-        'Assistant scope is DreamStream Comic Studio only.',
-        'For non-platform questions, use a general-purpose assistant.'
-      ]
-    };
+    const base: UniversalAssistantContext = { view: currentView };
+    if (!isAuthenticated || !shareWorkspace) return base;
 
-    if (!isAuthenticated) return base;
-
-    const [profile, usage, activeSummary, allSummaries, artifacts] = await Promise.all([
-      user ? getUserProfile(user.id) : Promise.resolve(null),
-      getUsageLimits(),
+    const [activeSummary, allSummaries, artifacts] = await Promise.all([
       activeProject ? summarizeProject(activeProject) : Promise.resolve(undefined),
       summarizeAllProjects(projects.slice(0, 12)),
       activeProject ? loadArtifactsForProject(activeProject.id) : Promise.resolve([])
@@ -181,22 +171,6 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
     return {
       ...base,
-      account: {
-        isAuthenticated: true,
-        username: profile?.username || undefined,
-        maskedEmail: maskEmail(user?.email),
-        // No isAdmin here: the server rebuilds the account summary (routes/assistant.ts) from the
-        // plan it holds, and an email address never makes anyone an admin.
-        planTier: usage?.plan_tier,
-        usage: usage ? {
-          imagesGenerated: usage.images_generated_count,
-          maxImagesAllowed: usage.max_images_allowed,
-          hasByok: usage.has_byok,
-          isPremium: usage.is_premium,
-          dailyRemainingCt: usage.daily_remaining_ct,
-          availableCt: usage.available_ct
-        } : undefined
-      },
       reportSummary: activeSummary ? {
         cost: activeSummary.cost,
         storage: activeSummary.storage,
@@ -227,7 +201,9 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
   const handleSend = async (overrideText?: string) => {
     const message = (overrideText ?? input).trim();
-    if (!message || isSending) return;
+    if (!message || isSending || pending.current) return;
+    const controller = new AbortController();
+    pending.current = controller;
 
     const userMessage: ChatItem = {
       id: crypto.randomUUID(),
@@ -242,8 +218,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     setStatusMessage(null);
     setIsSending(true);
 
-    // Understand + write down disappointment: when the user vents at the assistant,
-    // capture the sentiment as feedback automatically (no thumbs-down hunt required).
+    // Record sentiment counts only. A private conversation is not a support transcript.
     const sentiment = detectSentiment(message);
     if (sentiment) {
       captureEvent({
@@ -251,13 +226,11 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         severity: sentiment === 'frustrated' ? 'warn' : 'info',
         source: 'universal_assistant',
         surface: currentView,
-        message,
         metadata: { sentiment }
       });
       void submitFeedback({
         targetType: 'universal_assistant',
         sentiment,
-        comment: message,
         source: 'universal_assistant',
         surface: currentView,
         metadata: { auto: true, view: currentView }
@@ -266,7 +239,9 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
     try {
       const context = await buildContext();
-      const response = await queryUniversalAssistant(message, history, context);
+      if (controller.signal.aborted) return;
+      const response = await queryUniversalAssistant(message, history, context, { signal: controller.signal, expectedAccountId: user?.id });
+      if (controller.signal.aborted) return;
       setLastLimitInfo(response.limitInfo);
       setMessages((prev) => [
         ...prev,
@@ -278,6 +253,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         }
       ]);
     } catch (error) {
+      if (controller.signal.aborted) return;
       if (error instanceof ApiError && error.status === 429) {
         setMessages((prev) => [
           ...prev,
@@ -305,11 +281,18 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         metadata: { historyLength: history.length }
       });
     } finally {
-      setIsSending(false);
+      if (pending.current === controller) {
+        pending.current = null;
+        setIsSending(false);
+      }
     }
   };
 
   const clearConversation = () => {
+    pending.current?.abort();
+    pending.current = null;
+    setIsSending(false);
+    setShareWorkspace(false);
     setMessages([]);
     setSavedMsgIds(new Set());
     setStatusMessage(null);
@@ -364,7 +347,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                 <div className="min-w-0">
                   <p className="truncate text-[15px] font-semibold leading-5 text-[var(--ds-ink)]">Assistant</p>
                   <p className={cn('truncate text-[11px] leading-4', MUTED)}>
-                    {isAuthenticated ? 'Knows your projects & account' : 'Guest mode'}
+                    {isAuthenticated ? 'Signed in' : 'Guest mode'}
                   </p>
                 </div>
               </div>
@@ -389,7 +372,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                   </div>
                   <p className="text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">How can I help?</p>
                   <p className={cn('mb-5 mt-1 max-w-[15rem] text-[length:var(--ds-text-sm)]', MUTED)}>
-                    Ask about your projects, account, generation setup, or anything DreamStream.
+                    Ask a question, think through an idea, or get help with DreamStream.
                   </p>
                   <div className="flex flex-col gap-2 w-full max-w-[16rem]">
                     {SUGGESTIONS.map((suggestion) => (
@@ -428,6 +411,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                       {/* Actions: always visible on touch screens (no hover there); on
                           pointer devices they reveal on hover/focus to keep the thread clean. */}
                       <div className="mt-1 flex flex-wrap items-center gap-2 px-1 transition-opacity duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                        <ReadReplyAloud text={message.text} />
                         {onSaveCreativeDirection && message.text.trim() && (
                           <button
                             onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
@@ -462,7 +446,18 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
             {/* Composer: one calm row; meta only when it matters. */}
             <div className="shrink-0 border-t border-[var(--ds-hairline)] p-3">
+              {isAuthenticated && (activeProject || projects.length > 0) && (
+                <label className="mb-2 flex items-center gap-2 text-xs text-[var(--ds-muted)]">
+                  <input type="checkbox" checked={shareWorkspace} onChange={event => setShareWorkspace(event.target.checked)} />
+                  Include my workspace summaries
+                </label>
+              )}
               <div className="flex items-center gap-2">
+                <DictationButton disabled={isSending} align="start"
+                  onStart={() => { dictationBase.current = input; }}
+                  onPartial={insertDictation}
+                  onFinal={spoken => { insertDictation(spoken); inputRef.current?.focus(); }}
+                  onTypeInstead={() => inputRef.current?.focus()} />
                 <input
                   ref={inputRef}
                   type="text"
@@ -474,7 +469,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                       void handleSend();
                     }
                   }}
-                  placeholder="Ask anything about DreamStream…"
+                  placeholder="Ask a question…"
                   className={cn(FIELD, 'h-11 min-w-0 flex-1 px-3.5 text-base md:text-[length:var(--ds-text-base)]')}
                 />
                 <Button

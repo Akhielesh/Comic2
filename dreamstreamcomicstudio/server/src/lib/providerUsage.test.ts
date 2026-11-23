@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   providerForUrl,
+  flushUsageDeltas,
+  isKnownConnectorProvider,
+  setUsageCloudSink,
   getConfiguredProviderBudget,
   assertProviderBudget,
   noteProviderCall,
@@ -181,5 +184,43 @@ describe('account-wise cloud deltas', () => {
     await flushUsageDeltas();
     expect(rows.length).toBeGreaterThan(0);
     expect(__pendingUsageDeltas()).toHaveLength(0);
+  });
+});
+
+describe('account connector persistence', () => {
+  it('replays the same batch after an ambiguous write and keeps new activity separate', async () => {
+    const { runWithAccount } = await import('./accountContext.js');
+    const persisted = new Map<string, number>();
+    const url = 'https://api.frankfurter.app/latest';
+    const count = (id: string) => runWithAccount(id, () => assertProviderBudget(url, T0));
+    let failOnce = true;
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => { finish = resolve; });
+    setUsageCloudSink(async (rows) => {
+      for (const row of rows) {
+        if (!persisted.has(row.id)) persisted.set(row.id, row.calls);
+      }
+      if (failOnce) {
+        failOnce = false;
+        await waiting;
+        throw new Error('response lost after commit');
+      }
+    });
+    count('owner-a');
+    const first = flushUsageDeltas();
+    expect(flushUsageDeltas()).toBe(first);
+    count('owner-a');
+    count('owner-b');
+    finish();
+    await first;
+    await flushUsageDeltas();
+    expect([...persisted.values()]).toEqual([1, 1, 1]);
+  });
+
+  it('recognizes public meter names and keeps private host names outside the display allowlist', () => {
+    expect(isKnownConnectorProvider('frankfurter')).toBe(true);
+    expect(isKnownConnectorProvider('web-page')).toBe(true);
+    expect(isKnownConnectorProvider('private-workspace.example')).toBe(false);
+    expect(isKnownConnectorProvider('constructor')).toBe(false);
   });
 });

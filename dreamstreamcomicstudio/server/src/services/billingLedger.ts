@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { MeteredUsage } from '../ai/usage.js';
 import Stripe from 'stripe';
 import type {
   BillingInterval,
@@ -727,6 +728,33 @@ const recordLedgerEntry = async (
   if (error) {
     throw createBillingBackendUnavailableError(error);
   }
+};
+
+/** Account analytics for a completed helper that runs without a wallet hold.
+ * Accept only numeric usage fields, so model messages and provider responses cannot enter the ledger. */
+export const recordUnreservedHelperUsage = async (input: {
+  userId: string; operation: string; provider: string; model: string; byok: boolean; failed: boolean; usage?: MeteredUsage;
+}): Promise<void> => {
+  const reported = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const usage = input.usage;
+  await recordLedgerEntry(input.userId, {
+    entryType: 'USAGE_OBSERVED',
+    operation: input.operation,
+    provider: input.provider,
+    model: input.model,
+    isByok: input.byok,
+    ctDelta: 0,
+    usdDelta: 0,
+    providerCostUsd: reported(usage?.providerCostUsd),
+    metadata: {
+      failed: input.failed,
+      promptTokens: reported(usage?.promptTokens),
+      candidatesTokens: reported(usage?.candidatesTokens),
+      totalTokens: reported(usage?.totalTokens),
+      partialProviderCostUsd: reported(usage?.partialProviderCostUsd)
+    }
+  });
 };
 
 const recordCostEvent = async (event: Record<string, unknown>) => {

@@ -104,7 +104,7 @@ function NewComicScene() {
     <div data-comic-theme={material} data-qa-new-comic={view} className="min-h-[100dvh] bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
       <ComicWorkspaceFrame title={view === 'new' ? 'New comic' : 'All comics'} navigation={navigation} onHome={noop}>
         {view === 'new'
-          ? <ComicIdeaForm name={name} idea={idea} pending={false} error={error} onName={setName} onIdea={setIdea} onStart={noop} onStartBlank={noop} onClassic={noop} onLibrary={noop} />
+          ? <ComicIdeaForm name={name} idea={idea} pending={false} error={error} onName={setName} onIdea={setIdea} onStart={noop} onDraft={noop} onStartBlank={noop} onClassic={noop} onLibrary={noop} />
           : <AllComicsStandIn />}
       </ComicWorkspaceFrame>
     </div>

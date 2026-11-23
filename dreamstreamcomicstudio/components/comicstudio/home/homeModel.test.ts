@@ -132,8 +132,10 @@ describe('coverCandidates', () => {
 });
 
 describe('HOME_START_HELP', () => {
-  it('is one plain sentence pair with no price', () => {
-    expect(HOME_START_HELP).toMatch(/^Start /);
+  it('explains the writing allowance and the drawing approval without a fixed price', () => {
+    expect(HOME_START_HELP).toMatch(/writing allowance/i);
+    expect(HOME_START_HELP).toMatch(/approve one drawing estimate/i);
+    expect(HOME_START_HELP).toMatch(/private comic/i);
     expect(HOME_START_HELP).not.toMatch(/\$|¢/);
   });
 });

@@ -61,6 +61,7 @@ export type TopLevelSection =
  */
 export const TOP_LEVEL_SECTIONS: Readonly<Record<keyof ComicDoc, TopLevelSection>> = {
   v: 'excluded',
+  directorDraft: 'excluded',
   id: 'excluded',
   createdAt: 'excluded',
   updatedAt: 'excluded',

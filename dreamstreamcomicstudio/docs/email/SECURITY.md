@@ -31,14 +31,11 @@ The mailer refuses to send a marketing message if it can't build a working unsub
 (missing `EMAIL_PUBLIC_BASE_URL`), so we never send non-compliant marketing mail. Every email
 carries the honest "why you're getting this" footer + sender postal address (CAN-SPAM / CASL).
 
-## Read receipts / open tracking — privacy note
+## Message receipts and privacy
 
-Marketing **and** essential mail can embed a 1×1 open-tracking pixel
-(`/api/email/o/:id.gif` → stamps `email_log.opened_at`). This is **best-effort**: many clients
-block remote images or pre-fetch them, so opens are a weak signal, not proof of reading. The
-pixel only records the open timestamp against our own log row — no third-party tracker, no
-profile, no cross-site cookies. To disable tracking entirely, leave `EMAIL_PUBLIC_BASE_URL`
-unset (no pixel URL is generated) or strip `params.pixelUrl` in the mailer.
+An eligible service email may carry a voluntary acknowledgement link. Opening it displays a confirmation form. Its POST records the first acknowledgement on the send-log row. A holder of a forwarded link may also acknowledge it. Signing in is unnecessary. Each message and purpose has its own 256-bit random token. The server stores hashes, checks a 90-day expiry, and omits the URL, IP and account from receipt access logs.
+
+Passive image collection requires `EMAIL_OPEN_SIGNALS=on`. Mail clients and proxies can load or block these images automatically. The first image load, link acknowledgement and provider acceptance are separate events. Authentication, security, newsletter-confirmation and campaign messages contain no receipts. See [receipt controls](SETUP.md#message-acknowledgements-and-image-signals).
 
 ## Bot protection — Cloudflare Turnstile
 

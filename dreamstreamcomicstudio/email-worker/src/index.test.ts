@@ -58,6 +58,27 @@ const confirm = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe('POST /send (worker route)', () => {
+  it('only carries first-party receipt capabilities on eligible templates', async () => {
+    const { env, sent } = makeEnv();
+    const ackUrl = APP + '/api/email/ack/' + 'a'.repeat(43);
+    const pixelUrl = APP + '/api/email/o/' + 'b'.repeat(43) + '.gif';
+    const body = { template: 'welcome', to: 'reader@example.test', params: { ackUrl, pixelUrl } };
+    await send(env, body);
+    expect(sent[0].html).toContain(ackUrl);
+    expect(sent[0].text).toContain(ackUrl);
+    expect(sent[0].html).toContain(pixelUrl);
+    await send(env, { ...body, params: { ackUrl: ackUrl + '?target=other', pixelUrl: pixelUrl.replace(APP,'https://third-party.test') } });
+    expect(sent[1].html).not.toContain('/api/email/');
+    await send(env, { ...body, template: 'auth-security-notice' });
+    expect(sent[2].html + sent[2].text).not.toContain('/api/email/');
+  });
+
+  it('refuses signed product-update requests on the transactional channel', async () => {
+    const { env, sent } = makeEnv();
+    expect((await send(env, { template: 'product-update', to: 'ada@example.com' })).status).toBe(422);
+    expect(sent).toHaveLength(0);
+  });
+
   it('renders with the env brand by default, from no-reply@ for auth templates', async () => {
     const { env, sent } = makeEnv();
     expect(await send(env, confirm())).toEqual({ status: 200, json: { ok: true, messageId: 'm1' } });
@@ -74,6 +95,13 @@ describe('POST /send (worker route)', () => {
     expect(sent[0].html).toContain('Welcome to Stream Studio!');
     // The link the backend built is used as-is.
     expect(sent[0].html).toContain('/live?after=monitor&amp;token_hash=h&amp;type=signup');
+  });
+
+  it('uses Comic Studio branding for authenticated comic mail', async () => {
+    const { env, sent } = makeEnv();
+    await send(env, confirm({ brand: 'comic-studio' }));
+    expect(sent[0].from).toMatchObject({ name: 'Comic Studio' });
+    expect(sent[0].subject).toBe('Confirm your email — Comic Studio');
   });
 
   it('ignores unknown brand values', async () => {

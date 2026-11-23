@@ -65,7 +65,10 @@ adminEmailRouter.post('/preview', (req, res) => {
   const template = req.body?.template;
   if (!isEmailTemplateName(template)) return res.status(400).json({ error: { message: 'Unknown template' } });
   try {
-    const rendered = renderEmail(template, (req.body?.params ?? {}) as EmailParams);
+    const params = { ...(req.body?.params ?? {}) } as EmailParams;
+    delete params.ackUrl;
+    delete params.pixelUrl;
+    const rendered = renderEmail(template, params);
     res.json({ ...rendered, kind: TEMPLATE_KIND[template] });
   } catch (err) {
     res.status(400).json({ error: { message: (err as Error)?.message || 'Could not render' } });

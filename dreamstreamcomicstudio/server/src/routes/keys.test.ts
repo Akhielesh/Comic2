@@ -177,6 +177,35 @@ const ALLOWED_FIELDS = ['message', 'provider', 'status', 'valid'];
 const LEAKY = /usage|label|is_free_tier|rate_limit|limit|credit|detail|PLATFORM/i;
 const authOut = (u: Upstream) => u.headers.authorization ?? u.headers['x-api-key'] ?? u.headers['x-goog-api-key'];
 
+describe('POST /api/keys/balance', () => {
+  const balance = async (provider: string, headers: Record<string, string> = {}, auth = true) => {
+    const res = await fetch(`${base}/api/keys/balance`, { method: 'POST',
+      headers: { 'content-type':'application/json', ...(auth ? { authorization:'Bearer good-token' } : {}), ...headers },
+      body: JSON.stringify({ provider, ownerId:'forged-account', key:'forged-key' }) });
+    return { res, body: await res.json() };
+  };
+
+  it('requires a member and never checks the platform fallback or a credential supplied in JSON', async () => {
+    expect((await balance('openrouter', {}, false)).res.status).toBe(401);
+    const {body,res}=await balance('openrouter');
+    expect(body).toMatchObject({report:{status:'missing'},saved:false});
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(upstream).toHaveLength(0);
+  });
+
+  it('checks the explicitly selected personal key even with a different key saved, and respects source governance', async () => {
+    store.rows = [{provider:'openrouter',encrypted_key:'account-key',iv:'test'}];
+    const {body}=await balance('openrouter',{'X-OpenRouter-Key':'selected-personal'});
+    expect(upstream.length).toBeGreaterThan(0);
+    expect(upstream.every(u => authOut(u)==='Bearer selected-personal')).toBe(true);
+    expect(body.report.status).toBe('reported');
+    expect(JSON.stringify(body)).not.toContain('selected-personal');
+    upstream.length=0;
+    expect((await balance('openrouter',{'X-Allowed-Sources':'nvidia'})).res.status).toBe(403);
+    expect(upstream).toHaveLength(0);
+  });
+});
+
 describe('POST /api/keys/validate never touches the platform key', () => {
   it.each(['openrouter', 'nvidia', 'gemini', 'openai', 'anthropic', 'pixazo', 'ideogram'])(
     'signed in, no key header, platform %s key set → missing, no detail, and no upstream call',

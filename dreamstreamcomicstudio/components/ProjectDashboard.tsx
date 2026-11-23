@@ -142,7 +142,7 @@ interface ProjectDashboardProps {
   comicWorkspace?: boolean;
   accountId?: string;
   /** May return a promise: the dashboard shows progress and an inline error if it rejects. */
-  onCreateProject: (name: string, mode: NewComicMode, initialIdea?: string) => void | Promise<void>;
+  onCreateProject: (name: string, mode: NewComicMode, initialIdea?: string, directorCreationId?: string) => void | Promise<void>;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDuplicateProject: (id: string) => void;
@@ -332,13 +332,19 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     }
   };
 
-  const startIdea = async (blank = false) => {
+  const startIdea = async (intent: 'hands-on' | 'director' | 'blank' = 'hands-on') => {
+    const blank = intent === 'blank';
     if (createInFlightRef.current || (!blank && !draft.idea.trim())) return;
     createInFlightRef.current = true;
     setCreateError(null);
     setCreatePending('studio');
     try {
-      await onCreateProject(newProjectName.trim().slice(0, PROJECT_NAME_MAX), 'studio', blank ? undefined : draft.idea);
+      const title = newProjectName.trim().slice(0, PROJECT_NAME_MAX);
+      if (intent === 'director') {
+        await onCreateProject(title, 'studio', draft.idea, draft.directorCreationId());
+      } else {
+        await onCreateProject(title, 'studio', blank ? undefined : draft.idea);
+      }
       // Start blank leaves an unfinished idea available when the author returns.
       if (!blank) draft.clear();
       setIsCreating(false);
@@ -395,7 +401,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             {/* One New comic per screen: the open form owns Create; in the comics workspace the frame's sidebar owns it,
                 and only where that sidebar folds into a drawer does the header keep a quiet outline one. */}
             {!isCreating && (!comicWorkspace || ff.width < WORKSPACE_NAV_DRAWER_BELOW) && (
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {comicWorkspace && onNavigate && <Button variant="outline" onClick={() => onNavigate('images')}>Create an image</Button>}
                 <Button variant={comicWorkspace ? 'outline' : 'default'} onClick={beginNewComic}><Plus aria-hidden /> New comic</Button>
               </div>
             )}
@@ -794,10 +801,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
     navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
       onNewComic: beginNewComic,
+      onImages: onNavigate && (() => onNavigate('images')),
+      onChat: onNavigate && (() => onNavigate('chat')),
       onAllComics: () => { initialEntryChosen.current = true; setIsCreating(false); setCreateError(null); },
       onLibrary: () => onNavigate?.('gallery'), onOpenProject }}>
     {isCreating && !classicForm ? <ComicIdeaForm name={newProjectName} idea={draft.idea} pending={!!createPending} error={createError}
-      onName={setNewProjectName} onIdea={draft.setIdea} onStart={() => void startIdea()} onStartBlank={() => void startIdea(true)}
-      onClassic={() => setClassicForm(true)} onLibrary={() => onNavigate?.('gallery')} /> : dashboard}
+      onName={setNewProjectName} onIdea={draft.setIdea} onStart={() => void startIdea()} onDraft={() => void startIdea('director')} onStartBlank={() => void startIdea('blank')}
+      onImages={onNavigate && (() => onNavigate('images'))} onClassic={() => setClassicForm(true)} onLibrary={() => onNavigate?.('gallery')} /> : dashboard}
   </ComicWorkspaceFrame>;
 };

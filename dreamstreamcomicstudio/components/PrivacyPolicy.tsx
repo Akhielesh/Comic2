@@ -12,7 +12,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                 <header className="mb-8 sm:mb-10">
                     <p className={OVERLINE_DISPLAY}>Legal</p>
                     <h1 className={cn(DISPLAY_SECTION, 'mt-4 text-[var(--ds-ink)]')}>Privacy Policy</h1>
-                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: November 19, 2026</p>
+                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: November 23, 2026</p>
                 </header>
                 <div className={cn(SECTION_CARD, 'p-6 sm:p-8')}>
                 <div className={LEGAL_PROSE}>
@@ -26,7 +26,8 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                         <li><strong>Stream Studio Live-Event Data:</strong> Event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
                         <li><strong>Community Data:</strong> Public profile data, follows, likes, views, notifications, and other social interactions tied to your account.</li>
                         <li><strong>Support Data:</strong> Contact/support messages you submit (for example, email and message body).</li>
-                        <li><strong>Register Interest Data:</strong> When you register interest or join a list while sign-up is closed, we store your email address and any optional answers (first name, what you would like to make, how you heard about us, and anything else you add) in our Supabase database, with the page you sent it from, and whether you ticked the box to be kept updated, with the time you sent it. It is kept until you ask us to remove it and is used only to plan the product; we do not send emails for it at this time. From the register-interest form, only people who ticked that box will hear about news or new studios once updates start, and only after confirming their address from a link we send; the Stream Studio list is mailed only after its own confirm step.</li>
+                        <li><strong>Interest registration.</strong> We store the address and optional answers you submit, the registration page, time and updates preference. We use these details to handle your request, send a receipt when enabled and plan access. You can ask us to remove your registration. Product updates require your permission and an email confirmation. You can unsubscribe from an update at any time.</li>
+                        <li><strong>Email activity.</strong> For eligible service messages, we can record the first time a mail app requests a receipt image. Some apps fetch images automatically or block them. If you follow an optional acknowledgement link and confirm on the following page, we record that choice separately. Sign-in, verification and password reset messages use neither receipt.</li>
                         <li><strong>Operational and Debug Data:</strong> Token ledger events, pricing snapshot metadata, provider/model timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
                         <li><strong>Billing Lifecycle Data:</strong> If paid billing is enabled for your account, subscription status, cancel-at-period-end flags, billing-period timestamps, webhook processing records, and overage capture metadata.</li>
                         <li><strong>Device-Stored Data:</strong> Browser local storage and IndexedDB records used for saved keys, guest projects, test runs/images, reader state, and learning progress.</li>
@@ -47,7 +48,8 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                     <p>When you use generation features, relevant request data (for example prompts, selected model, and any reference images you submit) may be sent to model providers to produce output.</p>
                     <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Supabase:</strong> Authentication, database tables, and cloud storage.</li>
-                        <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
+                        <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Transactional email delivery, Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
+                        <li><strong>Postmark.</strong> When enabled for product updates, Postmark processes recipient addresses, campaign messages and unsubscribe requests.</li>
                         <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
                         <li><strong>OpenRouter:</strong> Routes Comic Studio image requests to the model you pick.</li>
                         <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>

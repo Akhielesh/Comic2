@@ -37,6 +37,7 @@ import {
   specHashFor,
   type AssetRef,
   type ComicDoc,
+  type DirectorDraft,
   type RenderState,
   type RenderTarget
 } from '../../../shared/comic/doc.js';
@@ -321,8 +322,17 @@ const legacyPlanMatches = (doc: ComicDoc, stored: string): boolean => {
  * retry, an open gate older than a day is declined, and spec hashes stamped before the
  * canonical serialisation are re-stamped when their spec is unchanged (back-compat F1).
  */
+// An overlapping rollout can load a project owned by the previous process. A live draft's claim
+// lasts longer than its planning deadline, so opening the project never grants a second paid run.
+export const DIRECTOR_DRAFT_LEASE_MS = 15 * 60_000;
+const expiredDraft = (doc: ComicDoc, now: number): boolean =>
+  doc.directorDraft?.status === 'planning' && now - (doc.directorDraft.startedAt ?? 0) >= DIRECTOR_DRAFT_LEASE_MS;
+
 export const recoveryOps = (doc: ComicDoc, opts: { now: number; allInFlight: boolean }): DocOp[] => {
   const ops: DocOp[] = [];
+  if (expiredDraft(doc, opts.now) && doc.directorDraft) {
+    ops.push({ op: 'director_draft', draft: { ...doc.directorDraft, status: 'interrupted' } });
+  }
   for (const { target, render } of listRenderTargets(doc)) {
     if (render.status !== 'queued' && render.status !== 'rendering') continue;
     const age = opts.now - (render.updatedAt || 0);
@@ -638,6 +648,26 @@ export class StudioSession implements StudioSessionApi {
     if (capture) await capture;
   }
 
+  /** Win an owner/revision-guarded write before allowing a director draft to call its planner. */
+  async claimDirectorDraft(expectedRev: number, idea: string): Promise<void> {
+    const stale = () => new StudioError('CONFLICT', 'This comic changed. Reopen it before starting a draft.', { status: 409 });
+    await this.flush();
+    if (!this.persisted || this.gone || this.current.rev !== expectedRev) throw stale();
+    const at = this.now();
+    const draft: DirectorDraft = { status: 'planning', idea, startedAt: at };
+    const next = { ...this.current, directorDraft: draft, rev: expectedRev + 1, updatedAt: at };
+    this.checkSize(next, JSON.stringify(draft).length, 'user');
+    await this.store.save({ projectId: this.projectId, userId: this.userId, doc: next, summary: projectSummary(next), expectedRev });
+    if (this.current.rev !== expectedRev) {
+      // A manual edit landed while the database was claiming the revision. Keep the edit;
+      // do not even start the planner on the earlier document.
+      this.commit([{ op: 'director_draft', draft: { ...draft, status: 'interrupted' } }], { origin: 'job' });
+      throw stale();
+    }
+    this.commit([{ op: 'director_draft', draft }], { origin: 'user', label: 'Start a director draft' });
+    this.savedRev = Math.max(this.savedRev, expectedRev + 1);
+  }
+
   resetAbort(): AbortController {
     this.controller = new AbortController();
     return this.controller;
@@ -894,6 +924,9 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
     }
     // Old composer uploads leave the inbox on every sweep, idle or not (never during a turn).
     if (!session.turnRunning) {
+      if (expiredDraft(session.doc, now) && session.doc.directorDraft) {
+        session.commit([{ op: 'director_draft', draft: { ...session.doc.directorDraft, status: 'interrupted' } }], { origin: 'job' });
+      }
       const pruned = pruneRefInboxOps(session.doc, now);
       if (pruned.length) {
         try {

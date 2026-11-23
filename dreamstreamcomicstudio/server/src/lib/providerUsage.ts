@@ -15,6 +15,7 @@
 // accounting. When a budget is hit the tool degrades to its next provider or an
 // honest "budget reached" notice instead of calling upstream.
 
+import { randomUUID } from 'node:crypto';
 import { currentAccountId } from './accountContext.js';
 
 // Matched against the URL's HOST only (never its path or query string): user text ends up in
@@ -116,6 +117,10 @@ const DEFAULT_BUDGETS: Record<string, ProviderBudget> = {
   foursquare: { perMin: 20, perDay: 300 }, // keyed Places API: protect the account's free calls
   youtube: { perMin: 10, perDay: 80 } // Data API: 10,000 units/day, search = 100 units → 100/day max
 };
+/** Display names for account analytics. Unknown hosts may contain private workspace names. */
+export const isKnownConnectorProvider = (provider: string): boolean =>
+  provider === PAGE_ACCOUNT_PROVIDER || Object.hasOwn(DEFAULT_BUDGETS, provider);
+
 const FALLBACK_BUDGET: ProviderBudget = { perMin: 60, perDay: 3000 };
 
 let envOverrides: Record<string, Partial<ProviderBudget>> | null = null;
@@ -163,6 +168,7 @@ const dayKey = (now: number): string => new Date(now).toISOString().slice(0, 10)
 // totals come from the provider_usage_daily view (SUM over deltas). Fully
 // best-effort: no admin client / table → counted in memory only, never throws.
 interface UsageDelta {
+  id: string;
   account_id: string;
   provider: string;
   day: string;
@@ -171,6 +177,10 @@ interface UsageDelta {
   blocked: number;
 }
 const pendingDeltas = new Map<string, UsageDelta>();
+// Freeze the batch once a write starts. A timeout can mean the database already
+// inserted it, so every retry must keep the same row IDs and unchanged totals.
+let retryBatch: UsageDelta[] = [];
+let flushInFlight: Promise<void> | null = null;
 const FLUSH_MS = 60_000;
 let flusher: ReturnType<typeof setInterval> | null = null;
 let cloudSink: ((rows: UsageDelta[]) => Promise<void>) | null = null;
@@ -184,28 +194,28 @@ export const setUsageCloudSink = (sink: (rows: UsageDelta[]) => Promise<void>): 
   }
 };
 
-export const flushUsageDeltas = async (): Promise<void> => {
-  if (!cloudSink || pendingDeltas.size === 0) return;
-  const rows = [...pendingDeltas.values()];
-  pendingDeltas.clear();
+const persistUsageDeltas = async (sink: (rows: UsageDelta[]) => Promise<void>): Promise<void> => {
   try {
-    await cloudSink(rows);
-  } catch (err) {
-    // Cloud write failed — restore the deltas so the next flush retries (merge with
-    // anything accumulated meanwhile), and log once per flush, never throw.
-    for (const r of rows) {
-      const key = `${r.account_id}|${r.provider}|${r.day}`;
-      const cur = pendingDeltas.get(key);
-      if (cur) {
-        cur.calls += r.calls;
-        cur.errors += r.errors;
-        cur.blocked += r.blocked;
-      } else {
-        pendingDeltas.set(key, r);
-      }
+    if (retryBatch.length) {
+      await sink(retryBatch);
+      retryBatch = [];
     }
-    console.warn(`[provider-usage] cloud flush failed (${(err as Error)?.message || 'unknown'}); will retry`);
+    if (pendingDeltas.size) {
+      retryBatch = [...pendingDeltas.values()];
+      pendingDeltas.clear();
+      await sink(retryBatch);
+      retryBatch = [];
+    }
+  } catch {
+    console.warn('[provider-usage] cloud flush failed; will retry');
   }
+};
+
+export const flushUsageDeltas = (): Promise<void> => {
+  if (flushInFlight) return flushInFlight;
+  if (!cloudSink || (!retryBatch.length && !pendingDeltas.size)) return Promise.resolve();
+  flushInFlight = persistUsageDeltas(cloudSink).finally(() => { flushInFlight = null; });
+  return flushInFlight;
 };
 
 const noteAccountDelta = (meterKey: string, now: number, field: 'calls' | 'errors' | 'blocked', by: 1 | -1 = 1): void => {
@@ -219,7 +229,7 @@ const noteAccountDelta = (meterKey: string, now: number, field: 'calls' | 'error
     return;
   }
   if (!d) {
-    d = { account_id: account, provider, day, calls: 0, errors: 0, blocked: 0 };
+    d = { id: randomUUID(), account_id: account, provider, day, calls: 0, errors: 0, blocked: 0 };
     pendingDeltas.set(key, d);
   }
   d[field] += 1;
@@ -395,8 +405,9 @@ export const __resetProviderUsage = (): void => {
   stats.clear();
   pageHosts = 0;
   pendingDeltas.clear();
+  retryBatch = [];
   envOverrides = null;
 };
 
 /** Test/inspection hook for the un-flushed account deltas. */
-export const __pendingUsageDeltas = (): UsageDelta[] => [...pendingDeltas.values()];
+export const __pendingUsageDeltas = (): UsageDelta[] => [...retryBatch, ...pendingDeltas.values()];

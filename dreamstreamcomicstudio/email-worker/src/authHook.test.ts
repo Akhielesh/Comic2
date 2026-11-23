@@ -303,6 +303,7 @@ describe('planAuthEmails', () => {
     expect(isLiveRedirect(`${APP}/lively`)).toBe(false);
     expect(isLiveRedirect(`${APP}/?next=/live`)).toBe(false);
     expect(isLiveRedirect('not a url')).toBe(false);
+    expect(isLiveRedirect('https://unrelated.example.test/live')).toBe(false);
     // Stream Studio's own host is the live app wherever it lands.
     expect(isLiveRedirect('https://stream.dreamstreamstudio.ai/?after=monitor')).toBe(true);
   });
@@ -371,6 +372,39 @@ describe('POST /auth-hook (worker route)', () => {
     expect(res.json).toMatchObject({ ok: true, skipped: true });
     expect(res.json).not.toHaveProperty('error'); // a 200 body with `error` would count as failure
     expect(sent).toHaveLength(0);
+  });
+
+  it.each(SUPPORTED_ACTIONS)('dispatches the signed %s hook to the intended inbox', async (action) => {
+    const { env, sent } = makeEnv();
+    const comic = 'https://comics.dreamstreamstudio.ai';
+    const input = payload({
+      email_action_type: action, redirect_to: comic + '/auth/callback',
+      token: '123456', token_hash: 'first-hash', token_new: '654321', token_hash_new: 'second-hash',
+      old_email: 'previous@example.test', old_phone: '+15550000', provider: 'google', factor_type: 'totp'
+    }, { email: 'reader@example.test', new_email: 'new@example.test' });
+    const recipients = action === 'email_change' ? ['new@example.test', 'reader@example.test']
+      : [action === 'email_changed_notification' ? 'previous@example.test' : 'reader@example.test'];
+    expect(await call(env, input)).toEqual({ status: 200, json: { ok: true, sent: recipients.length } });
+    expect(sent.map(mail => mail.to).sort()).toEqual(recipients);
+    for (const mail of sent) {
+      expect(mail.from).toMatchObject({ name: 'Comic Studio' });
+      expect(mail.subject).toBeTruthy();
+      expect(mail.html).toBeTruthy();
+      expect(mail.text).toBeTruthy();
+      if (action === 'reauthentication') expect(mail.text).toContain('123456');
+      else if (!action.endsWith('_notification')) {
+        expect(mail.text).toContain(BASE + '/auth/v1/verify?');
+        expect(mail.text).toContain(encodeURIComponent(comic + '/auth/callback'));
+      }
+    }
+  });
+
+  it('uses canonical comic branding for its HTTPS alias and ignores misleading origins', () => {
+    const branded = (redirect_to: string) => sendPlan(planAuthEmails(payload({ email_action_type: 'signup', token_hash: 'h', redirect_to }), opts)).brand;
+    expect(branded('https://comic.dreamstreamstudio.ai/auth/callback')).toEqual({ productName: 'Comic Studio', appUrl: 'https://comics.dreamstreamstudio.ai' });
+    expect(branded('https://comics.dreamstreamstudio.ai.example.test/auth/callback')).toEqual({});
+    expect(branded('https://comics.dreamstreamstudio.ai:444/auth/callback')).toEqual({});
+    expect(branded('http://comics.dreamstreamstudio.ai/auth/callback')).toEqual({});
   });
 
   it('sends both Secure Email Change mails from no-reply@ with reply-to support@', async () => {

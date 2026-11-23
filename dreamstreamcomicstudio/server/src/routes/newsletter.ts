@@ -1,11 +1,8 @@
-import { Router, type Request } from 'express';
-import { APP_PUBLIC_URL, EMAIL_PUBLIC_BASE_URL } from '../config.js';
-import {
-  sendAccessRequested,
-  sendNewsletterConfirm,
-  sendNewsletterWelcome,
-  verifyUnsubscribeToken
-} from '../services/mailer.js';
+import { Router } from 'express';
+import { COMICS_ORIGIN } from '../../../services/productHost.js';
+import { APP_PUBLIC_URL } from '../config.js';
+import { verifyUnsubscribeToken } from '../services/mailer.js';
+import { wakeLifecycleEmail } from '../services/lifecycleEmail.js';
 import {
   confirmSubscriber,
   markUnsubscribed,
@@ -36,13 +33,6 @@ import {
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const reqMeta = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
-
-// Prefer the configured public origin; fall back to the request's own origin so confirm
-// links still work before EMAIL_PUBLIC_BASE_URL is set.
-const baseUrl = (req: Request): string =>
-  EMAIL_PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
 
 const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter=${encodeURIComponent(status)}`;
 
@@ -160,19 +150,19 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
 
     // Answers and the consent flag (with this moment as its time) ride in the existing metadata (jsonb) column, the
     // shape the form's direct save writes too; the note also goes to the existing feedback column.
-    const { firstName, comment } = answers;
+    const { comment } = answers;
     const intent = comment ? { feedback: comment } : {};
     const metadata = interestMetadata(source, answers, new Date().toISOString());
+    // This records product presentation only; it never changes consent or account access.
+    if (req.get('origin') === COMICS_ORIGIN) metadata.emailBrand = 'comic-studio';
     // An open tab from before the questions changed: its name and note were asked by the old set, so say so.
     if (fromOldQuestionSet(body) && metadata.answers) metadata.answers = { ...(metadata.answers as Record<string, unknown>), v: 1 };
     const token = newConfirmToken();
     const emailsOn = interestEmailsOn();
-    let outcome: string;
     try {
       // An address already on the list keeps its answers; a ticked box is recorded on a register-interest row that
-      // held no yes, and only with emails on does an unconfirmed 'updates' row get a fresh confirm token (the link
-      // about to be sent). A store that saved nothing throws.
-      ({ outcome } = await upsertSubscriber(email, kind, token, metadata, intent, { reissueToken: emailsOn }));
+      // held no yes. Pending updates reuse a live token or conditionally replace an expired one.
+      await upsertSubscriber(email, kind, token, metadata, intent, { reissueToken: emailsOn });
     } catch (err) {
       console.warn('[newsletter] store failed', (err as Error)?.message);
       return res
@@ -180,16 +170,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         .json({ ok: false, status: 'unavailable', message: 'We could not save that just now. Please try again in a moment.' });
     }
 
-    if (emailsOn) {
-      // Neither branch reads the keep-me-updated box: it starts no email of its own.
-      // Best-effort and never awaited: a mailer failure must not change the answer. A confirm email only goes
-      // with a token the store just wrote (a new row, or a renewed one), so its link always matches the row.
-      if (kind === 'access' && outcome === 'new') void sendAccessRequested(email, firstName, reqMeta(req));
-      if (kind === 'updates' && (outcome === 'new' || outcome === 'pending')) {
-        const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
-        void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
-      }
-    }
+    if (emailsOn) wakeLifecycleEmail();
     return res.status(200).json(neutralReply(kind, answers));
   } catch (err) {
     next(err);
@@ -203,11 +184,12 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const token = String(req.query.t ?? '');
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
 
-    const confirmed = await confirmSubscriber(email, token);
+    const emailsOn = interestEmailsOn();
+    const confirmed = await confirmSubscriber(email, token, emailsOn);
     if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
 
     // Welcome is marketing: only once they opted in (here), and only while interest emails are on.
-    if (interestEmailsOn()) void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    if (emailsOn) wakeLifecycleEmail();
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

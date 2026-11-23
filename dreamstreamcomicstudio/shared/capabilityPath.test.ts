@@ -4,6 +4,13 @@ import { loggablePath, maskCapabilityUrls } from './capabilityPath';
 
 const SLUG = 'Ab3dEf6hIj9kLm2nP';
 
+it('masks both message receipt capabilities in access paths and nested error text', () => {
+  for (const path of ['/api/email/ack/opaque-value', '/api/email/o/opaque-value.gif']) {
+    expect(loggablePath(path)).not.toContain('opaque-value');
+    expect(maskCapabilityUrls('from https://dreamstreamstudio.ai'+path)).not.toContain('opaque-value');
+  }
+});
+
 describe('loggablePath (S19: share capabilities never reach a log)', () => {
   it.each([
     ['/c', '/c'],

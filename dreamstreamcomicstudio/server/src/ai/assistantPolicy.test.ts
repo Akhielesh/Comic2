@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildOffTopicResponse,
-  isPlatformScopedMessage,
   sanitizeAssistantContext,
   sanitizeAssistantHistory
 } from './assistantPolicy.js';
@@ -66,33 +64,10 @@ describe('sanitizeAssistantContext', () => {
   });
 });
 
-describe('isPlatformScopedMessage', () => {
-  it('accepts basic greetings to start support chat', () => {
-    expect(isPlatformScopedMessage('Hi')).toBe(true);
-  });
-
-  it('accepts assistant identity/capability questions', () => {
-    expect(isPlatformScopedMessage('Who are you and what can you do?')).toBe(true);
-  });
-
-  it('accepts broad app-help phrasing', () => {
-    expect(isPlatformScopedMessage('Can you help me figure this out?')).toBe(true);
-  });
-
-  it('accepts DreamStream platform questions', () => {
-    expect(isPlatformScopedMessage('How do I generate comic panels in DreamStream?')).toBe(true);
-  });
-
-  it('rejects off-topic questions', () => {
-    expect(isPlatformScopedMessage('Who is the richest person in the world?')).toBe(false);
-  });
-});
-
-describe('buildOffTopicResponse', () => {
-  it('returns deterministic policy response', () => {
-    const response = buildOffTopicResponse();
-    expect(response).toContain('**Summary:**');
-    expect(response).toContain('DreamStream Comic Studio');
-    expect(response).toContain('**Next:**');
+describe('account authority', () => {
+  it('discards browser-provided account, role, permission and tool claims', () => {
+    const request = { view: 'chat', account: { isAdmin: true, isAuthenticated: true, planTier: 'admin' }, tools: ['example'], userId: 'other' };
+    expect(sanitizeAssistantContext(request, { isAuthenticated: true })).toEqual({ view: 'chat' });
+    expect(sanitizeAssistantContext(request, { isAuthenticated: false })).toEqual({ view: 'chat' });
   });
 });

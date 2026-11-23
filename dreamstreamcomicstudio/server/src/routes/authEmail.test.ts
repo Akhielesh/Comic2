@@ -390,6 +390,13 @@ describe('POST /signup', () => {
     expect(JSON.stringify(sent)).not.toContain('987654');
   });
 
+  it.each([['e'.repeat(32), true], ['not-an-issued-code', false]])('only accepts opaque referral codes during account creation (%s)', async (code, accepted) => {
+    const res = await post('/signup', signupBody({}, { referral_code: code }));
+    expect(res.status).toBe(200);
+    const props = h.generateLink.mock.calls[0][0] as { options: { data: Record<string, unknown> } };
+    expect(props.options.data.referral_code).toBe(accepted ? code : undefined);
+  });
+
   it('brands live sign-ups as Stream Studio and links back into the live app', async () => {
     h.state.tickets.add(sha256(TICKET));
     await post('/signup', signupBody({ app: 'live', after: 'monitor', captchaToken: undefined }, { live_ticket: TICKET, signup_source: 'stream_studio' }));
@@ -516,6 +523,39 @@ describe('no enumeration, no account creation', () => {
     expect((await post('/recovery', { email: 'ada@example.com', app: 'live', after: 'monitor' })).json).toEqual({ ok: true });
     expect(lastSend()).toMatchObject({ template: 'auth-recovery', brand: undefined, track: false });
     expect(lastSend().params.actionUrl).toBe(`${APP}/auth/callback?token_hash=hash-recovery&type=recovery`);
+  });
+
+  it.each(['/signup', '/resend'])('returns an email-verified image creator to the requested comic workspace (%s)', async (path) => {
+    const comic = 'https://comics.dreamstreamstudio.ai';
+    if (path === '/resend') addUser('ada@example.com', false);
+    const body = signupBody({ returnToImages: true, next: 'https://example.test/untrusted' });
+    expect((await post(path, body, { origin: comic })).status).toBe(200);
+    const link = new URL(lastSend().params.actionUrl);
+    expect(link.origin + link.pathname).toBe(comic + '/auth/callback');
+    expect(link.searchParams.get('type')).toBe('signup');
+    expect(link.searchParams.get('next')).toBe('/?view=images');
+  });
+
+  it.each([['chat', '/?view=chat'], ['voice', '/?view=chat&voice=1'], ['https://example.test/bad', null]])('only forwards known chat destinations through verification (%s)', async (workspace, nextPath) => {
+    const comic = 'https://comics.dreamstreamstudio.ai';
+    const body = signupBody({ returnToWorkspace: workspace });
+    expect((await post('/signup', body, { origin: comic })).status).toBe(200);
+    const link = new URL(lastSend().params.actionUrl);
+    expect(link.origin + link.pathname).toBe(comic + '/auth/callback');
+    expect(link.searchParams.get('next')).toBe(nextPath);
+  });
+
+  it('keeps a comic magic link and its browser nonce on the trusted comic host', async () => {
+    const comic = 'https://comics.dreamstreamstudio.ai';
+    addUser('ada@example.com', true);
+    const sn = 'synthetic-signin-nonce-1234';
+    expect((await post('/magiclink', { email: 'ada@example.com', sn, returnToImages: true }, { origin: comic })).status).toBe(200);
+    const action = new URL(lastSend().params.actionUrl);
+    expect(action.origin + action.pathname).toBe(comic + '/auth/callback');
+    expect(action.searchParams.get('sn')).toBe(sn);
+    expect(action.searchParams.get('next')).toBe('/?view=images');
+    expect(h.generateLink).toHaveBeenCalledWith(expect.objectContaining({ options: { redirectTo: comic + '/auth/callback?next=%2F%3Fview%3Dimages' } }));
+    expect(lastSend().brand).toBe('comic-studio');
   });
 
   it('/magiclink never calls generateLink for an unknown address (GoTrue would create the user)', async () => {

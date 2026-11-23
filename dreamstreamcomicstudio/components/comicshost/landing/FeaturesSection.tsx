@@ -1,6 +1,4 @@
-// "Features": four rows, each a feature told in a few plain lines beside one real screen of Comic Studio. Each row
-// leads with a solid tile holding its icon only (ink, magenta, leaf, sky: never orange, never ultramarine). Phones read
-// copy then picture; from 960 px the rows are two columns and the picture alternates sides.
+// Real studio walkthroughs and the workspace actions that follow them.
 import React from 'react';
 import { Languages, MessageSquareText, Share2, Type } from 'lucide-react';
 import { cn } from '../../../lib/utils';
@@ -19,7 +17,7 @@ const ROWS: ReadonlyArray<{ icon: Icon; tile: string; media: LandingMedia }> = [
   { icon: Share2, tile: HUE_SOLID[6], media: landingMedia('share') }
 ];
 
-export const FeaturesSection: React.FC = () => (
+export const FeaturesSection: React.FC<React.PropsWithChildren> = ({ children }) => (
   <section id="features" aria-labelledby="landing-features" className="landing-section">
     <SectionHead id="landing-features" eyebrow={FEATURES_HEAD.eyebrow} title={FEATURES_HEAD.title}>
       <p className="landing-lead">{FEATURES_HEAD.intro}</p>
@@ -34,9 +32,8 @@ export const FeaturesSection: React.FC = () => (
                 <span aria-hidden data-feature-tile className={cn('landing-tile', tile)}>
                   <FeatureIcon aria-hidden />
                 </span>
-                <span aria-hidden className="landing-count">{String(i + 1).padStart(2, '0')}</span>
+                <h3 className={cn('landing-feature-title', FONT_DISPLAY)}>{feature.title}</h3>
               </div>
-              <h3 className={cn('landing-feature-title', FONT_DISPLAY)}>{feature.title}</h3>
               {feature.lines.map((line) => (
                 <p key={line} className="landing-body">
                   {fill(line, LANDING_VALUES)}
@@ -48,5 +45,6 @@ export const FeaturesSection: React.FC = () => (
         );
       })}
     </ol>
+    {children}
   </section>
 );

@@ -11,6 +11,10 @@ const validateApiKey = vi.hoisted(() =>
 const reconcileProviderMirror = vi.hoisted(() => vi.fn(async (): Promise<'synced' | 'failed'> => 'synced'));
 vi.mock('../services/keyValidation', () => ({ validateApiKey, KEY_CHECK_UNAVAILABLE_COPY: 'Couldn’t check this key right now — try Verify.' }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
+vi.mock('../services/accountProviderUsage', () => ({
+  fetchAccountProviderUsage: vi.fn(async () => ({ providers: [], balanceReports: [], from: '2026-11-01', generatedAt: '2026-11-05', sources: { models: 'available', connectors: 'available', balances: 'available' } })),
+  checkPersonalProviderBalance: vi.fn()
+}));
 vi.mock('../services/modelCatalog', () => ({ fetchModelCatalog: vi.fn(async () => ({ models: [] })) }));
 vi.mock('./ModelSelectionPanel', () => ({ ModelSelectionPanel: () => null }));
 vi.mock('../services/byokSync', () => ({ reconcileProviderMirror }));

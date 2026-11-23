@@ -307,7 +307,7 @@ describe('project endpoints', () => {
   it('creates a project', async () => {
     api.post.mockResolvedValue({ projectId: 'proj_9', doc: { ...rawDoc, id: 'proj_9' }, urls: {} });
     const res = await createStudioProject({ title: 'New' });
-    expect(api.post).toHaveBeenCalledWith('/api/comic/projects', { title: 'New' });
+    expect(api.post).toHaveBeenCalledWith('/api/comic/projects', { title: 'New' }, undefined);
     expect(res.projectId).toBe('proj_9');
   });
 

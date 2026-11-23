@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { classifyApiError, describeApiError, isRetryableError } from './apiErrors';
+import { classifyApiError, describeApiError, isRetryableError, userFacingErrorMessage } from './apiErrors';
+
+describe('workspace error messages', () => {
+  const retry = 'Try again in a moment.';
+  it('retains actionable image and project instructions', () => {
+    expect(userFacingErrorMessage(new Error('Choose a PNG image under 8 MB.'), retry)).toBe('Choose a PNG image under 8 MB.');
+  });
+  it('keeps the local recovery instruction for internal endpoints, secrets and server failures', () => {
+    for (const error of [new Error('Request to https://internal.example/db failed'), new Error('Invalid token sk-demo12345678'),
+      new Error('TypeError: Cannot read properties of undefined'), { status: 503, message: 'Proxy backend pool is exhausted.' }]) {
+      expect(userFacingErrorMessage(error, retry)).toBe(retry);
+    }
+  });
+});
 
 describe('classifyApiError', () => {
   it('explains a transport failure (status 0) in plain language and marks it retryable', () => {

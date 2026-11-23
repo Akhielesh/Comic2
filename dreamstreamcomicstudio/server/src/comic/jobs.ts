@@ -196,7 +196,7 @@ import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelN
 import { LINE_STYLE_MAX_BYTES, lineStyleIdOf } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { sanitizeDirection } from './sanitize/consistency.js';
-import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
+import { mergeRevisedPages, proposeStyleDirections, WRITER_SOURCE_LIMIT, writePagePlan } from './writer.js';
 
 // ── Limits & constants ───────────────────────────────────────────────────────
 
@@ -677,7 +677,7 @@ const UNKNOWN_TEXT_PRICE = { input: 1, output: 5 };
  * An LlmClient that reserves/settles platform billing around every call and accumulates
  * the charged cost in `tracker` (estimated from tokens when the provider reports none).
  */
-export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker }): LlmClient {
+export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void } }): LlmClient {
   return {
     async complete(req) {
       // Cancelled before we even reserved: nothing to bill or release.
@@ -685,6 +685,16 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
       const route = resolveTextRoute(req.role, ctx.keys);
       const size = textOf(req.messages);
       const approxPrompt = Math.ceil(size.chars / 4) + size.images * 1100;
+      let projectedDraftSpend = 0;
+      if (args.draft) {
+        args.draft.assertActive();
+        const output = req.maxTokens || 2000;
+        const unknown = (approxPrompt * UNKNOWN_TEXT_PRICE.input + output * UNKNOWN_TEXT_PRICE.output) / 1_000_000;
+        const chain = route?.models?.length ? route.models : [route?.model ?? ''];
+        const upper = Math.max(...chain.map(model => estimateTextCostUsd(model, approxPrompt, output) ?? unknown));
+        projectedDraftSpend = args.tracker.usd + upper * (route?.key.byok ? 1 : PLATFORM_MARKUP);
+        args.draft.hold(projectedDraftSpend);
+      }
       let reservation: BillingReservation | undefined;
       if (route) {
         const reserved = await ctx.billing.reserve({
@@ -699,6 +709,15 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
         });
         if (reserved.ok === false) throw new StudioError('BILLING_DENIED', reserved.message, { status: 402 });
         reservation = reserved.reservation;
+        if (args.draft) {
+          try {
+            args.draft.assertActive();
+            args.draft.hold(projectedDraftSpend);
+          } catch (error) {
+            await reservation.release('draft_changed_before_dispatch');
+            throw error;
+          }
+        }
         // Cancelled while the reserve was in flight: release it — nothing was dispatched, so
         // billing the usual CANCELLED estimate here would be charging for a call never made.
         // (Nothing is awaited between here and llm.ts's own pre-dispatch abort check.)
@@ -1833,11 +1852,19 @@ type SpendDecision =
   | { kind: 'done'; started: StartedAction }
   | { kind: 'go'; plan: SpendPlan; spec: ImageModelSpec; byok: boolean; estimate: SpendEstimate };
 
+/** Quote the private book in one run. Its gate binds all drawable pages, required sheets and the cover. */
+export async function offerDirectorDraftBook(ctx: StudioContext, assertActive: () => void): Promise<void> {
+  const prices = await priceBookFor(ctx);
+  assertActive();
+  const action: SpendAction = { type: 'render_pages', includeCover: true };
+  decideSpend(ctx, action, { confirmed: false, quoteBook: true, origin: 'director' }, prices);
+}
+
 /**
  * Everything startSpend decides before money moves, synchronously (validation, the lock, keys, access, the quote,
  * the gate). Terminal answers are delivered here; 'go' commits nothing.
  */
-function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOptions, prices: PriceBook): SpendDecision {
+function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOptions & { quoteBook?: boolean }, prices: PriceBook): SpendDecision {
   const done = (started: StartedAction): SpendDecision => ({ kind: 'done', started });
   const doc = ctx.session.doc;
   const problem = validateSpendAction(doc, action);
@@ -1849,7 +1876,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
   const plan = describeSpend(doc, action);
   const { spec } = modelLabel(doc, plan.kind);
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
-    return done(blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error'));
+    return done(blocked(ctx, opts, 'Your plan is saved. Connect a Gemini or OpenRouter key to draw your comic.', 'info', [{ label: 'Add an API key', client: { type: 'open_settings', section: 'keys' } }]));
   }
   const picked = imageRouteFor(spec, ctx.keys);
   if (!picked) {
@@ -1889,7 +1916,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
   // tolerance). Server chips carry PriceBook quotes and start directly; a quote on another basis (the client's
   // registry-priced plan cards) that the real price outgrew by more than 15% + $0.01 gets a fresh real-price gate.
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
-  const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
+  const normalReason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
@@ -1897,6 +1924,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
     redraw: !opts.confirmed && replacesCurrentArt(doc, action),
     action
   });
+  const reason = opts.quoteBook && normalReason !== 'budget' ? 'plan_review' : normalReason;
   if (reason) return done(createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom, prices }));
   return { kind: 'go', plan, spec, byok, estimate };
 }
@@ -2339,7 +2367,7 @@ export const pickDefaultPreset = (doc: ComicDoc): StylePreset => {
   return [...STYLE_PRESETS].sort((a, b) => score(b) - score(a))[0] || STYLE_PRESETS[0];
 };
 
-const presetStylePatch = (preset: StylePreset, status: StyleBible['status']): Partial<Omit<StyleBible, 'options'>> => ({
+export const presetStylePatch = (preset: StylePreset, status: StyleBible['status']): Partial<Omit<StyleBible, 'options'>> => ({
   status,
   name: preset.name,
   spec: preset.spec,
@@ -4667,7 +4695,9 @@ const knownPlanHash = (session: StudioSessionApi): string | undefined => session
 export async function planPages(
   ctx: StudioContext,
   args: { instructions?: string; pageIds?: string[] },
-  opts: Pick<RunActionOptions, 'collectCard' | 'collectNextSteps' | 'origin'> = {}
+  opts: Pick<RunActionOptions, 'collectCard' | 'collectNextSteps' | 'origin'> & {
+    draft?: { assertActive(): void; assertPlanUnchanged(): void; writerSource?: string };
+  } = {}
 ): Promise<ActionOutcome> {
   const signal = ctx.session.abort.signal;
   const before = ctx.session.doc;
@@ -4676,6 +4706,14 @@ export async function planPages(
   const origin = originOf(opts);
   const runOpts = { ...opts, confirmed: false } as RunActionOptions;
   const byok = spendIsByok(ctx.keys);
+  if (opts.draft) {
+    opts.draft.assertPlanUnchanged();
+    const maximumQuote = 2 * planPagesUsd(before, byok);
+    const cap = budgetOf(before.settings);
+    if (cap !== undefined && before.spend.totalUsd + pendingUsdOf(ctx.session) + maximumQuote > cap + 1e-9) {
+      throw new StudioError('BUDGET_EXCEEDED', 'The remaining comic budget is below the planning estimate including a writer repair. Change the scope or budget to start.', { status: 402 });
+    }
+  }
   // Real prices for the chips (the draw chips start at the price they show): fetched while the writer works.
   void priceBookFor(ctx);
 
@@ -4717,11 +4755,26 @@ export async function planPages(
 
   const tracker = newTextSpendTracker();
   const end = activity(ctx, revising && !rewroteAll ? 'Rewriting pages' : 'Writing the page plan', 'text');
+  // Expose the writer's in-flight allowance to the same budget checks used by image jobs.
+  // The tracker accumulates settled writer calls until the plan's spend entry is committed.
+  let draftHold = 0;
+  const holdDraftSpend = (projected: number) => {
+    const hold = Math.ceil(projected * 10_000) / 10_000;
+    const cap = budgetOf(ctx.session.doc.settings);
+    if (cap !== undefined && ctx.session.doc.spend.totalUsd + pendingUsdOf(ctx.session) - draftHold + hold > cap + 1e-9) {
+      throw new StudioError('BUDGET_EXCEEDED', 'The remaining project budget cannot cover the next writer call.', { status: 402 });
+    }
+    addPending(ctx.session, hold - draftHold);
+    draftHold = hold;
+  };
   let result: Awaited<ReturnType<typeof writePagePlan>>;
   try {
     result = await writePagePlan({
-      doc: ctx.session.doc,
-      llm: billedLlm(ctx, { stage: 'plan', operation: 'comic.text.writer', tracker }),
+      doc: opts.draft?.writerSource
+        ? { ...ctx.session.doc, source: { ...ctx.session.doc.source, script: opts.draft.writerSource } }
+        : ctx.session.doc,
+      llm: billedLlm(ctx, { stage: 'plan', operation: 'comic.text.writer', tracker,
+        draft: opts.draft && { assertActive: opts.draft.assertPlanUnchanged, hold: holdDraftSpend } }),
       ...(instructions ? { instructions } : {}),
       ...(revising ? { pageIds } : {}),
       // The account-clamped rating: a kids comic (or a young account) is never written above its ceiling.
@@ -4734,9 +4787,11 @@ export async function planPages(
     end(false);
     throw asStudioError(err);
   } finally {
+    if (draftHold) addPending(ctx.session, -draftHold);
     recordTextSpend(ctx, tracker, 'plan', revising && !rewroteAll ? 'Revise pages' : 'Page plan');
   }
 
+  opts.draft?.assertPlanUnchanged();
   const doc = ctx.session.doc;
   const ops: DocOp[] = [];
   for (const c of result.newCast) {
@@ -4799,10 +4854,16 @@ export async function planPages(
   // in plain words beside the plan card — never silent.
   const fitNotes = (Array.isArray(result.notes) ? result.notes : []).filter((n): n is string => typeof n === 'string' && !!n.trim()).slice(0, 6);
   const fitNote = fitNotes.length ? ` ${fitNotes.join(' ')}` : '';
+  const abbreviatedSource = opts.draft && (opts.draft.writerSource ?? before.source.script ?? '').trim().length > WRITER_SOURCE_LIMIT;
+  const sourceNote = abbreviatedSource ? ' Your full source is saved. For this draft the writer used the beginning and end of the script and omitted part of the middle.' : '';
+  const planReview = opts.draft
+    ? `I’ve chosen the look, cast and page layouts. Review the drawing estimate to start the illustrations.${sourceNote}`
+    : 'Read it here — edit anything, then draw the pages.';
   const text = revising && !rewroteAll
     ? `Rewrote ${plural(result.pages.length, 'page')}.${fitNote}${drawnNote}${castNote}`
-    : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. Read it here — edit anything, then draw the pages.${fitNote}${drawnNote}${castNote}`;
-  const steps = nextStepsFor(after, { byok, prices: await priceBookWithin(ctx) });
+    : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. ${planReview}${fitNote}${drawnNote}${castNote}`;
+  const steps = opts.draft ? [] : nextStepsFor(after, { byok, prices: await priceBookWithin(ctx) });
+  opts.draft?.assertActive();
   deliver(ctx, runOpts, text, [card], steps);
   return { status: 'done', message: `${headline}${castNote}${fitNotes.length ? ` Plan-fit notes (tell the user): ${fitNotes.join(' ')}` : ''}`, nextSteps: steps };
 }

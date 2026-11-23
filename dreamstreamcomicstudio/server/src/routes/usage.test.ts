@@ -18,8 +18,12 @@ vi.mock('../middleware/auth.js', () => ({
 vi.mock('../middleware/accountKeys.js', () => ({ accountKeyProviders: vi.fn(async () => ['gemini']) }));
 vi.mock('../services/rbac.js', () => ({
   isBootstrapAdminEmail: () => false,
+  resolveAccessProfile: () => ({ isAdmin:who.admin, isModerator:false, roles:who.admin?['admin']:[] }),
   getUserRoles: vi.fn(async () => (who.admin ? ['admin'] : []))
 }));
+
+const ownerUsage = vi.hoisted(() => vi.fn(async () => ({ providers: [], balanceReports: [] })));
+vi.mock('../services/accountProviderUsage.js', () => ({ accountProviderUsage: ownerUsage }));
 
 const allowance = await import('../services/platformAllowance.js');
 const { usageRouter } = await import('./usage.js');
@@ -103,4 +107,25 @@ describe('GET /api/usage/allowance', () => {
     who.signedIn = false;
     expect((await fetch(`${base}/api/usage/allowance`)).status).toBe(401);
   });
+});
+
+it('account provider usage ignores caller-supplied owner IDs and rejects unauthenticated reads', async () => {
+  who.signedIn=true;
+  const res=await fetch(`${base}/api/usage/account-providers?ownerId=someone-else`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('no-store');
+  expect(ownerUsage).toHaveBeenCalledWith('tester-1', expect.any(Date), expect.any(Function));
+  who.signedIn=false;
+  expect((await fetch(`${base}/api/usage/account-providers`)).status).toBe(401);
+  who.signedIn=true;
+});
+
+it('protects the process-wide provider circuit and call counters behind the operator role',async()=>{
+  who.signedIn=true; who.admin=false;
+  expect((await fetch(`${base}/api/usage/providers`)).status).toBe(403);
+  who.admin=true;
+  expect((await fetch(`${base}/api/usage/providers`)).status).toBe(200);
+  who.admin=false; who.signedIn=false;
+  expect((await fetch(`${base}/api/usage/providers`)).status).toBe(401);
+  who.signedIn=true;
 });

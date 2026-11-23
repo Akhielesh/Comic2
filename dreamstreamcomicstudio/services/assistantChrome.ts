@@ -7,7 +7,7 @@ export interface AssistantChrome {
   hideLauncher: boolean;
 }
 
-const NOT_MOUNTED = new Set(['auth-callback', 'shared', 'chat', 'comicstudio', 'publiccomic']);
+const NOT_MOUNTED = new Set(['auth-callback', 'shared', 'chat', 'comicstudio', 'images', 'publiccomic']);
 
 export const assistantChrome = (view: string): AssistantChrome => ({
   mounted: !NOT_MOUNTED.has(view),

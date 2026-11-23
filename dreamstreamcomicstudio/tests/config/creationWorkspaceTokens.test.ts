@@ -234,7 +234,7 @@ describe('ComicCreationWorkspace.tsx: no cobalt on work surfaces', () => {
   it('New comic (current on the New comic view) and Start render without it', () => {
     const html = renderToStaticMarkup(React.createElement(React.Fragment, null,
       React.createElement(ComicProjectNavigation, { ...navigation, activeView: 'new' }),
-      React.createElement(ComicIdeaForm, { name: '', idea: 'A lighthouse keeper finds a map.', pending: false, error: null, onName: noop, onIdea: noop, onStart: noop, onStartBlank: noop, onClassic: noop, onLibrary: noop })
+      React.createElement(ComicIdeaForm, { name: '', idea: 'A lighthouse keeper finds a map.', pending: false, error: null, onName: noop, onIdea: noop, onStart: noop, onDraft: noop, onStartBlank: noop, onClassic: noop, onLibrary: noop })
     ));
     const buttonWith = (cls: string) => {
       const tag = new RegExp(`<button[^>]*class="([^"]*\\b${cls}\\b[^"]*)"[^>]*>`).exec(html);

@@ -18,6 +18,8 @@
 
 /** [prefix pattern, masked prefix]. Matched case-insensitively (Express routing is too). */
 const CAPABILITY_PREFIXES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^\/api\/email\/ack\/[^/]+/i, '/api/email/ack/:token'],
+  [/^\/api\/email\/o\/[^/]+/i, '/api/email/o/:token'],
   [/^\/api\/comic\/public\/s\/[^/]+/i, '/api/comic/public/s/:slug'],
   [/^\/api\/shares\/token\/[^/]+/i, '/api/shares/token/:token'],
   [/^\/c\/[^/]+/i, '/c/:slug'],

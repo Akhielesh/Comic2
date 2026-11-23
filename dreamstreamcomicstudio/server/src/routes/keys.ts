@@ -25,8 +25,10 @@ import { Request, Response, Router } from 'express';
 import { GEMINI_BASE_URL, OPENROUTER_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getProviderDef, isTextProvider, type ProviderDef, type ProviderId } from '../../../shared/providers.js';
-import { accountKeyForValidation, canonicalAccountProvider } from '../middleware/accountKeys.js';
+import { accountKeyForValidation, canonicalAccountProvider, readAccountBalanceKeys } from '../middleware/accountKeys.js';
 import { allowedProviderFilter } from '../middleware/keys.js';
+
+import { refreshProviderBalance } from '../services/accountProviderUsage.js';
 
 export const keysRouter = Router();
 
@@ -188,6 +190,31 @@ const validateDirectProvider = async (def: ProviderDef, key: string): Promise<Va
     return unreachable(def.id, def.label, err);
   }
 };
+
+// Read only the selected personal credential. A platform fallback (including one
+// injected into req.apiKeys) is never usable here, even by an authenticated admin.
+keysRouter.post('/balance', async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const ownerId = req.user?.id;
+    if (!ownerId) return res.status(401).json({ error: { message: 'Sign in to check a provider.' } });
+    const provider = canonicalAccountProvider(String(req.body?.provider || ''));
+    if (!provider) return res.status(400).json({ error: { message: 'Choose a supported provider.' } });
+    if (!allowedProviderFilter(req)(provider)) return res.status(403).json({ error: { message: 'Enable this provider to check it.' } });
+    const def = getProviderDef(provider);
+    const headerPresent = def ? req.header(def.header)
+      : provider === 'pixazo' ? req.header('X-Pixazo-Key') || req.header('X-Flux-Key')
+      : provider === 'ideogram' ? req.header('X-Ideogram-Key') : req.header('X-Sarvam-Key');
+    let key = headerPresent?.trim() ? callerKeyFor(req, provider) : null;
+    if (!key) {
+      try { key = (await readAccountBalanceKeys(ownerId, provider))[provider] || null; }
+      catch {
+        return res.json({ report: { provider, status: 'unavailable', checkedAt: Date.now(), accountBalances: null, keyQuotaUsd: null }, saved: false });
+      }
+    }
+    return res.json(await refreshProviderBalance({ ownerId, provider, key }));
+  } catch (error) { next(error); }
+});
 
 keysRouter.post('/validate', async (req: Request, res: Response) => {
   const provider = String(req.body?.provider || '').trim().toLowerCase();

@@ -77,6 +77,12 @@ beforeEach(() => {
 });
 
 describe('DictationButton target sizes', () => {
+  it('focuses the microphone on a voice entry without opening it or recording', () => {
+    render(<DictationButton onFinal={vi.fn()} focusOnEntry />);
+    expect(screen.getByRole('button', { name: 'Start voice dictation' })).toHaveFocus();
+    expect(state.start).not.toHaveBeenCalled();
+  });
+
   it('the caret is ≥ 24 px wide with a mouse; on touch both halves are 44 px', () => {
     render(<DictationButton onFinal={vi.fn()} />);
     const mic = screen.getByRole('button', { name: 'Start voice dictation' });

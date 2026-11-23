@@ -15,7 +15,9 @@ import {
 } from '../../services/toolAnalytics';
 import { listMcpServers, onMcpServersChanged, addMcpServer } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
-import { API_BASE_URL } from '../../services/clientConfig';
+import { buildApiUrl } from '../../services/clientConfig';
+import { useAuth } from '../../contexts/AuthContext';
+import { ownerBearer } from '../../services/accountProviderUsage';
 import { useIsAdmin } from '../../hooks/useIsAdmin';
 import { platformDocsVisible } from '../../services/platformFlags';
 import { FOCUS_RING, MUTED, RADIUS_CONTROL, SECTION_CARD, TWO_LINE_TEXT, WRAP_TEXT } from './studioDesign';
@@ -225,28 +227,37 @@ export const ToolsDashboard: React.FC = () => {
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [query, setQuery] = useState('');
   const [activeCat, setActiveCat] = useState<ToolCategory | 'all'>('all');
-  const [usage, setUsage] = useState<ProviderUsageRow[] | null>(null);
+  const [snapshot, setSnapshot] = useState<{ owner: string; rows: ProviderUsageRow[] } | null>(null);
+  const owner = useAuth().user?.id;
   // Tools behind the shared-platform rollout (email_draft, deck_create) are listed only for a person the
   // rollout admits (VITE_PLATFORM_DOCS exactly 'on' and the stage), the same rule the server routes them by.
   const isAdmin = useIsAdmin();
+  const usage = isAdmin && snapshot?.owner === owner ? snapshot?.rows : null;
   const showPlatformDocs = platformDocsVisible(isAdmin);
   const catalog = useMemo(
     () => TOOL_CATALOG.filter((t) => t.rollout !== 'platform-docs' || showPlatformDocs),
     [showPlatformDocs]
   );
 
-  // Server-side provider usage (counts + budgets) — refresh every 30s while open.
+  // Platform counters are operator-only. Reads carry the same signed-in account
+  // throughout, with no personal provider keys attached.
   useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetch(`${API_BASE_URL}/api/usage/providers`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (alive && d?.providers) setUsage(d.providers); })
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 30_000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+    if (!isAdmin || !owner) return;
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const authorization = await ownerBearer(owner, controller.signal);
+        const response = await fetch(buildApiUrl('/api/usage/providers'), {
+          headers: { Authorization: authorization }, cache: 'no-store', redirect: 'error', signal: controller.signal
+        });
+        const data = response.ok ? await response.json() : null;
+        if (!controller.signal.aborted) setSnapshot(Array.isArray(data?.providers) ? { owner, rows: data.providers } : null);
+      } catch { if (!controller.signal.aborted) setSnapshot(null); }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 30_000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [isAdmin, owner]);
 
   useEffect(() => onToolAnalyticsChanged(() => setStats(getToolStats())), []);
   useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);

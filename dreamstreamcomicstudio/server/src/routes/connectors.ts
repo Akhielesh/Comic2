@@ -12,6 +12,7 @@
 // to req.user.id so a user can only read connections they own + authorized.
 // ============================================================================
 
+import { finishGoogleAuthorization } from './googleLogin.js';
 import { randomBytes } from 'node:crypto';
 import { Router, type Response } from 'express';
 import {
@@ -138,6 +139,7 @@ export const connectorsPublicRouter = Router();
 
 connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
   const stateParam = String(req.query.state || '');
+  if (stateParam.startsWith('login.')) return finishGoogleAuthorization(req, res);
   const code = String(req.query.code || '');
   const oauthError = String(req.query.error || '');
 

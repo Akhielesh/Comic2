@@ -18,6 +18,7 @@ vi.mock('./emailStore.js', async (importOriginal) => ({
   patchLog: vi.fn(async () => undefined)
 }));
 
+const { logSend } = await import('./emailStore.js');
 const { sendEmail } = await import('./mailer.js');
 
 const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ ok: true, messageId: 'm1' })));
@@ -35,13 +36,36 @@ const lastRequest = () => {
 };
 
 describe('sendEmail → email Worker', () => {
-  it('signs the exact body and adds the read-receipt pixel by default', async () => {
+  it('signs the exact body with an optional acknowledgement and no default image tracking', async () => {
     expect(await sendEmail({ to: 'Ada@Example.com', template: 'welcome' })).toEqual({ ok: true, messageId: 'm1' });
     const req = lastRequest();
     expect(req.url).toBe('https://email-worker.test/send');
     expect(req.signature).toBe('sha256=' + crypto.createHmac('sha256', 'test-secret').update(req.raw).digest('hex'));
-    expect(req.body).toMatchObject({ template: 'welcome', to: 'ada@example.com', params: { pixelUrl: 'https://api.test/api/email/o/log-1.gif' } });
+    expect(req.body).toMatchObject({ template: 'welcome', to: 'ada@example.com' });
+    expect(req.body.params.ackUrl).toMatch(/^https:\/\/api\.test\/api\/email\/ack\/[A-Za-z0-9_-]{43}$/);
+    expect(req.body.params).not.toHaveProperty('pixelUrl');
+    expect(vi.mocked(logSend).mock.lastCall?.[0].ackReceiptHash).toBe(crypto.createHash('sha256').update(req.body.params.ackUrl.split('/').pop()).digest('hex'));
     expect(req.body).not.toHaveProperty('brand');
+  });
+
+  it('mints separate random tokens per purpose and message and discards supplied trackers', async () => {
+    vi.stubEnv('EMAIL_OPEN_SIGNALS', 'on');
+    try {
+      const tokens = new Set();
+      for (let i = 0; i < 2; i++) {
+        await sendEmail({ to: 'reader@example.test', template: 'announcement', params: { ackUrl: 'https://foreign.test/ack', pixelUrl: 'https://foreign.test/p' } });
+        const { params } = lastRequest().body;
+        const open = new URL(params.pixelUrl), ack = new URL(params.ackUrl);
+        expect(open.origin).toBe('https://api.test');
+        expect(ack.origin).toBe(open.origin);
+        for (const url of [open, ack]) tokens.add(url.pathname.split('/').pop()!.replace(/\.gif$/, ''));
+      }
+      expect(tokens.size).toBe(4);
+      for (const template of ['auth-recovery','signin-alert','newsletter-confirm'] as const) {
+        await sendEmail({ to: 'reader@example.test', template, params: { ackUrl: 'https://foreign.test/ack', pixelUrl: 'https://foreign.test/p' } });
+        expect(lastRequest().body.params).toEqual({});
+      }
+    } finally { delete process.env.EMAIL_OPEN_SIGNALS; }
   });
 
   it('forwards the sub-brand and drops tracking when track is false', async () => {

@@ -49,7 +49,7 @@ export type InterestHeard = (typeof INTEREST_HEARD)[number]['id'];
  */
 export const INTEREST_UPDATES = {
   label: 'Keep me updated about Comic Studio news and new DreamStream studios.',
-  hint: 'Nothing is sent yet; this only records that you would like updates.'
+  hint: 'Choose this if you would like to hear about future releases.'
 } as const;
 
 const MAKE_IDS: readonly string[] = INTEREST_MAKES.map((m) => m.id);
@@ -162,8 +162,8 @@ export const INTEREST_THANKS = {
   access: 'Thank you, you are on the list.',
   accessWithAnswers: 'Thank you, you are on the list. Your answers help shape what we build next.',
   updates: 'Thank you, you are on the list.',
-  /** After a ticked box: true today (nothing goes out) and what happens when that changes. */
-  keptUpdated: 'Nothing is sent yet; we will let you know when updates start.'
+  /** Confirms the saved preference, independent of the mailer's current setting. */
+  keptUpdated: 'Your preference for updates is saved.'
 } as const;
 
 /** True when any optional answer was given (after cleaning). The box is a choice, not an answer. */
@@ -178,13 +178,12 @@ export const interestThanks = (kind: 'access' | 'updates', answers: InterestAnsw
 };
 
 /**
- * The main site's list card (kind 'updates', HomePage "stay-updated"). Nothing is sent while interest emails are off
- * (the server's INTEREST_EMAILS), so the card promises no email, updates or invites; it says plainly that none go out
- * yet. Change it with the switch, if emails are ever turned on.
+ * The main site's list card (kind 'updates', HomePage "stay-updated"). It describes the
+ * registration independently of the server's mail settings.
  */
 export const UPDATES_CARD = {
   eyebrow: 'Join the list',
   title: 'Interested in Stream Studio?',
-  body: 'Leave your email and it goes on the Stream Studio list. We are not sending any emails yet, so nothing will arrive for now.',
+  body: 'Leave your email to join the Stream Studio interest list.',
   button: 'Add me to the list'
 } as const;

@@ -15,17 +15,12 @@ vi.mock('../services/supabase', () => ({
   setAuthPersistMode: vi.fn(),
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
+vi.mock('../services/googleSignIn', () => ({ googleSignInAvailable: vi.fn(async () => false), startGoogleSignIn: vi.fn(), pendingGoogleSignIn: () => null, completeGoogleSignIn: vi.fn(), cancelGoogleSignIn: vi.fn() }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('./WaitlistForm', () => ({
-  WaitlistForm: ({ onJoined }: { onJoined?: (email: string) => void }) => (
-    <div data-testid="waitlist">
-      <button type="button" onClick={() => onJoined?.('reader@example.com')}>Pretend saved</button>
-    </div>
-  )
-}));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
 
 import { AuthPage } from './AuthPage';
+import { googleSignInAvailable, startGoogleSignIn } from '../services/googleSignIn';
 
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
 const LEGACY = /border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red|black)|text-white|animate-shake|#[0-9a-f]{6}\b/i;
@@ -42,7 +37,7 @@ describe('AuthPage on Atlas', () => {
     expect(screen.getByLabelText(/^Password/)).toHaveAttribute('type', 'password');
     expect(container.innerHTML).not.toMatch(LEGACY);
     // The two choices are one radio group (the DS Segmented), not two loose buttons.
-    expect(screen.getByRole('radiogroup', { name: 'Sign in or register interest' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Sign in or join' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveAttribute('aria-checked', 'true');
   });
 
@@ -71,12 +66,26 @@ describe('AuthPage on Atlas', () => {
     expect(alert.className).not.toMatch(/animate-|red-\d/);
   });
 
+  it('exposes Google only when available and retains the requested voice workspace', async () => {
+    vi.mocked(googleSignInAvailable).mockResolvedValueOnce(true);
+    render(<AuthPage initialMode="signup" returnToWorkspace="voice" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with Google' }));
+    await settle();
+    expect(startGoogleSignIn).toHaveBeenCalledWith('voice', undefined);
+    expect(auth.signInWithPassword).not.toHaveBeenCalled();
+    cleanup();
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    await settle();
+    expect(screen.queryByRole('button', { name: 'Continue with Google' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Enter Studio' })).toBeEnabled();
+  });
+
   it('an invite opens sign-up: the invite is shown, and the legal words are links to the pages', () => {
     const onOpenTerms = vi.fn();
     const onOpenPrivacy = vi.fn();
     const { container } = render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={onOpenPrivacy} onOpenTerms={onOpenTerms} pendingInviteCode="DS-ABCD-EFGH" />);
     expect(screen.getByRole('heading', { level: 1, name: 'Create your account' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent(/DS-ABCD-EFGH will be applied automatically/);
+    expect(screen.getByRole('status')).toHaveTextContent(/check your invite code DS-ABCD-EFGH/);
     const terms = screen.getByRole('link', { name: 'Terms and Conditions' });
     expect(terms).toHaveAttribute('href', '/?view=terms');
     fireEvent.click(terms);
@@ -128,36 +137,25 @@ describe('AuthPage on Atlas', () => {
     for (const cls of DENSITY.coarse.split(' ')) expect(resend.className.split(/\s+/)).toContain(cls);
   });
 
-  it('switching to “Register interest” (sign-ups closed) shows the access request in place', () => {
+  it('offers email signup and lets a returning member switch back without an invitation', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-    fireEvent.click(screen.getByRole('radio', { name: 'Register interest' }));
-    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
-    expect(screen.getByTestId('waitlist')).toBeInTheDocument();
-    // "Already have an account? Sign in" is a 44 x 44 target under a coarse pointer (the layout smoke's hit-target rule).
-    const signIn = screen.getByRole('button', { name: 'Sign in' });
-    for (const cls of DENSITY.coarseSquare.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
-    fireEvent.click(signIn);
-    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign up' }));
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign in' }));
+    expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
   });
 
-  it('after the thank-you, the intro that asked for the email and answers is gone', () => {
-    render(<AuthPage initialMode="request-access" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-    expect(screen.getByText(/Leave your email, and a few answers if you like\./)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Pretend saved' }));
-    expect(screen.queryByText(/Leave your email/)).toBeNull();
-    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
-  });
-
-  it('reads its mode once, at mount: App keys it per request, so a header "Request access" on the open page switches the form', () => {
+  it('reads its mode once, at mount: App keys it per request, so a header "Sign up" on the open page switches the form', () => {
     const h = { onLoginSuccess: vi.fn(), onOpenPrivacy: vi.fn(), onOpenTerms: vi.fn() };
     const { rerender } = render(<AuthPage key="auth-1" initialMode="signin" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
     // The same key keeps the mounted form (the mode prop alone changes nothing): why App bumps the key.
-    rerender(<AuthPage key="auth-1" initialMode="request-access" {...h} />);
+    rerender(<AuthPage key="auth-1" initialMode="signup" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
-    rerender(<AuthPage key="auth-2" initialMode="request-access" {...h} />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
-    expect(screen.getByTestId('waitlist')).toBeInTheDocument();
+    rerender(<AuthPage key="auth-2" initialMode="signup" {...h} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Create your account' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
     rerender(<AuthPage key="auth-3" initialMode="signin" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
   });
@@ -191,8 +189,8 @@ describe('AuthPage on Atlas', () => {
       expect(screen.getByRole('main')).not.toHaveTextContent(/other DreamStream studios/i);
       cleanup();
       // Registering interest is about Comic Studio alone: no line about the main site under that card.
-      render(<AuthPage initialMode="request-access" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-      expect(screen.getByTestId('waitlist')).toBeInTheDocument();
+      render(<AuthPage initialMode="signup" onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+      expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
       expect(screen.queryByRole('link', { name: 'Sign in there' })).toBeNull();
       expect(screen.getByRole('main')).not.toHaveTextContent(/other DreamStream studios/i);
       cleanup();

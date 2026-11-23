@@ -235,7 +235,7 @@ describe('director with the registry', () => {
 });
 
 describe('action registry', () => {
-  it('covers every StudioAction type exactly once: core in jobs.ts, the rest registered', () => {
+  it('gives each StudioAction exactly one built-in or registered owner', () => {
     const all = new Set([...SPEND_ACTION_TYPES, ...NON_SPEND_ACTION_TYPES]);
     const registered = Object.keys(ACTION_HANDLERS);
     for (const type of all) expect(CORE_ACTION_TYPES.has(type) !== registered.includes(type)).toBe(true);

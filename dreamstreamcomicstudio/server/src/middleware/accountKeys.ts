@@ -55,27 +55,37 @@ export const canonicalAccountProvider = (provider: string): AccountKeyProvider |
   return null;
 };
 
-const queryAccountKeys = async (userId: string): Promise<AccountKeys> => {
-  const keys: AccountKeys = {};
-  try {
-    const { data, error } = await getSupabaseAdmin()
-      .from('user_api_keys')
-      .select('provider, encrypted_key, iv')
-      .eq('user_id', userId);
-    if (!error) {
-      for (const row of data || []) {
-        const provider = canonicalAccountProvider(String(row.provider || ''));
-        if (!provider) continue;
-        // An exact-name row wins over an alias row ('pixazo' over 'flux').
-        if (keys[provider] && String(row.provider).toLowerCase() !== provider) continue;
-        const secret = decryptSecret(String(row.encrypted_key || ''), String(row.iv || ''));
-        if (secret) keys[provider] = secret;
-      }
-    }
-  } catch (err) {
-    logger.warn('account_keys_load_failed', { message: (err as Error)?.message });
+/** A fresh account credential read, for explicit financial checks where a vault failure
+ * must stay distinguishable from a user who has not added a key. */
+const loadAccountKeys = async (userId: string, strict: boolean, onlyProvider?: AccountKeyProvider): Promise<AccountKeys> => {
+  if (!isSecureStoreAvailable() || !getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+    throw new Error('Account key storage unavailable');
   }
+  const { data, error } = await getSupabaseAdmin().from('user_api_keys').select('provider, encrypted_key, iv').eq('user_id', userId);
+  if (error) throw new Error('Account key read unavailable');
+  const keys: AccountKeys = {};
+  const unreadable = new Set<AccountKeyProvider>();
+  for (const row of data || []) {
+    const provider = canonicalAccountProvider(String(row.provider || ''));
+    if (!provider || (onlyProvider && onlyProvider !== provider) || (keys[provider] && String(row.provider).toLowerCase() !== provider)) continue;
+    const secret = decryptSecret(String(row.encrypted_key || ''), String(row.iv || ''));
+    if (!secret) { unreadable.add(provider); continue; }
+    keys[provider] = secret;
+  }
+  if (strict && [...unreadable].some(provider => !keys[provider])) throw new Error('Account key decryption unavailable');
   return keys;
+};
+
+export const readAccountBalanceKeys = (userId: string, onlyProvider?: AccountKeyProvider): Promise<AccountKeys> =>
+  loadAccountKeys(userId, true, onlyProvider);
+
+const queryAccountKeys = async (userId: string): Promise<AccountKeys> => {
+  try {
+    return await loadAccountKeys(userId, false);
+  } catch {
+    logger.warn('account_keys_load_failed', {});
+    return {};
+  }
 };
 
 // How each provider maps onto the req.apiKeys fields attachKeys populates.

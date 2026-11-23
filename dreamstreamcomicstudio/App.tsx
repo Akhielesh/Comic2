@@ -19,6 +19,7 @@ const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/Pag
 const ComicStudio = lazyImportWithRetry(() => import('./components/comicstudio/ComicStudio').then(module => ({ default: module.ComicStudio })));
 // Recent-project navigation belongs to the workspace, including its drawer and frame styles.
 const ComicProjectNavigation = lazyImportWithRetry(() => import('./components/comicstudio/ComicCreationWorkspace').then(module => ({ default: module.ComicProjectNavigation })));
+const ImageWorkspace = lazyImportWithRetry(() => import('./components/images/ImageWorkspace').then(module => ({ default: module.ImageWorkspace })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
@@ -114,6 +115,7 @@ type AppView =
   | 'profile'
   | 'pagestudio'
   | 'comicstudio'
+  | 'images'
   | 'ventures'
   | 'shared'
   // The public, read-only share reader: /c/<slug>[/<title-tail>|/embed]. Its own URL; no suite chrome.
@@ -128,7 +130,7 @@ type AppView =
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.
 //  Project workspaces restore through the ?view=…&id= deep-link path instead.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'privacy', 'terms', 'settings',
+  'auth', 'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'privacy', 'terms', 'settings', 'images',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -169,6 +171,7 @@ const VIEW_PRODUCT: Partial<Record<AppView, ProductId>> = {
   editor: 'comic_studio',
   pagestudio: 'comic_studio',
   comicstudio: 'comic_studio',
+  images: 'comic_studio',
 };
 
 // Friendly gate for accounts confined to specific studios (product_access rows exist): the DS empty state,
@@ -368,9 +371,12 @@ const App: React.FC = () => {
     }
   }, [user]);
   // Which tab the auth page opens on: existing users sign in; everyone else can
-  // request early access while new signups are invite-only.
-  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
-  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Register interest"
+  // open public account creation directly.
+  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'signup'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('view') === 'auth' && params.get('mode') === 'signup' ? 'signup' : 'signin';
+  });
+  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Sign up"
   // pressed while the sign-in page is already open remounts it on the step asked for (an invite still wins there).
   const [authRequest, setAuthRequest] = useState(0);
 
@@ -610,9 +616,11 @@ const App: React.FC = () => {
         if (currentView === 'home') url.searchParams.delete('view');
         else url.searchParams.set('view', currentView);
       }
+      if (currentView === 'auth' && authInitialMode === 'signup') url.searchParams.set('mode', 'signup');
+      else if (url.searchParams.get('mode') === 'signup') url.searchParams.delete('mode');
       window.history.replaceState({}, '', url);
     } catch { /* history unavailable; navigation still works via state */ }
-  }, [currentView, activeProjectId, pendingStudioTarget]);
+  }, [currentView, activeProjectId, pendingStudioTarget, authInitialMode]);
 
   useEffect(() => {
     // Never from an email address (anyone can sign up with any address): only the server's
@@ -774,7 +782,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures', 'publiccomic'];
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'images', 'reader', 'ventures', 'publiccomic'];
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
@@ -845,6 +853,7 @@ const App: React.FC = () => {
 
     if (
       view === 'dashboard' ||
+      view === 'images' ||
       view === 'auth' ||
       view === 'learn' ||
       view === 'gallery' ||
@@ -882,7 +891,7 @@ const App: React.FC = () => {
     setNewComicRequested(true);
   };
 
-  const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
+  const goToAuth = (mode: 'signin' | 'signup' = 'signin') => {
     setAuthInitialMode(mode);
     setAuthRequest((n) => n + 1);
     handleNavigate('auth');
@@ -914,16 +923,25 @@ const App: React.FC = () => {
   // New comics start in the conversational studio. The server creates the projects row +
   // the comic_docs row in one call; failures reject with a user-safe message the dashboard
   // shows inline (offline, expired session, studio storage unavailable…).
-  const handleCreateProject = async (name: string, mode: NewComicMode = 'studio', initialIdea?: string): Promise<void> => {
+  const handleCreateProject = async (name: string, mode: NewComicMode = 'studio', initialIdea?: string, directorCreationId?: string): Promise<void> => {
     if (mode === 'studio') {
       const accountId = user?.id;
       // The Comic Studio API and document normalization are needed only after explicit creation.
       const { createStudioProject } = await import('./components/comicstudio/studioApi');
+      const draftStart = directorCreationId ? await import('./components/comicstudio/live/startDirectorDraft') : null;
       if (!accountId || accountRef.current !== accountId) return;
-      const { projectId } = await createStudioProject({ title: name.trim() || undefined });
-      // An in-flight request from a previous account must not open its project for the next account.
-      if (!accountId || accountRef.current !== accountId) return;
-      setFirstIdea(initialIdea?.trim() ? { accountId, projectId, id: crypto.randomUUID(), text: initialIdea } : null);
+      const { projectId, doc } = await createStudioProject({
+        title: name.trim() || undefined,
+        ...(directorCreationId && initialIdea ? { directorIdea: initialIdea.trim(), creationId: directorCreationId } : {})
+      }, accountId);
+      if (accountRef.current !== accountId) return;
+      if (draftStart && doc.directorDraft) {
+        setFirstIdea(null);
+        // Resume opens an already-running or completed plan without starting a second job.
+        draftStart.startDirectorDraft(accountId, doc);
+      } else {
+        setFirstIdea(initialIdea?.trim() ? { accountId, projectId, id: projectId, text: initialIdea } : null);
+      }
       openComicStudio(projectId);
       // The server created the listing row; pick it up in the background so every way
       // back to the dashboard lists the new comic.
@@ -1101,7 +1119,7 @@ const App: React.FC = () => {
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
   // ventures (the Operator Console) only works signed in, so send visitors to sign in first
   // instead of letting them reach a console that fails every call with 401.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'comicstudio', 'chat', 'ventures'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'comicstudio', 'images', 'chat', 'ventures'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   // Product gate (product_access): confined accounts only reach their active studios.
@@ -1124,8 +1142,8 @@ const App: React.FC = () => {
   const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });
   const comicsChrome = chrome.owns;
   const comicsDashboard = comicsHost.active && effectiveView === 'dashboard';
-  const showSharedHeader = chrome.suiteHeader && !comicsDashboard && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
-  const showSharedLegalLinks = !comicsDashboard && effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
+  const showSharedHeader = chrome.suiteHeader && !comicsDashboard && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'images', 'publiccomic'].includes(effectiveView);
+  const showSharedLegalLinks = !comicsDashboard && effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'images' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
   // The comics host's own views (the landing; signed out, sign-in, Privacy, Terms and the Library) carry no floating
@@ -1138,7 +1156,7 @@ const App: React.FC = () => {
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = chrome.widgets && !comicsDashboard && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  const showFeedbackWidget = chrome.widgets && !comicsDashboard && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'images' && effectiveView !== 'publiccomic';
   // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
   const publicComicIsOwner =
     !!publicComicRoute?.slug &&
@@ -1171,7 +1189,7 @@ const App: React.FC = () => {
               onViewComics={() => handleNavigate('gallery')}
               onEnterStudio={() => handleNavigate('dashboard')}
               onSignIn={() => goToAuth('signin')}
-              onRequestAccess={() => goToAuth('request-access')}
+              onRequestAccess={() => goToAuth('signup')}
               onNotify={goToStayUpdated}
               onOpenProfile={() => openSettings('profile')}
               onNavigate={handleNavigate}
@@ -1199,7 +1217,7 @@ const App: React.FC = () => {
             current={chrome.current}
             onGoHome={handleBackToHome}
             onSignIn={() => goToAuth('signin')}
-            onRequestAccess={() => goToAuth('request-access')}
+            onRequestAccess={() => goToAuth('signup')}
             onOpenComics={() => handleNavigate('dashboard')}
             onBrowseGallery={handleBrowseComicsLibrary}
           />
@@ -1218,7 +1236,7 @@ const App: React.FC = () => {
             <ComicsLanding
               signedIn={!!user}
               onSignIn={() => goToAuth('signin')}
-              onRequestAccess={() => goToAuth('request-access')}
+              onRequestAccess={() => goToAuth('signup')}
               onOpenComics={() => handleNavigate('dashboard')}
               onStartCreating={handleStartCreating}
               onBrowseGallery={handleBrowseComicsLibrary}
@@ -1239,6 +1257,9 @@ const App: React.FC = () => {
             <AuthPage
               key={`auth-${authRequest}`}
               initialMode={authInitialMode}
+              onModeChange={setAuthInitialMode}
+              returnToWorkspace={currentView === 'images' ? 'images' : currentView === 'chat'
+                ? (new URLSearchParams(window.location.search).get('voice') === '1' ? 'voice' : 'chat') : undefined}
               pendingInviteCode={getPendingInviteCode()}
               onLoginSuccess={() => {
                 if (pendingReaderTarget) {
@@ -1247,7 +1268,7 @@ const App: React.FC = () => {
                   void navigateToReader(target.id, target.returnView);
                   return;
                 }
-                setCurrentView('dashboard');
+                setCurrentView(currentView === 'images' || currentView === 'chat' ? currentView : 'dashboard');
               }}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
@@ -1323,6 +1344,10 @@ const App: React.FC = () => {
             />
           )}
 
+          {effectiveView === 'images' && user && (
+            <ImageWorkspace key={user.id} userId={user.id} onBack={() => handleNavigate('dashboard')} />
+          )}
+
           {effectiveView === 'learn' && (
             <LearnHub />
           )}
@@ -1347,7 +1372,7 @@ const App: React.FC = () => {
                   initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
                   onInitialIdeaConsumed={consumeFirstIdea}
                   navigationFooter={<Suspense fallback={null}><ComicProjectNavigation projects={projects} activeProjectId={activeProjectId}
-                    onNewComic={handleStartCreating} onAllComics={leaveComicStudio} onLibrary={handleBrowseComicsLibrary} onOpenProject={handleOpenProject} /></Suspense>} />
+                    onNewComic={handleStartCreating} onImages={() => handleNavigate('images')} onAllComics={leaveComicStudio} onLibrary={handleBrowseComicsLibrary} onOpenProject={handleOpenProject} /></Suspense>} />
               </StudioErrorBoundary>
             </div>
           )}
@@ -1441,6 +1466,7 @@ const App: React.FC = () => {
         {showUniversalAssistant && (
           <Suspense fallback={null}>
             <UniversalAssistant
+              key={user?.id ?? 'guest'}
               currentView={effectiveView}
               hideLauncher={assistant.hideLauncher}
               activeProject={activeProject}

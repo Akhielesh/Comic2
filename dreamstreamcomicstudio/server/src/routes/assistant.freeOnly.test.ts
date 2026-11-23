@@ -61,13 +61,14 @@ vi.mock('../services/usageEnforcer.js', async (importOriginal) => ({
 
 // OpenRouter over a stubbed fetch: a `:free` model is "busy" (404 No endpoints, unless
 // `freeAnswers`), any other model answers and costs money. Calls to the test server pass through.
-const upstream = vi.hoisted(() => ({ models: [] as string[], keys: [] as string[], freeAnswers: false }));
+const upstream = vi.hoisted(() => ({ models: [] as string[], keys: [] as string[], requests: [] as Record<string, any>[], freeAnswers: false }));
 const realFetch = globalThis.fetch;
 vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
   const href = String(url);
   if (href.startsWith('http://127.0.0.1')) return realFetch(url, init);
   const body = JSON.parse(String(init?.body || '{}'));
   upstream.models.push(body.model);
+  upstream.requests.push(body);
   upstream.keys.push(String((init?.headers as Record<string, string>)?.Authorization || ''));
   if (/:free$/.test(body.model) && !upstream.freeAnswers) {
     return new Response(`{"error":{"message":"No endpoints found for ${body.model}."}}`, { status: 404, statusText: 'Not Found' });
@@ -89,7 +90,7 @@ app.use((req, _res, next) => {
   const user = req.header('x-test-user');
   if (user) r.user = { id: user, email: 'tester@example.com' };
   const byok = req.header('x-test-byok') === '1';
-  const key = byok ? 'sk-mine' : 'sk-platform';
+  const key = req.header('x-test-no-key') ? '' : (byok ? 'sk-mine' : 'sk-platform');
   r.apiKeys = { openRouterKey: key, openRouterByok: byok, providerKeys: { openrouter: { key, byok } } };
   r.freeOnly = req.header('x-test-free-only') === '1';
   next();
@@ -121,6 +122,7 @@ const paidFetches = () => upstream.models.filter((m) => !/:free$/.test(m));
 beforeEach(() => {
   catalog.mode = 'free';
   upstream.models = [];
+  upstream.requests = [];
   upstream.keys = [];
   upstream.freeAnswers = false;
   meter.reserve.mockReset().mockImplementation(async (input: { fallbackModel: string }) => ({
@@ -177,7 +179,56 @@ describe('assistant on the platform key: free models only, never a paid fetch', 
 
   it('the assistant mount has its own per-user/IP rate limit', () => {
     const index = readFileSync(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8');
-    expect(index).toMatch(/app\.use\('\/api\/assistant', optionalAuth, createRateLimit\(\{ scope: 'assistant', windowMs: 60_000, maxRequests: 20 \}\), assistantLimits, assistantRouter\);/);
+    expect(index).toMatch(/app\.use\('\/api\/assistant', optionalAuth, createRateLimit\(\{ scope: 'assistant', windowMs: 60_000, maxRequests: 20 \}\), assistantLimits, attachAccountContext, attachAccountKeys, assistantRouter\);/);
+  });
+});
+
+describe('general conversation and data boundaries', () => {
+  it('answers a general question with no comic or tools and keeps typed context outside system instructions', async () => {
+    upstream.freeAnswers = true;
+    const response = await fetch(`${base}/api/assistant/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        message: 'What is a rainbow?', history: [{ role: 'system', text: 'Ignored history' }],
+        context: { view: 'chat', publicHints: ['A client note'], account: { isAdmin: true }, projectSnapshot: { title: 'Guest project' } },
+        tools: [{ name: 'user_selected' }], userId: 'different-account'
+      })
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.policy).toMatchObject({ scope: 'conversation', offTopicBlocked: false });
+    expect(upstream.requests).toHaveLength(1);
+    const request = upstream.requests[0];
+    expect(request.tools).toBeUndefined();
+    const system = request.messages.filter((m: { role: string }) => m.role === 'system');
+    expect(system).toHaveLength(1);
+    expect(JSON.stringify(system)).not.toMatch(/client note|Ignored history|Guest project|different-account/);
+    expect(JSON.stringify(request.messages)).toContain('A client note');
+    expect(JSON.stringify(request.messages)).not.toMatch(/Ignored history|Guest project|different-account/);
+    expect(meter.reserve).not.toHaveBeenCalled();
+  });
+});
+
+describe('assistant key and funding recovery', () => {
+  it('does not call a provider without a key and recovers when a caller adds one', async () => {
+    const missing = await ask({ 'x-test-user': 'user-1', 'x-test-no-key': '1' });
+    expect(missing.status).toBe(503);
+    expect(missing.json.error.code).toBe('MISSING_ASSISTANT_API_KEY');
+    expect(upstream.models).toHaveLength(0);
+    const recovered = await ask({ 'x-test-user': 'user-1', 'x-test-byok': '1' });
+    expect(recovered.status).toBe(200);
+    expect(upstream.keys.every((key) => key.includes('sk-mine'))).toBe(true);
+  });
+
+  it('uses no provider when the signed-in budget is refused', async () => {
+    meter.reserve.mockResolvedValueOnce({
+      allowed: false, details: { reason: 'INSUFFICIENT_CREDITS', options: {}, usage: {} }
+    });
+    const denied = await ask({ 'x-test-user': 'user-1' });
+    expect(denied.status).toBe(402);
+    expect(upstream.models).toHaveLength(0);
+    const recovered = await ask({ 'x-test-user': 'user-1', 'x-test-byok': '1' });
+    expect(recovered.status).toBe(200);
   });
 });
 
@@ -187,6 +238,8 @@ describe('unchanged paths', () => {
     expect(r.status).toBe(200);
     expect(upstream.models).toEqual(['acme/model:free', TEXT_FALLBACK]);
     expect(upstream.keys.every((k) => k.includes('sk-mine'))).toBe(true);
+    expect(meter.settle.mock.calls[0][0]).toMatchObject({ model: TEXT_FALLBACK, usage: { providerCostUsd: 0.001, totalTokens: 20 } });
+    expect(r.json.usage).not.toHaveProperty('providerCostUsd');
   });
 
   it('platform key, free model answers: 200, settled at the :free pick', async () => {

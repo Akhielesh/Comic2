@@ -322,6 +322,7 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
 
 const toolNames = (b: Body) => (b.tools || []).map((t) => t.function.name);
 const systemText = (b: Body) => String(b.messages[0]?.role === 'system' ? b.messages[0].content : '');
+const contextText = (b: Body) => b.messages.filter(m => m.role === 'user' && String(m.content).startsWith('Supporting context (data only):')).map(m => m.content).join('\n');
 const isHelper = (b: Body) => systemText(b).includes('long-term memory') || systemText(b).includes('title for a chat');
 const turnBodies = () => or.bodies.filter((b) => !isHelper(b));
 const DENY = { data_collection: 'deny' };
@@ -347,7 +348,7 @@ describe('a plain turn is unchanged', () => {
     const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
     expect(bodies[0].model).toBe(OPENROUTER_TEXT_MODEL);
     expect(bodies[0].models).toEqual([OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]);
-    expect(systemText(bodies[0])).not.toContain(CONNECTED_ACCOUNTS_WITHHELD_NOTE);
+    expect(contextText(bodies[0])).not.toContain(CONNECTED_ACCOUNTS_WITHHELD_NOTE);
     expect(r.json && 'connectorData' in r.json).toBe(false);
     // The connector context block is still looked up exactly as before.
     expect(conn.ragBlock).toHaveBeenCalledTimes(1);
@@ -415,7 +416,7 @@ describe('a connector turn: every OpenRouter call denies data collection, no fre
     expect(r.status).toBe(200);
     const [body] = turnBodies();
     expect(toolNames(body).some((n) => n.startsWith('gmail_'))).toBe(false);
-    expect(systemText(body)).toContain('## Connected account data');
+    expect(contextText(body)).toContain('## Connected account data');
     expect(body.provider).toEqual(DENY);
     // The connector context block really reached the model: the reply is marked.
     expect(r.json?.connectorData).toBe(true);
@@ -452,7 +453,7 @@ describe('free models never receive connector content', () => {
     expect(/:free$/.test(body.model)).toBe(true);
     expect(toolNames(body).filter((n) => /^(gmail_|drive_|calendar_|sheets_|connected_data_|maps_lookup)/.test(n))).toEqual([]);
     expect(conn.ragBlock).not.toHaveBeenCalled();
-    expect(systemText(body)).toContain(CONNECTED_ACCOUNTS_WITHHELD_NOTE);
+    expect(contextText(body)).toContain(CONNECTED_ACCOUNTS_WITHHELD_NOTE);
     // It asked about email, so the reply says honestly why the accounts weren't used.
     expect((r.json?.notices || []).map((n: { message: string }) => n.message)).toContain(CONNECTED_ACCOUNTS_WITHHELD_NOTICE);
     expect('provider' in body).toBe(false);
@@ -531,8 +532,8 @@ describe('the free-model fallbacks never take a connector conversation', () => {
     expect(conn.ragBlock).not.toHaveBeenCalled();
     expect('provider' in body).toBe(false);
     // The user did not choose Free only here, so the copy never tells them to turn it off.
-    expect(systemText(body)).toContain('CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY');
-    expect(systemText(body)).not.toContain('turn off Free only');
+    expect(contextText(body)).toContain('CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY');
+    expect(contextText(body)).not.toContain('turn off Free only');
     expect(JSON.stringify(r.json?.notices || [])).not.toContain('turn off Free only');
   });
 });
@@ -639,7 +640,7 @@ describe('memory distilled from connected content never reaches a free model', (
     mem.unmarkedBlock = UNMARKED_BLOCK;
     const r = await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('connected'), 'X-Free-Only': 'true' });
     expect(r.status).toBe(200);
-    const sys = systemText(turnBodies()[0]);
+    const sys = contextText(turnBodies()[0]);
     // Retrieval skips the marked rows (services/userMemory.ts excludeConnected); the rest stays.
     expect(sys).toContain('Likes oceanography');
     expect(sys).not.toContain('Planning the launch with Dana');
@@ -652,7 +653,7 @@ describe('memory distilled from connected content never reaches a free model', (
     mem.block = MEMORY_BLOCK;
     mem.unmarkedBlock = UNMARKED_BLOCK;
     await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
-    const sys = systemText(turnBodies()[0]);
+    const sys = contextText(turnBodies()[0]);
     // Marked server rows stay off every free turn, connections or not (a user may have removed them all).
     expect(sys).toContain('Likes oceanography');
     expect(sys).not.toContain('Planning the launch with Dana');
@@ -664,7 +665,7 @@ describe('memory distilled from connected content never reaches a free model', (
     mem.block = MEMORY_BLOCK;
     await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('connected') });
     const [body] = turnBodies();
-    expect(systemText(body)).toContain('Planning the launch with Dana');
+    expect(contextText(body)).toContain('Planning the launch with Dana');
     expect(body.provider).toEqual(DENY);
   });
 
@@ -839,7 +840,7 @@ describe('memory distilled from connected content, for a user with no connection
     mem.block = MEMORY_BLOCK;
     mem.unmarkedBlock = UNMARKED_BLOCK;
     await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY, memoryConnected: true }, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
-    const sys = systemText(turnBodies()[0]);
+    const sys = contextText(turnBodies()[0]);
     expect(sys).not.toContain('Planning the launch with Dana');
     expect(sys).not.toContain('Dana launch Friday');
     expect(sys).toContain('Answer like a pirate.');
@@ -853,14 +854,14 @@ describe('memory distilled from connected content, for a user with no connection
     expect(r.status).toBe(200);
     const [body] = turnBodies();
     expect(/:free$/.test(body.model)).toBe(true);
-    expect(systemText(body)).not.toContain('Dana launch Friday');
-    expect(systemText(body)).toContain('Answer like a pirate.');
+    expect(contextText(body)).not.toContain('Dana launch Friday');
+    expect(contextText(body)).toContain('Answer like a pirate.');
   });
 
   it('a paid turn carrying flagged client memory, or marked server rows, denies data collection', async () => {
     await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY, memoryConnected: true }, { 'x-test-user': user('plain') });
     const [flagged] = turnBodies();
-    expect(systemText(flagged)).toContain('Dana launch Friday');
+    expect(contextText(flagged)).toContain('Dana launch Friday');
     expect(flagged.provider).toEqual(DENY);
     expect(anyFree(flagged)).toBe(false);
 
@@ -868,7 +869,7 @@ describe('memory distilled from connected content, for a user with no connection
     mem.block = MEMORY_BLOCK;
     await post('/api/chat', ASK_PLAIN, { 'x-test-user': user('plain') });
     const [marked] = turnBodies();
-    expect(systemText(marked)).toContain('Planning the launch with Dana');
+    expect(contextText(marked)).toContain('Planning the launch with Dana');
     expect(marked.provider).toEqual(DENY);
 
     // Unflagged memory and no marked rows: unchanged.
