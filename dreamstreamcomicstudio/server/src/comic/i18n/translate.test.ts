@@ -632,6 +632,9 @@ describe('review fixes: no double charge, Stop semantics, honest message order',
     await ctx1.settled();
     expect(ctx1.llmFake.calls.filter((c) => c.role === 'translator')).toHaveLength(2);
     expect(editionReadiness(s1.doc, 'te').publishable).toBe(true);
+    expect(ctx1.billingFake.reserves).toHaveLength(ctx1.llmFake.calls.length);
+    expect(ctx1.billingFake.settled).toHaveLength(ctx1.llmFake.calls.length);
+    expect(ctx1.billingFake.released).toHaveLength(0);
 
     const s2 = newSession(sixPageKidsDoc());
     const tr2 = fakeTranslator();
@@ -659,6 +662,9 @@ describe('review fixes: no double charge, Stop semantics, honest message order',
     // …and the review that had not started yet is skipped (those lines honestly wait for review).
     expect(ctx2.llmFake.calls.filter((c) => c.role === 'linguist')).toHaveLength(0);
     expect(editionProgress(s2.doc, 'te').unreviewed).toBeGreaterThan(0);
+    expect(ctx2.billingFake.reserves).toHaveLength(1);
+    expect(ctx2.billingFake.settled).toHaveLength(1);
+    expect(ctx2.billingFake.released).toHaveLength(0);
   });
 
   it('UI-started: when the user wrote meanwhile, the summary is APPENDED and the progress message points to it', async () => {

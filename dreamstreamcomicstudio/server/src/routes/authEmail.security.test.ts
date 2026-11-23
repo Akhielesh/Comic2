@@ -21,7 +21,11 @@ const h = vi.hoisted(() => {
     data: { properties: { hashed_token: `hash-${params.type}`, verification_type: params.type }, user: { id: 'u-1' } },
     error: null as unknown
   }));
-  const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({ data: state.rpc.data, error: state.rpc.error }));
+  const rpc = vi.fn(async (fn: string, _args: Record<string, unknown>) => {
+    if (fn === 'lookup_signup_handles') return { data: [], error: null };
+    if (fn === 'live_secure_account') return state.rpc;
+    throw new Error('Unexpected auth RPC: ' + fn);
+  });
   const query = () => {
     const q = { select: () => q, eq: () => q, is: () => q, gt: () => q, limit: () => q, maybeSingle: async () => ({ data: null, error: null }) };
     return q;
@@ -155,6 +159,7 @@ describe('sign-up refuses breached passwords', () => {
     const res = await post('/signup', signup('password123!'));
     expect(res).toEqual({ status: 400, json: { ok: false, code: 'breached_password', message: BREACHED_PASSWORD_MESSAGE } });
     expect(h.verifyTurnstile).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
     expect(h.generateLink).not.toHaveBeenCalled();
     const ok = await post('/signup', signup('an unusual long phrase 42'));
     expect(ok.status).toBe(200);

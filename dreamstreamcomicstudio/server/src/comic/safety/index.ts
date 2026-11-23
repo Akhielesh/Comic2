@@ -262,6 +262,10 @@ export async function screenTurnInput(
   ctx: StudioContext,
   input: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }
 ): Promise<ScreenResult> {
+  const attachments = input.attachments || [];
+  if (attachments.length > DOC_LIMITS.imagesPerMessage) {
+    throw new StudioError('BAD_REQUEST', `Send up to ${DOC_LIMITS.imagesPerMessage} images per message.`, { status: 400 });
+  }
   const deps = safetyDeps();
   if (!deps.enabled()) return { ...ALLOW };
   const rating = input.rating || ratingOf(ctx);
@@ -272,10 +276,8 @@ export async function screenTurnInput(
     text.trim() ? screenText(ctx, text, rating, 'message') : Promise.resolve<TextOutcome>({ decision: 'allow', categories: [], severity: 0 }),
     source.trim() ? screenText(ctx, source, rating, 'script') : Promise.resolve<TextOutcome>({ decision: 'allow', categories: [], severity: 0 }),
     Promise.all(
-      (input.attachments || [])
+      attachments
         .filter((a) => a && typeof a.path === 'string' && a.path)
-        // Every image a message may carry (inbox photos + legacy attachments), never a subset.
-        .slice(0, DOC_LIMITS.imagesPerMessage)
         .map((a) => withTimeout(screenStoredImage(ctx, a, rating), UPLOAD_CHECK_TIMEOUT_MS, { path: a.path, blocked: false, severity: 0 as const, categories: [] }))
     )
   ]);

@@ -1,13 +1,21 @@
 import { REPORT_LIMITS, type FeedbackReportInput, type FeedbackReportReceipt } from '../shared/feedbackReports';
 import { buildApiUrl } from './clientConfig';
 
+/** Only reviewed, first-party guidance reaches the report form. */
+class FeedbackReportProblem extends Error {
+  constructor(readonly guidance: string) { super(guidance); }
+}
+export function feedbackReportHelp(problem: unknown, fallback: string): string {
+  return problem instanceof FeedbackReportProblem ? problem.guidance : fallback;
+}
+
 export interface PreparedScreenshot {
   name: string;
   image: string;
   mime: string;
 }
 export async function prepareReportScreenshot(file: File): Promise<PreparedScreenshot> {
-  if (!file.size || file.size > REPORT_LIMITS.originalBytes) throw new Error('Choose a screenshot under 10 MiB.');
+  if (!file.size || file.size > REPORT_LIMITS.originalBytes) throw new FeedbackReportProblem('Choose a screenshot under 10 MiB.');
   const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const match = (start: number, expected: number[]) => expected.every((n, i) => bytes[start + i] === n);
   if (
@@ -17,15 +25,15 @@ export async function prepareReportScreenshot(file: File): Promise<PreparedScree
       (match(0, [82, 73, 70, 70]) && match(8, [87, 69, 66, 80]))
     )
   ) {
-    throw new Error('Choose a PNG, JPEG or WebP screenshot.');
+    throw new FeedbackReportProblem('Choose a PNG, JPEG or WebP screenshot.');
   }
   const { decodeRasterFile, encodeRasterFile } = await import('../components/comicstudio/refs/downscale');
   const input = await decodeRasterFile(file).catch(() => {
-    throw new Error('This image could not be opened.');
+    throw new FeedbackReportProblem('This image could not be opened.');
   });
   try {
     if (!input.width || !input.height || input.width * input.height > REPORT_LIMITS.maxPixels)
-      throw new Error('Choose a screenshot of up to 16 megapixels.');
+      throw new FeedbackReportProblem('Choose a screenshot of up to 16 megapixels.');
     for (const [edge, quality] of [
       [REPORT_LIMITS.maxEdge, 0.88],
       [1600, 0.78],
@@ -41,12 +49,12 @@ export async function prepareReportScreenshot(file: File): Promise<PreparedScree
       const data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(',')[1]);
-        reader.onerror = () => reject(new Error('This screenshot could not be read.'));
+        reader.onerror = () => reject(new FeedbackReportProblem('This screenshot could not be read.'));
         reader.readAsDataURL(blob);
       });
       return { name: file.name, image: data, mime: blob.type };
     }
-    throw new Error('Crop this screenshot or choose a smaller image.');
+    throw new FeedbackReportProblem('Crop this screenshot or choose a smaller image.');
   } finally {
     input.close?.();
   }
@@ -63,7 +71,7 @@ export async function sendFeedbackReport(
     try {
       headers.Authorization = await ownerBearer(ownerId, signal);
     } catch {
-      throw new Error('Please sign in again to send this report.');
+      throw new FeedbackReportProblem('Please sign in again to send this report.');
     }
   }
   let response: Response;
@@ -77,16 +85,19 @@ export async function sendFeedbackReport(
       signal
     });
   } catch {
-    throw new Error('Could not confirm delivery. Your report is still here. Retry to check or submit it.');
+    throw new FeedbackReportProblem('Could not confirm delivery. Your report is still here. Retry to check or submit it.');
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok || typeof payload?.id !== 'string') {
-    const message = payload?.error?.message;
-    throw new Error(
-      response.status >= 400 && response.status < 500 && typeof message === 'string'
-        ? message
-        : 'Your report could not be saved yet. Please retry.'
-    );
+    let guidance = 'Your report could not be saved yet. Please retry.';
+    if (response.status === 400) guidance = 'Check the description and screenshots, then try again.';
+    if (response.status === 401) guidance = 'Please sign in again to send this report.';
+    if (response.status === 409) guidance = 'This submission changed. Close the form to start a new report.';
+    if (response.status === 413) guidance = 'Remove a screenshot or choose a smaller image, then try again.';
+    if (response.status === 429) guidance = payload?.error?.code === 'RATE_LIMITED'
+      ? 'You have sent several reports recently. Wait a minute before trying again.'
+      : 'Screenshot storage is at its limit. You can remove the screenshots and send the text now, or try again later.';
+    throw new FeedbackReportProblem(guidance);
   }
   return { id: payload.id };
 }

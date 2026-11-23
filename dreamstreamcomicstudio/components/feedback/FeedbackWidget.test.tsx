@@ -6,7 +6,8 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../services/feedbackReports', () => ({
+vi.mock('../../services/feedbackReports', async (load) => ({
+  ...await load<typeof import('../../services/feedbackReports')>(),
   sendFeedbackReport: vi.fn(async () => ({ id: 'b48e2af7-a5e9-4b0c-8c3f-65ad306b891e' })),
   prepareReportScreenshot: vi.fn(async (file: File) => ({
     name: file.name,
@@ -107,13 +108,14 @@ describe('FeedbackWidget', () => {
   });
 
   it('keeps the draft on connection failure and safely retries the same submission', async () => {
-    vi.mocked(sendFeedbackReport).mockClear().mockRejectedValueOnce(new Error('Could not confirm delivery.'));
+    vi.mocked(sendFeedbackReport).mockClear().mockRejectedValueOnce(new Error('unreviewed upstream detail'));
     render(<FeedbackWidget showLauncher={false} ownerId="member-one" surface="comicstudio" />);
     act(() => openFeedbackReport('bug'));
     const input = screen.getByRole('textbox', { name: 'What happened?' });
     fireEvent.change(input, { target: { value: 'A blank panel.' } });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send bug report' })));
-    expect(screen.getByRole('alert')).toHaveTextContent('Could not confirm delivery.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Your report could not be saved. Please retry.');
+    expect(screen.queryByText(/unreviewed upstream/)).toBeNull();
     expect(input).toHaveValue('A blank panel.');
     expect(screen.queryByText('Report ID')).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send bug report' })));

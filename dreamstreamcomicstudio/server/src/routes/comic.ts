@@ -1710,7 +1710,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         ...(prepared.sourceText ? { sourceText: prepared.sourceText } : {})
       });
     } catch (err) {
-      if (err instanceof StudioError && err.code === 'CANCELLED') throw err;
+      if (err instanceof StudioError && (err.code === 'CANCELLED' || err.code === 'BAD_REQUEST')) throw err;
       logger.warn('comic_screen_failed_open', { requestId: req.requestId, projectId: ctx.projectId, message: (err as Error)?.message });
       screened = ALLOW;
     }

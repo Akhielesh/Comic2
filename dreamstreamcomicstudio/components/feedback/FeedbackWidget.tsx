@@ -2,6 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { Megaphone, X, Check } from 'lucide-react';
 import { FEEDBACK_CATEGORIES, type FeedbackSentiment } from '../../apiTypes';
 import {
+  feedbackReportHelp,
   prepareReportScreenshot,
   sendFeedbackReport,
   type PreparedScreenshot
@@ -10,6 +11,7 @@ import { REPORT_LIMITS, type ReportKind } from '../../shared/feedbackReports';
 import { cn } from '../../lib/utils';
 import {
   DENSITY,
+  DIALOG_TITLE_FROM_SM,
   FOCUS_RING,
   OVERLAY,
   OVERLINE,
@@ -17,6 +19,7 @@ import {
   SCRIM,
   SHADOW_SOFT,
   STATUS_INK,
+  WRAP_TEXT,
   Z
 } from '../chat/studioDesign';
 import { Button } from '../ds/Button';
@@ -204,7 +207,7 @@ export const FeedbackWidget: React.FC<{ showLauncher?: boolean; surface?: string
       try {
         accepted.push(await prepareReportScreenshot(file));
       } catch (error) {
-        errors.push(file.name + ': ' + (error instanceof Error ? error.message : 'Choose another image.'));
+        errors.push(file.name + ': ' + feedbackReportHelp(error, 'Choose another image.'));
       }
     }
     if (generation.current !== token) return;
@@ -241,7 +244,7 @@ export const FeedbackWidget: React.FC<{ showLauncher?: boolean; surface?: string
       setStatus('sent');
     } catch (error) {
       if (!controller.signal.aborted) {
-        setFailure(error instanceof Error ? error.message : 'Your report could not be saved. Try again.');
+        setFailure(feedbackReportHelp(error, 'Your report could not be saved. Please retry.'));
         setStatus('idle');
       }
     } finally {
@@ -288,7 +291,7 @@ export const FeedbackWidget: React.FC<{ showLauncher?: boolean; surface?: string
                 <Megaphone aria-hidden="true" className="size-4 text-[var(--ds-muted)]" />
                 <h2
                   id={titleId}
-                  className="m-0 text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)]"
+                  className={cn('m-0 text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)]', DIALOG_TITLE_FROM_SM)}
                 >
                   {kind === 'bug' ? 'Report a bug' : 'Send feedback'}
                 </h2>
@@ -436,7 +439,7 @@ export const FeedbackWidget: React.FC<{ showLauncher?: boolean; surface?: string
                   </p>
                 )}
                 {failure && (
-                  <p role="alert" className="text-sm">
+                  <p role="alert" className={cn(WRAP_TEXT, 'text-sm')}>
                     {failure}
                   </p>
                 )}

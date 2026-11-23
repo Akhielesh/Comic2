@@ -402,8 +402,11 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   const spec = languageSpec(lang)!;
   const tracker: TextSpendTracker = newTextSpendTracker();
   const res: LanguageResult = emptyResult(lang);
-  const llmT = billedLlm(ctx, { stage: 'translate', operation: 'comic.text.translator', tracker });
-  const llmL = billedLlm(ctx, { stage: 'translate', operation: 'comic.text.linguist', tracker });
+  // An approved translation outlives its HTTP stream. Queue admission and billing
+  // use this run's Stop signal. A chunk already dispatched still finishes and settles.
+  const runContext = { ...ctx, signal };
+  const llmT = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.translator', tracker });
+  const llmL = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.linguist', tracker });
   const rating = ratingOf(ctx);
   const opts = { pageIds: action.pageIds, force: action.force, overwriteEdits: action.overwriteEdits };
   const plan = planTranslation(ctx.session.doc, lang, opts);

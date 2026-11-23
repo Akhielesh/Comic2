@@ -62,7 +62,7 @@ export function ReportScreenshots({ id, count }: { id: string; count: number }) 
               <img
                 alt={'Report screenshot ' + position}
                 src={view.url}
-                className="max-h-72 max-w-full object-contain"
+                className="block max-h-72 max-w-full overflow-hidden object-contain"
               />
             </a>
           ) : (
