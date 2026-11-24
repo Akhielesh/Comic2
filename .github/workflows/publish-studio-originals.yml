@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        book: [orchard, fox, table-nine, harbor, margin, parrots, bubble, glass-hills, night-atlas]
+        book: [orchard, fox, table-nine, harbor, margin, parrots, glass-hills, night-atlas, hat-shop]
     timeout-minutes: 90
     permissions:
       contents: read

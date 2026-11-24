@@ -50,9 +50,12 @@ describe('Studio Originals publication requests', () => {
     const publish = vi.fn();
     const {post} = await fixture(publish);
     expect((await post('/unapproved')).status).toBe(404);
-    expect((await post('/tide',undefined,'invalid')).status).toBe(401);
-    const held=await post('/tide'); expect(held.status).toBe(410);
-    expect(await held.json()).toEqual({state:'held',code:'EDITION_HELD'});
+    for (const heldPath of ['/tide', '/bubble']) {
+      expect((await post(heldPath, undefined, 'invalid')).status).toBe(401);
+      const held = await post(heldPath);
+      expect(held.status).toBe(410);
+      expect(await held.json()).toEqual({ state: 'held', code: 'EDITION_HELD' });
+    }
     expect((await post('/fox', undefined, 'invalid')).status).toBe(401);
     expect((await post('/fox', {url:'https://example.invalid'})).status).toBe(400);
     expect((await post('/fox?owner=1')).status).toBe(400);

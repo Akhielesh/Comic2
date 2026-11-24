@@ -1,4 +1,4 @@
-import { collectionEdition, originalKeyForSlug, originalStoryPages, type OriginalKey } from '../../../shared/comic/originals';
+import { collectionEdition, isPublishableOriginal, originalKeyForSlug, originalStoryPages, type OriginalKey } from '../../../shared/comic/originals';
 
 const techniques: Partial<Record<OriginalKey, [string, string]>> = {
   orchard: ['Ligne claire', 'Fine, unbroken ink contours, flat turquoise and ochre colours, three cinematic tiers per page.'],
@@ -7,14 +7,14 @@ const techniques: Partial<Record<OriginalKey, [string, string]>> = {
   harbor: ['Coastal risograph', 'Ultramarine and marigold risograph layers, two panoramic panels on each page.'],
   margin: ['Black-and-white manga', 'Black ink and screentone, expressive close-ups and right-to-left panel order.'],
   parrots: ['Indian illustrated folktale', 'Fine ink and mineral watercolour with woven border motifs and captions beneath the artwork.'],
-  bubble: ['Speech-bubble comedy', 'Bright cel-cartoon colour, elastic silhouettes and expressive balloon lettering.'],
+  'hat-shop': ['Pop-screenprint bubble comedy', 'Hand-cut paper silhouettes and chunky block-letter signs in tomato, flamingo pink, chartreuse and cobalt on cream. Use expressive speech balloons and a two-beat visual gag per page.'],
   'glass-hills': ['Western travel poster', 'Cartographic details, cut-block silhouettes and broad panoramic views in an ochre and indigo palette.'],
   'night-atlas': ['Botanical cut paper', 'Layered hand-cut silhouettes and cyanotype botanical prints, using indigo, black and ivory.']
 };
 
 export function originalLook(slug: string) {
   const key = originalKeyForSlug(slug);
-  if (!key) return;
+  if (!key || !isPublishableOriginal(key)) return;
   const technique = techniques[key];
   if (!technique) return;
   const edition = collectionEdition(key);

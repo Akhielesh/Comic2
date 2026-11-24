@@ -9,7 +9,8 @@ export const ORIGINAL_SLUGS = {
   parrots: 'DSOriginalBird001',
   bubble: 'DSOriginalBubl001',
   'glass-hills': 'DSOriginalWest001',
-  'night-atlas': 'DSOriginalNite001'
+  'night-atlas': 'DSOriginalNite001',
+  'hat-shop': 'DSOriginalHats001'
 } as const;
 export type OriginalKey = keyof typeof ORIGINAL_SLUGS;
 export const ORIGINAL_KEYS = Object.keys(ORIGINAL_SLUGS) as OriginalKey[];
@@ -21,16 +22,16 @@ export const PUBLISHABLE_ORIGINAL_KEYS = [
   'harbor',
   'margin',
   'parrots',
-  'bubble',
   'glass-hills',
-  'night-atlas'
+  'night-atlas',
+  'hat-shop'
 ] as const satisfies readonly OriginalKey[];
 const publishableKeys: ReadonlySet<string> = new Set(PUBLISHABLE_ORIGINAL_KEYS);
 export const isPublishableOriginal = (key: string): boolean => publishableKeys.has(key);
 
 type OriginalFormat = { kind: 'comic' | 'manga'; readingDirection: 'ltr' | 'rtl'; orientation: 'portrait' | 'landscape'; colorMode?: 'bw' };
 type CollectionKey = Exclude<OriginalKey, 'tide' | 'orchard' | 'fox' | 'table-nine' | 'harbor'>;
-export type CollectionEdition = OriginalFormat & { title: string; pages: number };
+export type CollectionEdition = OriginalFormat & { title: string; pages: number; rating?: 'PG' };
 
 const portraitComic = { kind: 'comic', readingDirection: 'ltr', orientation: 'portrait' } as const;
 const landscapeComic = { ...portraitComic, orientation: 'landscape' } as const;
@@ -39,7 +40,8 @@ const collectionEditions: Partial<Record<OriginalKey, CollectionEdition>> = {
   parrots: { title: 'The Weaver and the Seventh Parrot', pages: 20, ...portraitComic },
   bubble: { title: 'Pip and the Unsent Bubble', pages: 15, ...portraitComic },
   'glass-hills': { title: 'West of the Glass Hills', pages: 20, ...landscapeComic },
-  'night-atlas': { title: 'The Night Garden Atlas', pages: 15, ...landscapeComic }
+  'night-atlas': { title: 'The Night Garden Atlas', pages: 15, ...landscapeComic },
+  'hat-shop': { title: 'Four Letters and a Hat Shop', pages: 15, rating: 'PG', ...portraitComic }
 } satisfies Record<CollectionKey, CollectionEdition>;
 export const collectionEdition = (key: OriginalKey): CollectionEdition | undefined => collectionEditions[key];
 /** The first five registered sources used a fixed fifteen-page metadata format. */

@@ -562,7 +562,7 @@ describe('no enumeration, no account creation', () => {
     expect(new URL(lastSend().params.actionUrl).origin).toBe(origin);
   });
 
-  it.each(['https://example.test', 'DSOriginalTide001', 'my private draft'])('drops an unknown or held style destination', async returnToOriginal => {
+  it.each(['https://example.test', 'DSOriginalTide001', 'DSOriginalBubl001', 'my private draft'])('drops an unknown or held style destination', async returnToOriginal => {
     expect((await post('/signup', signupBody({ returnToOriginal }))).status).toBe(200);
     expect(new URL(lastSend().params.actionUrl).searchParams.has('next')).toBe(false);
   });

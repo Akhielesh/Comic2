@@ -20,11 +20,15 @@ describe('Studio Originals release', () => {
       .map((title) => title.trim());
     expect(titles?.sort()).toEqual([...PUBLISHABLE_ORIGINAL_KEYS].sort());
     expect(titles).toContain('harbor');
+    expect(titles).toContain('hat-shop');
+    expect(titles).toHaveLength(9);
     expect(titles).not.toContain('tide');
-    expect(ORIGINAL_KEYS).toHaveLength(10);
-    expect(new Set(Object.values(ORIGINAL_SLUGS)).size).toBe(10);
+    expect(titles).not.toContain('bubble');
+    expect(ORIGINAL_KEYS).toHaveLength(11);
+    expect(new Set(Object.values(ORIGINAL_SLUGS)).size).toBe(11);
     expect(Object.values(ORIGINAL_SLUGS).every((slug) => /^[a-zA-Z0-9]{17}$/.test(slug))).toBe(true);
     expect(isOriginalSlug(ORIGINAL_SLUGS.tide)).toBe(true);
+    expect(isOriginalSlug(ORIGINAL_SLUGS.bubble)).toBe(true);
   });
 
   it('returns the exact independent reader URL for each publishable title', async () => {
@@ -44,7 +48,7 @@ describe('Studio Originals release', () => {
 
   it('rejects unregistered books before requesting a workflow credential', async () => {
     const fetcher = vi.fn();
-    for (const key of ['unregistered', 'tide']) await expect(publish(key, env, fetcher)).rejects.toThrow('currently open for publication');
+    for (const key of ['unregistered', 'tide', 'bubble']) await expect(publish(key, env, fetcher)).rejects.toThrow('currently open for publication');
     expect(fetcher).not.toHaveBeenCalled();
   });
 });

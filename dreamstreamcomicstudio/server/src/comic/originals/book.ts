@@ -60,6 +60,7 @@ export function originalMetadata(key: OriginalKey, raw: unknown): OriginalMetada
   const count = originalStoryPages(key);
   if (!Array.isArray(data.pages) || data.pages.length !== count) throw new Error(`This edition requires ${count} story pages.`);
   const edition = collectionEdition(key);
+  if (edition?.rating && data.rating !== edition.rating) throw new Error('The rating differs from this registered edition.');
   if (
     edition &&
     (data.title !== edition.title ||

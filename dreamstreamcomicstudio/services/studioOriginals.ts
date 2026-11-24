@@ -1,4 +1,4 @@
-import { originalKeyForSlug, originalStoryPages } from '../shared/comic/originals';
+import { isPublishableOriginal, originalKeyForSlug, originalStoryPages } from '../shared/comic/originals';
 import { isContentRating, type ContentRating } from '../shared/comic/safety';
 import { supabase } from './supabase';
 
@@ -28,7 +28,7 @@ export function originalCatalogCards(value: unknown): StudioOriginalCard[] {
   const seen = new Set<string>();
   for (const row of value) {
     const key = typeof row?.slug === 'string' ? originalKeyForSlug(row.slug) : undefined;
-    if (!key || seen.has(row.slug) ||
+    if (!key || !isPublishableOriginal(key) || seen.has(row.slug) ||
         typeof row.title !== 'string' || !row.title.trim() || typeof row.description !== 'string' ||
         row.creator !== 'DreamStream Studio Originals' || !isContentRating(row.rating) ||
         row.pageCount !== originalStoryPages(key) ||

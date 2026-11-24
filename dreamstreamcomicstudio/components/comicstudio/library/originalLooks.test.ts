@@ -23,6 +23,20 @@ describe('the library look selected before sign-in', () => {
     }
   });
 
+  it('drops a previously stored or directly requested look when an edition is held', () => {
+    const held = 'DSOriginalBubl001';
+    sessionStorage.setItem('comicstudio.library-look.v1', JSON.stringify({ slug: held, at: Date.now() }));
+    window.history.replaceState({}, '', '/?view=dashboard&look=' + held);
+    try {
+      expect(pendingOriginalLook()).toBeUndefined();
+      expect(sessionStorage.getItem('comicstudio.library-look.v1')).toBeNull();
+      expect(originalLook(held)).toBeUndefined();
+      expect(originalLook('DSOriginalHats001')?.brief).toContain('15-page comic, portrait, left to right');
+    } finally {
+      window.history.replaceState({}, '', '/');
+    }
+  });
+
   it('expires old selections and refuses arbitrary or unavailable editions', () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
     try {
