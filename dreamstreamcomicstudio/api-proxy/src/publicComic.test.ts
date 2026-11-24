@@ -385,7 +385,7 @@ describe('POST /api/csp-report (edge only)', () => {
 
 describe('registered Studio Originals use the editorial publication authority', () => {
   it.each([
-    ['DSOriginalTree001', 15, '2:3'], ['DSOriginalPort001', 15, '2:3'],
+    ['DSOriginalTree001', 15, '2:3'], ['DSOriginalPort001', 15, '2:3'], ['DSOriginalHats001', 15, '2:3'],
     ['DSOriginalMarg001', 30, '2:3'], ['DSOriginalWest001', 20, '3:2']
   ] as const)('serves the full frozen reading copy and matching editorial oEmbed for %s', async (slug, count, aspect) => {
     const member = publication();
@@ -402,7 +402,7 @@ describe('registered Studio Originals use the editorial publication authority', 
     if (aspect === '3:2') expect(frame.width).toBeGreaterThan(frame.height);
     expect(backend.calls.map(c => c.url.split('/').pop())).toEqual(['comic_originals_public_payload','comic_originals_share_card']);
   });
-  it.each(['DSOriginalTide001','DSOriginalPort001'])('returns 404 for held or unpublished %s without falling back to member data',async(slug)=>{
+  it.each(['DSOriginalTide001','DSOriginalBubl001','DSOriginalHats001','DSOriginalPort001'])('returns 404 for held or unpublished %s without falling back to member data',async(slug)=>{
     const backend=stubFetch(name=>name==='comic_public_payload'?{publication:publication({slug}),doc:snapshot()}:null);
     expect((await call('/api/comic/public/s/'+slug)).status).toBe(404);
     expect(backend.calls.map(c=>c.url.split('/').pop())).toEqual(['comic_originals_public_payload']);

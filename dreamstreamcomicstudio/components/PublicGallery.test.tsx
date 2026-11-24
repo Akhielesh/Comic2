@@ -564,6 +564,21 @@ describe('first-party editions in the public Library', () => {
     expect(await screen.findByRole('link',{name:'Read The Harbor That Listened'})).toHaveAttribute('href','/c/DSOriginalPort001');
     expect(screen.queryByRole('link',{name:/When the Tide Clock Stopped/})).toBeNull();
   });
+  it('opens Hat Shop and its lettering technique while excluding stale records for held books', async () => {
+    const hats = { ...orchard, slug: 'DSOriginalHats001', title: 'Four Letters and a Hat Shop', rating: 'PG' };
+    const pip = { ...orchard, slug: 'DSOriginalBubl001', title: 'Pip and the Unsent Bubble' };
+    const tide = { ...orchard, slug: 'DSOriginalTide001', title: 'When the Tide Clock Stopped' };
+    originalsRpc.mockResolvedValue({ data: [hats, pip, tide, orchard] });
+    const useLook = vi.fn();
+    render(<PublicGallery onReadComic={vi.fn()} onUseOriginalLook={useLook} />);
+    expect(await screen.findByRole('link', { name: 'Read Four Letters and a Hat Shop' })).toHaveAttribute('href', '/c/DSOriginalHats001');
+    expect(screen.queryByRole('link', { name: /Read Pip|Read When the Tide/ })).toBeNull();
+    submitSearch('bubble');
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Read The Last Orchard/ })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Start a comic like Four Letters and a Hat Shop' }));
+    expect(useLook).toHaveBeenCalledWith(hats.slug);
+  });
+
   it('shows the registered thirty-page manga and omits a truncated landscape edition', async () => {
     const manga = { ...orchard, slug: 'DSOriginalMarg001', title: 'The Girl in the Margin', pageCount: 30 };
     const partial = { ...orchard, slug: 'DSOriginalWest001', title: 'West of the Glass Hills', pageCount: 15 };

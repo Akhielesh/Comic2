@@ -60,7 +60,7 @@ function collectionSource(key: OriginalKey) {
   };
 }
 beforeAll(async () => {
-  for (const key of ['margin', 'glass-hills'] as const) {
+  for (const key of ['margin', 'glass-hills', 'hat-shop'] as const) {
     const book = collectionSource(key);
     const dir = join(root, key);
     await mkdir(dir);
@@ -210,10 +210,10 @@ function localBackend() {
 }
 
 describe('Studio Originals publication', () => {
-  it('keeps the historical Tide record and never opens storage or contacts a reviewer to release it', async () => {
+  it.each(['tide', 'bubble'] as const)('keeps held %s closed before opening storage or contacting a reviewer', async (key) => {
     const fakes = installSafetyFakes();
     const db = localBackend();
-    await expect(publishBundledOriginal('tide', root)).rejects.toThrow('held from publication');
+    await expect(publishBundledOriginal(key, root)).rejects.toThrow('held from publication');
     expect(getSupabaseAdmin).not.toHaveBeenCalled();
     expect(db.upload).not.toHaveBeenCalled();
     expect(fakes.llm.calls).toHaveLength(0);
@@ -369,7 +369,7 @@ const historicalOrchard = {
 };
 
 describe('registered collection reading formats', () => {
-  it.each(['margin', 'parrots', 'bubble', 'glass-hills', 'night-atlas'] as const)(
+  it.each(['margin', 'parrots', 'bubble', 'glass-hills', 'night-atlas', 'hat-shop'] as const)(
     'rejects a short, mislabeled or reordered %s edition',
     (key) => {
       const raw = collectionSource(key);
@@ -382,6 +382,13 @@ describe('registered collection reading formats', () => {
       expect(() => originalMetadata(key, { ...raw, title: 'Another title' })).toThrow('registered edition');
     }
   );
+  it('requires the registered Hat Shop rating before any provider work', () => {
+    const manuscript = collectionSource('hat-shop');
+    expect(originalMetadata('hat-shop', manuscript).rating).toBe('PG');
+    for (const rating of ['G', 'PG-13']) {
+      expect(() => originalMetadata('hat-shop', { ...manuscript, rating })).toThrow('rating differs');
+    }
+  });
   it.each(['margin', 'glass-hills'] as const)(
     'checks every illustrated leaf of %s and publishes the native reading format',
     async (key) => {
@@ -409,7 +416,7 @@ describe('registered collection reading formats', () => {
     },
     40000
   );
-  it.each(['margin', 'parrots', 'bubble', 'glass-hills', 'night-atlas'] as const)(
+  it.each(['margin', 'parrots', 'glass-hills', 'night-atlas', 'hat-shop'] as const)(
     'builds the reader from every frozen source plate in the published %s bundle',
     async (key) => {
       const fake = installSafetyFakes();
@@ -442,6 +449,23 @@ describe('registered collection reading formats', () => {
     },
     90_000
   );
+
+  it('keeps Hat Shop private when only the manuscript receives a hard finding', async () => {
+    const fake = installSafetyFakes();
+    fake.llm.fallback = (request) =>
+      request.jsonSchema?.name === 'comic_safety_text'
+        ? { ...cleanAnswer(request), rating: 'PG', categories: ['dangerous'] }
+        : cleanAnswer(request);
+    const db = localBackend();
+    await expect(publishBundledOriginal('hat-shop', root)).rejects.toThrow('did not clear');
+    const report = db.dbRow.review_report as EditorialReview['report'];
+    expect(report.text.categories).toContain('dangerous');
+    expect([report.cover, ...report.pages].map((v) => v.status)).toEqual(Array(16).fill('pass'));
+    expect(db.dbRow.status).toBe('blocked');
+    expect(db.dbRow.snapshot).toBeUndefined();
+    expect(db.upload).not.toHaveBeenCalled();
+    expect(db.rpc.mock.calls.some(([name]) => name === 'studio_claim_original_revision')).toBe(false);
+  }, 30_000);
 
   it('catches a late-page moderation refusal before any long-book artwork is uploaded', async () => {
     const fake = installSafetyFakes();

@@ -62,7 +62,9 @@ The publisher runs each registered current edition independently. Apply `server/
 
 Apply `server/sql/studio_original_collection.sql` after the Harbor, rating-review and Discover migrations. The collection registers `margin`, `parrots`, `bubble`, `glass-hills` and `night-atlas`. Their source manifests include the title, reading direction, comic kind and orientation. The publisher verifies physical dimensions on the cover and every story page, plus the exact number of numbered pages assigned in `shared/comic/originals.ts`. Each edition’s first publication requires text, cover and all its illustrations to pass the ordinary gate. The frozen reader keeps its reading direction and derives its supported aspect ratio from the artwork.
 
-Tide’s identifier is reserved for its historical record. Operators can inspect its bundled files offline with `npx tsx scripts/ops/studioOriginal.ts check tide server/assets/originals`. The publisher rejects a release request for the held edition.
+Apply `server/sql/studio_original_hat_shop.sql` after the collection migration. *Four Letters and a Hat Shop* has its own source, 15-page portrait reader, and share identifier `DSOriginalHats001`. Its manuscript, cover and 15 separate page illustrations each require an affirmative assessment before publication.
+
+Tide and Pip retain their original identifiers and historical moderation records. The release workflow omits both. Operators can inspect either source offline with `npx tsx scripts/ops/studioOriginal.ts check <key> server/assets/originals`, using `tide` or `bubble` as the key.
 
 ## A small Library
 
