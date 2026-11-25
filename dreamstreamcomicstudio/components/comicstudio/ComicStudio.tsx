@@ -96,6 +96,8 @@ import { INSIGHTS_KIND_ORDER } from '../../shared/comic/modelInsights';
 import { recentLabel } from './insights/copy';
 import { spendSummary } from './insights/insightsModel';
 import { SpendByKindList } from './insights/OverviewTab';
+import { StageStrip } from './stage/StageStrip';
+import type { StagePlace } from '../../shared/comic/stage';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -1158,6 +1160,16 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
     return <StudioSkeleton onBack={onBack} wide={!phone} chrome={phoneChromeVars(ff.layout)} />;
   }
 
+  // The stage strip's steps and next step only navigate: a board tab, the conversation, or the composer.
+  const goToStage = (place: StagePlace) => {
+    if (place === 'composer') skipToComposer();
+    else if (place === 'conversation') showChat();
+    else {
+      setTab(place);
+      showBoard();
+    }
+  };
+
   const pagesRendering = renderingPageCount(doc);
   const progress = pageProgress(doc);
   const gateOpen = doc.gate?.status === 'open';
@@ -1255,6 +1267,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
         ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
+      <StageStrip doc={doc} onGo={goToStage} />
 
       <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>

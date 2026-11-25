@@ -26,7 +26,7 @@ interface Props {
   footer?: React.ReactNode;
 }
 
-/** Project stages share the board's registry; collapsing changes chrome, never the active panel. */
+/** The board's tabs (its registry; the comic's stages are the strip under the header); collapsing changes chrome, never the active panel. */
 export function WorkspaceNavigation({ doc, caps, tab, compact = false, onSelect, onConversation, onBack, footer }: Props) {
   const tabs = boardTabsFor(doc, caps, tab);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -51,7 +51,7 @@ export function WorkspaceNavigation({ doc, caps, tab, compact = false, onSelect,
     <button type="button" onClick={onConversation} aria-label="Ask the Director" title={compact ? 'Ask the Director' : undefined} className={`${item} ${layout} text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}>
       <MessageSquare className="h-4 w-4 shrink-0" aria-hidden />{!compact && <span>Ask the Director</span>}
     </button>
-    {!compact && <p className={`px-3 pt-3 ${OVERLINE}`}>Project stages</p>}
+    {!compact && <p className={`px-3 pt-3 ${OVERLINE}`}>Board</p>}
     <div role="tablist" aria-label="Board" aria-orientation="vertical" className="flex shrink-0 flex-col gap-1 border-t border-[var(--ds-hairline)] pt-2">
       {tabs.map((stage, index) => {
         const selected = stage.id === tab;
