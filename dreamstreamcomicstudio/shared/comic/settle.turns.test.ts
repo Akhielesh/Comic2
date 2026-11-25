@@ -113,7 +113,13 @@ const KINDS: KindCase[] = [
     fresh: 'live',
     tap: { after: [laterTurn()], expect: { state: 'settled', outcome: 'passed' } }
   },
-  { type: 'research', card: { type: 'research', id: 'k_res', query: 'Mumbai rooftops', results: { items: [] } as never }, fresh: 'live', tap: { after: [laterTurn()], expect: { state: 'settled', outcome: 'passed' } } }
+  { type: 'research', card: { type: 'research', id: 'k_res', query: 'Mumbai rooftops', results: { items: [] } as never }, fresh: 'live', tap: { after: [laterTurn()], expect: { state: 'settled', outcome: 'passed' } } },
+  {
+    type: 'credit',
+    card: { type: 'credit', id: 'k_credit', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 1, notStarted: 2 },
+    fresh: 'live',
+    tap: { after: [laterTurn()], expect: { state: 'settled', outcome: 'passed' } }
+  }
 ];
 
 const docOf = (k: KindCase, conversation: Msg[], extra: Partial<ComicDoc> = {}): ComicDoc => ({ ...base, ...(k.doc || {}), ...extra, conversation });

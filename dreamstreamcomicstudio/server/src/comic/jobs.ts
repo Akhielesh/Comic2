@@ -155,7 +155,20 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import { notAvailableAction, type ActionHandler, type SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute } from './imageClient.js';
+import { creditRefusalOf, imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickAlternateRoute, pickImageRoute } from './imageClient.js';
+import {
+  continuedText,
+  creditBudgetFor,
+  fitsBudget,
+  shortCreditCard,
+  shortCreditText,
+  stoppedCreditCard,
+  stoppedReason,
+  textPayerOf,
+  UNKNOWN_BUDGET,
+  type CreditBudget,
+  type SpendPayer
+} from './creditCheck.js';
 import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
 import { recordImageCall } from './billing.js';
@@ -1356,7 +1369,21 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
     action
   });
   if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  const short = await textCreditShort(ctx, opts, action, estimate);
+  if (short) return short;
   return handler.run(ctx, action, opts);
+}
+
+/**
+ * The balance check before an imageless paid step starts (translate, a page detail pass, the page re-check): text
+ * routes are OpenRouter-first, so the payer is that key (or the allowance). null = go (fits, or unknown).
+ */
+async function textCreditShort(ctx: StudioContext, opts: RunActionOptions, action: GatedSpend, estimate: SpendEstimate): Promise<StartedAction | null> {
+  const payer = textPayerOf(ctx.keys);
+  if (!payer || !(estimate.usd > 0)) return null;
+  const budget = await creditBudgetFor(ctx, payer);
+  if (!budget.known || fitsBudget(budget, estimate.usd)) return null;
+  return notEnoughCredit(ctx, opts, action, { plan: describeSpend(ctx.session.doc, action), byok: payer.byok, estimate }, budget);
 }
 
 /** Who is patching, for the feature sanitizers (§12.1 SanitizeCtx). */
@@ -2027,6 +2054,64 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Ga
 };
 
 /**
+ * The key an image spend draws on (credit-safety.md): the image client's own pick, or the same-payer route the preflight
+ * chose. A route with no key is unknown to the balance check (it never blocks).
+ */
+const imagePayerOf = (ctx: StudioContext, spec: ImageModelSpec, useRoute?: ImageRoute): SpendPayer | null => {
+  const picked = imageRouteFor(spec, ctx.keys);
+  if (!picked) return null;
+  const route = useRoute && useRoute !== picked.route && ctx.keys[useRoute]?.key && !!ctx.keys[useRoute]?.byok === picked.byok ? useRoute : picked.route;
+  return { route, byok: picked.byok };
+};
+
+/**
+ * "Draw what fits": the leading pages of a render_pages run (with the sheets they need, never the cover) whose fresh
+ * quote fits what is left, most pages first; null when even one page doesn't fit or the run has one page.
+ */
+export const drawWhatFits = (
+  doc: ComicDoc,
+  action: Extract<SpendAction, { type: 'render_pages' }>,
+  byok: boolean,
+  prices: PriceBook | undefined,
+  fits: (usd: number) => boolean
+): { action: SpendAction; usd: number; pages: number } | null => {
+  const targets = drawTargets(doc, action);
+  if (targets.length < 2) return null;
+  const { pageIds: _ids, includeCover: _cover, quotedUsd: _quote, drawOverfull, ...rest } = action;
+  for (let n = targets.length - 1; n >= 1; n -= 1) {
+    const ids = targets.slice(0, n).map((p) => p.id);
+    const overfull = drawOverfull?.filter((id) => ids.includes(id));
+    const candidate: SpendAction = { ...rest, type: 'render_pages', pageIds: ids, ...(overfull?.length ? { drawOverfull: overfull } : {}) };
+    const usd = estimateSpendAction(doc, candidate, byok, prices).usd;
+    if (usd > 0 && fits(usd)) return { action: { ...candidate, quotedUsd: usd }, usd, pages: n };
+  }
+  return null;
+};
+
+/**
+ * The balance check said no (credit-safety.md): nothing starts, ONE "Not enough credit" card says what the step needs,
+ * what is left (a governed user reads percentages only) and the ways forward. An approval that was being approved stays
+ * open (approveGate reopens a blocked start).
+ */
+const notEnoughCredit = (
+  ctx: StudioContext,
+  opts: RunActionOptions,
+  action: GatedSpend,
+  go: { plan: SpendPlan; byok: boolean; estimate: SpendEstimate },
+  budget: Extract<CreditBudget, { known: true }>,
+  prices?: PriceBook
+): StartedAction => {
+  const doc = ctx.session.doc;
+  const step = { what: go.plan.what, usd: go.estimate.usd };
+  const fits = action.type === 'render_pages' ? drawWhatFits(doc, action, go.byok, prices, (usd) => fitsBudget(budget, usd)) : null;
+  const card = shortCreditCard(budget, step, fits ?? undefined);
+  const words = shortCreditText(budget, step, costOf(ctx), fits ?? undefined);
+  deliver(ctx, opts, words.text, [card]);
+  logger.info('comic_credit_short', { projectId: ctx.projectId, action: action.type, payer: budget.payer, fits: fits?.pages ?? 0 });
+  return finished({ status: 'blocked', message: words.outcome });
+};
+
+/**
  * Whether starting `next` makes the open gate's action moot: the same kind of spend and, for pages, one that draws
  * every page the gate would still draw (and the cover when the gate has it). A single-page draw beside a pending
  * "Render all" leaves that gate open: the other pages keep their approval card instead of silently losing it.
@@ -2050,9 +2135,14 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
   // reliability.md §2: check before spending — no paid run starts on a model that is down everywhere we can reach.
   const pre = await preflightFor(ctx, opts, action, prices);
   if (pre && !pre.ok) return preflightBlocked(ctx, opts, action, first, pre);
-  // The doc may have moved while the health check ran: decide again, synchronously up to the reservation.
+  // credit-safety.md: what the key that will draw (or the allowance) has left, read before the final decision.
+  const payer = imagePayerOf(ctx, first.spec, pre?.useRoute);
+  const budget = payer ? await creditBudgetFor(ctx, payer) : UNKNOWN_BUDGET;
+  // The doc may have moved while the health and balance checks ran: decide again, synchronously up to the reservation.
   const go = decideSpend(ctx, action, opts, prices);
   if (go.kind === 'done') return go.started;
+  // A known shortfall starts nothing (no reservation, no job); an unknown balance never blocks.
+  if (budget.known && !fitsBudget(budget, go.estimate.usd)) return notEnoughCredit(ctx, opts, action, go, budget, prices);
   const { plan, spec, byok, estimate } = go;
   const doc = ctx.session.doc;
 
@@ -2133,6 +2223,8 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
     action
   });
   if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  const short = await textCreditShort(ctx, opts, action, estimate);
+  if (short) return short;
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) {
     commitGate(ctx, { ...open, status: 'declined' }, 'job', { kind: 'close', status: 'superseded', by: 'system' });
@@ -2365,7 +2457,8 @@ interface JobResult {
   chargedUsd?: number;
 }
 
-type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
+/** `reroute`: the job's key was refused for credit and the same model has a same-payer route left: draw it again there now. */
+type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number } | { kind: 'reroute' };
 
 const restoredStatus = (prev: ImageJob['prev']): RenderState['status'] =>
   prev.status === 'queued' || prev.status === 'rendering' ? (prev.hasAsset ? 'ready' : 'none') : prev.status;
@@ -2449,6 +2542,17 @@ class RenderRun {
   /** Chips this run adds in front of the doc-state next steps (aspect fixes, fresh takes). */
   private readonly extraSteps: NextStep[] = [];
   private stopReason: string | null = null;
+  /**
+   * credit-safety.md: routes whose key was refused for credit in this run (imageClient creditRefusalOf). Never called
+   * again by this run: every attempt checks it first and every request excludes it from the image client's fallback.
+   */
+  private readonly refusedRoutes = new Set<ImageRoute>();
+  /** The last key refusal (who pays, which route, quota or credit), for the stop reason and its one card. */
+  private lastRefusal: { route: ImageRoute; byok: boolean; noQuota: boolean } | null = null;
+  /** The run stopped on a key refusal with no same-payer route left: its completion carries one credit card. */
+  private creditStopped = false;
+  /** Same-payer continuations already said (one notice per switch). */
+  private readonly continued = new Set<string>();
   private spentUsd = 0;
   private savedUsd = 0;
   /** Estimate still held as pending spend (released as images land or the run ends). */
@@ -3091,7 +3195,8 @@ class RenderRun {
     if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
     const doc = this.session.doc;
     const drewPages = [...drawn, ...reused].some((r) => r.job.kind === 'page');
-    if (drewPages && !failedAll.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
+    // A run that stopped (money ran out, or was refused) never suggests the next paid step.
+    if (drewPages && !failedAll.length && !this.stopReason && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
       parts.push('Want the cover next?');
     }
     return parts.join(' ');
@@ -3206,13 +3311,19 @@ class RenderRun {
     if (outage) this.notices.push(outage.card);
     const unavailable = this.modelUnavailableNotice(failed);
     if (unavailable) this.notices.push(unavailable);
+    // credit-safety.md: a run stopped on a key with no credit ends with ONE credit card, and no other paid chip (its
+    // "Draw the rest" is the one way to spend again, after a top-up or a key switch).
+    const credit = this.creditStopCard();
+    if (credit) this.notices.push(credit);
     const steps = dedupeSteps([
       ...(outage?.steps ?? []),
       ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
       ...safety.steps.map((s) => this.priced(s)),
       ...this.extraSteps,
       ...nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices })
-    ]).slice(0, MAX_NEXT_STEPS);
+    ])
+      .filter((step) => !credit || !(step.action && isSpendAction(step.action)))
+      .slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
@@ -3280,6 +3391,60 @@ class RenderRun {
     if (this.serial) return;
     this.serial = true;
     logger.warn('comic_render_run_serial', { projectId: this.ctx.projectId, target: renderTargetKey(job.target) });
+  }
+
+  // ── Keys out of credit (credit-safety.md) ───────────────────────────────────
+
+  /**
+   * The route a job of this run draws on: the image client's own pick, or, once that key was refused for credit, the
+   * same model on the other route with a key of the same payer (pickAlternateRoute: never another model, never
+   * another payer). null when every eligible route was refused in this run.
+   */
+  private routeFor(spec: ImageModelSpec): { route: ImageRoute; model: string; byok: boolean } | null {
+    const primary = imageRouteFor(spec, this.ctx.keys);
+    if (!primary || !this.refusedRoutes.has(primary.route)) return primary;
+    try {
+      const alt = pickAlternateRoute(spec, this.ctx.keys, pickImageRoute(spec, this.ctx.keys));
+      return alt && !this.refusedRoutes.has(alt.route) ? { route: alt.route, model: alt.model, byok: alt.key.byok } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** No eligible key is left: the rest of the run does not start (its reason ends the completion, its card follows). */
+  private stopOnCredit() {
+    if (this.stopReason) return;
+    const refusal = this.lastRefusal ?? { route: 'openrouter' as const, byok: this.byok, noQuota: false };
+    this.stopReason = stoppedReason(refusal);
+    this.creditStopped = true;
+    logger.warn('comic_render_run_credit_stop', { projectId: this.ctx.projectId, route: refusal.route, byok: refusal.byok });
+  }
+
+  /** The run moved to the same payer's other key: said once per switch, in the completion. */
+  private noteContinued(from: ImageRoute, to: ImageRoute, byok: boolean, model: string) {
+    const key = `${from}>${to}`;
+    if (this.continued.has(key)) return;
+    this.continued.add(key);
+    this.notices.push(noticeCard('info', continuedText(from, to, byok, model)));
+    logger.info('comic_render_run_continued', { projectId: this.ctx.projectId, from, to });
+  }
+
+  /**
+   * The one card of a run that stopped on a key with no credit: what was drawn, what was not started (it cost nothing),
+   * and "Draw the rest" priced fresh for exactly what did not start (top up first, or switch key).
+   */
+  private creditStopCard(): Card | null {
+    if (!this.creditStopped || !this.lastRefusal) return null;
+    const skipped = this.results.filter((r) => r.skipped);
+    const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked).length;
+    const narrowed = this.action && !isProSpendAction(this.action) ? narrowBlockedAction(this.action, skipped.map((r) => r.job.target), this.session.doc) : undefined;
+    let rest: { action: StudioAction; usd: number } | undefined;
+    if (narrowed && isSpendAction(narrowed)) {
+      const { quotedUsd: _old, ...fresh } = narrowed as SpendAction & { quotedUsd?: number };
+      const step = this.priced({ label: 'Draw the rest', action: fresh as SpendAction });
+      if (step.action && typeof step.usd === 'number' && step.usd > 0) rest = { action: step.action, usd: step.usd };
+    }
+    return stoppedCreditCard({ ...this.lastRefusal, drawn, notStarted: skipped.length, ...(rest ? { rest } : {}) });
   }
 
   // ── One image ─────────────────────────────────────────────────────────────
@@ -3355,6 +3520,11 @@ class RenderRun {
     } finally {
       release?.();
       this.endTurn();
+    }
+    if (outcome.kind === 'reroute') {
+      // The same model on the same payer's other key (release 308's rule, credit-safety.md): at once, never the refused key.
+      if (this.signal.aborted || this.stopReason) return this.restore(job);
+      return this.runJob(job);
     }
     if (outcome.kind === 'requeue') {
       // Incident follow-up: wait for the provider (Retry-After or 45 s, jittered, abortable), then once more.
@@ -3569,9 +3739,15 @@ class RenderRun {
       end(false);
       throw err;
     }
-    const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
+    const picked = this.routeFor(prepared.compiled.spec);
     if (!picked) {
       end(false);
+      // Every key this model can use was refused for credit in this run: not started, never failed (the run is stopping).
+      if (this.refusedRoutes.size) {
+        this.stopOnCredit();
+        this.restore(job);
+        return { outcome: { kind: 'done' }, asset: null };
+      }
       this.fail(job, `${prepared.compiled.spec.nickname} needs an OpenRouter or Gemini key. Add one in Settings → API keys.`);
       return { outcome: { kind: 'done' }, asset: null };
     }
@@ -3622,7 +3798,19 @@ class RenderRun {
     let abandonedUsd = 0;
     // What the failed attempts of this job were charged (the mid-run outage card's chargedUsd).
     let failedCharged = 0;
+    // credit-safety.md: this job's key was refused for credit (by its own call or by a parallel job's), or the run was
+    // stopped while this job waited to retry. Either way nothing more is sent from here.
+    let keyRefused = false;
+    let stoppedBeforeRetry = false;
     while (attempts < (job.singleRequest ? 1 : MAX_IMAGE_ATTEMPTS)) {
+      if (this.refusedRoutes.has(picked.route)) {
+        keyRefused = true;
+        break;
+      }
+      if (attempts > 0 && this.stopReason) {
+        stoppedBeforeRetry = true;
+        break;
+      }
       attempts += 1;
       const startedAt = Date.now();
       try {
@@ -3635,7 +3823,8 @@ class RenderRun {
           prompt: prepared.compiled.prompt,
           references: prepared.references,
           ...(job.singleRequest ? { singleRequest: true } : {}),
-          ...(this.preferRoute ? { preferRoute: this.preferRoute } : {}),
+          // After a key refusal the run draws on the route routeFor chose and never on a refused one.
+          ...(this.refusedRoutes.size ? { preferRoute: picked.route, excludeRoutes: [...this.refusedRoutes] } : this.preferRoute ? { preferRoute: this.preferRoute } : {}),
           // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
           ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
         };
@@ -3668,6 +3857,16 @@ class RenderRun {
               suffix: abandoned ? ' (timed out)' : ' (failed attempt)'
             })
         );
+        // A confirmed credit refusal of the key (never a rate limit): no retry, no safe take, never this key again.
+        const refusal = creditRefusalOf(err);
+        if (refusal) {
+          const route = imageFailureInfo(err)?.route ?? picked.route;
+          this.refusedRoutes.add(route);
+          this.lastRefusal = { route, byok: picked.byok, noQuota: refusal === 'no_quota' };
+          logger.warn('comic_image_key_refused', { projectId: ctx.projectId, target: renderTargetKey(job.target), route, kind: refusal });
+          keyRefused = true;
+          break;
+        }
         if (lastError.code === 'RATE_LIMIT') {
           rateLimited = true;
           this.noteRateLimit(job);
@@ -3700,6 +3899,23 @@ class RenderRun {
       }
     }
 
+    if (!result && (keyRefused || stoppedBeforeRetry)) {
+      end(false);
+      const owed = round4(failedSpend + abandonedUsd);
+      if (owed > 0) await reservation.settle({ costUsd: owed, imageUnits: 0 });
+      else await reservation.release(keyRefused ? 'key_refused' : 'run_stopped');
+      if (keyRefused && !this.stopReason && !this.signal.aborted) {
+        const next = this.routeFor(prepared.compiled.spec);
+        if (next) {
+          this.noteContinued(picked.route, next.route, picked.byok, prepared.compiled.spec.nickname);
+          return { outcome: { kind: 'reroute' }, asset: null };
+        }
+        this.stopOnCredit();
+      }
+      // Not started, never failed: the target goes back to how it was and this job cost nothing more.
+      this.restore(job);
+      return { outcome: { kind: 'done' }, asset: null };
+    }
     if (!result) {
       end(false);
       const owed = round4(failedSpend + abandonedUsd);

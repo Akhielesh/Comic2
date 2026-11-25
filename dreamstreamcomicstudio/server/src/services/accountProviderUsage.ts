@@ -1,6 +1,13 @@
 import { createHmac } from 'node:crypto';
 import type { AccountProviderUsageReport, AccountProviderUsageRow, ProviderBalanceRefresh } from '../../../shared/accountProviderUsage.js';
-import { normalizeSavedBalanceReport, PROVIDER_BALANCE_CAPABILITIES, type BalanceProvider, type ProviderBalanceReport } from '../../../shared/providerBalances.js';
+import {
+  BALANCE_FRESH_MS,
+  balanceIsFresh,
+  normalizeSavedBalanceReport,
+  PROVIDER_BALANCE_CAPABILITIES,
+  type BalanceProvider,
+  type ProviderBalanceReport
+} from '../../../shared/providerBalances.js';
 import { getProviderDef } from '../../../shared/providers.js';
 import { isKnownConnectorProvider } from '../lib/providerUsage.js';
 import { readAccountBalanceKeys } from '../middleware/accountKeys.js';
@@ -37,8 +44,55 @@ export async function refreshProviderBalance(credential: ScopedCredential): Prom
   }
 }
 
+/** The newest saved observation for exactly this credential (owner, provider, key), or null. Throws when unreadable. */
+async function savedObservation(credential: ScopedCredential, binding: string): Promise<ProviderBalanceReport | null> {
+  const { ownerId, provider } = credential;
+  let q = getSupabaseAdmin().from('provider_balance_observations').select('report').eq('provider', provider).eq('credential_binding', binding);
+  q = ownerId === null ? q.is('owner_id', null) : q.eq('owner_id', ownerId);
+  const { data, error } = await q.order('checked_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw new Error('Observation history unavailable');
+  return normalizeSavedBalanceReport(data?.report, provider);
+}
+
+/**
+ * The reading a paid step compares with (Comic Studio's balance check before spending): this owner's saved
+ * observation of exactly this key while it is under BALANCE_FRESH_MS old, else a fresh read through the same code as
+ * POST /api/keys/balance (saved for next time). A refresh that fails or outlasts `timeoutMs` gives null: a stale
+ * reading never decides anything, so the caller proceeds as if the balance were unknown. Unsupported providers, a
+ * missing key and a server without the binding secret are unknown too. Never throws.
+ */
+export async function latestOwnKeyBalance(
+  credential: { ownerId: string; provider: BalanceProvider; key: string },
+  opts: { timeoutMs?: number; now?: () => number } = {}
+): Promise<ProviderBalanceReport | null> {
+  const now = opts.now ?? Date.now;
+  const scoped: ScopedCredential = { ownerId: credential.ownerId, provider: credential.provider, key: credential.key?.trim() || null };
+  if (!scoped.ownerId || !scoped.key || !supported(scoped.provider)) return null;
+  const binding = balanceBinding(scoped);
+  if (!binding) return null;
+  try {
+    const previous = await savedObservation(scoped, binding);
+    if (previous && balanceIsFresh(previous, now())) return previous;
+  } catch {
+    /* no saved history right now: read the provider instead */
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), opts.timeoutMs ?? 3_500);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    const fresh = refreshProviderBalance(scoped)
+      .then(({ report }) => (report.status === 'reported' ? report : null))
+      .catch(() => null);
+    return await Promise.race([fresh, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Active dashboard reads revalidate stale observations without delaying the response.
-const FRESH_MS = 15 * 60_000;
+const FRESH_MS = BALANCE_FRESH_MS;
 const RETRY_MS = 2 * 60_000;
 const MAX_PROBES = 8;
 const backgroundProbes = new Set<string>();
@@ -61,17 +115,12 @@ function revalidateBalance(credential: ScopedCredential, binding: string, previo
 }
 
 async function readBalances(ownerId: string | null, keys: PersonalKeys, allow: (provider: BalanceProvider) => boolean = () => true) {
-  const admin = getSupabaseAdmin();
   const keysWithReports = (Object.entries(keys) as [BalanceProvider,string][]).filter(([provider, key]) => key && supported(provider));
   let balancesRefreshing = false;
   const observations = await Promise.all(keysWithReports.map(async ([provider, key]) => {
     const binding = balanceBinding({ ownerId, provider, key });
     if (!binding) throw new Error('Credential binding unavailable');
-    let q = admin.from('provider_balance_observations').select('report').eq('provider', provider).eq('credential_binding', binding);
-    q = ownerId === null ? q.is('owner_id', null) : q.eq('owner_id', ownerId);
-    const { data, error } = await q.order('checked_at', { ascending: false }).limit(1).maybeSingle();
-    if (error) throw new Error('Observation history unavailable');
-    const previous = normalizeSavedBalanceReport(data?.report, provider);
+    const previous = await savedObservation({ ownerId, provider, key }, binding);
     if (allow(provider) && revalidateBalance({ownerId, provider, key}, binding, previous, Date.now())) balancesRefreshing = true;
     return previous;
   }));

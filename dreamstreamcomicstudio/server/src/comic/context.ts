@@ -21,6 +21,7 @@ import { logger } from '../lib/logger.js';
 import { servablePaths } from './ownerAssetVisibility.js';
 import { createSupabaseAssetStore, pathOwner } from './assets.js';
 import { createBillingHooks } from './billing.js';
+import { defaultCreditPort } from './creditCheck.js';
 import { createImageGenerator } from './imageClient.js';
 import { studioKeysFromRequest } from './keys.js';
 import { createLlmClient } from './llm.js';
@@ -29,6 +30,7 @@ import { SIGNED_TTL_SEC, isPrivatePath, isQuarantinePath, isPrivateDraftPath } f
 import type {
   AssetStore,
   BillingHooks,
+  CreditPort,
   ImageGenerator,
   LlmClient,
   StudioContext,
@@ -60,6 +62,8 @@ export interface StudioContextDeps {
   billing?: BillingHooks;
   /** The request's PriceBook (tests pass registry prices); default: createPriceBook for this user, once per request. */
   prices?: () => Promise<PriceBook>;
+  /** The owner's own-key balance for the check before spending; default: the saved reading, refreshed when stale. */
+  credit?: CreditPort;
 }
 
 /**
@@ -147,6 +151,7 @@ export function createStudioContext(args: {
     billing: args.spendBlocked ? spendLockedBilling(billing, args.spendBlocked) : billing,
     signal: args.signalFrom || session.abort.signal,
     prices,
+    credit: deps.credit || defaultCreditPort,
     ...(args.qualityDenied ? { qualityDenied: args.qualityDenied } : {}),
     ...(args.spendBlocked ? { spendBlocked: args.spendBlocked } : {}),
     ...(args.caps ? { caps: args.caps } : {}),

@@ -350,6 +350,15 @@ const cardText = (card: Card, cardDoc?: ComicDoc, outcome?: string): string => {
       return `[${card.tone}: ${clip(card.text, 200)}]`;
     case 'model_outage':
       return outageCardText(card);
+    case 'credit': {
+      // Money stopped a paid step (credit-safety.md). Never an amount: the model must not repeat one to a governed user.
+      const key = card.payer === 'own_key' ? `the creator's ${card.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} key` : 'the included usage';
+      if (card.reason === 'short') {
+        return `[not started: not enough credit on ${key} for ${clip(card.what || 'that step', 80)}; nothing was charged${card.fits ? `; it offers to draw the first ${card.fits.pages} pages that fit` : ''}]`;
+      }
+      const left = typeof card.notStarted === 'number' && card.notStarted > 0 ? `; ${card.notStarted} not started and not charged` : '';
+      return `[drawing stopped: ${key} ${card.noQuota ? 'has no image quota' : 'ran out of credit'}${left}; the card offers a top-up or a key switch]`;
+    }
     case 'conflict': {
       const text = conflictCardText(card);
       return tail && text.endsWith(']') ? `${text.slice(0, -1)}${tail}]` : text;

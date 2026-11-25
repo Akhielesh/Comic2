@@ -22,6 +22,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
 import type { PriceBook } from '../../../shared/comic/modelLock.js';
+import type { ProviderBalanceReport } from '../../../shared/providerBalances.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -158,6 +159,11 @@ export interface ImageRequest {
    * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
    */
   preferRoute?: ImageRoute;
+  /**
+   * Routes this request must never call: a run marks a route here once its key was refused for credit
+   * (imageClient creditRefusalOf), so neither the first try nor the same-payer fallback spends on it again.
+   */
+  excludeRoutes?: ImageRoute[];
   /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
   maxUsd?: number;
 }
@@ -351,4 +357,18 @@ export interface StudioContext {
    * costs; never throws). Absent ⇒ jobs.ts priceBookFor builds one itself.
    */
   prices?: () => Promise<PriceBook>;
+  /**
+   * The balance check before spending (creditCheck.ts): reads the owner's own key balance. Absent ⇒ every own-key
+   * balance is unknown and paid steps start as before (the allowance check needs only `caps.usage`).
+   */
+  credit?: CreditPort;
+}
+
+/** How a paid step learns what the owner's OWN key has left (never anyone else's, never a platform key). */
+export interface CreditPort {
+  /**
+   * The newest provider reading for exactly this owner and key, refreshed on the server when it is stale; null when
+   * unknown or unsupported. Never throws.
+   */
+  ownKeyBalance(input: { ownerId: string; provider: 'openrouter'; key: string }): Promise<ProviderBalanceReport | null>;
 }
