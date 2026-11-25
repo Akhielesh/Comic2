@@ -96,6 +96,11 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
     On phones the board's tabs live in a drawer, so the strip is also a quick way between Story, Style, Pages and Read.
 - The workspace navigation's list (`mobile/shell/WorkspaceNavigation.tsx`) is labelled "Board" (it was "Project
   stages"): those are the board's tabs, not the comic's stages.
+- **What the row costs (measured, for the lead).** On a 360 × 740 phone the row is 45 px: the declutter probe's phone
+  chrome share for the studio scenes rises by 6 points (chat 42 → 48 %, pages 28 → 34 %) and the transcript reads one
+  or two screens longer; the phone-content rule (content ≥ 45 % of the screen) still holds. That ratchet
+  (`tests/e2e/baselines/declutter.json`, the on-demand and nightly `declutter` project) is already red on production
+  for these same scenes, so its baseline needs a reviewed reset either way; it was left untouched here.
 
 ## 6. Key files and tests
 
