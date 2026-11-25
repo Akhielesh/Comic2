@@ -61,6 +61,33 @@ describe('a run stopped on a key with no credit', () => {
   });
 });
 
+describe('a run that stopped after both of the person\'s keys were refused', () => {
+  it('names both keys, says what each needs, and offers a Top up for each', () => {
+    const card: CreditCard = {
+      type: 'credit', id: 'c10', reason: 'stopped', payer: 'own_key', provider: 'gemini', drawn: 0, notStarted: 3,
+      keys: [{ provider: 'openrouter' }, { provider: 'gemini' }]
+    };
+    const { section } = renderCard(card);
+    expect(within(section).getByText('Your OpenRouter and Gemini keys ran out of credit')).toBeInTheDocument();
+    expect(section).toHaveTextContent(
+      'I stopped before the rest of this run: your OpenRouter key ran out of credit and your Gemini key ran out of credit. 3 pictures weren’t started and cost nothing. Top up OpenRouter or top up Gemini, or switch key in Settings, then draw the rest.'
+    );
+    expect(within(section).getByRole('link', { name: /Top up OpenRouter/ })).toHaveAttribute('href', 'https://openrouter.ai/settings/credits');
+    expect(within(section).getByRole('link', { name: /Top up Gemini/ }).getAttribute('href')).toMatch(/^https:\/\/aistudio\.google\.com\//);
+  });
+
+  it('mixed reasons read as what each key needs (credit for one, billing for the other)', () => {
+    const words = creditWords({
+      type: 'credit', id: 'c11', reason: 'stopped', payer: 'own_key', provider: 'gemini', noQuota: true, drawn: 1, notStarted: 2,
+      keys: [{ provider: 'openrouter' }, { provider: 'gemini', noQuota: true }]
+    });
+    expect(words.title).toBe('Neither of your keys can draw right now');
+    expect(words.body).toBe(
+      'I stopped before the rest of this run: your OpenRouter key ran out of credit and your Gemini key has no image quota (its Google project has no billing). 1 picture was drawn first. 2 pictures weren’t started and cost nothing. Top up OpenRouter or turn on billing for that Google project, or switch key in Settings, then draw the rest.'
+    );
+  });
+});
+
 describe('"Not enough credit" before a paid step', () => {
   it('own key: what it needs and what is left in dollars, when the balance was read, and Draw what fits', () => {
     const card: CreditCard = {
@@ -83,9 +110,20 @@ describe('"Not enough credit" before a paid step', () => {
       fits: { action: { type: 'render_pages', pageIds: ['pg_1'], quotedUsd: 0.06 }, usd: 0.06, pages: 1 }
     };
     const { section } = renderCard(card, studio);
-    expect(section).toHaveTextContent('It needs about 4.2% of your usage for pages 1–3, and 0.5% is left. Nothing was started. Ask us for a top-up, or use your own key.');
+    expect(section).toHaveTextContent('It needs about 4.2% of your usage for pages 1–3, and 0.5% is left. Nothing was started. Ask for a top-up, or use your own key.');
     expect(section.textContent).not.toMatch(/\$|¢/);
     expect(within(section).getByRole('button', { name: /Draw what fits · 1 page · ≈.*% of your usage/ })).toBeInTheDocument();
+    // The way to ask is on the card: a mail to support with a subject and nothing about the account in it.
+    const ask = within(section).getByRole('link', { name: /Ask for a top-up/ });
+    expect(ask.getAttribute('href')).toBe('mailto:support@dreamstreamstudio.ai?subject=Comic%20Studio%3A%20more%20usage%2C%20please');
+    expect(within(section).queryByRole('link', { name: /^Top up/ })).toBeNull();
+  });
+
+  it('says when what is left already sets aside what this comic is drawing now', () => {
+    const own: CreditCard = { type: 'credit', id: 'c8', reason: 'short', payer: 'own_key', provider: 'openrouter', what: 'the cover', needUsd: 0.2, leftUsd: 0.1, held: true };
+    expect(creditWords(own).body).toBe('It needs ≈ $0.20 for the cover, and your OpenRouter key has $0.10 left after what’s drawing now. Nothing was started or charged.');
+    const governed: CreditCard = { type: 'credit', id: 'c9', reason: 'short', payer: 'allowance', what: 'the cover', needPct: 3, leftPct: 1, held: true };
+    expect(creditWords(governed).body).toBe('It needs about 3% of your usage for the cover, and 1% is left after what’s drawing now. Nothing was started. Ask for a top-up, or use your own key.');
   });
 
   it('no colour on the card\'s money or its spend controls', () => {

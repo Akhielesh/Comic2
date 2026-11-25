@@ -132,8 +132,9 @@ export function recentOpenRouterCreditExhaustion(owner: string, key: string): bo
     !!report.accountBalances?.some(entry => entry.currency === 'USD' && entry.remaining <= 0);
 }
 
-export async function getProviderBalanceReport({ ownerId, provider, key }: {
-  ownerId: string; provider: BalanceProvider; key: string | null;
+/** `fresh`: read the provider now even inside the 60 s cache (a reading about to refuse a paid step; it refills the cache). */
+export async function getProviderBalanceReport({ ownerId, provider, key, fresh = false }: {
+  ownerId: string; provider: BalanceProvider; key: string | null; fresh?: boolean;
 }): Promise<ProviderBalanceReport> {
   const checkedAt = Date.now();
   const empty = { provider, checkedAt, ...noData() };
@@ -142,7 +143,7 @@ export async function getProviderBalanceReport({ ownerId, provider, key }: {
   const credential = key.trim();
   const cacheKey = balanceId(ownerId, provider, credential);
   const cached = cache.get(cacheKey);
-  if (cached && checkedAt < cached.expires) return cached.pending;
+  if (cached && checkedAt < cached.expires && !fresh) return cached.pending;
   if (cache.size >= MAX_ENTRIES) cache.delete(cache.keys().next().value!);
   const unavailable: ProviderBalanceReport = { ...empty, status: 'unavailable' };
   const pending = read(provider, credential)

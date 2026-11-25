@@ -95,6 +95,15 @@ describe('needsYouOf', () => {
     expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [outage])] }))).toEqual({ why: 'question', key: 'card:a1:mo' });
   });
 
+  it('a credit card (a run stopped on an empty key, a step that did not fit) waits on the person until they move past it', () => {
+    const stopped: Card = { type: 'credit', id: 'cr', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 2, notStarted: 4 };
+    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [stopped])] }))).toEqual({ why: 'question', key: 'card:a1:cr' });
+    const short: Card = { type: 'credit', id: 'cs', reason: 'short', payer: 'allowance', leftPct: 0.5, needPct: 4 };
+    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [short])] }))).toEqual({ why: 'question', key: 'card:a1:cs' });
+    // Moved past (a later message of theirs): nothing waits.
+    expect(needsYouOf(doc({ conversation: [msg('a1', 'assistant', [stopped]), msg('u2', 'user'), msg('a2', 'assistant')] }))).toBeNull();
+  });
+
   it('the page plan waiting for its OK; not while a render runs, not once approved, not without pages', () => {
     const conv = [msg('u1', 'user'), msg('a1', 'assistant', [{ type: 'plan', id: 'pl' }])];
     expect(needsYouOf(doc({ planStatus: 'draft', pages: [page('pg_1', 1)], conversation: conv }))).toEqual({ why: 'plan', key: 'plan:a1:pl' });

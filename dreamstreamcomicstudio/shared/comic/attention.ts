@@ -77,6 +77,10 @@ const isQuestion = (index: SettleIndex, m: Msg, c: Card & { id: string }): boole
       return c.status === 'pending' && state === 'live';
     case 'model_outage':
       return state === 'live';
+    // credit-safety.md: a run that stopped on an empty key, or a step that did not fit, waits on a top-up or a key
+    // switch (the card stays live until the chat moves past it), so it is not "Pages are ready".
+    case 'credit':
+      return state === 'live';
     default:
       return false;
   }

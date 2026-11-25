@@ -173,6 +173,20 @@ describe('a Director turn', () => {
     expect(s.alerts).toHaveLength(1);
   });
 
+  it('a run that stopped because a key ran out is a needs-you, not "Pages are ready" (credit-safety.md)', () => {
+    const doc = baseDoc();
+    const six = { ...doc, pages: [1, 2, 3, 4, 5, 6].map((n) => ({ ...doc.pages[0], id: `pg_${n}`, n, render: emptyRender() })) };
+    const s = new Studio(six);
+    s.start('a1', 'action', 'approve_gate');
+    for (let n = 1; n <= 2; n += 1) s.ops('a1', [drawn(`pg_${n}`)], 'job');
+    // The other four pages went back to not started; the completion carries the one credit card.
+    const credit: Card = { type: 'credit', id: 'cr', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 2, notStarted: 4 };
+    s.ops('a1', [reply('a2', [credit], 'Drew pages 1 and 2. Stopped before pages 3–6: your OpenRouter key ran out of credit.')], 'job');
+    s.end('a1');
+    expect(s.kinds()).toEqual(['question']);
+    expect(s.alerts[0]).toMatchObject({ key: `comic:${PROJECT}:needs:card:a2:cr` });
+  });
+
   it('a question that was already open before the stream is not new at its settle', () => {
     const doc = baseDoc();
     doc.conversation = [{ id: 'u0', role: 'user', text: 'Hi', at: T }, { id: 'a0', role: 'assistant', text: 'Which?', at: T, cards: [options] }];

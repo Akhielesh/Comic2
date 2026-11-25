@@ -8,7 +8,7 @@ const io = vi.hoisted(() => ({ rpc: vi.fn(), table: vi.fn(), keys: vi.fn(), prob
 vi.mock('./supabase.js', () => ({ getSupabaseAdmin: () => ({ rpc: io.rpc, from: io.table }) }));
 vi.mock('../middleware/accountKeys.js', () => ({ readAccountBalanceKeys: io.keys }));
 vi.mock('./providerBalances.js', () => ({ getProviderBalanceReport: io.probe }));
-import { latestOwnKeyBalance } from './accountProviderUsage.js';
+import { __resetOwnKeyBalanceReadsForTests, latestOwnKeyBalance } from './accountProviderUsage.js';
 
 const NOW = 1_790_000_000_000;
 const report = (checkedAt: number, remaining = 4.2): ProviderBalanceReport => ({
@@ -29,7 +29,12 @@ const savedRows = (row: ProviderBalanceReport | null) => {
 };
 const credential = { ownerId: 'owner-synthetic', provider: 'openrouter' as const, key: 'sk-or-synthetic' };
 
-beforeEach(() => { vi.resetAllMocks(); vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-only-binding'); io.rpc.mockResolvedValue({ data: null, error: null }); });
+beforeEach(() => {
+  vi.resetAllMocks();
+  __resetOwnKeyBalanceReadsForTests();
+  vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-only-binding');
+  io.rpc.mockResolvedValue({ data: null, error: null });
+});
 afterEach(() => vi.unstubAllEnvs());
 
 it('uses a saved reading under 15 minutes old for this owner without reading the provider', async () => {
@@ -53,8 +58,49 @@ it('never decides on a stale reading: a failed or slow refresh is unknown', asyn
   savedRows(report(NOW - 20 * 60_000, 0));
   io.probe.mockResolvedValue({ ...report(NOW), status: 'unavailable', keyQuotaUsd: null });
   expect(await latestOwnKeyBalance(credential, { now: () => NOW })).toBeNull();
+  __resetOwnKeyBalanceReadsForTests();
   io.probe.mockImplementation(() => new Promise(() => undefined));
   expect(await latestOwnKeyBalance(credential, { now: () => NOW, timeoutMs: 5 })).toBeNull();
+});
+
+it('a slow or failing provider is asked at most once per two minutes, and checks meanwhile share one read', async () => {
+  savedRows(report(NOW - 20 * 60_000, 0));
+  let release: (r: ProviderBalanceReport) => void = () => undefined;
+  io.probe.mockImplementation(() => new Promise<ProviderBalanceReport>((resolve) => { release = resolve; }));
+  // Two checks at once wait on one provider read.
+  const [a, b] = await Promise.all([
+    latestOwnKeyBalance(credential, { now: () => NOW, timeoutMs: 5 }),
+    latestOwnKeyBalance(credential, { now: () => NOW, timeoutMs: 5 })
+  ]);
+  expect([a, b]).toEqual([null, null]);
+  expect(io.probe).toHaveBeenCalledTimes(1);
+  // It timed out: the next check within the cooldown does not wait or ask again.
+  const started = Date.now();
+  expect(await latestOwnKeyBalance(credential, { now: () => NOW + 60_000, timeoutMs: 1_000 })).toBeNull();
+  expect(Date.now() - started).toBeLessThan(500);
+  expect(io.probe).toHaveBeenCalledTimes(1);
+  // The slow read lands (and is saved); once the cooldown is over the provider is asked again.
+  release(report(NOW, 3));
+  await new Promise((r) => setTimeout(r, 0));
+  io.probe.mockResolvedValue(report(NOW + 3 * 60_000, 2));
+  expect(await latestOwnKeyBalance(credential, { now: () => NOW + 3 * 60_000 })).toEqual(report(NOW + 3 * 60_000, 2));
+  expect(io.probe).toHaveBeenCalledTimes(2);
+});
+
+it('a stricter age reads a recent reading again, past the provider cache, and keeps it when that read fails', async () => {
+  const recent = report(NOW - 2 * 60_000, 0.02);
+  savedRows(recent);
+  const topped = report(NOW, 10.02);
+  io.probe.mockResolvedValue(topped);
+  // The default age keeps a 2-minute-old reading; 30 s does not.
+  expect(await latestOwnKeyBalance(credential, { now: () => NOW })).toEqual(recent);
+  expect(io.probe).not.toHaveBeenCalled();
+  expect(await latestOwnKeyBalance(credential, { now: () => NOW, maxAgeMs: 30_000 })).toEqual(topped);
+  expect(io.probe).toHaveBeenCalledWith({ ownerId: 'owner-synthetic', provider: 'openrouter', key: 'sk-or-synthetic', fresh: true });
+  // A read that fails leaves the saved reading that is still under 15 minutes old (it is what the check had).
+  __resetOwnKeyBalanceReadsForTests();
+  io.probe.mockResolvedValue({ ...report(NOW), status: 'unavailable', keyQuotaUsd: null });
+  expect(await latestOwnKeyBalance(credential, { now: () => NOW, maxAgeMs: 30_000 })).toEqual(recent);
 });
 
 it('is unknown for a provider with no balance API, a missing key, or a server without the binding secret', async () => {

@@ -23,28 +23,53 @@ own key, a percentage and plain words for DreamStream's included usage (governed
 - **Same-payer continuation** (release 308's rule for standalone images, commit 336a3e63): when the same model has a
   route on a key of the same payer (`pickAlternateRoute`: the person's own OpenRouter and Gemini keys, or two platform
   keys, never one of each) that was not refused, the refused job is drawn there at once (`DrawOutcome` `reroute`) and
-  the rest of the run follows. One info notice says so. Never another model.
+  the rest of the run follows. One info notice says so, posted with the completion ("Your OpenRouter key ran out of
+  credit, so the rest of this run carried on with your Gemini key …"; a key with no image quota is named for what it
+  is, "has no image quota (its Google project has no billing) … Turn on billing for that project", since a top-up
+  would not fix it). Never another model. When the other key is refused too, that notice is dropped: the run stopped,
+  and the stop card names both keys.
 - Otherwise the run **stops**: `stopReason` is set, the refused job and every job not yet dispatched go back to their
   previous state (not started, never failed, no error on the tile), and their reservations are released ($0). Jobs
   already on the wire finish; a job waiting to retry does not retry; nothing is re-queued.
 - The completion says `Stopped before …: your OpenRouter key ran out of credit (or reached its spending limit).
-  Nothing more was charged.` (governed: `the drawing service ran out of capacity. Nothing more was used from your
-  usage.`) and never suggests the next paid step. It carries **one** `credit` card and no other paid chip.
+  Nothing more was charged.` (both keys: `your OpenRouter and Gemini keys ran out of credit …`; governed: `the drawing
+  service ran out of capacity. Nothing more was used from your usage.`) and never suggests the next paid step. It
+  carries **one** `credit` card and no other paid chip.
+- The card is a **needs-you** (`shared/comic/attention.ts`, like a live outage card): the "needs you" alert fires instead
+  of "Pages are ready", and My comics and the AI activity feed flag the comic until the chat moves past the card.
 
 ## 2. The balance check before spending
 
-Runs on the server right before an approved paid step starts, never at quote time:
+Runs on the server right before an approved paid step starts, never at quote time, on every path that starts one:
 
 - `startSpend`: drawing runs, the whole-book approval of "Draft it for me" (its gate is approved through
   `approveGate`), and every small paid step a person taps directly (a confirmed chip or button).
-- `runFeatureAction` (translate, the page detail pass) and `startRecheck`: text spends, paid by the text route's key
-  (OpenRouter first).
+- Text spends, paid by the text route's key (OpenRouter first), through `textCreditShort`: translate and the page
+  detail pass asked for directly (`runFeatureAction`) **and approved** (`approveGate` runs the same check before the
+  handler; most translations start from an approval, since the Director opens one for every translate it is asked
+  for), and the page re-check (`startRecheck`, both ways).
+
+**What is left** is what the payer has left minus what this comic is drawing right now (`pendingUsdOf`: the quotes runs
+still under way hold). A reading is usually taken before such a run started, so without this a second step approved
+while the first draws would pass the check and stop mid-run instead. The card then says "left after what's drawing
+now" (`held`).
+
+**A reading that would refuse is read again first.** When an own-key reading says no and is more than 30 s old
+(`RECHECK_REFUSAL_AFTER_MS`), the provider is read once more, past the 60 s provider cache, and the newer reading
+decides. So "top up, then Draw the rest" (or Approve again) works at once instead of repeating the refusal on the
+reading saved when the run stopped. If that read fails, the earlier reading (still under 15 minutes old) decides.
+
+**The person's other key.** When the own key that would draw is known to be short and the same model has a route on
+the person's other own key whose balance fits or is unknown (Gemini reports none), the run starts there instead
+(`preferRoute`), with one line in the start message: "Your OpenRouter key has $0.05 left, so this run draws on your
+Gemini key (the same model)." That is MN-1's continuation rule applied up front: a step is never blocked while another
+of the person's keys could pay.
 
 `server/src/comic/creditCheck.ts` `creditBudgetFor` reads what the payer has left:
 
 | Payer | Compared with | Unknown (never blocks) when |
 | --- | --- | --- |
-| Own OpenRouter key | `spendableUsd` of the owner's last reading of exactly this key: the smaller of the key's remaining limit and the account's USD credits. `latestOwnKeyBalance` (services/accountProviderUsage.ts) uses the saved observation while under 15 minutes old, else reads OpenRouter through the same code as `POST /api/keys/balance` (saved for next time), waiting at most 3.5 s. | no reading, a stale reading that could not be refreshed, a key with no reported limit or credits, no binding secret |
+| Own OpenRouter key | `spendableUsd` of the owner's last reading of exactly this key: the smaller of the key's remaining limit and the account's USD credits. `latestOwnKeyBalance` (services/accountProviderUsage.ts) uses the saved observation while under 15 minutes old (or the stricter `maxAgeMs` of the re-read above), else reads OpenRouter through the same code as `POST /api/keys/balance` (saved for next time). Bounded: one read in flight per key (checks meanwhile share it), at most 3.5 s of waiting, and after a read that failed or timed out no new one for two minutes, so a slow provider costs a paid step that wait at most once per two minutes. | no reading, a stale reading that could not be refreshed, a key with no reported limit or credits, no binding secret |
 | Own Gemini key (and every dashboard-only provider) | nothing (no balance API) | always |
 | DreamStream's allowance (governed) | `caps.usage`: the quote ÷ markup × the share one dollar takes (costText.ts) against `pctLeft`; exhausted never fits | the share of a dollar is unknown, the status was not read, admins and exempt accounts |
 
@@ -53,8 +78,11 @@ approval that was being approved stays open, so the person can approve again aft
 `Not started: not enough credit … Do not say the drawing is under way.`
 
 **Draw what fits** (`drawWhatFits`): for `render_pages` only, the most leading pages (with the sheets they need, never
-the cover) whose fresh quote fits, offered as a priced button. It is a direct, priced step: it starts at once and the
-balance check runs again.
+the cover) whose fresh quote fits, offered as a priced button. When the step included the cover (the whole-book
+approval does), every page counts, so 6 pages that fit without the cover are offered as 6, and a one-page book can
+draw its page; otherwise the biggest smaller run is one page fewer. The quote of the leading n pages never falls as n
+grows, so the most that fit is a binary search (about eight quotes for a 200-page book). It is a direct, priced step:
+it starts at once and the balance check runs again.
 
 ## 3. The `credit` card
 
@@ -64,13 +92,18 @@ feature module).
 
 | reason · payer | Title | Actions |
 | --- | --- | --- |
-| stopped · own key | "Your OpenRouter key ran out of credit" / "Your Gemini key has no image quota" | Top up (the provider's funds page) · Switch key (Settings → API keys) · Draw the rest (priced, what did not start) |
+| stopped · own key | "Your OpenRouter key ran out of credit" / "Your Gemini key has no image quota"; both keys refused: "Your OpenRouter and Gemini keys ran out of credit" (mixed reasons: "Neither of your keys can draw right now", with what each needs) | Top up (the provider's funds page; one per key, named, when both are out) · Switch key (Settings → API keys) · Draw the rest (priced, what did not start) |
 | stopped · allowance | "Drawing paused" | Use my own key · Draw the rest (in usage words) |
 | short · own key | "Not enough credit": needs ≈ $X, key has $Y left, when it was read | Top up · Switch key · Draw what fits |
-| short · allowance | "Not enough credit": about N% of your usage needed, M% left; ask us for a top-up | Use my own key · Draw what fits |
+| short · allowance | "Not enough credit": about N% of your usage needed, M% left; ask for a top-up, or use your own key | Ask for a top-up (a mail to support, subject prefilled, nothing about the account) · Use my own key · Draw what fits |
 
-An allowance card never stores a dollar figure (`needPct` / `leftPct` only; the normalizer drops `needUsd` /
-`leftUsd`). Every control is the ink ghost button: no colour on or beside a price or a control that spends.
+What is left and what the step needs are stored in the payer's terms: `needUsd` / `leftUsd` on an own-key card,
+`needPct` / `leftPct` on an allowance card (the normalizer drops the other payer's fields). The one dollar figure an
+allowance card holds is the quote of the spend it offers again (`fits.usd` / `rest.usd`, charged USD, like a chip's
+quote), kept so the button can be priced and re-checked; it is only ever shown through the viewer's cost format, so a
+governed person reads a share of the usage. `stopped` own-key cards list `keys` when both of the person's keys were
+refused. The share-of-usage words come from one helper, `creditShareWords`, on the server and the card. Every control
+is ink: no colour on or beside a price or a control that spends.
 
 ## 4. The real balance of your own OpenRouter key
 
@@ -80,9 +113,15 @@ when a view that shows it opens and the reading is missing or older than 15 minu
 (something was drawing, now nothing is), and on a tap. Concurrent asks share one request. Nothing polls.
 
 - **Studio header** — `components/comicstudio/usage/KeyBalanceSlot.tsx`, header slot `key-balance` at order 221
-  (right after the usage meter; StudioHeader is not edited): "$12.40 left · 5 min ago"; phones show "$12.40" with the
-  full sentence in the label. Tap reads again and announces the result. Shown only while the comic draws on the
-  person's own key and they have an OpenRouter key; hidden while the balance is unknown.
+  (right after the usage meter): "$12.40 left · 5 min ago" on the desktop header; the tablet (split) header and phone
+  headers from 560 px say "$12.40 · 5m" (phones in the flat icon family), so when it was read always shows, and an
+  old reading that could not be refreshed reads as old ("· 3h"). Tap reads again and announces the result. Shown only
+  while the comic draws on the person's own key and they have an OpenRouter key; hidden while the balance is unknown.
+- **Phone headers narrower than 560 px** have no room for it (`KEY_BALANCE_PILL_MIN_WIDTH`, the History pattern: at
+  360 px share, the spend chip, Ask and ⋯ already fill the header, and the pill pushed ⋯ off-screen). There the
+  balance lives in the **Spending sheet** (`KeyBalanceSheetLine.tsx`, the spend chip or ⋯ → Spending): "$12.40 left",
+  when it was read, Check now. The header slot still reads it when the studio opens and after a run settles, so the
+  sheet opens on a current figure.
 - **Settings → API keys** — `components/usage/KeyBalancePanel.tsx`, first under "DreamStream usage left": the figure
   large, when it was read (and "an older reading" past 15 minutes), the key limit, its usage and the account credits
   when reported, Check now, Add funds. When OpenRouter shares no balance for the key it says so (set a credit limit on
@@ -100,6 +139,10 @@ when a view that shows it opens and the reading is missing or older than 15 minu
 ## Tests
 
 `server/src/comic/imageClient.credit.test.ts` (classification, `excludeRoutes`), `server/src/comic/jobs.credit.test.ts`
-(the run stopping, same-payer continuation, the pre-spend check: fits, short, unknown, governed, the open approval),
-`server/src/services/accountProviderUsage.latest.test.ts`, `shared/comic/credit.test.ts`, `services/keyBalance.test.ts`,
-`components/comicstudio/usage/{CreditCard,KeyBalanceSlot}.test.tsx`, `components/usage/KeyBalancePanel.test.tsx`.
+(the run stopping, same-payer continuation, both keys refused, a no-quota key carried on, the pre-spend check: fits,
+short, unknown, governed, the open approval, an approved translation, the re-read after a top-up, the held quote of a
+run under way, the other key, Draw what fits with the cover and against a brute force),
+`server/src/services/accountProviderUsage.latest.test.ts` (fresh, stale, the stricter re-read, the shared read and its
+cooldown), `shared/comic/credit.test.ts`, `shared/comic/attention.test.ts`, `components/comicstudio/alerts/studioTransitions.test.ts`,
+`services/keyBalance.test.ts`, `components/comicstudio/usage/{CreditCard,KeyBalanceSlot}.test.tsx` (the header by width
+and the Spending sheet line), `components/usage/KeyBalancePanel.test.tsx`.

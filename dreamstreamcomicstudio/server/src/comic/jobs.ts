@@ -167,6 +167,7 @@ import {
   textPayerOf,
   UNKNOWN_BUDGET,
   type CreditBudget,
+  type RefusedKey,
   type SpendPayer
 } from './creditCheck.js';
 import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
@@ -1375,13 +1376,15 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
 }
 
 /**
- * The balance check before an imageless paid step starts (translate, a page detail pass, the page re-check): text
- * routes are OpenRouter-first, so the payer is that key (or the allowance). null = go (fits, or unknown).
+ * The balance check before an imageless paid step starts (translate, a page detail pass, the page re-check), on every
+ * path that starts one: a direct ask (runFeatureAction, startRecheck) and an approval (approveGate). Text routes are
+ * OpenRouter-first, so the payer is that key (or the allowance); what this comic is drawing right now is set aside
+ * first. null = go (fits, or unknown).
  */
 async function textCreditShort(ctx: StudioContext, opts: RunActionOptions, action: GatedSpend, estimate: SpendEstimate): Promise<StartedAction | null> {
   const payer = textPayerOf(ctx.keys);
   if (!payer || !(estimate.usd > 0)) return null;
-  const budget = await creditBudgetFor(ctx, payer);
+  const budget = await creditBudgetFor(ctx, payer, { needUsd: estimate.usd, heldUsd: pendingUsdOf(ctx.session) });
   if (!budget.known || fitsBudget(budget, estimate.usd)) return null;
   return notEnoughCredit(ctx, opts, action, { plan: describeSpend(ctx.session.doc, action), byok: payer.byok, estimate }, budget);
 }
@@ -1452,7 +1455,13 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
     // The approved action names its commits for History (not approve_gate's own scope).
-    const started = await withHistoryAction(gate.action, () => (handler ? handler.run(ctx, gate.action, next) : startSpend(ctx, gated, next)));
+    const started = await withHistoryAction(gate.action, async () => {
+      if (!handler) return startSpend(ctx, gated, next);
+      // credit-safety.md: an approved feature spend (translate, a page detail pass) is checked against what is left
+      // before it starts, exactly like the same spend asked for directly (runFeatureAction); a shortfall reopens the card.
+      const short = handler.spend && handler.estimate ? await textCreditShort(ctx, next, gated, estimate) : null;
+      return short ?? handler.run(ctx, gate.action, next);
+    });
     if (started.outcome.status === 'blocked') reopen();
     else if (started.outcome.status === 'nothing') close();
     return started;
@@ -2064,9 +2073,45 @@ const imagePayerOf = (ctx: StudioContext, spec: ImageModelSpec, useRoute?: Image
   return { route, byok: picked.byok };
 };
 
+/** The same model on the payer's other route with a key of the same payer (pickAlternateRoute), or null. */
+const otherImagePayer = (ctx: StudioContext, spec: ImageModelSpec, payer: SpendPayer): SpendPayer | null => {
+  const key = ctx.keys[payer.route];
+  const model = spec.routes[payer.route];
+  if (!key?.key || !model) return null;
+  const alt = pickAlternateRoute(spec, ctx.keys, { route: payer.route, model, key });
+  return alt ? { route: alt.route, byok: !!alt.key.byok } : null;
+};
+
+/**
+ * The balance check of an image spend (credit-safety.md): what the key that will draw has left, after what this comic is
+ * drawing right now. When that own key is known to be short and the same model has a route on the person's other key
+ * whose balance fits or is unknown (Gemini reports none), the run draws there instead (`useRoute`), as a run that hit
+ * the empty key part-way would (release 308's rule): never blocked while another of their keys could pay.
+ */
+const imageBudgetFor = async (
+  ctx: StudioContext,
+  spec: ImageModelSpec,
+  needUsd: number,
+  useRoute?: ImageRoute
+): Promise<{ budget: CreditBudget; useRoute?: ImageRoute; movedFrom?: { route: ImageRoute; leftUsd: number; held: boolean } }> => {
+  const payer = imagePayerOf(ctx, spec, useRoute);
+  if (!payer) return { budget: UNKNOWN_BUDGET, ...(useRoute ? { useRoute } : {}) };
+  const heldUsd = pendingUsdOf(ctx.session);
+  const budget = await creditBudgetFor(ctx, payer, { needUsd, heldUsd });
+  if (!budget.known || budget.payer !== 'own_key' || fitsBudget(budget, needUsd)) return { budget, ...(useRoute ? { useRoute } : {}) };
+  const other = otherImagePayer(ctx, spec, payer);
+  if (!other?.byok) return { budget, ...(useRoute ? { useRoute } : {}) };
+  const otherBudget = await creditBudgetFor(ctx, other, { needUsd, heldUsd });
+  if (otherBudget.known && !fitsBudget(otherBudget, needUsd)) return { budget, ...(useRoute ? { useRoute } : {}) };
+  return { budget: otherBudget, useRoute: other.route, movedFrom: { route: payer.route, leftUsd: budget.leftUsd, held: !!budget.held } };
+};
+
 /**
  * "Draw what fits": the leading pages of a render_pages run (with the sheets they need, never the cover) whose fresh
- * quote fits what is left, most pages first; null when even one page doesn't fit or the run has one page.
+ * quote fits what is left, most pages first. The whole step did not fit, so the biggest smaller run is every page
+ * without the cover when the step has one, else one page fewer; null when even one page doesn't fit (or there is no
+ * smaller run). A run of the leading n pages never costs less than one of fewer pages, so the most that fit is a binary
+ * search: about eight quotes for a 200-page book, not one per page.
  */
 export const drawWhatFits = (
   doc: ComicDoc,
@@ -2076,16 +2121,25 @@ export const drawWhatFits = (
   fits: (usd: number) => boolean
 ): { action: SpendAction; usd: number; pages: number } | null => {
   const targets = drawTargets(doc, action);
-  if (targets.length < 2) return null;
+  const most = action.includeCover && coverWanted(doc, action.force) ? targets.length : targets.length - 1;
+  if (most < 1) return null;
   const { pageIds: _ids, includeCover: _cover, quotedUsd: _quote, drawOverfull, ...rest } = action;
-  for (let n = targets.length - 1; n >= 1; n -= 1) {
+  const quote = (n: number): { action: SpendAction; usd: number; pages: number } => {
     const ids = targets.slice(0, n).map((p) => p.id);
     const overfull = drawOverfull?.filter((id) => ids.includes(id));
     const candidate: SpendAction = { ...rest, type: 'render_pages', pageIds: ids, ...(overfull?.length ? { drawOverfull: overfull } : {}) };
-    const usd = estimateSpendAction(doc, candidate, byok, prices).usd;
-    if (usd > 0 && fits(usd)) return { action: { ...candidate, quotedUsd: usd }, usd, pages: n };
+    return { action: candidate, usd: estimateSpendAction(doc, candidate, byok, prices).usd, pages: n };
+  };
+  let best: { action: SpendAction; usd: number; pages: number } | null = null;
+  for (let lo = 1, hi = most; lo <= hi; ) {
+    const mid = (lo + hi) >> 1;
+    const q = quote(mid);
+    if (fits(q.usd)) {
+      best = q;
+      lo = mid + 1;
+    } else hi = mid - 1;
   }
-  return null;
+  return best && best.usd > 0 ? { ...best, action: { ...best.action, quotedUsd: best.usd } } : null;
 };
 
 /**
@@ -2136,14 +2190,19 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
   const pre = await preflightFor(ctx, opts, action, prices);
   if (pre && !pre.ok) return preflightBlocked(ctx, opts, action, first, pre);
   // credit-safety.md: what the key that will draw (or the allowance) has left, read before the final decision.
-  const payer = imagePayerOf(ctx, first.spec, pre?.useRoute);
-  const budget = payer ? await creditBudgetFor(ctx, payer) : UNKNOWN_BUDGET;
+  const credit = await imageBudgetFor(ctx, first.spec, first.estimate.usd, pre?.useRoute);
+  const budget = credit.budget;
   // The doc may have moved while the health and balance checks ran: decide again, synchronously up to the reservation.
   const go = decideSpend(ctx, action, opts, prices);
   if (go.kind === 'done') return go.started;
   // A known shortfall starts nothing (no reservation, no job); an unknown balance never blocks.
   if (budget.known && !fitsBudget(budget, go.estimate.usd)) return notEnoughCredit(ctx, opts, action, go, budget, prices);
   const { plan, spec, byok, estimate } = go;
+  // One line when the balance check moved the run to the person's other key.
+  const moved = credit.movedFrom && credit.useRoute
+    ? ` Your ${ROUTE_NAMES[credit.movedFrom.route]} key has ${formatUsd(credit.movedFrom.leftUsd)} left${credit.movedFrom.held ? ' after what’s drawing now' : ''}, so this run draws on your ${ROUTE_NAMES[credit.useRoute]} key (the same model).`
+    : '';
+  if (credit.movedFrom) logger.info('comic_credit_other_key', { projectId: ctx.projectId, from: credit.movedFrom.route, to: credit.useRoute });
   const doc = ctx.session.doc;
 
   // Proceeding: retire an open gate this spend makes moot (the same kind of spend covering everything it would draw).
@@ -2160,9 +2219,9 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
   // Pin the model (the lock), quality and override now so mid-run settings changes can't move this spend off
   // the quoted/authorised price (the latest sheets and pages are still used — see prepare()).
   const pinned = runPinOf(doc);
-  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, pre?.useRoute, action);
+  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, credit.useRoute, action);
   runner.reserve();
-  const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.${heldCard && held ? ` ${heldBackNote(held)}` : ''}`;
+  const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}).${moved} They appear on the board as they finish; I'll post when they're ready.${heldCard && held ? ` ${heldBackNote(held)}` : ''}`;
   let done: Promise<void>;
   switch (action.type) {
     case 'render_style_options':
@@ -2547,12 +2606,16 @@ class RenderRun {
    * again by this run: every attempt checks it first and every request excludes it from the image client's fallback.
    */
   private readonly refusedRoutes = new Set<ImageRoute>();
-  /** The last key refusal (who pays, which route, quota or credit), for the stop reason and its one card. */
-  private lastRefusal: { route: ImageRoute; byok: boolean; noQuota: boolean } | null = null;
+  /** Every key refusal of this run, one per route in order (quota or credit), for the stop reason and its one card. */
+  private readonly refusals: RefusedKey[] = [];
+  /** Who pays for the refused keys (the run's own payer: a continuation never changes it). */
+  private refusedByok: boolean | null = null;
   /** The run stopped on a key refusal with no same-payer route left: its completion carries one credit card. */
   private creditStopped = false;
   /** Same-payer continuations already said (one notice per switch). */
   private readonly continued = new Set<string>();
+  /** Their notices, posted with the completion unless the run then stopped on credit (its card tells the whole story). */
+  private readonly continuedNotes: Card[] = [];
   private spentUsd = 0;
   private savedUsd = 0;
   /** Estimate still held as pending spend (released as images land or the run ends). */
@@ -3314,7 +3377,9 @@ class RenderRun {
     // credit-safety.md: a run stopped on a key with no credit ends with ONE credit card, and no other paid chip (its
     // "Draw the rest" is the one way to spend again, after a top-up or a key switch).
     const credit = this.creditStopCard();
-    if (credit) this.notices.push(credit);
+    // One story per run: the stop card names every key that was refused, so "carried on with your other key" would
+    // contradict it (the other key was refused too).
+    this.notices.push(...(credit ? [credit] : this.continuedNotes));
     const steps = dedupeSteps([
       ...(outage?.steps ?? []),
       ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
@@ -3411,22 +3476,31 @@ class RenderRun {
     }
   }
 
+  /** A key of this run was refused for credit (or has no image quota): never called again by this run. */
+  private noteRefusal(route: ImageRoute, byok: boolean, noQuota: boolean) {
+    this.refusedRoutes.add(route);
+    if (this.refusedByok === null) this.refusedByok = byok;
+    const known = this.refusals.find((r) => r.route === route);
+    if (known) known.noQuota = noQuota;
+    else this.refusals.push({ route, noQuota });
+  }
+
   /** No eligible key is left: the rest of the run does not start (its reason ends the completion, its card follows). */
   private stopOnCredit() {
     if (this.stopReason) return;
-    const refusal = this.lastRefusal ?? { route: 'openrouter' as const, byok: this.byok, noQuota: false };
-    this.stopReason = stoppedReason(refusal);
+    const byok = this.refusedByok ?? this.byok;
+    this.stopReason = stoppedReason({ byok, refused: this.refusals });
     this.creditStopped = true;
-    logger.warn('comic_render_run_credit_stop', { projectId: this.ctx.projectId, route: refusal.route, byok: refusal.byok });
+    logger.warn('comic_render_run_credit_stop', { projectId: this.ctx.projectId, routes: this.refusals.map((r) => r.route), byok });
   }
 
-  /** The run moved to the same payer's other key: said once per switch, in the completion. */
-  private noteContinued(from: ImageRoute, to: ImageRoute, byok: boolean, model: string) {
-    const key = `${from}>${to}`;
-    if (from === to || this.continued.has(key)) return;
+  /** The run moved to the same payer's other key: said once per switch, with the completion. */
+  private noteContinued(from: RefusedKey, to: ImageRoute, byok: boolean, model: string) {
+    const key = `${from.route}>${to}`;
+    if (from.route === to || this.continued.has(key)) return;
     this.continued.add(key);
-    this.notices.push(noticeCard('info', continuedText(from, to, byok, model)));
-    logger.info('comic_render_run_continued', { projectId: this.ctx.projectId, from, to });
+    this.continuedNotes.push(noticeCard('info', continuedText(from.route, to, byok, model, from.noQuota)));
+    logger.info('comic_render_run_continued', { projectId: this.ctx.projectId, from: from.route, to });
   }
 
   /**
@@ -3434,7 +3508,7 @@ class RenderRun {
    * and "Draw the rest" priced fresh for exactly what did not start (top up first, or switch key).
    */
   private creditStopCard(): Card | null {
-    if (!this.creditStopped || !this.lastRefusal) return null;
+    if (!this.creditStopped || !this.refusals.length) return null;
     const skipped = this.results.filter((r) => r.skipped);
     const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked).length;
     const narrowed = this.action && !isProSpendAction(this.action) ? narrowBlockedAction(this.action, skipped.map((r) => r.job.target), this.session.doc) : undefined;
@@ -3444,7 +3518,7 @@ class RenderRun {
       const step = this.priced({ label: 'Draw the rest', action: fresh as SpendAction });
       if (step.action && typeof step.usd === 'number' && step.usd > 0) rest = { action: step.action, usd: step.usd };
     }
-    return stoppedCreditCard({ ...this.lastRefusal, drawn, notStarted: skipped.length, ...(rest ? { rest } : {}) });
+    return stoppedCreditCard({ byok: this.refusedByok ?? this.byok, refused: this.refusals, drawn, notStarted: skipped.length, ...(rest ? { rest } : {}) });
   }
 
   // ── One image ─────────────────────────────────────────────────────────────
@@ -3861,8 +3935,7 @@ class RenderRun {
         const refusal = creditRefusalOf(err);
         if (refusal) {
           const route = imageFailureInfo(err)?.route ?? picked.route;
-          this.refusedRoutes.add(route);
-          this.lastRefusal = { route, byok: picked.byok, noQuota: refusal === 'no_quota' };
+          this.noteRefusal(route, picked.byok, refusal === 'no_quota');
           logger.warn('comic_image_key_refused', { projectId: ctx.projectId, target: renderTargetKey(job.target), route, kind: refusal });
           keyRefused = true;
           break;
@@ -3907,7 +3980,8 @@ class RenderRun {
       if (keyRefused && !this.stopReason && !this.signal.aborted) {
         const next = this.routeFor(prepared.compiled.spec);
         if (next) {
-          this.noteContinued(this.lastRefusal?.route ?? picked.route, next.route, picked.byok, prepared.compiled.spec.nickname);
+          const from = this.refusals[this.refusals.length - 1] ?? { route: picked.route, noQuota: false };
+          this.noteContinued(from, next.route, picked.byok, prepared.compiled.spec.nickname);
           return { outcome: { kind: 'reroute' }, asset: null };
         }
         this.stopOnCredit();

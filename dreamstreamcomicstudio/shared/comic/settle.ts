@@ -1014,10 +1014,18 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
       return { text: `Research · ${clip(str(card.query), 120)}`, tone: 'plain' };
     case 'credit': {
       // Words only, never an amount: the line is the same for every viewer.
-      const key = card.payer === 'own_key' ? `${card.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} key` : 'usage';
+      const names = (card.keys?.length ? card.keys.map((k) => k.provider) : [card.provider]).map((p) => (p === 'gemini' ? 'Gemini' : 'OpenRouter'));
+      const key = `${names.join(' and ')} key${names.length > 1 ? 's' : ''}`;
       if (card.reason === 'short') return { text: `Not enough credit · nothing started`, tone: 'quiet' };
       const n = typeof card.notStarted === 'number' && card.notStarted > 0 ? card.notStarted : 0;
-      const head = card.payer === 'own_key' ? (card.noQuota ? `Stopped: ${key} has no image quota` : `Stopped: ${key} out of credit`) : 'Drawing paused';
+      const head =
+        card.payer !== 'own_key'
+          ? 'Drawing paused'
+          : names.length > 1
+            ? `Stopped: ${key} can’t draw`
+            : card.noQuota
+              ? `Stopped: ${key} has no image quota`
+              : `Stopped: ${key} out of credit`;
       return { text: n ? `${head} · ${plural(n, 'picture')} not started` : head, tone: 'quiet' };
     }
     case 'publish': {

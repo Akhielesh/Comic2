@@ -367,8 +367,9 @@ export interface StudioContext {
 /** How a paid step learns what the owner's OWN key has left (never anyone else's, never a platform key). */
 export interface CreditPort {
   /**
-   * The newest provider reading for exactly this owner and key, refreshed on the server when it is stale; null when
-   * unknown or unsupported. Never throws.
+   * The newest provider reading for exactly this owner and key, refreshed on the server when it is older than
+   * `maxAgeMs` (default 15 minutes: a stricter age reads the provider again, as a check about to refuse a step does);
+   * null when unknown or unsupported. Never throws.
    */
-  ownKeyBalance(input: { ownerId: string; provider: 'openrouter'; key: string }): Promise<ProviderBalanceReport | null>;
+  ownKeyBalance(input: { ownerId: string; provider: 'openrouter'; key: string; maxAgeMs?: number }): Promise<ProviderBalanceReport | null>;
 }

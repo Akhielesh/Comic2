@@ -10,7 +10,9 @@ import { checkPersonalProviderBalance } from '../../../services/accountProviderU
 import { getProviderKeyValue } from '../../../services/apiKeys';
 import { __resetKeyBalanceForTests, seedKeyBalance } from '../../../services/keyBalance';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
-import { KeyBalanceSlot } from './KeyBalanceSlot';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { KeyBalanceSheetLine } from './KeyBalanceSheetLine';
+import { KEY_BALANCE_PILL_MIN_WIDTH, KeyBalanceSlot } from './KeyBalanceSlot';
 
 const auth = vi.hoisted(() => ({ user: { id: 'owner-synthetic' } as { id: string } | null }));
 vi.mock('../../../contexts/AuthContext', () => ({ useAuth: () => ({ user: auth.user }) }));
@@ -96,12 +98,38 @@ describe('the studio header balance', () => {
     }
   });
 
-  it('phones show the amount alone; the full sentence stays in the label', async () => {
-    seedKeyBalance(reading(12.4));
-    render(slot(OWN, idle(), true));
-    expect(screen.getByText('$12.40')).toBeInTheDocument();
-    expect(screen.queryByText(/· just now/)).toBeNull();
-    expect(screen.getByRole('button', { name: /\$12\.40 left, read just now/ })).toBeInTheDocument();
+  it('phone headers up to 559 px have no room for it: nothing in the header, but it is still read when the studio opens', async () => {
+    for (const w of [320, 360, 390, 430, KEY_BALANCE_PILL_MIN_WIDTH - 1]) {
+      __resetKeyBalanceForTests();
+      check.mockClear();
+      const { container, unmount } = render(<FormFactorProvider value={formFactorFor({ w, h: 800, coarse: true })}>{slot(OWN, idle(), true)}</FormFactorProvider>);
+      await act(async () => undefined);
+      expect(container.querySelector('[data-key-balance]'), `${w}px`).toBeNull();
+      // The Spending sheet shows this reading, so it is current when the sheet opens.
+      expect(check).toHaveBeenCalledTimes(1);
+      unmount();
+    }
+  });
+
+  it('a wide phone and the tablet header show the figure with a short age; the full sentence stays in the label', async () => {
+    seedKeyBalance(reading(12.4, Date.now() - 5 * 60_000));
+    const phone = render(<FormFactorProvider value={formFactorFor({ w: 600, h: 900, coarse: true })}>{slot(OWN, idle(), true)}</FormFactorProvider>);
+    const flat = screen.getByRole('button', { name: /\$12\.40 left, read 5 minutes ago/ });
+    expect(flat).toHaveTextContent('$12.40· 5m');
+    // The phone header's flat icon family: no filled pill between flat icons.
+    expect(flat.className).not.toMatch(/surface-soft/);
+    phone.unmount();
+    render(<FormFactorProvider value={formFactorFor({ w: 820, h: 1180, coarse: true })}>{slot(OWN, idle(), true)}</FormFactorProvider>);
+    expect(screen.getByRole('button', { name: /\$12\.40 left, read 5 minutes ago/ })).toHaveTextContent('$12.40· 5m');
+  });
+
+  it('an old reading that could not be read again still says how old it is', async () => {
+    check.mockResolvedValue({ report: { ...reading(null), status: 'unavailable', keyQuotaUsd: null }, saved: false });
+    seedKeyBalance(reading(12.4, Date.now() - 3 * 60 * 60_000));
+    render(<FormFactorProvider value={formFactorFor({ w: 820, h: 1180, coarse: true })}>{slot(OWN, idle(), true)}</FormFactorProvider>);
+    await act(async () => undefined);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /OpenRouter balance/ })).toHaveTextContent('$12.40· 3h');
   });
 
   it('governed people, signed-out views and keys with no reported balance show nothing (no request for the governed)', async () => {
@@ -125,5 +153,49 @@ describe('the studio header balance', () => {
     const button = screen.getByRole('button', { name: /OpenRouter balance/ });
     expect(button.textContent).toContain('$0.00 left');
     expect(button.outerHTML).not.toMatch(/--ds-(?:hue|spark|accent|success|warning|danger|art)|STATUS|text-(?:red|amber|green)-/);
+  });
+});
+
+describe('the Spending sheet balance (phone headers without room for the pill)', () => {
+  const line = (w: number, caps: StudioCaps = OWN) => (
+    <FormFactorProvider value={formFactorFor({ w, h: 800, coarse: true })}>
+      <KeyBalanceSheetLine studio={{ caps }} />
+    </FormFactorProvider>
+  );
+
+  it('shows what is left, when it was read, and Check now reads it again', async () => {
+    seedKeyBalance(reading(12.4, Date.now() - 20 * 60_000));
+    render(line(360));
+    // Opening the sheet reads a stale reading.
+    expect(await screen.findByText(/just now/)).toBeInTheDocument();
+    const region = screen.getByRole('region', { name: 'Your OpenRouter balance' });
+    expect(region).toHaveTextContent('$12.40 left');
+    expect(check).toHaveBeenCalledTimes(1);
+    check.mockResolvedValueOnce({ report: reading(7.25), saved: true });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check now/ }));
+    });
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('$7.25')).toBeInTheDocument();
+    // Ink and muted only: the money carries no colour, and Check now is the plain outline control (only its shared
+    // invalid-state edge names a status token).
+    expect(region.outerHTML.replace(/aria-\[invalid=true\]:border-\[var\(--ds-danger-mark\)\]/g, '')).not.toMatch(
+      /--ds-(?:hue|spark|accent|success|warning|danger|art)|text-(?:red|amber|green)-/
+    );
+  });
+
+  it('nothing where the header shows the pill, for governed people, or while the balance is unknown', async () => {
+    seedKeyBalance(reading(12.4));
+    const { container, rerender } = render(line(1280));
+    expect(container.querySelector('[data-key-balance-line]')).toBeNull();
+    rerender(line(KEY_BALANCE_PILL_MIN_WIDTH));
+    expect(container.querySelector('[data-key-balance-line]')).toBeNull();
+    rerender(line(360, GOVERNED));
+    expect(container.querySelector('[data-key-balance-line]')).toBeNull();
+    __resetKeyBalanceForTests();
+    check.mockResolvedValue({ report: reading(null), saved: true });
+    rerender(line(360));
+    await act(async () => undefined);
+    expect(container.querySelector('[data-key-balance-line]')).toBeNull();
   });
 });

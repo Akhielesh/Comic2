@@ -7,15 +7,18 @@
 //            Draw what fits (the leading pages whose quote fits) where that makes sense.
 //
 // Who pays decides the words. Own key: real dollars (the person's own provider balance). DreamStream's allowance:
-// percentages and plain words only — the card stores no dollar figure for it, and its prices go through the viewer's
-// cost format. Ink on paper throughout: no colour on or beside a price or a control that spends.
+// percentages and plain words only — what is left and what the step needs are stored as shares of the usage, and the
+// price of the spend it offers again goes through the viewer's cost format. There is no self-serve top-up for the
+// allowance, so "Ask for a top-up" writes to support. Ink on paper throughout: no colour on or beside a price or a
+// control that spends.
 
 import React from 'react';
-import { ExternalLink, KeyRound, Wallet } from 'lucide-react';
-import type { CreditCard as CreditCardData } from '../../../shared/comic/credit';
+import { ExternalLink, KeyRound, Mail, Wallet } from 'lucide-react';
+import { creditProviderName, creditShareWords, type CreditCard as CreditCardData, type CreditKey } from '../../../shared/comic/credit';
 import { formatUsd } from '../../../shared/comic/models';
 import { getProviderDef } from '../../../shared/providers';
 import { readingAge } from '../../../services/keyBalance';
+import { SUPPORT_EMAIL } from '../../legal/contacts';
 import { cn } from '../../../lib/utils';
 import { FOCUS_RING, HAIRLINE, INK, MUTED, RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
 import type { CardProps } from '../extensions';
@@ -25,13 +28,21 @@ import { CardShell, GhostButton } from '../conversation/ui';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "12%", "0.4%", "almost none" — a share of the usage, never a dollar figure. */
-export const shareWords = (pct: number): string => {
-  const p = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
-  if (p <= 0) return 'none';
-  if (p < 0.1) return 'almost none';
-  return p < 10 ? `${p.toFixed(1).replace(/\.0$/, '')}%` : `${Math.round(p)}%`;
+/** Every own key the card is about, in order (one, or both when the run moved to the other key and that one ran out too). */
+const keysOf = (card: CreditCardData): CreditKey[] =>
+  card.keys?.length ? card.keys : [{ provider: card.provider ?? 'openrouter', ...(card.noQuota ? { noQuota: true } : {}) }];
+
+/** "Your OpenRouter key ran out of credit" · "Your OpenRouter and Gemini keys ran out of credit" · mixed reasons. */
+const stoppedTitle = (keys: CreditKey[]): string => {
+  const names = keys.map((k) => creditProviderName(k.provider));
+  if (keys.length === 1) return keys[0].noQuota ? `Your ${names[0]} key has no image quota` : `Your ${names[0]} key ran out of credit`;
+  if (keys.every((k) => k.noQuota)) return `Your ${names.join(' and ')} keys have no image quota`;
+  if (keys.every((k) => !k.noQuota)) return `Your ${names.join(' and ')} keys ran out of credit`;
+  return 'Neither of your keys can draw right now';
 };
+
+/** The mailto behind a governed person's "Ask for a top-up" (support reads it; no account detail is prefilled). */
+export const TOP_UP_REQUEST_HREF = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Comic Studio: more usage, please')}`;
 
 export interface CreditWords {
   title: string;
@@ -44,7 +55,7 @@ export interface CreditWords {
 
 /** The card's words (pure). Own-key amounts are dollars; the allowance is only ever a share of the usage. */
 export function creditWords(card: CreditCardData, now: number = Date.now()): CreditWords {
-  const provider = card.provider === 'gemini' ? 'Gemini' : 'OpenRouter';
+  const provider = creditProviderName(card.provider);
   const own = card.payer === 'own_key';
   const keyLabel = own ? 'Switch key' : 'Use my own key';
   if (card.reason === 'stopped') {
@@ -63,33 +74,50 @@ export function creditWords(card: CreditCardData, now: number = Date.now()): Cre
         keyLabel
       };
     }
+    const keys = keysOf(card);
+    if (keys.length > 1) {
+      // Both of the person's keys were refused: say what each one needs.
+      const why = keys
+        .map((k) => `your ${creditProviderName(k.provider)} key ${k.noQuota ? 'has no image quota (its Google project has no billing)' : 'ran out of credit'}`)
+        .join(' and ');
+      const fixes = keys.map((k) => (k.noQuota ? 'turn on billing for that Google project' : `top up ${creditProviderName(k.provider)}`)).join(' or ');
+      return {
+        title: stoppedTitle(keys),
+        body: `I stopped before the rest of this run: ${why}. ${counts} ${fixes.charAt(0).toUpperCase()}${fixes.slice(1)}, or switch key in Settings, then draw the rest.`
+          .replace(/\s+/g, ' ')
+          .trim(),
+        keyLabel
+      };
+    }
     const todo = card.noQuota
       ? `Turn on billing for that key’s Google project, or switch key in Settings, then draw the rest.`
       : `Top up ${provider} (or raise the key’s spending limit), or switch key in Settings, then draw the rest.`;
     return {
-      title: card.noQuota ? `Your ${provider} key has no image quota` : `Your ${provider} key ran out of credit`,
+      title: stoppedTitle(keys),
       body: `I stopped before the rest of this run. ${counts} ${todo}`.replace(/\s+/g, ' ').trim(),
       keyLabel
     };
   }
   // "It needs ≈ $0.21 for pages 1–3": reads right for one picture or many ("the cover", "an edit of page 2").
   const forWhat = card.what ? ` for ${card.what}` : '';
+  // The figure left already sets aside what this comic is drawing right now.
+  const after = card.held ? ' after what’s drawing now' : '';
   if (own) {
     const need = typeof card.needUsd === 'number' ? `≈ ${formatUsd(card.needUsd)}` : 'more than is left';
     const left = typeof card.leftUsd === 'number' ? formatUsd(card.leftUsd) : 'too little';
     return {
       title: 'Not enough credit',
-      body: `It needs ${need}${forWhat}, and your ${provider} key has ${left} left. Nothing was started or charged.`,
+      body: `It needs ${need}${forWhat}, and your ${provider} key has ${left} left${after}. Nothing was started or charged.`,
       ...(typeof card.checkedAt === 'number' ? { detail: `${provider} reported the balance ${readingAge(card.checkedAt, now)}.` } : {}),
       keyLabel
     };
   }
-  const need = typeof card.needPct === 'number' ? `about ${shareWords(card.needPct)} of your usage` : 'more of your usage than is left';
+  const need = typeof card.needPct === 'number' ? `about ${creditShareWords(card.needPct)} of your usage` : 'more of your usage than is left';
   const leftPct = card.leftPct ?? 0;
-  const left = leftPct > 0 ? `${shareWords(leftPct)} is left` : 'none is left';
+  const left = leftPct > 0 ? `${creditShareWords(leftPct)} is left${after}` : `none is left${after}`;
   return {
     title: 'Not enough credit',
-    body: `It needs ${need}${forWhat}, and ${left}. Nothing was started. Ask us for a top-up, or use your own key.`,
+    body: `It needs ${need}${forWhat}, and ${left}. Nothing was started. Ask for a top-up, or use your own key.`,
     keyLabel
   };
 }
@@ -112,7 +140,12 @@ export const CreditCardView: React.FC<CardProps<CreditCardData>> = ({ card, stud
   if (!card || card.type !== 'credit') return null;
   const cost = own ? ownCost : viewerCost;
   const words = creditWords(card);
-  const funds = own ? getProviderDef(card.provider ?? 'openrouter')?.fundsUrl : null;
+  // Own key: one Top up per key that ran out of credit (a key with no image quota needs billing turned on, which its
+  // provider page also is); named when there are two. The allowance has no self-serve top-up: ask support.
+  const keys = own ? keysOf(card) : [];
+  const fundLinks = keys
+    .map((k) => ({ provider: k.provider, href: getProviderDef(k.provider)?.fundsUrl ?? null }))
+    .filter((k): k is { provider: CreditKey['provider']; href: string } => !!k.href);
   const offer = card.reason === 'short' ? card.fits : card.rest;
   const offerLabel = card.reason === 'short' && card.fits ? `Draw what fits · ${plural(card.fits.pages, 'page')}` : 'Draw the rest';
   return (
@@ -121,11 +154,18 @@ export const CreditCardView: React.FC<CardProps<CreditCardData>> = ({ card, stud
         <p className="text-[13.5px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]">{words.body}</p>
         {words.detail && <p className={cn('text-[11.5px] [overflow-wrap:anywhere]', MUTED)}>{words.detail}</p>}
         <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label="Ways to continue">
-          {funds && (
-            <a href={funds} target="_blank" rel="noreferrer" className={LINK_BUTTON}>
-              Top up
+          {fundLinks.map((link) => (
+            <a key={link.provider} href={link.href} target="_blank" rel="noreferrer" className={LINK_BUTTON}>
+              {fundLinks.length > 1 ? `Top up ${creditProviderName(link.provider)}` : 'Top up'}
               <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-              <span className="sr-only">(opens {card.provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'} in a new tab)</span>
+              <span className="sr-only">(opens {link.provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'} in a new tab)</span>
+            </a>
+          ))}
+          {!own && card.reason === 'short' && (
+            <a href={TOP_UP_REQUEST_HREF} className={LINK_BUTTON}>
+              <Mail className="h-3.5 w-3.5" aria-hidden />
+              Ask for a top-up
+              <span className="sr-only">(writes to {SUPPORT_EMAIL})</span>
             </a>
           )}
           <GhostButton size="sm" onClick={() => studio.runClientAction({ type: 'open_settings', section: 'keys' })}>

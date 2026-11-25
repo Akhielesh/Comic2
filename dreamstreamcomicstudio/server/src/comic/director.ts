@@ -352,12 +352,14 @@ const cardText = (card: Card, cardDoc?: ComicDoc, outcome?: string): string => {
       return outageCardText(card);
     case 'credit': {
       // Money stopped a paid step (credit-safety.md). Never an amount: the model must not repeat one to a governed user.
-      const key = card.payer === 'own_key' ? `the creator's ${card.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} key` : 'the included usage';
+      const names = (card.keys?.length ? card.keys.map((k) => k.provider) : [card.provider]).map((p) => (p === 'gemini' ? 'Gemini' : 'OpenRouter'));
+      const key = card.payer === 'own_key' ? `the creator's ${names.join(' and ')} key${names.length > 1 ? 's' : ''}` : 'the included usage';
       if (card.reason === 'short') {
         return `[not started: not enough credit on ${key} for ${clip(card.what || 'that step', 80)}; nothing was charged${card.fits ? `; it offers to draw the first ${card.fits.pages} pages that fit` : ''}]`;
       }
       const left = typeof card.notStarted === 'number' && card.notStarted > 0 ? `; ${card.notStarted} not started and not charged` : '';
-      return `[drawing stopped: ${key} ${card.noQuota ? 'has no image quota' : 'ran out of credit'}${left}; the card offers a top-up or a key switch]`;
+      const why = card.keys?.length ? 'were all refused (out of credit or no image quota)' : card.noQuota ? 'has no image quota' : 'ran out of credit';
+      return `[drawing stopped: ${key} ${why}${left}; the card offers a top-up or a key switch]`;
     }
     case 'conflict': {
       const text = conflictCardText(card);

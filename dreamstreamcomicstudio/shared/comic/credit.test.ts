@@ -2,7 +2,7 @@
 // and the actions it offers are only the image spends a run can carry.
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, normalizeDoc, type Msg } from './doc';
-import { normalizeCreditCard } from './credit';
+import { creditShareWords, normalizeCreditCard } from './credit';
 
 const msg = (cards: unknown[]): Msg => ({ id: 'm1', role: 'assistant', text: 'Stopped.', at: 1, cards: cards as Msg['cards'] });
 
@@ -30,6 +30,23 @@ describe('normalizeCreditCard', () => {
       rest: { action: { type: 'publish' }, usd: 1 }, fits: { action: { type: 'render_pages' }, usd: 0, pages: 1 }
     });
     expect(out).toEqual({ type: 'credit', id: 'c6', reason: 'stopped', payer: 'own_key', provider: 'gemini', noQuota: true, drawn: 1 });
+  });
+
+  it('keeps both refused keys of a stopped own-key card (one per provider), and the "after what is drawing" mark of a short card', () => {
+    const both = normalizeCreditCard({
+      type: 'credit', id: 'c9', reason: 'stopped', payer: 'own_key', provider: 'gemini', notStarted: 3,
+      keys: [{ provider: 'openrouter', extra: 1 }, { provider: 'gemini', noQuota: true }, { provider: 'gemini' }, { provider: 'other' }]
+    });
+    expect(both?.keys).toEqual([{ provider: 'openrouter' }, { provider: 'gemini', noQuota: true }]);
+    // One key is what provider/noQuota already say; an allowance card names no keys.
+    expect(normalizeCreditCard({ type: 'credit', id: 'c10', reason: 'stopped', payer: 'own_key', keys: [{ provider: 'openrouter' }] })?.keys).toBeUndefined();
+    expect(normalizeCreditCard({ type: 'credit', id: 'c11', reason: 'stopped', payer: 'allowance', keys: [{ provider: 'openrouter' }, { provider: 'gemini' }] })?.keys).toBeUndefined();
+    expect(normalizeCreditCard({ type: 'credit', id: 'c12', reason: 'short', payer: 'allowance', leftPct: 1, held: true })?.held).toBe(true);
+    expect(normalizeCreditCard({ type: 'credit', id: 'c13', reason: 'stopped', payer: 'own_key', held: true })?.held).toBeUndefined();
+  });
+
+  it('words a share of the usage the same way on the server and on the card', () => {
+    expect([0, 0.04, 0.4, 4.25, 12.6, 140, Number.NaN].map(creditShareWords)).toEqual(['none', 'almost none', '0.4%', '4.3%', '13%', '100%', 'none']);
   });
 
   it('runs on every stored doc: older comics without the card load as before, a bad card is dropped', () => {

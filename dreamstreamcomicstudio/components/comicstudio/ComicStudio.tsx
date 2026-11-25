@@ -82,6 +82,7 @@ import { useBackLayer } from './mobile/backStack';
 import { HEADER_BANNER_MIN_ORDER } from './mobile/headerSlots';
 import { ModeToggle } from './mobile/ModeToggle';
 import { SavingsBreakdown, savedTotal } from './mobile/SavingsChip';
+import { KeyBalanceSheetLine } from './usage/KeyBalanceSheetLine';
 import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
 import { SideSheet } from './mobile/sheets/SideSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
@@ -462,6 +463,8 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
           <SavingsBreakdown doc={doc} cost={cost} />
         </div>
       )}
+      {/* The own key's balance, where a phone header has no room for its pill (credit-safety.md MN-3). */}
+      <KeyBalanceSheetLine studio={studio} />
     </div>
   );
 

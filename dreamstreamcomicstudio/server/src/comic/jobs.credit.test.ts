@@ -6,7 +6,9 @@ import type { CreditCard } from '../../../shared/comic/credit.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ProviderBalanceReport } from '../../../shared/providerBalances.js';
 import { registryPriceBook } from './models/index.js';
-import { JOB_TIMINGS, drawWhatFits, estimateSpendAction, runAction } from './jobs.js';
+import { JOB_TIMINGS, drawWhatFits, estimateSpendAction, runAction, runFeatureAction, startAction } from './jobs.js';
+import { actionHandlerFor } from './actions/index.js';
+import type { ActionHandler } from './extensions.js';
 import { classifyImageError } from './imageClient.js';
 import { fakeBilling, fakeImages, newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { analyzePageRender } from './vision.js';
@@ -21,6 +23,10 @@ vi.mock('./vision.js', async (importOriginal) => {
 vi.mock('./safety/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./safety/index.js')>();
   return { ...actual, onRenderVerdict: vi.fn(actual.onRenderVerdict), checkRenderSafety: vi.fn(actual.checkRenderSafety) };
+});
+vi.mock('./actions/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./actions/index.js')>();
+  return { ...actual, actionHandlerFor: vi.fn(actual.actionHandlerFor) };
 });
 vi.mock('./castScan.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./castScan.js')>();
@@ -61,6 +67,9 @@ const sheetsReady = (): ComicDoc => {
 /** The error the image client throws for a key out of credit on a route (its real classification). */
 const outOfCredit = (route: 'openrouter' | 'gemini', byok = true) =>
   Object.assign(classifyImageError({ status: 402, message: 'Insufficient credits' }, { route, byok }), { imageFailure: { route, status: 402 } });
+/** A Google project with no image quota behind the key (429 RESOURCE_EXHAUSTED "limit: 0"), classified as the client does. */
+const noQuota = (route: 'openrouter' | 'gemini') =>
+  Object.assign(classifyImageError({ status: 429, message: 'RESOURCE_EXHAUSTED: Quota exceeded, limit: 0' }, { route, byok: true }), { imageFailure: { route, status: 429 } });
 
 const creditCards = (doc: ComicDoc): CreditCard[] => doc.conversation.flatMap((m) => m.cards || []).filter((c): c is CreditCard => c.type === 'credit');
 const allCards = (doc: ComicDoc): Card[] => doc.conversation.flatMap((m) => m.cards || []);
@@ -84,6 +93,7 @@ const port = (report: ProviderBalanceReport | null): CreditPort & { calls: numbe
   return fake;
 };
 const withCredit = (ctx: TestContext, credit: CreditPort): TestContext => Object.assign(ctx, { credit });
+const findPageStatus = (doc: ComicDoc, i: number) => doc.pages[i].render.status;
 
 describe('MN-1: a run stops at once when its key runs out of credit', () => {
   it('sends nothing more after the refusal: the rest are not started (never failed), cost nothing, and one card says what to do', async () => {
@@ -168,7 +178,24 @@ describe('MN-1: a run stops at once when its key runs out of credit', () => {
     // Each key was refused at most for the calls already in flight; nothing was sent once both were refused.
     expect(images.calls.length).toBeLessThanOrEqual(4);
     const [card] = creditCards(doc);
-    expect(card).toMatchObject({ reason: 'stopped', payer: 'own_key', provider: 'gemini', notStarted: 3 });
+    expect(card).toMatchObject({ reason: 'stopped', payer: 'own_key', provider: 'gemini', notStarted: 3, keys: [{ provider: 'openrouter' }, { provider: 'gemini' }] });
+    // Nothing was drawn on the other key, so no notice says the run "carried on"; the stop names both keys.
+    expect(allCards(doc).some((c) => c.type === 'notice' && /carried on/.test(c.text))).toBe(false);
+    expect(lastText(doc)).toMatch(/Stopped before pages 1–3: your OpenRouter and Gemini keys ran out of credit/);
+  });
+
+  it('a key with no image quota is named for what it is when the run carries on with the other key', async () => {
+    const session = newSession(sheetsReady());
+    const images = fakeImages((req: ImageRequest) =>
+      req.excludeRoutes?.includes('openrouter') ? { route: 'gemini', byok: true, model: 'gemini-nano-banana-2.1' } : noQuota('openrouter')
+    );
+    const ctx = testContext(session, { keys: OWN_BOTH, images });
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
+    const [note] = allCards(session.doc).filter((c) => c.type === 'notice' && /carried on with your Gemini key/.test(c.text)) as Extract<Card, { type: 'notice' }>[];
+    expect(note.text).toMatch(/^Your OpenRouter key has no image quota \(its Google project has no billing\), so the rest of this run carried on/);
+    expect(note.text).toMatch(/Turn on billing for that project when you can\.$/);
+    expect(note.text).not.toMatch(/Top up/);
   });
 
   it('the platform key at capacity stops a governed run in plain words: no dollar figure on the card or in the text', async () => {
@@ -273,6 +300,104 @@ describe('MN-2: the balance check before spending', () => {
     expect(creditCards(session.doc)).toHaveLength(1);
   });
 
+  it('a reading that refuses the step and is minutes old is read again first: a top-up since then lets it start', async () => {
+    const session = newSession(sheetsReady());
+    const asked: Array<number | undefined> = [];
+    const credit: CreditPort = {
+      async ownKeyBalance({ maxAgeMs }) {
+        asked.push(maxAgeMs);
+        // The saved reading from when the last run stopped; the provider reports the top-up when asked again.
+        return maxAgeMs === undefined ? reading(0.02, Date.now() - 2 * 60_000) : reading(10.02);
+      }
+    };
+    const ctx = withCredit(testContext(session, { keys: OWN_OR, prices }), credit);
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(asked).toEqual([undefined, 30_000]);
+    expect(session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
+    expect(creditCards(session.doc)).toEqual([]);
+  });
+
+  it('a reading taken moments ago decides at once (no second read)', async () => {
+    const session = newSession(sheetsReady());
+    const credit = port(reading(0.001));
+    const ctx = withCredit(testContext(session, { keys: OWN_OR, prices }), credit);
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(credit.calls).toBe(1);
+    expect(creditCards(session.doc)).toHaveLength(1);
+  });
+
+  it('sets aside what this comic is drawing right now before it compares', async () => {
+    const doc = sheetsReady();
+    const session = newSession(doc);
+    const one = pageQuote(doc, 1);
+    // Enough for page 1 and half of page 2: each fits alone, both together do not.
+    const left = one * 1.5;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const images = fakeImages(async () => {
+      await held;
+      return undefined;
+    });
+    const ctx = withCredit(testContext(session, { keys: OWN_OR, images, prices }), port(reading(left)));
+    const first = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[0].id] }, { confirmed: true });
+    expect(first.outcome.status).toBe('started');
+    const second = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[1].id] }, { confirmed: true });
+    expect(second.outcome.status).toBe('blocked');
+    const [card] = creditCards(session.doc);
+    expect(card).toMatchObject({ reason: 'short', payer: 'own_key', held: true });
+    expect(card.leftUsd!).toBeCloseTo(left - one, 3);
+    expect(lastText(session.doc)).toMatch(/left after what’s drawing now\. Nothing was charged\./);
+    release();
+    await first.done;
+    expect(findPageStatus(session.doc, 0)).toBe('ready');
+    expect(findPageStatus(session.doc, 1)).toBe('none');
+  });
+
+  it('draws on the person\'s other key when the known one is short and the other could pay (never blocked on unknown)', async () => {
+    const session = newSession(sheetsReady());
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: 'gemini-nano-banana-2.1' }));
+    const left = pageQuote(session.doc, 1) * 0.5;
+    const ctx = withCredit(testContext(session, { keys: OWN_BOTH, images, prices }), port(reading(left)));
+    const started = await startAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(started.outcome.status).toBe('started');
+    expect(started.outcome.message).toMatch(/Your OpenRouter key has \$\d+\.\d\d left, so this run draws on your Gemini key \(the same model\)\./);
+    await started.done;
+    expect(session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
+    expect(images.calls.length).toBeGreaterThan(0);
+    expect(images.calls.every((c) => c.preferRoute === 'gemini')).toBe(true);
+    expect(creditCards(session.doc)).toEqual([]);
+  });
+
+  it('an approved translation that does not fit does not start: its approval stays open and one card says why', async () => {
+    const run = vi.fn(async () => ({ outcome: { status: 'done' as const, message: 'Translated.' }, done: Promise.resolve() }));
+    const handler: ActionHandler = { type: 'translate', spend: true, estimate: async () => ({ usd: 0.3, imageCount: 0, model: 'Translator', lines: [] }), run };
+    const real = vi.mocked(actionHandlerFor).getMockImplementation()!;
+    vi.mocked(actionHandlerFor).mockImplementation((type: string) => (type === 'translate' ? handler : real(type)));
+    try {
+      const doc = sheetsReady();
+      doc.settings = { ...doc.settings, confirm: 'always' };
+      const session = newSession(doc);
+      const ctx = withCredit(testContext(session, { keys: OWN_OR, prices }), port(reading(0.01)));
+      // Asked for directly with confirm "always": it opens an approval (no balance check at quote time).
+      await runFeatureAction(ctx, handler, { type: 'translate', languages: ['hi', 'ta'] }, { confirmed: false });
+      const gate = session.doc.gate!;
+      expect(gate).toMatchObject({ status: 'open', action: { type: 'translate' } });
+      expect(creditCards(session.doc)).toEqual([]);
+      await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
+      expect(run).not.toHaveBeenCalled();
+      expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'open' });
+      const cards = creditCards(session.doc);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ reason: 'short', payer: 'own_key', needUsd: 0.3, leftUsd: 0.01 });
+      // With room on the key the same approval runs.
+      Object.assign(ctx, { credit: port(reading(5)) });
+      await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(actionHandlerFor).mockImplementation(real);
+    }
+  });
+
   it('Draw what fits: the most leading pages that fit, or nothing when one page does not', () => {
     const doc = sheetsReady();
     const one = pageQuote(doc, 1);
@@ -281,5 +406,31 @@ describe('MN-2: the balance check before spending', () => {
     expect(drawWhatFits(doc, { type: 'render_pages' }, true, prices, (usd) => usd <= one)).toMatchObject({ pages: 1, usd: one });
     expect(drawWhatFits(doc, { type: 'render_pages' }, true, prices, () => false)).toBeNull();
     expect(drawWhatFits(doc, { type: 'render_pages', pageIds: [doc.pages[0].id] }, true, prices, () => true)).toBeNull();
+  });
+
+  it('Draw what fits with the cover: every page that fits is offered without it (a one-page book too)', () => {
+    const doc = sheetsReady();
+    expect(doc.cover.render.status).not.toBe('ready');
+    const all = pageQuote(doc, 3);
+    // The pages fit, the cover does not: all three pages, not two.
+    expect(drawWhatFits(doc, { type: 'render_pages', includeCover: true }, true, prices, (usd) => usd <= all)).toMatchObject({ pages: 3, usd: all, action: { pageIds: doc.pages.map((p) => p.id) } });
+    const first = pageQuote(doc, 1);
+    const fits = drawWhatFits(doc, { type: 'render_pages', pageIds: [doc.pages[0].id], includeCover: true }, true, prices, (usd) => usd <= first);
+    expect(fits).toMatchObject({ pages: 1, usd: first });
+    expect((fits!.action as { includeCover?: boolean }).includeCover).toBeUndefined();
+  });
+
+  it('Draw what fits finds the same answer as trying every page count', () => {
+    const doc = sheetsReady();
+    const quotes = [1, 2, 3].map((n) => pageQuote(doc, n));
+    for (const includeCover of [false, true]) {
+      for (const limit of [0, quotes[0] - 1e-6, quotes[0], (quotes[0] + quotes[1]) / 2, quotes[1], quotes[2], quotes[2] * 2]) {
+        const most = includeCover ? 3 : 2;
+        let want: number | null = null;
+        for (let n = most; n >= 1 && want === null; n -= 1) if (quotes[n - 1] > 0 && quotes[n - 1] <= limit) want = n;
+        const got = drawWhatFits(doc, { type: 'render_pages', ...(includeCover ? { includeCover: true } : {}) }, true, prices, (usd) => usd <= limit);
+        expect(got?.pages ?? null, `cover ${includeCover}, limit ${limit}`).toBe(want);
+      }
+    }
   });
 });

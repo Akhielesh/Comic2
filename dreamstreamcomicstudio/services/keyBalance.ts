@@ -123,6 +123,15 @@ export const readingAge = (checkedAt: number, now: number = Date.now()): string 
   return `on ${new Date(checkedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 };
 
+/** "now" · "5m" · "3h" · "12 Nov" — the same age, short enough for a phone or tablet header. */
+export const shortReadingAge = (checkedAt: number, now: number = Date.now()): string => {
+  const ms = Math.max(0, now - checkedAt);
+  if (ms < 60_000) return 'now';
+  if (ms < 60 * 60_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 24 * 60 * 60_000) return `${Math.floor(ms / (60 * 60_000))}h`;
+  return new Date(checkedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
 /** "about 5 minutes ago" for a screen reader. */
 const spokenAge = (checkedAt: number, now: number): string => {
   const age = readingAge(checkedAt, now);
@@ -136,6 +145,8 @@ export interface KeyBalanceView {
   amount: string;
   /** "5 min ago" */
   age: string;
+  /** "5m" (headers narrower than the desktop one) */
+  shortAge: string;
   stale: boolean;
   /** "OpenRouter balance: $12.40 left, read 5 minutes ago." */
   spoken: string;
@@ -150,6 +161,7 @@ export function keyBalanceView(report: ProviderBalanceReport | null | undefined,
     leftUsd: left,
     amount,
     age: readingAge(report.checkedAt, now),
+    shortAge: shortReadingAge(report.checkedAt, now),
     stale: !balanceIsFresh(report, now),
     spoken: `OpenRouter balance: ${amount} left, read ${spokenAge(report.checkedAt, now)}.`
   };
