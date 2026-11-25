@@ -3,6 +3,7 @@ import { CheckCheck, ChevronRight, ListTodo, RefreshCw } from 'lucide-react';
 import type { FinishedKind, FinishedWork, WorkAttention } from '../../../shared/comic/workspaceActivity';
 import { loadComicActivity, type ComicActivityRow } from '../../../services/comicWorkspaceActivity';
 import { requestTaskTarget, taskDestination, WORK_CHANGED_EVENT } from './workspaceTaskTarget';
+import { stageView } from '../../../shared/comic/stage';
 
 const attentionLabel: Record<WorkAttention, string> = {
   approval: 'Review drawing estimate', question: 'Answer the Director', plan: 'Review page plan',
@@ -137,7 +138,7 @@ export function ComicTaskActivity({ accountId, disabled, onOpen }: { accountId: 
         <button type="button" disabled={status === 'loading' || status === 'offline'} aria-label="Refresh AI activity" onClick={refresh}><RefreshCw aria-hidden /></button>
       </div>
       {waiting.length > 0 && <><h3>Needs you</h3>{waiting.map((row) => projectLink(row, row.attention!, attentionLabel[row.attention!]))}</>}
-      {working.length > 0 && <><h3>In progress</h3>{working.map((row) => projectLink(row, 'reply', row.updatedAt && Date.now() - row.updatedAt > 15 * 60_000 ? 'Check stalled progress' : 'Last reported in progress'))}</>}
+      {working.length > 0 && <><h3>In progress</h3>{working.map((row) => projectLink(row, 'reply', row.updatedAt && Date.now() - row.updatedAt > 15 * 60_000 ? 'Check stalled progress' : row.stage ? stageView(row.stage).summary : 'Last reported in progress'))}</>}
       {finished.length > 0 && <><h3>Finished</h3>{(showAll ? finished : finished.slice(0, 4)).map(({ row, work }) => projectLink(row, work.kind, finishedLabel(work)))}
         {finished.length > 4 && <button className="comic-task-secondary" type="button" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer results' : `Show all ${finished.length} results`}</button>}
         <button type="button" className="comic-task-secondary" onClick={clearFinished}><CheckCheck aria-hidden />Clear finished here</button></>}
