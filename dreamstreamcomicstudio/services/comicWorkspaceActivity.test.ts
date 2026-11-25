@@ -25,7 +25,7 @@ describe('owner task listing', () => {
     expect(comicActivityRow({ project_id: 'p', plan: 'draft', draft: 'review' }).attention).toBe('plan');
   });
   it('keeps a stored stage only when it reads as a whole; older summaries and garbage carry none', () => {
-    const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, drawing: 0, withheld: 0, failed: 0, looks: 0, next: 'draw_rest' };
+    const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next: 'draw_rest' };
     const activity = { v: 1 as const, attention: null, working: true, finished: [] };
     expect(comicActivityRow({ project_id: 'p', activity: { ...activity, stage } as never }).stage).toEqual(stage);
     expect(comicActivityRow({ project_id: 'p', activity }).stage).toBeUndefined();

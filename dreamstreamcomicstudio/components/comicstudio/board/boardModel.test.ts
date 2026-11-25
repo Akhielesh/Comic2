@@ -38,6 +38,13 @@ describe('page states', () => {
   it('counts current drawn pages for the tab badge', () => {
     expect(pageProgress(makeSampleDoc())).toEqual({ ready: 1, total: 6 });
   });
+
+  it('never counts a picture the content check withheld (stored as ready, never shown)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].render = { ...d.pages[0].render, asset: { ...d.pages[0].render.asset!, safety: { quarantined: true, at: 1 } } };
+    });
+    expect(pageProgress(doc)).toEqual({ ready: 0, total: 6 });
+  });
 });
 
 describe('what a click would draw', () => {

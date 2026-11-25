@@ -54,7 +54,7 @@ it('keeps last checked results on failure, recovers on reconnect and never shows
   expect(screen.queryByText('Private A')).toBeNull();
 });
 it('says where a comic in progress stands from its saved stage, and stays plain for one saved before stages', async () => {
-  const stage = { v: 1 as const, stage: 'draw' as const, done: ['story', 'style', 'plan'] as ('story' | 'style' | 'plan')[], pages: 12, planned: 12, drawn: 6, drawing: 6, withheld: 0, failed: 0, looks: 0, next: 'watch_drawing' as const };
+  const stage = { v: 1 as const, stage: 'draw' as const, done: ['story', 'style', 'plan'] as ('story' | 'style' | 'plan')[], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 6, withheld: 0, failed: 0, looks: 0, paused: false, next: 'watch_drawing' as const };
   const working = (title: string, id: string, extra: Partial<ComicActivityRow> = {}): ComicActivityRow => ({ v: 1, title, id, working: true, attention: null, finished: [], updatedAt: Date.now(), ...extra });
   load.mockResolvedValue(result([working('Night ferry', 'comic-1', { stage }), working('Old comic', 'comic-2')]));
   render(mount('owner')); expand();

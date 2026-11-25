@@ -62,7 +62,7 @@ import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
 import { hasReadablePage } from './reader/readerModel';
 import { SPEND_KIND_LABEL, pageProgress } from './board/boardModel';
-import { ConversationPane } from './conversation/ConversationPane';
+import { ConversationPane, type ConversationRevealHandle } from './conversation/ConversationPane';
 import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
 import { COMPOSE_EVENT } from './conversation/composerBus';
 import { QualityPanel } from './conversation/panels/QualityPanel';
@@ -1011,6 +1011,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const [readerOpen, setReaderOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const composerApi = useRef<StudioComposerHandle | null>(null);
+  const conversationApi = useRef<ConversationRevealHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
   const { user } = useAuth();
@@ -1160,15 +1161,23 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
     return <StudioSkeleton onBack={onBack} wide={!phone} chrome={phoneChromeVars(ff.layout)} />;
   }
 
-  // The stage strip's steps and next step only navigate: a board tab, the conversation, or the composer.
+  // The stage strip's steps and next step only navigate: a board tab, the open approval or the draft (brought into
+  // view, with focus on it, even when the chat is already showing), the composer, or the Share sheet.
   const goToStage = (place: StagePlace) => {
     if (place === 'composer') skipToComposer();
-    else if (place === 'conversation') showChat();
+    else if (place === 'approval' || place === 'draft') {
+      if (phone && view !== 'chat') flushSync(() => setView('chat'));
+      else if (!phone && paneMode === 'board') flushSync(() => setPaneModeState('both'));
+      conversationApi.current?.reveal(place);
+    } else if (place === 'share') studio.runClientAction({ type: 'open_share' });
     else {
       setTab(place);
       showBoard();
     }
   };
+  // From 768 px a row under the header; on a phone, the top of the board's panel (it scrolls away with the work and
+  // adds no fixed chrome: the conversation keeps its room, and its activity line already reports drawing).
+  const stageStrip = <StageStrip doc={doc} behind={studio.publication?.behind} onGo={goToStage} />;
 
   const pagesRendering = renderingPageCount(doc);
   const progress = pageProgress(doc);
@@ -1218,7 +1227,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       : undefined;
 
   const chat = (
-    <ConversationPane studio={chatStudio} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
+    <ConversationPane studio={chatStudio} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} revealApiRef={conversationApi} className="min-w-0 flex-1" />
   );
 
   const board = (
@@ -1230,7 +1239,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       style={phone && !tabBar ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
     >
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <BoardPane studio={studio} navigation="external" />
+        <BoardPane studio={studio} navigation="external" lead={phone ? stageStrip : undefined} />
       </div>
     </section>
   );
@@ -1267,7 +1276,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
         ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
-      <StageStrip doc={doc} onGo={goToStage} />
+      {!phone && stageStrip}
 
       <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>

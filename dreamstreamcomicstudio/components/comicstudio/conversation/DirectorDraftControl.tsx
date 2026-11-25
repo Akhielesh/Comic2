@@ -1,6 +1,7 @@
 import React, { useId, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, Feather } from 'lucide-react';
-import { DIRECTOR_DRAFT_IDEA_LIMIT, isPageStale } from '../../../shared/comic/doc';
+import { DIRECTOR_DRAFT_IDEA_LIMIT } from '../../../shared/comic/doc';
+import { stageFacts } from '../../../shared/comic/stage';
 import { FOCUS_RING } from '../../chat/studioDesign';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import type { ComicStudioController } from '../useStudio';
@@ -28,7 +29,8 @@ export function DirectorDraftControl({ studio, readComposerDraft }: Props) {
   const planning = status === 'planning';
   const hasPages = doc.pages.length > 0;
   const openGate = doc.gate?.status === 'open';
-  const readyPages = doc.pages.filter(p => p.render.asset && p.render.status === 'ready' && !isPageStale(doc, p)).length;
+  // The stage strip's count (shared/comic/stage.ts): drawn, current and shown to you. A withheld picture is never ready.
+  const readyPages = stageFacts(doc).current;
   const readable = directorLed && hasPages && readyPages === doc.pages.length;
   const drawing = directorLed && doc.pages.some(p => p.render.status === 'queued' || p.render.status === 'rendering');
   const plans = [...doc.pages].sort((a, b) => a.n - b.n);
@@ -70,14 +72,14 @@ export function DirectorDraftControl({ studio, readComposerDraft }: Props) {
   return (
     <div className="shrink-0 border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-canvas)]">
       <div className="mx-auto flex min-h-10 w-full max-w-3xl flex-wrap items-center justify-between gap-x-2 px-3 sm:px-5">
-        <button type="button" ref={anchor} aria-haspopup="dialog" aria-expanded={open}
+        <button type="button" ref={anchor} aria-haspopup="dialog" aria-expanded={open} data-draft-control
           onClick={openControl}
           className={`flex min-h-10 items-center gap-2 rounded-md px-1.5 text-[13px] text-[var(--ds-ink)] coarse:min-h-[44px] ${FOCUS_RING}`}>
           <Feather size={15} aria-hidden /><span><span className="text-[var(--ds-muted)]">Drafting · </span>{mode}</span><ChevronDown size={13} aria-hidden />
         </button>
         {readable
           ? <PrimaryButton onClick={() => studio.runClientAction({ type: 'open_reader', immersive: true })}><BookOpen size={16} aria-hidden />Read comic</PrimaryButton>
-          : drawing ? <span role="status" className="text-xs text-[var(--ds-muted)]">Drawing your comic · {readyPages} of {plans.length} pages ready</span>
+          : drawing ? <span role="status" className="text-xs text-[var(--ds-muted)]">Drawing your comic · {readyPages} of {plans.length} {plans.length === 1 ? 'page' : 'pages'} drawn</span>
           : reviewable
           ? <button type="button" onClick={review} className={`flex min-h-10 items-center gap-1.5 rounded-md px-1 text-[13px] font-medium text-[var(--ds-ink)] coarse:min-h-[44px] ${FOCUS_RING}`}><BookOpen size={15} aria-hidden />Review page plan</button>
           : statusText && <span role="status" className="text-xs text-[var(--ds-muted)]">{statusText}</span>}

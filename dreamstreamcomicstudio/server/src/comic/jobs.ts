@@ -100,6 +100,8 @@ import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHeal
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
+// The studio's stage strip reads the same rule for "Publish your changes".
+import { publicationBehind } from '../../../shared/comic/stage.js';
 import { DEFAULT_LETTERING, mergeNamedStyles, mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { CONSISTENCY_LIMITS, DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
@@ -5752,14 +5754,6 @@ const dedupeSteps = (steps: NextStep[]): NextStep[] => {
     seen.add(key);
     return true;
   });
-};
-
-/** The published comic is behind the studio: a page or the cover changed after the last publish. */
-const publicationBehind = (doc: ComicDoc): boolean => {
-  const pub = doc.publication;
-  if (!pub || pub.status !== 'live') return false;
-  const at = pub.publishedAt || 0;
-  return doc.pages.some((p) => (p.render.updatedAt || 0) > at && p.render.status === 'ready') || ((doc.cover.render.updatedAt || 0) > at && doc.cover.render.status === 'ready');
 };
 
 /**

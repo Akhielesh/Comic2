@@ -1,18 +1,19 @@
 // The stage strip under the studio header (SH-A): the comic's five stages (Story, Style, Plan, Draw, Publish), and one
 // line that says where it stands and the next step. Ink only: the current stage is the heavier ink, a done stage gets a
 // check, the rest are muted; no hue, no spark, no price. Every stage and the next step only navigate (a board tab, the
-// conversation or the composer), so nothing here can start a paid step. The words come from shared/comic/stage.ts, the
-// same ones the lists read from the saved summary.
+// approval or the draft in the conversation, the composer, or the Share sheet), so nothing here can start a paid step.
+// The words come from shared/comic/stage.ts, the same ones the lists read from the saved summary.
 //
-// Two layouts, both one row high so the conversation and the board keep their room (on a phone the content keeps at
-// least 45 % of the screen: the layout smoke's phone-content rule):
-//  - from 768 px: the five named stages, then the status and the "Next: …" button, in one row;
-//  - below (phones, small tablets, and the first screen of a book-posture foldable): one 44 px row holding a stage
+// Two layouts:
+//  - from 768 px: the five named stages, then the status and the "Next: …" button, in one row under the header;
+//  - below (a narrow split, the first screen of a book-posture foldable, and phones): one 44 px row holding a stage
 //    button that shows the five stages as marks (a check when done, a heavier ink dot for the current one, a ring for
 //    the rest) and the status as one button whose second line is the next step. The stage button opens the five named
 //    stages in a row below; choosing one, or Escape, closes it again. Below 360 px a done stage there shows only its
-//    check, keeping its name for screen readers and as a tooltip.
-// Coarse pointers get 44 px targets everywhere. The strip hides while the on-screen keyboard is up, like the tab bar.
+//    check, keeping its name for screen readers and as a tooltip. On a phone the shell puts this row at the top of the
+//    board's scrolling panel rather than under the header, so it adds no fixed chrome and scrolls away with the work.
+// The marks are SVG in the text colour, so they keep their shapes in forced colours (high contrast). Coarse pointers get
+// 44 px targets everywhere. The strip hides while the on-screen keyboard is up, like the tab bar.
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
@@ -32,21 +33,35 @@ const PLACE_HINT: Readonly<Record<StagePlace, string>> = {
   style: 'Opens the Style tab',
   pages: 'Opens the Pages tab',
   read: 'Opens the Read tab',
-  conversation: 'Opens the conversation',
-  composer: 'Opens the message box'
+  approval: 'Shows the approval in the conversation',
+  draft: 'Shows the Director’s draft in the conversation',
+  composer: 'Opens the message box',
+  share: 'Opens the Share sheet'
 };
 
 export interface StageStripProps {
   doc: ComicDoc;
+  /** The server's own "changes not published" (the owner's publication view), when the studio has it. */
+  behind?: boolean;
   /** Open where a stage, or the next step, is worked. */
   onGo: (place: StagePlace) => void;
 }
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-export function StageStrip({ doc, onGo }: StageStripProps) {
+/** One stage as a mark on the compact stage button: a check when done, a filled dot when current, a ring otherwise. */
+const StageMark = ({ done, current }: { done: boolean; current: boolean }) =>
+  done ? (
+    <Check className="h-2.5 w-2.5" strokeWidth={current ? 3.5 : 2.5} />
+  ) : (
+    <svg viewBox="0 0 8 8" className="h-2 w-2" focusable="false">
+      {current ? <circle cx="4" cy="4" r="4" fill="currentColor" /> : <circle cx="4" cy="4" r="3.5" fill="none" stroke="currentColor" strokeWidth="1" />}
+    </svg>
+  );
+
+export function StageStrip({ doc, behind, onGo }: StageStripProps) {
   const ff = useFormFactor();
-  const view = useMemo(() => comicStage(doc), [doc]);
+  const view = useMemo(() => comicStage(doc, { behind }), [doc, behind]);
   const hintId = useId();
   const listId = useId();
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
@@ -76,13 +91,15 @@ export function StageStrip({ doc, onGo }: StageStripProps) {
     onGo(place);
   };
 
+  // Escape closes the opened stages from anywhere in the strip (the stage button keeps focus after opening them).
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== 'Escape' || oneRow || !open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
+
   const move = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape' && !oneRow) {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-      return;
-    }
     const at = buttons.current.findIndex((b) => b === event.target);
     if (at < 0) return;
     const last = view.steps.length - 1;
@@ -159,6 +176,7 @@ export function StageStrip({ doc, onGo }: StageStripProps) {
     <nav
       aria-label="Comic stages"
       data-stage-strip={oneRow ? 'row' : 'compact'}
+      onKeyDown={onKeyDown}
       // Hidden while the on-screen keyboard is up, like the tab bar, so typing keeps the conversation's room.
       className={cn('shrink-0 border-b border-[var(--ds-hairline-soft)] [html.kb-open_&]:hidden', oneRow ? 'px-3' : 'px-4')}
       style={hinge ? { maxWidth: Math.max(0, hinge.start - 6) } : undefined}
@@ -209,7 +227,7 @@ export function StageStrip({ doc, onGo }: StageStripProps) {
                   data-stage-mark={step.done ? 'done' : step.current ? 'current' : 'upcoming'}
                   className={cn('flex h-2.5 w-2.5 items-center justify-center', step.done || step.current ? 'text-[var(--ds-ink)]' : MUTED)}
                 >
-                  {step.done ? <Check className="h-2.5 w-2.5" strokeWidth={step.current ? 3.5 : 2.5} /> : <span className={cn('h-2 w-2 rounded-full', step.current ? 'bg-[var(--ds-ink)]' : 'border border-current')} />}
+                  <StageMark done={step.done} current={step.current} />
                 </span>
               ))}
             </button>

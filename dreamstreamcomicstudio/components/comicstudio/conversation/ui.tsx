@@ -17,9 +17,15 @@ export const CardShell: React.FC<{
   children?: React.ReactNode;
   className?: string;
   'aria-label'?: string;
-}> = ({ title, icon, right, children, className, ...rest }) => (
+  /** -1: the shell can move focus to the card (the open approval, from the stage strip's next step). */
+  tabIndex?: number;
+  /** Marks the open approval card, so the conversation can bring it into view. */
+  'data-approval-open'?: boolean;
+}> = ({ title, icon, right, children, className, tabIndex, ...rest }) => (
   <section
     aria-label={rest['aria-label']}
+    tabIndex={tabIndex}
+    data-approval-open={rest['data-approval-open'] || undefined}
     className={cx(`${RADIUS_PANEL} ${HAIRLINE} ${SHADOW_SOFT} bg-[var(--ds-surface)] p-4`, className)}
   >
     {(title || right) && (

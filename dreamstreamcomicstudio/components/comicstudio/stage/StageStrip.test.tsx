@@ -6,6 +6,9 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { createEmptyDoc, type AssetRef, type ComicDoc, type Page, type RenderState } from '../../../shared/comic/doc';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import type { FormFactor } from '../mobile/formFactor';
+import { stageFacts } from '../../../shared/comic/stage';
+import { pageProgress } from '../board/boardModel';
+import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { StageStrip } from './StageStrip';
 
 const NOW = 1_800_000_000_000;
@@ -35,10 +38,10 @@ const DESK = formFactorFor({ w: 1280, h: 800 });
 const PHONE = formFactorFor({ w: 360, h: 740, coarse: true });
 const SMALL_PHONE = formFactorFor({ w: 320, h: 568, coarse: true });
 
-const mount = (doc: ComicDoc, ff: FormFactor = DESK, onGo = vi.fn()) => {
+const mount = (doc: ComicDoc, ff: FormFactor = DESK, onGo = vi.fn(), behind?: boolean) => {
   const ui = (d: ComicDoc) => (
     <FormFactorProvider value={ff}>
-      <StageStrip doc={d} onGo={onGo} />
+      <StageStrip doc={d} onGo={onGo} behind={behind} />
     </FormFactorProvider>
   );
   const utils = render(ui(doc));
@@ -95,7 +98,7 @@ describe('StageStrip', () => {
     expect(onGo).toHaveBeenCalledTimes(6);
   });
 
-  it('a new comic points at the composer; an open approval at the conversation, never at a spend', () => {
+  it('a new comic points at the composer; an open approval at the approval in the conversation, never at a spend', () => {
     const fresh = mount(createEmptyDoc('c0', 'Untitled comic', NOW));
     const next = screen.getByRole('button', { name: 'Next: tell the Director your idea' });
     expect(next).toHaveAccessibleDescription('Opens the message box');
@@ -107,10 +110,33 @@ describe('StageStrip', () => {
     doc.gate = { id: 'g1', action: { type: 'render_pages' }, title: 'Draw', summary: '', estimateUsd: 0.4, imageCount: 12, model: 'm', createdAt: NOW, status: 'open', reason: 'policy' };
     const gated = mount(doc);
     const review = screen.getByRole('button', { name: 'Next: review the estimate' });
-    expect(review).toHaveAccessibleDescription('Opens the conversation');
+    expect(review).toHaveAccessibleDescription('Shows the approval in the conversation');
     fireEvent.click(review);
-    expect(gated.onGo).toHaveBeenLastCalledWith('conversation');
+    expect(gated.onGo).toHaveBeenLastCalledWith('approval');
     expect(strip().textContent).not.toMatch(/\$|¢|\d+\s?%/);
+  });
+
+  it('a published comic the server says is behind asks to publish the changes, in the Share sheet', () => {
+    const doc = drawing(4, 4);
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'night-ferry', publishedRev: 1, publishedAt: NOW + 1, languages: ['en'] };
+    const { onGo } = mount(doc, DESK, vi.fn(), true);
+    const next = screen.getByRole('button', { name: 'Next: publish your changes' });
+    expect(next).toHaveAccessibleDescription('Opens the Share sheet');
+    fireEvent.click(next);
+    expect(onGo).toHaveBeenLastCalledWith('share');
+    cleanup();
+    mount(doc, DESK, vi.fn(), false);
+    expect(screen.getByRole('button', { name: 'Next: read your comic' })).toBeTruthy();
+  });
+
+  it('counts pages the way the Board badge and the reader do: a withheld picture is never drawn, an out-of-date one is named', () => {
+    const doc = drawing(12);
+    doc.pages[2].render = render_('ready', { ...picture(), safety: { quarantined: true, at: NOW } });
+    doc.pages[4].render = render_('stale', picture());
+    for (const d of [doc, makeSampleDoc()]) expect(stageFacts(d).current).toBe(pageProgress(d).ready);
+    mount(doc);
+    expect(within(strip()).getByTitle('Drawing · 10 of 12 pages drawn · 1 out of date')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Next: review 1 withheld page' })).toBeTruthy();
   });
 
   it('keyboard: every step and the next step are native buttons in reading order; arrows, Home and End move along the steps', () => {
@@ -207,7 +233,26 @@ describe('StageStrip', () => {
     fireEvent.keyDown(steps()[0], { key: 'Escape' });
     expect(within(strip()).queryByRole('list')).toBeNull();
     expect(toggle).toHaveFocus();
+    // …and with focus still on the stage button that opened it.
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(within(strip()).getByRole('list')).toBeTruthy();
+    fireEvent.keyDown(toggle, { key: 'Escape' });
+    expect(within(strip()).queryByRole('list')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveFocus();
     expect(onGo).toHaveBeenCalledTimes(1);
+  });
+
+  it('phone: the marks are drawn in the text colour (SVG), so the current stage keeps its dot in forced colours', () => {
+    mount(drawing(6), PHONE);
+    const marks = [...screen.getByRole('button', { name: /^Stages:/ }).querySelectorAll('[data-stage-mark]')];
+    const [current, upcoming] = [marks[3], marks[4]];
+    expect(current.querySelector('circle')).toHaveAttribute('fill', 'currentColor');
+    expect(upcoming.querySelector('circle')).toHaveAttribute('fill', 'none');
+    expect(upcoming.querySelector('circle')).toHaveAttribute('stroke', 'currentColor');
+    // No mark relies on a background fill, which forced colours replace.
+    for (const mark of marks) expect(mark.innerHTML).not.toMatch(/bg-\[/);
   });
 
   it('phone 320: a done stage shows only its check, and keeps its name for screen readers and as a tooltip', () => {
