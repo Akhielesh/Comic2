@@ -28,6 +28,8 @@ import {
 import type { ImageCallRow, MonthlyUsageRow, PlatformStatRow } from './observed.js';
 import { priceBookFromSources, type PriceBookSources, type ServerPriceBook } from './pricing.js';
 import { createQualitySource, qualityStoreFromCatalogStore } from './quality.js';
+import { textRateSource, type TextRateSource } from './textRates.js';
+import { FLOOR_TEXT_RATES, type TextRates } from '../../../../shared/comic/priceBook.js';
 
 export * from './catalog.js';
 export * from './observed.js';
@@ -264,21 +266,54 @@ export interface PriceBookDeps {
   sources?: PriceBookSources;
   /** How long to wait for a price refresh before quoting from cache / the registry (default PRICE_WAIT_MS). */
   maxWaitMs?: number;
+  /** Default: the process text-rate source (textRates.ts: the ledger, cached in memory). */
+  textRates?: TextRateSource;
 }
+
+/** How long a quote waits for a stale text-rate batch before using the last one (else the constants). */
+export const TEXT_RATES_WAIT_MS = 1_500;
+
+/** The text rates for one user, bounded and never throwing (the constants on any failure). */
+const textRatesFor = async (deps: PriceBookDeps): Promise<TextRates> => {
+  try {
+    return await (deps.textRates ?? textRateSource()).forUser(deps.userId, { maxWaitMs: deps.maxWaitMs ?? TEXT_RATES_WAIT_MS });
+  } catch (err) {
+    logger.warn('comic_text_rates_fallback', { message: (err as Error)?.message });
+    return FLOOR_TEXT_RATES;
+  }
+};
+
+/**
+ * What one user's PriceBook is built from: the catalog's price sources (live list prices, their observed medians and
+ * QC) and the observed text rates. The price sheet (GET /api/comic/models/prices) serves exactly this, so the
+ * client builds the same book (shared/comic/priceBook.ts). Never throws: the registry and the constants on failure.
+ */
+export const priceSourcesFor = async (deps: PriceBookDeps = {}): Promise<PriceBookSources> => {
+  if (deps.sources) return deps.sources;
+  const [sources, text] = await Promise.all([
+    (deps.catalog ?? modelCatalog())
+      .priceSources(deps.userId, deps.maxWaitMs !== undefined ? { maxWaitMs: deps.maxWaitMs } : {})
+      .catch((err: unknown) => {
+        logger.warn('comic_price_book_fallback', { message: (err as Error)?.message });
+        return { rows: [] } as PriceBookSources;
+      }),
+    textRatesFor(deps)
+  ]);
+  return { ...sources, text };
+};
 
 /** A PriceBook from the registry's dated price list only (no I/O): quotes say "price list from {factsAsOf}". */
 export const registryPriceBook = (): ServerPriceBook => priceBookFromSources({ rows: [] });
 
 /**
  * The server PriceBook for one user (models.md §2.3), implementing shared/comic/modelLock.ts `PriceBook`
- * (`unit`, `qcUsd`) plus `quote` (the full basis) and `jobQuote` (QC + markup unless BYOK). Async because
- * it loads that user's observed costs; never throws — on any failure it falls back to the registry book.
+ * (`unit`, `qcUsd`, `text`) plus `quote` (the full basis) and `jobQuote` (QC + markup unless BYOK). Async because
+ * it loads that user's observed costs and text rates; never throws — on any failure it falls back to the registry
+ * book and the constants.
  */
 export const createPriceBook = async (deps: PriceBookDeps = {}): Promise<ServerPriceBook> => {
-  if (deps.sources) return priceBookFromSources(deps.sources);
   try {
-    const sources = await (deps.catalog ?? modelCatalog()).priceSources(deps.userId, deps.maxWaitMs !== undefined ? { maxWaitMs: deps.maxWaitMs } : {});
-    return priceBookFromSources(sources);
+    return priceBookFromSources(await priceSourcesFor(deps));
   } catch (err) {
     logger.warn('comic_price_book_fallback', { message: (err as Error)?.message });
     return registryPriceBook();

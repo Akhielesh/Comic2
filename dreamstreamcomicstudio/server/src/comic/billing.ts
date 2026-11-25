@@ -173,7 +173,10 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
     const metadata: Record<string, unknown> = {
       surface: 'comic_studio_v4',
       stage: args.stage,
-      ...(args.resolution ? { resolution: args.resolution } : {})
+      ...(args.resolution ? { resolution: args.resolution } : {}),
+      // One priced text operation's calls share this tag (ids and numbers only): models/textRates.ts derives what
+      // planning, style directions and translation really cost from the settled rows that carry it.
+      ...(args.textOp ? { textOp: args.textOp } : {})
     };
 
     // The studio's own price for THIS call (registry image price at the resolution it renders;
@@ -229,10 +232,11 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
         if (done) return {};
         done = true;
         const imageUnits = finite(result.imageUnits) ?? args.imageUnits ?? 0;
-        const reported = finite(result.costUsd);
+        // Our own guess for a cancelled or timed-out call is billed like a figure, but it is not the provider's.
+        const reported = result.estimated ? undefined : finite(result.costUsd);
         // Gemini direct reports no cost: settle image ops at the registry list price for
         // the resolution actually rendered, not a single flat catalog row.
-        const providerCostUsd = reported ?? (isImage ? registryImageCostUsd(args.model, args.resolution, imageUnits) : undefined);
+        const providerCostUsd = reported ?? (result.estimated ? finite(result.costUsd) : undefined) ?? (isImage ? registryImageCostUsd(args.model, args.resolution, imageUnits) : undefined);
         const promptTokens = finite(result.promptTokens);
         const completionTokens = finite(result.completionTokens);
         const usage: UsagePayload = {

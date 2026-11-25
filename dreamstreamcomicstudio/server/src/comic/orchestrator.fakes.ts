@@ -365,8 +365,8 @@ export function scriptedLlm(script: Partial<Record<TextRole, ScriptStep[]>> = {}
 // ── Billing ──────────────────────────────────────────────────────────────────
 
 export interface FakeBilling extends BillingHooks {
-  reserves: { operation: string; stage: string; model: string }[];
-  settled: { costUsd?: number; imageUnits?: number }[];
+  reserves: { operation: string; stage: string; model: string; textOp?: Parameters<BillingHooks['reserve']>[0]['textOp'] }[];
+  settled: { costUsd?: number; imageUnits?: number; estimated?: boolean }[];
   released: string[];
   /** Deny reservations whose index (0-based) is ≥ this. */
   denyFrom: number;
@@ -380,7 +380,7 @@ export function fakeBilling(denyFrom = Number.POSITIVE_INFINITY): FakeBilling {
     denyFrom,
     async reserve(args) {
       const i = billing.reserves.length;
-      billing.reserves.push({ operation: args.operation, stage: args.stage, model: args.model });
+      billing.reserves.push({ operation: args.operation, stage: args.stage, model: args.model, ...(args.textOp ? { textOp: args.textOp } : {}) });
       if (i >= billing.denyFrom) return { ok: false, code: 'BILLING_DENIED', message: "You've used this month's included generation allowance." };
       return {
         ok: true,

@@ -22,6 +22,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
 import type { PriceBook } from '../../../shared/comic/modelLock.js';
+import type { TextOpTag } from './models/textRates.js';
 import type { ProviderBalanceReport } from '../../../shared/providerBalances.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
@@ -288,7 +289,8 @@ export interface DocStore {
 // ── Billing ──────────────────────────────────────────────────────────────────
 
 export interface BillingReservation {
-  settle(args: { costUsd?: number; imageUnits?: number; promptTokens?: number; completionTokens?: number }): Promise<{ billableUsd?: number }>;
+  /** `estimated`: costUsd is our own guess (a cancelled or timed-out call), not the provider's figure. */
+  settle(args: { costUsd?: number; imageUnits?: number; promptTokens?: number; completionTokens?: number; estimated?: boolean }): Promise<{ billableUsd?: number }>;
   release(reason: string): Promise<void>;
 }
 
@@ -308,6 +310,9 @@ export interface BillingHooks {
     outputTokens?: number;
     /** Text calls: every model the call may be served by (the route's fallback chain, primary first). The hold covers the dearest. */
     models?: string[];
+    /** Text calls of one priced operation (a page plan, a style proposal, one language): rides on the ledger rows so
+     *  the observed text rates can be derived from what was really paid (models/textRates.ts). */
+    textOp?: TextOpTag;
   }): Promise<BillingReserveResult>;
 }
 

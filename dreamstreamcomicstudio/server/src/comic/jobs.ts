@@ -141,6 +141,7 @@ import {
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { planUsd, recheckQuoteUsd, styleDirectionsQuoteUsd } from '../../../shared/comic/priceBook.js';
+import { textOpTag, type TextOpTag } from './models/textRates.js';
 import { STYLE_PRESETS, briefWantsSpotColour, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -699,7 +700,10 @@ const UNKNOWN_TEXT_PRICE = { input: 1, output: 5 };
  * An LlmClient that reserves/settles platform billing around every call and accumulates
  * the charged cost in `tracker` (estimated from tokens when the provider reports none).
  */
-export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void } }): LlmClient {
+export function billedLlm(
+  ctx: StudioContext,
+  args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void }; textOp?: TextOpTag }
+): LlmClient {
   return {
     complete(req) {
       const size = textOf(req.messages);
@@ -733,7 +737,8 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           models: route.models,
           stage: args.stage,
           inputTokens: approxPrompt,
-          outputTokens: req.maxTokens
+          outputTokens: req.maxTokens,
+          ...(args.textOp ? { textOp: args.textOp } : {})
         });
         if (reserved.ok === false) throw new StudioError('BILLING_DENIED', reserved.message, { status: 402 });
         reservation = reserved.reservation;
@@ -768,7 +773,7 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           const providerGuess =
             (route && estimateTextCostUsd(route.model, approxPrompt, outputGuess)) ??
             (approxPrompt * UNKNOWN_TEXT_PRICE.input + outputGuess * UNKNOWN_TEXT_PRICE.output) / 1_000_000;
-          await reservation?.settle({ costUsd: providerGuess, promptTokens: approxPrompt, completionTokens: outputGuess });
+          await reservation?.settle({ costUsd: providerGuess, promptTokens: approxPrompt, completionTokens: outputGuess, estimated: true });
           if (route) {
             args.tracker.usd = round4(args.tracker.usd + chargedUsd(providerGuess, route.key.byok));
             args.tracker.byok = route.key.byok;
@@ -2814,7 +2819,7 @@ class RenderRun {
         try {
           const proposed = await proposeStyleDirections({
             doc: this.session.doc,
-            llm: billedLlm(this.ctx, { stage: 'style', operation: 'comic.text.writer', tracker }),
+            llm: billedLlm(this.ctx, { stage: 'style', operation: 'comic.text.writer', tracker, textOp: textOpTag('style_directions', 1) }),
             count,
             signal: this.signal
           });
@@ -5082,6 +5087,9 @@ export async function planPages(
   const revising = !!pageIds;
 
   const tracker = newTextSpendTracker();
+  // Every writer call of this pass (outline, chunks, the plan check's repair) is one priced operation: what it really
+  // cost per page feeds the next planning quote (models/textRates.ts).
+  const planOp = textOpTag('plan', pageIds ? pageIds.length : Math.max(1, before.format.pageCount || 1));
   const end = activity(ctx, revising && !rewroteAll ? 'Rewriting pages' : 'Writing the page plan', 'text');
   // Expose the writer's in-flight allowance to the same budget checks used by image jobs.
   // The tracker accumulates settled writer calls until the plan's spend entry is committed.
@@ -5102,7 +5110,8 @@ export async function planPages(
         ? { ...ctx.session.doc, source: { ...ctx.session.doc.source, script: opts.draft.writerSource } }
         : ctx.session.doc,
       llm: billedLlm(ctx, { stage: 'plan', operation: 'comic.text.writer', tracker,
-        draft: opts.draft && { assertActive: opts.draft.assertPlanUnchanged, hold: holdDraftSpend } }),
+        draft: opts.draft && { assertActive: opts.draft.assertPlanUnchanged, hold: holdDraftSpend },
+        ...(planOp ? { textOp: planOp } : {}) }),
       ...(instructions ? { instructions } : {}),
       ...(revising ? { pageIds } : {}),
       // The account-clamped rating: a kids comic (or a young account) is never written above its ceiling.

@@ -12,6 +12,8 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { logger } from '../lib/logger.js';
 import { quoteTranslation, resolveLanguages } from '../comic/i18n/index.js';
+import { TEXT_RATES_WAIT_MS } from '../comic/models/index.js';
+import { textRateSource, type TextRateSource } from '../comic/models/textRates.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { getStudioSession } from '../comic/session.js';
 import { createSupabaseDocStore } from '../comic/store.js';
@@ -26,6 +28,8 @@ export interface ComicI18nRouterDeps {
   store?: DocStore;
   /** Keys override for tests (default: the request's resolved account keys). */
   keysFor?: (req: Request) => StudioKeys;
+  /** Text-rate source override for tests (default: the process source, models/textRates.ts). */
+  textRates?: TextRateSource;
 }
 
 const lazy = <T>(make: () => T) => {
@@ -60,7 +64,9 @@ export function createComicI18nRouter(deps: ComicI18nRouterDeps = {}): Router {
       const { codes, unknown } = resolveLanguages(session.doc, raw.split(',').slice(0, DOC_LIMITS.editions + 4));
       if (!codes.length) throw new StudioError('BAD_REQUEST', 'Pick at least one language to translate into.', { status: 400 });
       const keys = deps.keysFor ? deps.keysFor(req) : studioKeysFromRequest(req);
-      const q = quoteTranslation(session.doc, keys, { languages: codes });
+      // What translations really cost against their estimate (the same text rate the gate quotes with; bounded).
+      const text = await (deps.textRates ?? textRateSource()).forUser(userId, { maxWaitMs: TEXT_RATES_WAIT_MS }).catch(() => undefined);
+      const q = quoteTranslation(session.doc, keys, { languages: codes }, text);
       res.set('Cache-Control', 'private, no-store');
       res.json({
         perLanguage: q.perLanguage,

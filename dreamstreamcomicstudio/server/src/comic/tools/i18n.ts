@@ -25,7 +25,7 @@ import { graphemes } from '../../../../shared/comic/textLayout.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { glossaryRenameOps, linesInOrder, planIsFree, translationBudget } from '../../../../shared/comic/translationPlan.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
-import { languageLabel, overlayFix, quoteTranslation, resolveLanguage, resolveLanguages, runTranslation, supportedLanguagesText, textlessCoverQuote } from '../i18n/index.js';
+import { languageLabel, overlayFix, quoteTranslation, resolveLanguage, resolveLanguages, runTranslation, supportedLanguagesText, textlessCoverQuote, translateRatesFor } from '../i18n/index.js';
 import { scriptShare } from '../i18n/translate.js';
 import { swapSourceOps } from '../actions/i18n.js';
 import { prefilterText } from '../safety/index.js';
@@ -131,7 +131,7 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, asked: Tra
 
 async function quoteAndStartTranslate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<string> {
   const doc = ctx.session.doc;
-  const quote = quoteTranslation(doc, ctx.keys, action);
+  const quote = quoteTranslation(doc, ctx.keys, action, await translateRatesFor(ctx));
   // caps and origin are explicit on every action this tool starts (RunActionOptions may require them).
   const opts: Omit<RunActionOptions, 'confirmed'> = {
     collectCard: (card) => {
@@ -355,7 +355,7 @@ function readTranslationTool(ctx: StudioContext): DirectorTool {
       const lang = langArg(doc, args.language);
       const edition = i18nOf(doc).editions[lang];
       if (!edition) {
-        const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }).estimate.usd;
+        const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }, await translateRatesFor(ctx)).estimate.usd;
         return `There is no ${englishName(lang)} translation yet. translate_comic would cost ${costFormatterFor(ctx).approx(usd)}.`;
       }
       const pages = pagesArg(doc, args.pages);

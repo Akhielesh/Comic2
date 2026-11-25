@@ -170,6 +170,25 @@ describe('createBillingHooks', () => {
     expect(input.operation).toBe('comic.text.writer');
   });
 
+  it('tags the ledger rows of a priced text operation, and never calls our own guess for a cancelled call a reported cost', async () => {
+    const { hooks, reserve, settle } = setup();
+    const textOp = { id: 'op_test', kind: 'plan' as const, units: 6, baseUsd: 0.072 };
+    const res = await hooks.reserve({ operation: 'comic.text.writer', provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', stage: 'plan', inputTokens: 4000, outputTokens: 6000, textOp });
+    if (!res.ok) throw new Error('expected ok');
+    expect(reserve.mock.calls[0][0].metadata).toMatchObject({ stage: 'plan', textOp });
+    await res.reservation.settle({ costUsd: 0.05 });
+    expect(settle.mock.calls[0][0].metadata).toMatchObject({ textOp, providerCostReported: true });
+    // A cancelled call is billed at our guess (cancel-spam protection), but the rates must not read it as paid.
+    const guessed = await hooks.reserve({ operation: 'comic.text.writer', provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', stage: 'plan', inputTokens: 4000, outputTokens: 6000, textOp });
+    if (!guessed.ok) throw new Error('expected ok');
+    await guessed.reservation.settle({ costUsd: 0.03, estimated: true });
+    expect(settle.mock.calls[1][0].metadata).toMatchObject({ textOp, providerCostReported: false });
+    expect(settle.mock.calls[1][0].usage.providerCostUsd).toBe(0.03);
+    // Untagged calls carry no tag (image calls, the director).
+    await hooks.reserve(pageArgs);
+    expect(reserve.mock.calls[2][0].metadata).not.toHaveProperty('textOp');
+  });
+
   it('settles Gemini-direct images (no reported cost) at the registry price for the rendered resolution', async () => {
     const { hooks, settle } = setup();
     const res = await hooks.reserve({ ...pageArgs, provider: 'gemini', model: 'gemini-nano-banana-2.1', resolution: '1K' });

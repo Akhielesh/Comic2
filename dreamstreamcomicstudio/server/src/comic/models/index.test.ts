@@ -23,6 +23,7 @@ describe('no timers, fetches or catalog work at import (models.md §4.5 cadence 
       await import('./observed.js');
       await import('./pricing.js');
       await import('./catalog.js');
+      await import('./textRates.js');
       await import('./index.js');
       await import('../../routes/comicModels.js');
       expect(setTimeoutSpy).not.toHaveBeenCalled();
@@ -39,7 +40,7 @@ describe('no timers, fetches or catalog work at import (models.md §4.5 cadence 
 
   it('the sources contain no interval scheduling at all', async () => {
     const { readFileSync } = await import('node:fs');
-    for (const f of ['catalog.ts', 'quality.ts', 'observed.ts', 'pricing.ts', 'index.ts']) {
+    for (const f of ['catalog.ts', 'quality.ts', 'observed.ts', 'pricing.ts', 'textRates.ts', 'index.ts']) {
       const src = readFileSync(new URL(`./${f}`, import.meta.url), 'utf8');
       expect(src, f).not.toMatch(/setInterval\s*\(/);
     }
