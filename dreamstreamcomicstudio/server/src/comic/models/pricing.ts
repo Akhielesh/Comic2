@@ -3,31 +3,46 @@
 // Two pure pieces:
 //   1. `mapEndpointPricing` turns OpenRouter's documented per-endpoint `pricing[]` lines into one price per
 //      resolution with a basis and, where a number cannot honestly be derived, `null` plus the exact copy.
-//   2. `priceBookFromSources` implements the shared PriceBook contract (shared/comic/modelLock.ts): the server's
-//      unit price for a quote = max(list + perRefUsd × refs, observed median), where the observed median is
-//      the user's last ≤ 20 same model/kind/resolution calls when n ≥ 3 (platform aggregate as a fallback
-//      when it has ≥ 5 distinct users); QC at the observed median when n ≥ 5, else QC_USD_PER_PAGE. The
-//      markup (PLATFORM_MARKUP unless BYOK) is applied by the caller (redrawQuote / estimateJobs) or by
-//      `jobQuote()`, never inside `unit()`, so `unit()` is always the provider price. models/index.ts wraps it
-//      as `createPriceBook(deps)`, which loads the sources for one user first.
+//   2. `priceBookFromSources` (shared/comic/priceBook.ts, re-exported here) implements the shared PriceBook contract:
+//      unit = max(list + perRefUsd × refs, observed median), where the observed median is the user's last ≤ 20 same
+//      model/kind/resolution calls when n ≥ 3 (platform aggregate as a fallback when it has ≥ 5 distinct users);
+//      QC = max(observed median when n ≥ 5, QC_USD_PER_PAGE); text rates from textRates.ts. models/index.ts wraps
+//      it as `createPriceBook(deps)`, which loads the sources for one user first; the client builds the same book
+//      from the sources GET /api/comic/models/prices serves.
 //
 // Nothing here fetches, times or guesses: every number is either a live OpenRouter line, a vendor-published
 // tokens-per-image table, the registry's dated price list, or our own observed costs.
 
 import type { Resolution } from '../../../../shared/comic/doc.js';
-import type { PriceBook } from '../../../../shared/comic/modelLock.js';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type AnyImageJobKind, type ImageModelSpec } from '../../../../shared/comic/models.js';
+import type { ImageModelSpec } from '../../../../shared/comic/models.js';
+import { NO_OPENROUTER_PRICE_COPY, registryPrices, type SharedPriceBook } from '../../../../shared/comic/priceBook.js';
 import type { CatalogPrice, OrImageEndpoint, OrPricingLine, PriceBasis } from './catalog.js';
+
+// The PriceBook itself lives in shared/comic/priceBook.ts (the client builds the same book from the sources the
+// server serves); these names stay importable from here.
+export {
+  NO_OPENROUTER_PRICE_COPY,
+  OBSERVED_MIN_N,
+  OBSERVED_WINDOW,
+  PRICE_UNPUBLISHED_COPY,
+  QC_OBSERVED_MIN_N,
+  priceBookFromSources,
+  registryPrices,
+  type JobQuote,
+  type ObservedMedian,
+  type PriceBookRow,
+  type PriceBookSources,
+  type PriceQuote,
+  type QuoteBasis
+} from '../../../../shared/comic/priceBook.js';
+/** The server's name for the shared book (the same type). */
+export type ServerPriceBook = SharedPriceBook;
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
 
 // ── §4.6 exact copy ───────────────────────────────────────────────────────────
 
-/** Per-image price unpublished (billed per token, no vendor table). */
-export const PRICE_UNPUBLISHED_COPY = "Price per image isn't published · you'll see the real cost after the first image";
-/** OpenRouter publishes no price (empty `pricing[]`, e.g. Krea). */
-export const NO_OPENROUTER_PRICE_COPY = "OpenRouter doesn't list a price for this model";
 /** The note on a `unit: token` line with no published tokens-per-image table. */
 export const PER_TOKEN_NOTE = 'billed per token; tokens per image not published';
 
@@ -245,19 +260,6 @@ export const mapEndpointPricing = (input: EndpointPricingInput): EndpointPricing
   return { price, perRefUsd: perReferenceUsd(endpoints, input.spec), providers: [...providers] };
 };
 
-/** The registry's dated price list as catalog prices (the fallback when OpenRouter has nothing). */
-export const registryPrices = (spec: ImageModelSpec): Partial<Record<Resolution, CatalogPrice>> => {
-  const out: Partial<Record<Resolution, CatalogPrice>> = {};
-  const note = `from our price list, ${spec.factsAsOf}`;
-  const resolutions = spec.resolutions.length ? spec.resolutions : (['1K'] as Resolution[]);
-  for (const r of resolutions) {
-    const usd = spec.priceUsd[r];
-    if (spec.priceBasis === 'unverified' || !isFiniteNumber(usd)) out[r] = { usd: null, basis: 'registry', note: PRICE_UNPUBLISHED_COPY };
-    else out[r] = { usd, basis: 'registry', note };
-  }
-  return out;
-};
-
 /**
  * Live prices first; a resolution OpenRouter cannot price falls back to the registry's dated number
  * (models.md §2.3 step 1), keeping the live note so the UI can say why. Resolutions neither side can price
@@ -277,197 +279,3 @@ export const mergeWithRegistry = (live: Partial<Record<Resolution, CatalogPrice>
   return out;
 };
 
-// ── PriceBook (shared/comic/modelLock.ts contract) ────────────────────────────
-
-export const OBSERVED_MIN_N = 3;
-export const QC_OBSERVED_MIN_N = 5;
-export const OBSERVED_WINDOW = 20;
-
-export interface PriceBookRow {
-  id: string;
-  price: Partial<Record<Resolution, CatalogPrice>>;
-  perRefUsd: number | null;
-  fetchedAt?: { catalog?: string };
-  stale?: boolean;
-}
-
-export interface ObservedMedian {
-  modelId: string;
-  kind: string;
-  res: Resolution;
-  n: number;
-  medianUsd: number;
-  minUsd: number;
-  maxUsd: number;
-  scope: 'you' | 'platform';
-}
-
-export interface PriceBookSources {
-  rows: PriceBookRow[];
-  observed?: ObservedMedian[];
-  /** Observed vision-QC cost per page (kind 'qc' rows), used when n ≥ QC_OBSERVED_MIN_N. */
-  qc?: { medianUsd: number; n: number } | null;
-}
-
-/**
- * The basis of a quote as data, next to the text. The text names dollar amounts, so it is for dollar views only
- * (admins, own-key calls); a governed user's copy must be worded from these fields through
- * costFormatterFor(ctx) / formatCostForUser, never by printing `basis` or a price `note`.
- */
-export interface QuoteBasis {
-  /** Which basis set the number: our observed median, the live list price, the registry's dated list, or none. */
-  source: 'observed' | 'list' | 'registry' | 'none';
-  /** Observed: how many calls, whose, and their range (provider cost per image). */
-  n?: number;
-  scope?: 'you' | 'platform';
-  minUsd?: number;
-  maxUsd?: number;
-  /** The list price including reference cost (what an observed median was compared with, or what was used). */
-  listUsd?: number;
-  /** Registry: the price list's date. */
-  factsAsOf?: string;
-  /** Live list: when OpenRouter's price was fetched. */
-  fetchedAt?: string;
-  /** References sent, what they added to the list basis, and whether their price is unpublished. */
-  refs?: number;
-  refsUsd?: number;
-  refsUnpriced?: boolean;
-}
-
-export interface PriceQuote {
-  usd: number | null;
-  /** Human-readable basis, e.g. "your last 4 pages: $0.043–$0.054; list $0.0336". Dollar views only. */
-  basis: string;
-  /** The same basis as data (every view; governed copy is worded from this). */
-  basisDetail: QuoteBasis;
-  list: { usd: number | null; basis: PriceBasis | 'none'; label: string; note?: string };
-  observed?: ObservedMedian;
-  /** Reference cost added to the list basis (0 when none sent or unpublished). */
-  refsUsd: number;
-  /** True when reference cost could not be added because the per-reference price is unpublished. */
-  refsUnpriced: boolean;
-}
-
-/** models.md §2.3 in full for one job: (unit + QC for page, edit and panel jobs) × PLATFORM_MARKUP unless BYOK. */
-export interface JobQuote {
-  /** What the user is charged (null = no basis: the UI shows no number). */
-  usd: number | null;
-  /** The provider price of the image (unit), before QC and markup. */
-  providerUsd: number | null;
-  /** QC added (page, edit and panel jobs only: one QC run each, as estimateJobs counts them). */
-  qcUsd: number;
-  markup: number;
-  /** Dollar views only (see QuoteBasis). */
-  basis: string;
-  basisDetail: QuoteBasis & { qc?: { usd: number; source: 'observed' | 'default'; n?: number } };
-}
-
-export interface ServerPriceBook extends PriceBook {
-  /** Any image job kind, Ship 2's 'panel' included: observed medians are matched by the exact kind. */
-  quote(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): PriceQuote;
-  jobQuote(modelId: string, res: Resolution, kind: AnyImageJobKind, opts?: { refs?: number; byok?: boolean }): JobQuote;
-  /** Observed QC detail when it was used. */
-  qcObserved: { medianUsd: number; n: number } | null;
-}
-
-const kindNoun = (kind: string, n: number) => {
-  const base = kind === 'style_option' ? 'style test' : kind === 'sheet' ? 'character sheet' : kind;
-  return n === 1 ? base : `${base}s`;
-};
-
-const basisLabel = (p: CatalogPrice, fetchedAt?: string): string => {
-  const when = fetchedAt ? `, ${fetchedAt}` : '';
-  if (p.basis === 'openrouter_endpoint') return `OpenRouter price${when}`;
-  if (p.basis === 'vendor_table') return `vendor token table via OpenRouter${when}`;
-  if (p.basis === 'derived_mp') return `OpenRouter per-megapixel price${when}`;
-  return p.note && p.note.startsWith('from our price list') ? p.note.replace('from our ', '') : 'price list';
-};
-
-/**
- * The PriceBook for one user: rows from the live catalog (already merged with the registry) and that user's
- * observed medians. `unit()` never under-quotes (max of the bases) and says which basis it used; usd null
- * means no basis at all ("can't price yet" — the UI shows no number).
- */
-export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => {
-  const rows = new Map(src.rows.map((r) => [r.id, r] as const));
-  const observed = src.observed ?? [];
-  const qc = src.qc && src.qc.n >= QC_OBSERVED_MIN_N && isFiniteNumber(src.qc.medianUsd) ? { medianUsd: round4(src.qc.medianUsd), n: src.qc.n } : null;
-
-  const quote = (modelId: string, res: Resolution, kind: AnyImageJobKind, refs = 0): PriceQuote => {
-    const spec = getImageModel(modelId);
-    const row = rows.get(spec?.id ?? modelId) ?? rows.get(modelId);
-    const sent = Number.isFinite(refs) && refs > 0 ? Math.floor(refs) : 0;
-
-    // 1. List price: live catalog (merged with the registry) → registry → none.
-    let list: PriceQuote['list'] = { usd: null, basis: 'none', label: 'no list price' };
-    const live = row?.price[res];
-    if (live && isFiniteNumber(live.usd)) list = { usd: live.usd, basis: live.basis, label: basisLabel(live, row?.fetchedAt?.catalog), note: live.note };
-    else if (spec) {
-      const reg = registryPrices(spec)[res];
-      if (reg && isFiniteNumber(reg.usd)) list = { usd: reg.usd, basis: 'registry', label: `price list from ${spec.factsAsOf}`, note: reg.note };
-      else list = { usd: null, basis: 'none', label: live?.note || reg?.note || PRICE_UNPUBLISHED_COPY };
-    } else if (live) list = { usd: null, basis: 'none', label: live.note || NO_OPENROUTER_PRICE_COPY };
-
-    // 2. Reference cost on the list basis only (observed already includes it).
-    const perRef = row?.perRefUsd ?? spec?.perRefUsd ?? null;
-    const refsUnpriced = sent > 0 && !isFiniteNumber(perRef);
-    const refsUsd = sent > 0 && isFiniteNumber(perRef) ? round4(perRef * sent) : 0;
-    const listTotal = isFiniteNumber(list.usd) ? round4(list.usd + refsUsd) : null;
-
-    // 3. Observed median (n ≥ 3), the user's own first.
-    const matches = observed.filter((o) => (o.modelId === modelId || o.modelId === spec?.id) && o.kind === kind && o.res === res && o.n >= OBSERVED_MIN_N);
-    const obs = matches.find((o) => o.scope === 'you') ?? matches.find((o) => o.scope === 'platform');
-
-    // 4. Never under-quote: the higher basis wins.
-    let usd: number | null = listTotal;
-    let basis: string;
-    const who = obs?.scope === 'platform' ? "DreamStream creators' last" : 'your last';
-    const obsText = obs ? `${who} ${obs.n} ${kindNoun(kind, obs.n)}: ${money(obs.minUsd)}–${money(obs.maxUsd)}` : '';
-    const usedObserved = Boolean(obs && (listTotal === null || obs.medianUsd >= listTotal));
-    if (obs && usedObserved) {
-      usd = round4(obs.medianUsd);
-      basis = listTotal === null ? obsText : `${obsText}; list ${money(listTotal)}`;
-    } else if (listTotal !== null) {
-      basis = `${list.label}${refsUsd ? ` + ${money(refsUsd)} for ${sent} reference${sent === 1 ? '' : 's'}` : ''}${obs ? ` (${obsText})` : ''}`;
-    } else {
-      basis = list.label;
-    }
-    if (refsUnpriced) basis += ' · reference cost unpublished';
-    const basisDetail: QuoteBasis = {
-      source: usedObserved ? 'observed' : listTotal === null ? 'none' : list.basis === 'registry' ? 'registry' : 'list',
-      ...(usedObserved && obs ? { n: obs.n, scope: obs.scope, minUsd: obs.minUsd, maxUsd: obs.maxUsd } : {}),
-      ...(listTotal !== null ? { listUsd: listTotal } : {}),
-      ...(list.basis === 'registry' && spec ? { factsAsOf: spec.factsAsOf } : {}),
-      ...(list.basis !== 'registry' && list.basis !== 'none' && row?.fetchedAt?.catalog ? { fetchedAt: row.fetchedAt.catalog } : {}),
-      ...(sent > 0 ? { refs: sent, refsUsd, refsUnpriced } : {})
-    };
-    return { usd, basis, basisDetail, list, ...(obs ? { observed: obs } : {}), refsUsd, refsUnpriced };
-  };
-
-  const qcUsd = qc ? qc.medianUsd : QC_USD_PER_PAGE;
-  const jobQuote: ServerPriceBook['jobQuote'] = (modelId, res, kind, opts = {}) => {
-    const q = quote(modelId, res, kind, opts.refs ?? 0);
-    const markup = opts.byok ? 1 : PLATFORM_MARKUP;
-    const qcAdd = kind === 'page' || kind === 'edit' || kind === 'panel' ? qcUsd : 0;
-    const qcBasis = qcAdd ? (qc ? ` + QC ${money(qcAdd)} (your last ${qc.n} checks)` : ` + QC ${money(qcAdd)}`) : '';
-    return {
-      usd: q.usd === null ? null : round4((q.usd + qcAdd) * markup),
-      providerUsd: q.usd,
-      qcUsd: qcAdd,
-      markup,
-      basis: `${q.basis}${q.usd === null ? '' : qcBasis}`,
-      basisDetail: { ...q.basisDetail, ...(qcAdd ? { qc: { usd: qcAdd, source: qc ? ('observed' as const) : ('default' as const), ...(qc ? { n: qc.n } : {}) } } : {}) }
-    };
-  };
-
-  return {
-    unit: (modelId, res, kind, refs = 0) => {
-      const q = quote(modelId, res, kind, refs);
-      return { usd: q.usd, basis: q.basis };
-    },
-    qcUsd,
-    qcObserved: qc,
-    quote,
-    jobQuote
-  };
-};

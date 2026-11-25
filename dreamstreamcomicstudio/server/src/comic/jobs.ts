@@ -120,10 +120,8 @@ import { comicImageCapacity, comicTextCapacity } from './generationCapacity.js';
 import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../shared/comic/sendable.js';
 import {
   IMAGE_MODELS,
-  PLAN_USD_PER_PAGE,
   PLATFORM_MARKUP,
   QC_USD_PER_PAGE,
-  RELAYOUT_VISION_USD,
   TIER_PRESETS,
   aspectFromSize,
   aspectMatches,
@@ -131,10 +129,10 @@ import {
   formatUsd,
   getImageModel,
   imagePriceUsd,
+  jobUnitUsd,
   nearestAspect,
   nearestResolution,
   resolveImageJob,
-  styleDirectionsUsd,
   type AnyImageJobKind,
   type ImageJobKind,
   type ImageModelSpec,
@@ -142,6 +140,7 @@ import {
   type SpendEstimate
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
+import { planUsd, recheckQuoteUsd, styleDirectionsQuoteUsd } from '../../../shared/comic/priceBook.js';
 import { STYLE_PRESETS, briefWantsSpotColour, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -563,7 +562,7 @@ const CHIP_PRICES_WAIT_MS = 800;
  * The request's PriceBook if it is ready within `ms` (else undefined: the chips quote the registry list, and a tap
  * whose real price outgrew that quote gets a fresh real-price gate). Free actions never stall on a cold catalog.
  */
-const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
+export const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
   const timer = delay(ms);
   try {
     const won = await Promise.race([priceBookFor(ctx), timer.promise]);
@@ -961,9 +960,10 @@ const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_
 export const RECHECK_MODEL_LABEL = 'Page check';
 
 /**
- * Price image jobs on this doc's lock / tier / override: the registry list (exactly estimateJobs) or, with a
- * PriceBook, its unit prices (live list or observed median, never under list; models.md §2.3) + QC for pages and
- * edits, × PLATFORM_MARKUP unless BYOK. A unit the book cannot price falls back to the registry list.
+ * Price image jobs on this doc's lock / tier / override with the one quote (shared/comic/models.ts estimateJobs, the
+ * same call the client's buttons make): the registry list without a PriceBook, else its unit prices (live list or
+ * observed median, never under list; models.md §2.3) + its QC for pages, edits and panels, × PLATFORM_MARKUP unless
+ * BYOK. A unit the book cannot price falls back to the registry list.
  */
 export const priceImageJobs = (
   doc: ComicDoc,
@@ -971,27 +971,7 @@ export const priceImageJobs = (
   byok: boolean,
   prices?: PriceBook,
   pin: RunPin = runPinOf(doc)
-): SpendEstimate => {
-  const base = estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}) });
-  if (!prices) return base;
-  const markup = byok ? 1 : PLATFORM_MARKUP;
-  const lines = jobs
-    .filter((j) => j.count > 0)
-    .map((j) => {
-      const { spec, resolution } = resolveJobFor(pin, j.kind);
-      let unit: number | null = null;
-      try {
-        unit = prices.unit(spec.id, resolution, j.kind).usd;
-      } catch {
-        unit = null;
-      }
-      const list = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
-      // A drawn page, an edit and a panel fix each get one page check (estimateJobs prices them the same way).
-      const qc = j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
-      return { label: j.label || j.kind, count: j.count, usd: round4((list + qc) * j.count * markup) };
-    });
-  return { ...base, usd: round4(lines.reduce((s, l) => s + l.usd, 0)), lines };
-};
+): SpendEstimate => estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}), ...(prices ? { prices } : {}) });
 
 /**
  * How a render_pages run treats consistency anchors (pro plan §4.2; B4 FIX note 2a): 'auto' with the
@@ -1044,13 +1024,7 @@ export const anchorSheetJobFor = (pin: RunPin) => {
 };
 const anchorSheetUnitUsd = (pin: RunPin, prices?: PriceBook): number => {
   const { spec, resolution } = anchorSheetJobFor(pin);
-  let unit: number | null = null;
-  try {
-    unit = prices ? prices.unit(spec.id, resolution, 'place').usd : null;
-  } catch {
-    unit = null;
-  }
-  return typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
+  return jobUnitUsd(spec, resolution, 'place', prices);
 };
 
 /**
@@ -1085,8 +1059,8 @@ export function estimateSpendAction(doc: ComicDoc, action: GatedSpend, byok: boo
     return { usd: round4(lines.reduce((sum, l) => sum + l.usd, 0)), imageCount: q.imageCount, model: q.model, lines };
   }
   if (action.type === 'recheck_page') {
-    // TEXT-priced: one vision call re-reads the page (lettering.md §9). No image is drawn.
-    const usd = round4(RELAYOUT_VISION_USD * (byok ? 1 : PLATFORM_MARKUP));
+    // TEXT-priced: one vision call re-reads the page (lettering.md §9), at the book's QC figure. No image is drawn.
+    const usd = recheckQuoteUsd(byok, prices);
     return { usd, imageCount: 0, model: RECHECK_MODEL_LABEL, lines: [{ label: 'page re-check', count: 1, usd }] };
   }
   const jobs: { kind: ImageJobKind; count: number; label?: string }[] = [];
@@ -1113,8 +1087,9 @@ export function estimateSpendAction(doc: ComicDoc, action: GatedSpend, byok: boo
   // When no directions are passed the runner also makes a writer call to propose them; the
   // image-only estimate would understate the quote and the budget gate. Add that text line.
   if (action.type === 'render_style_options' && !styleDirections(action).length) {
-    // Writer text spend for proposing style directions (shared with the client's StylePanel quote).
-    const usd = styleDirectionsUsd(byok);
+    // Writer text spend for proposing style directions (shared with the client's StylePanel quote), at what it
+    // really costs (the book's text rates, never under STYLE_DIRECTIONS_USD).
+    const usd = styleDirectionsQuoteUsd(byok, prices);
     return { ...est, usd: round4(est.usd + usd), lines: [...est.lines, { label: 'style directions', count: 1, usd }] };
   }
   return est;
@@ -5061,7 +5036,7 @@ export async function planPages(
   const byok = spendIsByok(ctx.keys);
   if (opts.draft) {
     opts.draft.assertPlanUnchanged();
-    const maximumQuote = 2 * planPagesUsd(before, byok);
+    const maximumQuote = 2 * planPagesUsd(before, byok, await priceBookWithin(ctx));
     const cap = budgetOf(before.settings);
     if (cap !== undefined && before.spend.totalUsd + pendingUsdOf(ctx.session) + maximumQuote > cap + 1e-9) {
       throw new StudioError('BUDGET_EXCEEDED', 'The remaining comic budget is below the planning estimate including a writer repair. Change the scope or budget to start.', { status: 402 });
@@ -5082,7 +5057,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     // A whole plan says what it costs, honestly bounded (one writer pass; up to two if the plan check sends it back).
-    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok)})`;
+    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok, await priceBookWithin(ctx))})`;
     const text = `This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again${price}. Nothing was spent.`;
     deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
     return { status: 'blocked', message: `The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings${price}. Nothing was spent.`, code: 'BUDGET_EXCEEDED' };
@@ -6053,17 +6028,17 @@ const publicationBehind = (doc: ComicDoc): boolean => {
 };
 
 /**
- * The "Plan the pages" estimate: one writer pass for every page — about $0.016 a page billed. The plan check can send
- * a page's count, overfull or quiet-shot problems back for ONE repair round, which is another writer pass (plan §7),
- * so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
+ * The "Plan the pages" estimate: one writer pass for every page, at what planning really costs per page (the book's
+ * text rates: PLAN_USD_PER_PAGE × the observed factor, never under it; about $0.016 a page billed at the constant).
+ * The plan check can send a page's count, overfull or quiet-shot problems back for ONE repair round, which is another
+ * writer pass (plan §7), so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
  */
-export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
-  round4(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP));
+export const planPagesUsd = (doc: ComicDoc, byok: boolean, prices?: PriceBook): number => planUsd(Math.max(1, doc.format.pageCount || 1), byok, prices);
 
 /** "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
-export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
+export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean, prices?: PriceBook): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
-  const usd = planPagesUsd(doc, byok);
+  const usd = planPagesUsd(doc, byok, prices);
   return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;
 };
 
@@ -6099,7 +6074,7 @@ export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean; prices?: Pri
   if (doc.style.status === 'empty' || (doc.style.status === 'drafted' && !doc.style.options.length && !doc.style.spec)) add(say('Show me 3 styles'));
   if (!doc.cast.length) add(say('Suggest a cast'));
   if (doc.style.status !== 'empty' && !castBusy && doc.cast.some(needsSheet) && doc.planStatus === 'none') add(spend('Draw the character sheets', { type: 'render_sheets' }));
-  if (doc.planStatus === 'none') add({ label: 'Plan the pages', action: { type: 'plan_pages' }, usd: planPagesUsd(doc, byok) });
+  if (doc.planStatus === 'none') add({ label: 'Plan the pages', action: { type: 'plan_pages' }, usd: planPagesUsd(doc, byok, prices) });
   if (doc.pages.length && !pagesBusy) {
     const undrawn = doc.pages.filter((p) => p.render.status !== 'ready' && p.panels.length);
     const stale = doc.pages.filter((p) => isPageStale(doc, p));
