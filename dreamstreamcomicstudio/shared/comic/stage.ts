@@ -303,7 +303,7 @@ const nextLabel = (facts: StageFacts): string => {
     case 'review_withheld':
       return `Review ${plural(facts.withheld, 'withheld page')}`;
     case 'review_failed':
-      return facts.failed === 1 ? 'Review the page that didn’t draw' : `Review ${facts.failed} pages that didn’t draw`;
+      return `Review ${plural(facts.failed, 'failed page')}`;
     case 'draw_pages':
       return 'Draw the pages';
     case 'draw_rest':
@@ -311,7 +311,7 @@ const nextLabel = (facts: StageFacts): string => {
     case 'publish':
       return 'Read and publish';
     case 'update_published':
-      return 'Update the published comic';
+      return 'Publish your changes';
     case 'read':
       return 'Read your comic';
   }

@@ -47,17 +47,34 @@ describe('the studio stage strip', () => {
     expect(strip().nextElementSibling?.id).toBe('studio-main');
   });
 
-  it('on a phone, a stage opens its tab and shows the board; the next step can bring the chat back', () => {
+  it('on a phone, a stage opens its tab and shows the board', () => {
     const studio = makeFakeStudio();
     mountAt(PHONE, studio);
     expect(pane('board')).toHaveAttribute('inert');
+    const stages = within(strip()).getByRole('button', { name: /^Stages:/ });
+    fireEvent.click(stages);
     fireEvent.click(within(strip()).getByRole('button', { name: /^Style/ }));
     expect(studio.setTab).toHaveBeenLastCalledWith('style');
     expect(pane('board')).not.toHaveAttribute('inert');
+    fireEvent.click(stages);
     fireEvent.click(within(strip()).getByRole('button', { name: /^Publish/ }));
     expect(studio.setTab).toHaveBeenLastCalledWith('read');
     expect(studio.act).not.toHaveBeenCalled();
     expect(studio.send).not.toHaveBeenCalled();
+  });
+
+  it('on a phone, an approval waiting brings the chat back from the board without approving anything', () => {
+    const doc = createEmptyDoc('c1', 'Night ferry', 1);
+    doc.brief.premise = 'A ferry after midnight.';
+    doc.gate = { id: 'g1', action: { type: 'render_style_options' }, title: 'Draw looks', summary: '', estimateUsd: 0.1, imageCount: 3, model: 'm', createdAt: 1, status: 'open', reason: 'policy' };
+    const studio = makeFakeStudio({ doc });
+    mountAt(PHONE, studio);
+    fireEvent.click(within(strip()).getByRole('button', { name: /^Stages:/ }));
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Style' }));
+    expect(pane('chat')).toHaveAttribute('inert');
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Style · Not chosen yet · Next: review the estimate' }));
+    expect(pane('chat')).not.toHaveAttribute('inert');
+    expect(studio.act).not.toHaveBeenCalled();
   });
 
   it('a new comic’s next step focuses the composer', () => {

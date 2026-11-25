@@ -42,9 +42,9 @@ its pages before choosing a look reads "Style", with Plan already ticked. No sta
 | Story | Story | Not started | Tell the Director your idea (composer) |
 | Style | Style | Not chosen yet · N looks to compare | Choose a look · Pick a look (Style tab) |
 | Plan | Planning | No pages planned yet · The Director is planning · P of N pages planned · N pages planned | Plan the pages · Follow the Director (conversation) · Plan the rest · Review the plan (Pages tab) |
-| Draw | Drawing | D of N pages drawn | Watch the pages draw · Review N withheld pages · Review N pages that didn't draw · Draw the pages · Draw the rest (Pages tab) |
+| Draw | Drawing | D of N pages drawn | Watch the pages draw · Review N withheld pages · Review N failed pages · Draw the pages · Draw the rest (Pages tab) |
 | Publish | Ready to publish | All N pages drawn | Read and publish (Read tab) |
-| (all done) | Published | All N pages drawn | Read your comic · Update the published comic (Read tab) |
+| (all done) | Published | All N pages drawn | Read your comic · Publish your changes (Read tab) |
 
 Two waits come before the stage's own step, without moving the stage: an open approval ("Review the estimate", the
 conversation) and an interrupted Director draft ("Resume the draft"). **The next step only navigates.** It carries no
@@ -83,11 +83,17 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
   conversation, or the composer (focused). Its description says where ("Opens the Pages tab").
 - Keyboard: native buttons in reading order; ArrowLeft, ArrowRight, Home and End move along the steps. A screen
   reader hears a polite note when the stage changes, never on each page drawn (the run's own card covers those).
-- Layout: one row from 768 px. Below that, the steps fill one row (16 px gutters) and the status line sits under them;
-  below 360 px a done stage shows only its check, keeping its name for screen readers and as a tooltip. Coarse pointers
-  get 44 px targets. On a book-posture foldable the strip stays on the first screen. It hides while the on-screen
-  keyboard is up (`html.kb-open`), like the tab bar. On phones the board's tabs live in a drawer, so the strip is also
-  the quickest way between Story, Style, Pages and Read.
+- Layout, always one row high so the conversation and the board keep their room (the layout smoke's phone-content rule:
+  a phone's content keeps at least 45 % of the screen; a second row cost the conversation 41 %):
+  - from 768 px: the five named stages, then the status and the "Next: …" button;
+  - below 768 px (phones, small tablets, the first screen of a book-posture foldable): one 44 px row with 16 px gutters.
+    A stage button shows the five stages as marks (a check when done, a heavier ink dot for the current one, a ring for
+    the rest; named "Stages: Draw, 3 of 5 done") and opens the five named stages in a row below; choosing one, or
+    Escape, closes them and returns focus to the stage button. Next to it, the status is one button: its first line is
+    "Drawing · 6 of 12 pages drawn", its second "Next: draw the rest". Below 360 px a done stage in the opened row
+    shows only its check, keeping its name for screen readers and as a tooltip.
+  - Coarse pointers get 44 px targets. It hides while the on-screen keyboard is up (`html.kb-open`), like the tab bar.
+    On phones the board's tabs live in a drawer, so the strip is also a quick way between Story, Style, Pages and Read.
 - The workspace navigation's list (`mobile/shell/WorkspaceNavigation.tsx`) is labelled "Board" (it was "Project
   stages"): those are the board's tabs, not the comic's stages.
 
@@ -99,8 +105,8 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
   validation.
 - `shared/comic/workspaceActivity.ts`, `server/src/comic/store.test.ts`: the saved summary.
 - `services/comicWorkspaceActivity.ts` (+ test), `components/comicstudio/home/ComicTaskActivity.tsx` (+ test).
-- `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, 360 and 320 px,
-  foldable), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell).
+- `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, the 360 px row
+  and its opened stages, 320 px, foldable), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell).
 
 ## 7. Left out on purpose
 

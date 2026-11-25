@@ -176,9 +176,9 @@ describe('stage boundaries', () => {
     drawnPages(doc, 1);
     doc.pages[1].render = render('failed');
     doc.pages[2].render = render('failed');
-    expect(comicStage(doc).line).toBe('Drawing · 1 of 3 pages drawn · Next: review 2 pages that didn’t draw');
+    expect(comicStage(doc).line).toBe('Drawing · 1 of 3 pages drawn · Next: review 2 failed pages');
     doc.pages[2].render = render('ready', picture());
-    expect(comicStage(doc).next.label).toBe('Review the page that didn’t draw');
+    expect(comicStage(doc).next.label).toBe('Review 1 failed page');
   });
 
   it('pages drawing for the first time point at the Pages tab; a redraw in flight keeps its picture', () => {
@@ -215,7 +215,7 @@ describe('stage boundaries', () => {
     expect(comicStage(one).progress).toBe('1 page drawn');
   });
 
-  it('a published comic is done; edits drawn since ask to update it', () => {
+  it('a published comic is done; pictures drawn since ask to publish the changes', () => {
     const doc = planned(4);
     drawnPages(doc, 4);
     live(doc);
@@ -224,7 +224,7 @@ describe('stage boundaries', () => {
     expect(view.steps.every((s) => s.done)).toBe(true);
     expect(view.line).toBe('Published · All 4 pages drawn · Next: read your comic');
     doc.pages[2].render = { ...render('ready', picture()), updatedAt: NOW + 100 };
-    expect(comicStage(doc).next.label).toBe('Update the published comic');
+    expect(comicStage(doc).next.label).toBe('Publish your changes');
     // A suspended publication is not published.
     doc.publication!.status = 'suspended';
     expect(comicStage(doc).complete).toBe(false);
