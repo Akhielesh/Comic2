@@ -1,6 +1,7 @@
 import type { ComicDoc, RenderState } from './doc.js';
 import { anyRenderBusy, needsYouOf, type NeedsWhy } from './attention.js';
 import { canServeToOwner } from './safety.js';
+import { stageFacts, type StageFacts } from './stage.js';
 
 export type WorkAttention = NeedsWhy | 'interrupted' | 'render_failed';
 export const FINISHED_KINDS = ['plan', 'pages', 'cover', 'sheets', 'looks', 'translation', 'reply', 'published'] as const;
@@ -12,6 +13,8 @@ export interface ComicWorkSummary {
   attention: WorkAttention | null;
   working: boolean;
   finished: FinishedWork[];
+  /** Where the comic stands (stage.ts): counts and keys only. Absent in summaries written before stages. */
+  stage?: StageFacts;
 }
 
 export function summarizeComicWork(doc: ComicDoc): ComicWorkSummary {
@@ -59,6 +62,7 @@ export function summarizeComicWork(doc: ComicDoc): ComicWorkSummary {
   return {
     v: 1, attention: need ?? (renderFailed ? 'render_failed' : null),
     working: anyRenderBusy(doc) || doc.directorDraft?.status === 'planning',
-    finished: finished.sort((a, b) => b.at - a.at)
+    finished: finished.sort((a, b) => b.at - a.at),
+    stage: stageFacts(doc)
   };
 }

@@ -24,4 +24,13 @@ describe('owner task listing', () => {
     expect(comicActivityRow({ project_id: 'p', gate: 'declined' }).attention).toBe(null);
     expect(comicActivityRow({ project_id: 'p', plan: 'draft', draft: 'review' }).attention).toBe('plan');
   });
+  it('keeps a stored stage only when it reads as a whole; older summaries and garbage carry none', () => {
+    const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, drawing: 0, withheld: 0, failed: 0, looks: 0, next: 'draw_rest' };
+    const activity = { v: 1 as const, attention: null, working: true, finished: [] };
+    expect(comicActivityRow({ project_id: 'p', activity: { ...activity, stage } as never }).stage).toEqual(stage);
+    expect(comicActivityRow({ project_id: 'p', activity }).stage).toBeUndefined();
+    expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: { ...stage, stage: 'publish' } } as never })).toBe(false);
+    expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: 'Drawing' } as never })).toBe(false);
+    expect(comicActivityRow({ project_id: 'p', gate: 'open' }).stage).toBeUndefined();
+  });
 });

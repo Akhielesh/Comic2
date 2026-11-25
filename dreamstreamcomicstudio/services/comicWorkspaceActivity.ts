@@ -1,4 +1,5 @@
 import type { ComicWorkSummary, FinishedWork, WorkAttention } from '../shared/comic/workspaceActivity';
+import { readStageFacts } from '../shared/comic/stage';
 import { isStoredSession, supabase } from './supabase';
 
 const PAGE_SIZE = 25;
@@ -23,7 +24,13 @@ interface StoredRow {
 export function comicActivityRow(row: StoredRow): ComicActivityRow {
   const updatedAt = Date.parse(row.updated_at ?? '');
   const base = { id: row.project_id, title: row.title?.trim() || 'Untitled comic', ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
-  if (row.activity?.v === 1 && Array.isArray(row.activity.finished)) return { ...row.activity, ...base };
+  if (row.activity?.v === 1 && Array.isArray(row.activity.finished)) {
+    // The stored stage is used only when it reads as a whole, consistent stage (stage.ts readStageFacts); a list
+    // shows "Open to see" for a comic without one, never a guess.
+    const { stage, ...activity } = row.activity;
+    const facts = readStageFacts(stage);
+    return { ...activity, ...(facts ? { stage: facts } : {}), ...base };
+  }
   const finished: FinishedWork[] = [];
   const rendered = Number(row.listing?.rendered);
   // The old listing records the count but no render timestamp. Never use an edit or rename as a new completion.
