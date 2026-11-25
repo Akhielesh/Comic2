@@ -3423,7 +3423,7 @@ class RenderRun {
   /** The run moved to the same payer's other key: said once per switch, in the completion. */
   private noteContinued(from: ImageRoute, to: ImageRoute, byok: boolean, model: string) {
     const key = `${from}>${to}`;
-    if (this.continued.has(key)) return;
+    if (from === to || this.continued.has(key)) return;
     this.continued.add(key);
     this.notices.push(noticeCard('info', continuedText(from, to, byok, model)));
     logger.info('comic_render_run_continued', { projectId: this.ctx.projectId, from, to });
@@ -3907,7 +3907,7 @@ class RenderRun {
       if (keyRefused && !this.stopReason && !this.signal.aborted) {
         const next = this.routeFor(prepared.compiled.spec);
         if (next) {
-          this.noteContinued(picked.route, next.route, picked.byok, prepared.compiled.spec.nickname);
+          this.noteContinued(this.lastRefusal?.route ?? picked.route, next.route, picked.byok, prepared.compiled.spec.nickname);
           return { outcome: { kind: 'reroute' }, asset: null };
         }
         this.stopOnCredit();
