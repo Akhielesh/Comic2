@@ -48,6 +48,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/alerts.md` | Alerts: the chime and toast when a comic or a chat finishes or waits on you while you are elsewhere — where-you-are rules, the moments, fixed copy, the two chimes' numbers, the audio lifecycle, the tab-title count, Chat's new-answer dot, the bus API for sources, two sites. |
 | `features/discovery.md` | Discover's public listing: the edge routes /api/comic/public/discover[/shelves], the item allow-list (bylines only with Show my username), the ask-first SQL comic_discovery.sql, featured seeding, tests. |
 | `features/comic-research.md` | Comic Studio research as it works today: the composer's research sheet and the Director's `research_comic` tool, what goes to Wikipedia and Wikimedia Commons, the link and picture-licence allowlist, budget, cache, failure states and key files. |
+| `features/comic-stages.md` | Every comic's stage (Story, Style, Plan, Draw, Publish): the boundaries from real doc fields, progress and the navigate-only next step, the saved summary lists read ("Open to see" before stages), and the studio's stage strip. |
 
 ## Conventions
 
