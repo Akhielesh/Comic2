@@ -23,7 +23,8 @@ const REGISTRY_CARDS: Card[] = [
   { type: 'refs', id: 'card_refs', owner: { kind: 'character', id: 'c_maya' }, paths: [] },
   { type: 'publish', id: 'card_pub', mode: 'publish', status: 'pending' },
   { type: 'share', id: 'card_share' },
-  { type: 'translation', id: 'card_tr', languages: ['te'] }
+  { type: 'translation', id: 'card_tr', languages: ['te'] },
+  { type: 'credit', id: 'card_credit', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 1, notStarted: 2 }
 ];
 
 const reply = (card: Card): Msg => ({ id: `msg_${card.id}`, role: 'assistant', text: '', at: 1, cards: [card] });

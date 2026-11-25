@@ -32,6 +32,7 @@ import {
   MessageCircleQuestion,
   Palette,
   Users,
+  Wallet,
   type LucideIcon
 } from 'lucide-react';
 import type { Card, ClientAction, ComicDoc } from '../../../../shared/comic/doc';
@@ -60,6 +61,7 @@ const CARD_ICON: Partial<Record<Card['type'], LucideIcon>> = {
   publish: Globe,
   share: Link2,
   model_outage: CloudOff,
+  credit: Wallet,
   history: History,
   notice: Info
 };

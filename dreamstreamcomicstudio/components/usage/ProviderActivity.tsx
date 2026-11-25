@@ -4,6 +4,7 @@ import type { AccountProviderUsageReport } from '../../shared/accountProviderUsa
 import { getProviderDef } from '../../shared/providers';
 import { PROVIDER_BALANCE_CAPABILITIES, type ProviderBalanceReport } from '../../shared/providerBalances';
 import { fetchAccountProviderUsage, checkPersonalProviderBalance } from '../../services/accountProviderUsage';
+import { seedKeyBalance } from '../../services/keyBalance';
 import { ALL_PROVIDERS, PROVIDER_META, type ApiKeyProvider } from '../../services/apiKeys';
 import { Button } from '../ds';
 import { FOCUS_RING, INK, MUTED, RADIUS_CONTROL, SECTION_CARD } from '../chat/studioDesign';
@@ -126,6 +127,8 @@ export function PersonalProviderBalance({ ownerId, provider, hasKey, enabled, sc
       const { report, saved: persisted } = await checkPersonalProviderBalance(ownerId, provider, controller.signal);
       if (controller.signal.aborted) return;
       if (report.status === 'reported') {
+        // The studio header and the balance panel show the same reading.
+        seedKeyBalance(report);
         setResult({ scope, reading: report, notice: persisted ? undefined : 'The provider responded. This reading could not be saved to your account.' });
         if (persisted) onSaved();
       } else {

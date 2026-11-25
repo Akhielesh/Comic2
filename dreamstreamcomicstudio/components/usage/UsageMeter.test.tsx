@@ -11,6 +11,7 @@ import { __resetAllowanceStore, getLastAllowanceStatus, normalizeAllowanceStatus
 import { UsageMeter, UsageMeterPill, UsageDetails, clampPopover, usageAriaLabel } from './UsageMeter';
 import { feature } from '../comicstudio/usage/index';
 import { UsageSlot, USAGE_SLOT_ORDER } from '../comicstudio/usage/UsageSlot';
+import { KEY_BALANCE_SLOT_ORDER, KeyBalanceSlot } from '../comicstudio/usage/KeyBalanceSlot';
 import { DEFAULT_CAPS } from '../../shared/comic/capabilities';
 
 const RAW = {
@@ -167,10 +168,15 @@ describe('UsageMeter (self-contained)', () => {
 describe('Comic Studio header slot', () => {
   const studio = (over: Record<string, unknown> = {}) => ({ doc: { spend: { totalUsd: 0.12 } }, caps: { ...DEFAULT_CAPS, byok: false }, ...over }) as never;
 
-  it('registers one header slot between the spend chip and Read', () => {
-    expect(feature.headerSlots).toEqual([{ id: 'usage', order: USAGE_SLOT_ORDER, Component: UsageSlot }]);
+  it('registers the usage slot between the spend chip and Read, with the own key\'s balance right after it', () => {
+    expect(feature.headerSlots).toEqual([
+      { id: 'usage', order: USAGE_SLOT_ORDER, Component: UsageSlot },
+      { id: 'key-balance', order: KEY_BALANCE_SLOT_ORDER, Component: KeyBalanceSlot }
+    ]);
     expect(USAGE_SLOT_ORDER).toBeGreaterThan(210);
     expect(USAGE_SLOT_ORDER).toBeLessThan(300);
+    expect(KEY_BALANCE_SLOT_ORDER).toBeGreaterThan(USAGE_SLOT_ORDER);
+    expect(KEY_BALANCE_SLOT_ORDER).toBeLessThan(300);
   });
 
   it('reads usage on mount (no timer) and shows percent left', async () => {
