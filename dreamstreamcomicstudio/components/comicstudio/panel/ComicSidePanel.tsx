@@ -162,7 +162,7 @@ export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, 
         <ol aria-label="Where you are" className="m-0 flex list-none flex-col gap-0.5 p-0" data-panel-here>
           {myComicsButton && <li className="min-w-0">{myComicsButton}</li>}
           {here && (
-            <li aria-current={hereInBreadcrumb ? undefined : 'page'} data-panel-here-current className="flex min-h-9 min-w-0 items-center px-3 text-sm font-semibold text-[var(--ds-ink)]" title={here}>
+            <li aria-current={hereInBreadcrumb ? undefined : 'page'} className="flex min-h-9 min-w-0 items-center px-3 text-sm font-semibold text-[var(--ds-ink)]" title={here}>
               <span className={CLIP_TEXT}>{here}</span>
             </li>
           )}

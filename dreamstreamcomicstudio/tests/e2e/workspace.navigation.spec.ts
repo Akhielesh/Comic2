@@ -132,9 +132,19 @@ for (const viewport of [{ width: 360, height: 740 }, { width: 852, height: 393 }
         // The name ends where its words do: no gap before the next crumb when it fits.
         const slack = await name.evaluate((el) => {
           const input = el as HTMLInputElement;
-          const ctx = document.createElement('canvas').getContext('2d')!;
-          ctx.font = getComputedStyle(input).font;
-          return input.scrollWidth > input.clientWidth ? 0 : input.getBoundingClientRect().width - ctx.measureText(input.value).width;
+          if (input.scrollWidth > input.clientWidth) return 0;
+          // The words' own width, set in the field's type (a canvas would drop the shorthand the skin's font features make).
+          const cs = getComputedStyle(input);
+          const probe = document.createElement('span');
+          for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'fontFeatureSettings', 'fontVariationSettings'] as const) probe.style[prop] = cs[prop];
+          probe.style.whiteSpace = 'pre';
+          probe.style.position = 'absolute';
+          probe.style.visibility = 'hidden';
+          probe.textContent = input.value;
+          document.body.append(probe);
+          const words = probe.getBoundingClientRect().width;
+          probe.remove();
+          return input.getBoundingClientRect().width - words;
         });
         expect(slack, 'the name field is as wide as its words (padding and one space)').toBeLessThan(32);
         // Nothing runs under the header's controls, and nothing scrolls sideways.
