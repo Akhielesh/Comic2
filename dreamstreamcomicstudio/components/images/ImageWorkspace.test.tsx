@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   renderStandalone: vi.fn(), loadStandaloneRoute: vi.fn(), loadImageHistory: vi.fn(), loadReference: vi.fn(), downloadStandalone: vi.fn(), reopenStandalone: vi.fn(), reuseStandalone: vi.fn()
 }));
 vi.mock('../../services/standaloneImages', () => api);
+vi.mock('../account/AccountMenu', () => ({ AccountMenu: () => null }));
 import { ImageWorkspace } from './ImageWorkspace';
 import { priceSheetOf } from '../../shared/comic/priceBook';
 import { __resetPriceSheetForTests, __seedPriceSheetForTests } from '../../services/priceSheet';
@@ -303,4 +304,18 @@ it('Generate is described by its price only while the price line is there (never
   await waitFor(() => expect(generate).toHaveAttribute('aria-describedby', 'image-price'));
   expect(document.getElementById('image-price')).toHaveTextContent(/an image on your OpenRouter key/);
   __resetPriceSheetForTests();
+});
+
+it('on the comics host it sits in the frame and side panel of My comics: one main, no second Back, Images marked current', async () => {
+  const onBack = vi.fn();
+  const panel = { projects: [], onNewComic: vi.fn(), onLibrary: vi.fn(), onOpenProject: vi.fn(), onChat: vi.fn(), onImages: vi.fn() };
+  render(<ImageWorkspace userId="first" onBack={onBack} panel={panel} />);
+  // The frame is its own lazy chunk; the first import in a test run takes a moment.
+  const nav = await screen.findByRole('navigation', { name: 'Project navigation' }, { timeout: 10_000 });
+  expect(screen.getAllByRole('main')).toHaveLength(1);
+  expect(screen.getByRole('main').contains(screen.getByRole('heading', { level: 1, name: 'Create an image' }))).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+  expect(nav.querySelector('[aria-current="page"]')?.textContent).toBe('Images');
+  fireEvent.click(screen.getByRole('button', { name: 'Back to My comics' }));
+  expect(onBack).toHaveBeenCalledTimes(1);
 });

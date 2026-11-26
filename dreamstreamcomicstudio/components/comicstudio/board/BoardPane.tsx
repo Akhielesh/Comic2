@@ -240,7 +240,12 @@ const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ ch
   </span>
 );
 
-export const BoardPane: React.FC<{ studio: StudioController; navigation?: 'inline' | 'external' }> = ({ studio, navigation = 'inline' }) => {
+export const BoardPane: React.FC<{
+  studio: StudioController;
+  navigation?: 'inline' | 'external';
+  /** Shown at the top of the scrolling panel (not in Read, where the reader owns the scroll): the phone stage row. */
+  lead?: React.ReactNode;
+}> = ({ studio, navigation = 'inline', lead }) => {
   const { doc, tab, setTab } = studio;
   const ff = useFormFactor();
   const [rootRef, rootSize] = useElementSize<HTMLDivElement>();
@@ -405,6 +410,7 @@ export const BoardPane: React.FC<{ studio: StudioController; navigation?: 'inlin
             tab === 'read' ? 'flex flex-col overflow-hidden [&>div]:min-h-0' : 'overflow-y-auto'
           )}
         >
+          {tab !== 'read' && lead}
           {tab === 'story' && <StoryTab studio={studio} doc={doc} />}
           {tab === 'cast' && <CastTab studio={studio} doc={doc} />}
           {tab === 'style' && <StyleTab studio={studio} doc={doc} />}

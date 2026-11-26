@@ -27,7 +27,7 @@ import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
 import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
 import { costFormat, useCostFormat, usageSafeSpendText, type CostFormat } from '../cost';
-import { TONE_CHIP, TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_CHIP, TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, plural } from '../ui';
 import { useAction } from './useAction';
 
@@ -206,7 +206,10 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
         ) : undefined
       }
       aria-label="Spend approval"
-      className="min-w-0 max-w-full"
+      // Open: the stage strip's "Next: review the estimate" scrolls here and focuses the card (never its Approve).
+      tabIndex={open ? -1 : undefined}
+      data-approval-open={open}
+      className={open ? `min-w-0 max-w-full ${FOCUS_RING}` : 'min-w-0 max-w-full'}
     >
       {open && <p className="mb-2.5 text-[12.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{gateReasonCopy(gate, doc, cost)}</p>}
 

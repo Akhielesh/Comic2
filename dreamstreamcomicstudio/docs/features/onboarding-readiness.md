@@ -22,6 +22,8 @@ to the right place.
   (the page's h1) it shows the comic to continue (`components/comicstudio/home/ContinueCard.tsx`) and,
   only when the member's own key is over its monthly limit, one quiet line with Manage keys
   (`OwnKeyLimitLine.tsx`), both above the filters and the grid.
+- The cards, the Continue card's stage and next step, and the order (Needs you first) are in
+  `docs/features/my-comics.md`.
 - The Continue comic is chosen once per list load (and again if it is deleted), from `updatedAt`.
   Every change to a comic stamps `updatedAt`, a rename or the Featured star included, so choosing on
   every change would move an old comic into the card on that click. Known limit until status rows

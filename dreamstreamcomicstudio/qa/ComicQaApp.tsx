@@ -20,6 +20,8 @@
 //                                   before the server kept them: the reader has no stand-in; every surface, RD-A #12)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
 //                                   the studio and reader roots carry the attribute regardless)
+//                    &byok=1       (the person draws on their own key: caps.byok, so money shows in dollars and the studio
+//                                   header's wallet is the "$0.42" chip; absent: platform usage, as before)
 //                    &hf=route     (fetches to Hugging Face's hosts go on to the network, where the spec's own
 //                                   Playwright route answers them with stand-ins; recorded as `net` {routed}.
 //                                   Absent: refused like every other origin. studio.dictation.spec.ts)

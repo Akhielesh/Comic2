@@ -41,9 +41,11 @@ own key, a percentage and plain words for DreamStream's included usage (governed
   service ran out of capacity. Nothing more was used from your usage.`) and never suggests the next paid step. It
   carries **one** `credit` card and no other paid chip.
 - The card is a **needs-you** of its own (`shared/comic/attention.ts` why `credit`, never a question): the "needs you"
-  alert fires instead of "Pages are ready" ("Waiting for a top-up or another key": alerts carry no money word), and the
-  AI activity feed lists the comic under Needs you as "Top up or switch key" until the chat moves past the card. A
-  summary saved before this reason existed still reads "Answer the Director".
+  alert fires instead of "Pages are ready" ("Waiting for a top-up or another key": alerts carry no money word), the
+  side panel's Your comics lists the comic under Needs you as "Top up or switch key", and the comic's stage names the
+  same step (`top_up` in `shared/comic/stage.ts`, at the conversation), so the stage strip, the My comics card and the
+  panel agree until the chat moves past the card. A summary saved before this reason existed still reads "Answer the
+  Director".
 - **A model switch that redraws everything** draws the sheets first, then the pages and cover
   (`actions/models.ts` `chainAfterSheets`). When that sheets run stops on credit, its one card is the whole story: the
   switch posts nothing more and offers no paid chip. Once "Draw the rest" has drawn the sheets left on the new model,
@@ -173,7 +175,7 @@ images on the wire counted once, the other key, planning and a page rewrite on a
 cover and against a brute force), `server/src/comic/directorDraft.test.ts` (the draft's planning on an empty key),
 `server/src/comic/actions/models.test.ts` (a switch the key can't redraw switches nothing; a sheets run that stopped
 posts nothing more, and Draw the rest then offers the pages and cover), `shared/comic/workspaceActivity.test.ts`,
-`components/comicstudio/home/ComicTaskActivity.test.tsx` (the feed's "Top up or switch key"), `services/alerts/copy.test.ts`,
+`components/comicstudio/panel/panelModel.test.ts` and `shared/comic/stage.test.ts` (the panel's and the stage's "Top up or switch key"), `services/alerts/copy.test.ts`,
 `server/src/services/accountProviderUsage.latest.test.ts` (fresh, stale, the stricter re-read, the shared read and its
 cooldown), `shared/comic/credit.test.ts`, `shared/comic/attention.test.ts`, `components/comicstudio/alerts/studioTransitions.test.ts`,
 `services/keyBalance.test.ts`, `components/comicstudio/usage/{CreditCard,KeyBalanceSlot}.test.tsx` (the header by width,

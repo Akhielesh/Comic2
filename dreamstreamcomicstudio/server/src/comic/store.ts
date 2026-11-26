@@ -19,7 +19,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { logger } from '../lib/logger.js';
 import { hashString, normalizeDoc, type AssetRef, type ComicDoc, type RenderState } from '../../../shared/comic/doc.js';
-import { summarizeComicWork } from '../../../shared/comic/workspaceActivity.js';
+import { summarizeComicWork, type ComicWorkSummary } from '../../../shared/comic/workspaceActivity.js';
+import { readStageFacts } from '../../../shared/comic/stage.js';
 import { StudioError, type DocStore, type ProjectRowSummary } from './types.js';
 
 const PROJECT_NAME_MAX = 200;
@@ -305,6 +306,32 @@ function storedOwnerDoc(doc: ComicDoc, projectId: string) {
   }
 }
 
+/**
+ * A stored doc whose listing summary has no stage the lists can read (saved before stages, or by an older server): its
+ * comic shows "Open to see" on My comics, the Continue card and the side panel until it is saved again.
+ */
+const listingLacksStage = (rawDoc: unknown): boolean => {
+  const activity = isRecord(rawDoc) ? rawDoc.workspaceActivity : undefined;
+  return !readStageFacts(isRecord(activity) ? activity.stage : undefined);
+};
+
+/**
+ * The listing summary to fill in for a loaded doc whose stored one lacks a stage, or null when there is nothing to fill
+ * (the summary cannot be made, or its stage would not read either: writing it would not change what the lists show).
+ */
+const listingToFill = (rawDoc: unknown, doc: ComicDoc): ComicWorkSummary | null => {
+  if (!listingLacksStage(rawDoc)) return null;
+  try {
+    const summary = summarizeComicWork(doc);
+    return readStageFacts(summary.stage) ? summary : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Comics whose listing this process already filled (or tried to), by project and revision: one write per comic. */
+const LISTING_FILLED_MAX = 5000;
+
 /** Stored row → normalized doc (the row's project id and rev are authoritative). */
 const hydrateDoc = (projectId: string, rawDoc: unknown, rawRev: unknown): ComicDoc | null => {
   if (!isRecord(rawDoc)) return null;
@@ -366,6 +393,34 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
   const now = opts.now || (() => Date.now());
   /** projectId → last mirrored fingerprint (skips redundant projects writes). */
   const mirrored = new Map<string, { fingerprint: string; at: number }>();
+
+  /** `${projectId}:${rev}` whose listing summary was filled on load (fillListing). */
+  const listingFilled = new Set<string>();
+
+  /**
+   * A comic saved before stages gets its stage the first time it is opened, not only after its next edit: the summary is
+   * written once into the stored doc AT THE REVISION JUST LOADED (a newer save, which writes its own summary, is never
+   * touched), and `updated_at` is left alone, so opening a comic never moves it up the lists. The doc written is the one
+   * just read (normalized, as every save writes it); only `workspaceActivity` is new. Best effort: a failure is logged and
+   * the next save fills it as before.
+   */
+  const fillListing = async (projectId: string, userId: string, doc: ComicDoc, summary: ComicWorkSummary) => {
+    const key = `${projectId}:${doc.rev}`;
+    if (listingFilled.has(key)) return;
+    if (listingFilled.size >= LISTING_FILLED_MAX) listingFilled.clear();
+    listingFilled.add(key);
+    try {
+      const { error } = await admin()
+        .from('comic_docs')
+        .update({ doc: jsonbSafe({ ...doc, id: projectId, workspaceActivity: summary }) })
+        .eq('project_id', projectId)
+        .eq('user_id', userId)
+        .eq('rev', doc.rev);
+      if (error) throw error;
+    } catch (err) {
+      logger.warn('comic_listing_fill_failed', { projectId, rev: doc.rev, code: pgCode(err), message: (err as PgError)?.message });
+    }
+  };
 
   const rememberMirror = (projectId: string, fingerprint: string) => {
     if (mirrored.size >= MIRROR_CACHE_MAX) {
@@ -459,7 +514,11 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
       throw storeError(error, 'load');
     }
     if (!data) return null;
-    return hydrateDoc(projectId, (data as { doc?: unknown }).doc, (data as { rev?: unknown }).rev);
+    const rawDoc = (data as { doc?: unknown }).doc;
+    const doc = hydrateDoc(projectId, rawDoc, (data as { rev?: unknown }).rev);
+    const fill = doc ? listingToFill(rawDoc, doc) : null;
+    if (doc && fill) void fillListing(projectId, userId, doc, fill);
+    return doc;
   };
 
   const create: DocStore['create'] = async ({ projectId, userId, doc }) => {
@@ -658,7 +717,11 @@ export function createMemoryDocStore(): MemoryDocStore {
     async load(projectId, userId) {
       const row = rows.get(projectId);
       if (!row || row.userId !== userId || !row.doc) return null;
-      return hydrateDoc(projectId, clone(row.doc), row.rev);
+      const doc = hydrateDoc(projectId, clone(row.doc), row.rev);
+      // The Supabase store's fill on load: the stored doc gains its stage summary at the same revision (not a save).
+      const fill = doc ? listingToFill(row.doc, doc) : null;
+      if (doc && fill && row.rev === doc.rev) row.doc = clone(jsonbSafe({ ...doc, id: projectId, workspaceActivity: fill }));
+      return doc;
     },
     async create({ projectId, userId, doc }) {
       if (rows.has(projectId)) throw new StudioError('BAD_REQUEST', 'A project with this id already exists.', { status: 409 });

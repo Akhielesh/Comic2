@@ -7,7 +7,7 @@ import { openApiKeysLink } from '../account/accountNav';
 import { readAttachmentBatch } from '../../services/attachmentBatch';
 import { MAX_INLINE_ATTACHMENT_CHARS } from '../../shared/attachmentLimits';
 import { userFacingErrorMessage } from '../../services/apiErrors';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Download, Image as ImageIcon, Paperclip, RefreshCw, X } from 'lucide-react';
 import { Button } from '../ds/Button';
 import { Field } from '../ds/Field';
@@ -17,9 +17,19 @@ import { IMAGE_PROMPT_LIMIT, IMAGE_RATIOS, MAX_IMAGE_REFS, REF_MIME_TYPES, type 
 import { downloadStandalone, loadImageHistory, loadStandaloneRoute, loadReference, reopenStandalone, renderStandalone, reuseStandalone } from '../../services/standaloneImages';
 import { API_KEYS_HREF } from '../usage/links';
 import { ImagePriceLine, useImagePrice } from './ImagePrice';
+import { lazyImportWithRetry } from '../../services/lazyImportWithRetry';
+import type { ComicPanelLinks } from '../comicstudio/panel/ComicSidePanel';
 import './imageWorkspace.css';
 
-export interface ImageWorkspaceProps { userId: string; onBack: () => void }
+export interface ImageWorkspaceProps {
+  userId: string;
+  onBack: () => void;
+  /**
+   * On the comics host: App's side-panel links. The page then sits in the frame of My comics and New comic, which holds
+   * the main landmark and the way back (its side panel), so the page drops its own Back.
+   */
+  panel?: Omit<ComicPanelLinks, 'activeView' | 'onAllComics'>;
+}
 type Reference = Awaited<ReturnType<typeof loadReference>>;
 const ratioLabels = ['Square · 1:1', 'Landscape · 4:3', 'Portrait · 3:4', 'Wide · 16:9', 'Tall · 9:16'];
 const ratios = [{ value: 'auto', label: 'Automatic' }, ...IMAGE_RATIOS.map((value, i) => ({ value, label: ratioLabels[i] }))];
@@ -34,10 +44,24 @@ function readDraft(key: string): { prompt: string; ratio: ImageFormatChoice } {
   } catch { return { prompt: '', ratio: 'auto' }; }
 }
 
-/** Remount on an account switch so the previous account’s files, signed links and pending results never appear. */
-export const ImageWorkspace = (props: ImageWorkspaceProps) => <Workspace key={props.userId} {...props} />;
+/** The frame is loaded only on the comics host (components/comicstudio/ComicCreationWorkspace.tsx). */
+const ComicWorkspaceFrame = lazyImportWithRetry(() => import('../comicstudio/ComicCreationWorkspace').then((module) => ({ default: module.ComicWorkspaceFrame })));
 
-function Workspace({ userId, onBack }: ImageWorkspaceProps) {
+/** Remount on an account switch so the previous account’s files, signed links and pending results never appear. */
+export const ImageWorkspace = (props: ImageWorkspaceProps) => {
+  const { panel, onBack } = props;
+  const workspace = <Workspace key={props.userId} {...props} framed={!!panel} />;
+  if (!panel) return workspace;
+  return (
+    <Suspense fallback={null}>
+      <ComicWorkspaceFrame title="Images" onHome={onBack} navigation={{ ...panel, activeView: 'images', onAllComics: onBack }}>
+        {workspace}
+      </ComicWorkspaceFrame>
+    </Suspense>
+  );
+};
+
+function Workspace({ userId, onBack, framed }: Omit<ImageWorkspaceProps, 'panel'> & { framed: boolean }) {
   const draftKey = 'dreamstream.image-draft.' + userId;
   const [draft, setDraft] = useState(() => readDraft(draftKey));
   const [refs, setRefs] = useState<Reference[]>([]);
@@ -304,12 +328,13 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
   };
 
   const inferredRatio = draft.ratio === 'auto' ? suggestedImageRatio(draft.prompt) : undefined;
+  const Root = framed ? 'div' : 'main';
   const formatSummary = draft.ratio === 'auto' ? `Automatic${inferredRatio ? ' · ' + inferredRatio : ''}` : draft.ratio;
 
   return (
-    <main className="image-workspace">
+    <Root className="image-workspace">
       <header className="image-workspace-header">
-        <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden /> Back</Button>
+        {!framed && <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden /> Back</Button>}
         <h1>Create an image</h1>
         <p>Tell the studio what you have in mind. It can choose the framing, lighting and style from your description.</p>
       </header>
@@ -420,6 +445,6 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
         </li>)}</ul>}
         {hasMore && <Button type="button" variant="outline" disabled={historyBusy} onClick={() => setPage(current => ({ offset: images.length, version: current.version + 1 }))}>Load more</Button>}
       </section>
-    </main>
+    </Root>
   );
 }

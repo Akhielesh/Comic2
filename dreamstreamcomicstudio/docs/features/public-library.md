@@ -56,6 +56,13 @@ Readers can search by art style, format, reading direction or page count. **Star
 
 Each registered editorial slug uses its own published share-card and frozen-payload RPC on the ordinary `/c/<slug>`, embed and oEmbed routes. Withdrawing the publication removes its Library entry and makes its reader unavailable. Editorial feedback opens the shared report form with the title and current page editable before submission.
 
+An edition's artwork lives under `comic-assets/pub/<asset_key>/`, like a member publication's, but it has no
+`comic_publications` row. The publication orphan sweep therefore skips every `asset_key` in
+`studio_original_editions`, whatever the edition's status, at two levels. The server (`sweepOrphanPublications`)
+reads the edition keys first and deletes nothing if it cannot. `server/sql/studio_original_orphan_guard.sql` also
+excludes them from `comic_publication_orphan_keys()`. Re-apply that file after `comic_publications.sql` whenever
+the latter is re-applied.
+
 ### Registering and publishing an edition
 
 The publisher runs each registered current edition independently. Apply `server/sql/studio_original_harbor.sql` after `studio_original_editions.sql` to register Harbor’s independent identifier. The migration checks for member slug collisions. Harbor first appears at `/c/DSOriginalPort001` once the deployed publisher has checked its manuscript, cover and fifteen page illustrations and verified the uploaded bytes. The normal publication workflow waits for the deployed backend to match the selected Git revision.

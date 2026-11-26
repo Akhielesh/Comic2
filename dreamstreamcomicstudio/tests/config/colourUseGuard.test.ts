@@ -43,14 +43,15 @@ import { costNamesOf, elementOf, isStringy, labelsOf, parse, priceIn, siblingsOf
 
 /** Where hero and empty-state washes may go (rule 3): one element per file. CL-10 puts the hero wash on the landing. */
 export const WASH_FILES: Record<string, string> = {
-  'components/comicshost/ComicsLanding.tsx': 'the comics landing hero (CL-10): one wash behind the headline and the calls to action, down to the drawn pages'
+  'components/comicshost/ComicsLanding.tsx': 'the comics landing hero (CL-10): one wash behind the headline and the calls to action, down to the drawn pages',
+  'components/comicstudio/home/MyComicsEmpty.tsx': 'My comics with no comics yet (SH-B): one empty-state wash behind the drawing, the sentence and Create a new comic, which opens the idea form and spends nothing'
 };
 /** Files that show the layer as specimens (rule 3 does not apply; rules 1, 2, 4 do). */
 export const SPECIMENS: readonly string[] = ['components/ds/specimens/**', 'qa/app/scenes/colour-layer.tsx', 'qa/app/scenes/ds-gallery.tsx'];
 /** Where the recipes are defined, not used. */
 const DEFINITIONS: readonly string[] = ['components/chat/studioDesign.ts', 'components/ds/recipes.ts'];
 /** sparkGuard's ink-only navigation, and its no-spark reader. */
-const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx'];
+const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx', 'components/comicstudio/panel/**'];
 const NO_COLOUR: readonly string[] = ['components/comicstudio/reader/**', 'components/comicstudio/immersive/**'];
 
 // ── The detector ──────────────────────────────────────────────────────────────────────────────────

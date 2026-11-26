@@ -222,12 +222,14 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
     };
   }, []);
 
-  // Older action cards with guided=true still open the full-screen reader.
+  // Older action cards with guided=true still open the full-screen reader; "Publish…", the stage strip's and My comics'
+  // "Publish your changes" open the Share sheet.
   const request = studio.readerRequest;
   useEffect(() => {
     if (!request || answeredRequests.has(request)) return;
     answeredRequests.add(request);
     if (request.immersive || request.guided) setImmersive({ intro: false });
+    else if (request.share) setShareOpen(true);
   }, [request]);
 
   const set = (s: ExportState) => mounted.current && setState(s);

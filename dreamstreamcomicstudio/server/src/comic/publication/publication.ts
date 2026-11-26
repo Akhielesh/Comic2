@@ -1226,15 +1226,28 @@ export async function removePublicationObjects(projectId: string): Promise<void>
  */
 export async function sweepOrphanPublications(assets: { removePrefix(prefix: string): Promise<number> }, limit = 100): Promise<number> {
   const d = deps();
+  // Studio Originals keep their artwork under pub/<asset_key>/ with no comic_publications row, so the
+  // orphan scan sees them as unowned. Read their keys first; if that read fails, delete nothing.
+  const editorial = d.store.editorialKeys ? await d.store.editorialKeys().catch(() => null) : [];
+  if (editorial === null) {
+    logger.warn('comic_publication_orphan_sweep_skipped', { reason: 'editorial_keys_unavailable' });
+    return 0;
+  }
+  const protectedKeys = new Set(editorial);
   const orphans = await d.store.orphanKeys(limit);
   const suspended = d.store.suspendedKeys ? await d.store.suspendedKeys(limit, d.now() - SWEEP_GRACE_MS).catch(() => [] as string[]) : [];
   const keys = [...new Set([...orphans, ...suspended])];
   let removed = 0;
+  let kept = 0;
   for (const key of keys) {
     if (!ASSET_KEY_RE.test(key)) continue;
+    if (protectedKeys.has(key)) {
+      kept += 1;
+      continue;
+    }
     removed += await assets.removePrefix(`pub/${key}/`).catch(() => 0);
   }
-  if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, suspended: suspended.length, removed });
+  if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, suspended: suspended.length, removed, keptEditorial: kept });
   return removed;
 }
 

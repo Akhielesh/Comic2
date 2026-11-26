@@ -11,13 +11,14 @@ vi.mock('./common/SmartImage', () => ({
   SmartImage: ({ src, alt, className }: { src: string; alt: string; className?: string }) => <img src={src} alt={alt} className={className} />
 }));
 vi.mock('./modals/ProjectInfoModal', () => ({ ProjectInfoModal: () => null }));
-vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
+vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client, isStoredSession: () => true }));
 
 import { DUPLICATE_UNAVAILABLE_FOR_STUDIO, ProjectDashboard, syncStudioTitle } from './ProjectDashboard';
 import { fakeSupabase } from '../services/projectRows.testkit';
 import { loadProjects } from '../services/db';
 import { clearOtherComicIdeaDrafts } from './comicstudio/comicIdeaDraft';
 import { FormFactorProvider, formFactorFor } from './comicstudio/mobile/useFormFactor';
+import { resetAnnouncer } from './ds';
 
 const baseState = (): ComicState => ({
   step: 0,
@@ -79,14 +80,32 @@ const renderDashboard = (projects: Project[], overrides: Partial<React.Component
 };
 
 /** The card that holds a project's title. */
+/** A card's status line as it reads (its parts are kept whole, so it is several elements; no-break spaces read as spaces). */
+const statusOf = (el: ParentNode) => el.querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ');
 const cardFor = (name: string): HTMLElement => {
   const title = screen.getByRole('heading', { name });
-  const card = title.closest('div.group') as HTMLElement | null;
+  const card = title.closest('article') as HTMLElement | null;
   if (!card) throw new Error(`card for ${name} not found`);
   return card;
 };
 
+const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
+/** Opens a card's ⋯ menu from the keyboard (Radix opens it on Enter) and returns it. */
+const openCardMenu = async (name: string): Promise<HTMLElement> => {
+  const trigger = within(cardFor(name)).getByRole('button', { name: `More for ${name}` });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Enter' });
+  await flush();
+  return screen.getByRole('menu');
+};
+const chooseFromMenu = async (name: string, item: string | RegExp) => {
+  fireEvent.click(within(await openCardMenu(name)).getByRole('menuitem', { name: item }));
+  await flush();
+};
+
 beforeEach(() => {
+  // jsdom has no ResizeObserver; the cards' ⋯ menu measures with it.
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   sessionStorage.clear();
   clearOtherComicIdeaDrafts('author-a');
   studioApi.streamStudio.mockReset();
@@ -183,12 +202,12 @@ describe('Comic Studio idea workspace', () => {
     const script = 'A long scene. '.repeat(12000);
     fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: script } });
     expect(storageWrite).not.toHaveBeenCalledWith(expect.stringContaining('comicstudio.new-idea.'), expect.anything());
-    fireEvent.click(screen.getByRole('button', { name: 'Spice Market' }));
+    fireEvent.click(screen.getByRole('link', { name: /^Spice Market/ }));
     expect(first.props.onOpenProject).toHaveBeenCalledWith('studio-1');
     first.unmount();
     const second = renderDashboard([studioProject()], options);
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
-    fireEvent.click(screen.getByRole('button', { name: 'All comics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My comics' }));
     fireEvent.click(screen.getByRole('button', { name: 'New comic' }));
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
     fireEvent(window, new Event('pagehide'));
@@ -227,9 +246,9 @@ describe('Comic Studio idea workspace', () => {
     const props = { projects: [], ...options, onCreateProject: vi.fn(), onOpenProject: vi.fn(), onDeleteProject: vi.fn(), onDuplicateProject: vi.fn(), onReadProject: vi.fn(), onUpdateProject: vi.fn() };
     render(<FormFactorProvider value={formFactorFor({ w: 320, h: 568, coarse: true })}><ProjectDashboard {...props} /></FormFactorProvider>);
     expect(screen.getByLabelText('Your comic idea or script')).not.toHaveFocus();
-    const opener = screen.getByRole('button', { name: 'Open comic navigation' });
+    const opener = screen.getByRole('button', { name: 'Open project navigation' });
     opener.focus(); fireEvent.click(opener);
-    expect(screen.getByRole('dialog', { name: 'Comic navigation' })).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Project navigation' })).toBeVisible();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(opener).toHaveFocus();
@@ -238,6 +257,9 @@ describe('Comic Studio idea workspace', () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  // A delete is announced through the page's one live region; each test starts without it.
+  resetAnnouncer();
 });
 
 describe('ProjectDashboard — Comic Studio v4 cards', () => {
@@ -249,22 +271,23 @@ describe('ProjectDashboard — Comic Studio v4 cards', () => {
     expect(heading.className).not.toMatch(/(^|\s)(font-display|text-black)(\s|$)/);
   });
 
-  it('shows the Studio badge, page progress and the mirrored cover on v4 cards only', () => {
+  it('shows each comic’s stage line, status and cover; a classic card names its editor and opens it with Edit', () => {
     renderDashboard([studioProject(), classicProject()]);
 
     const studioCard = cardFor('Spice Market');
-    expect(within(studioCard).getByTestId('studio-badge')).toHaveTextContent('Studio');
-    expect(within(studioCard).getByText('2 of 6 pages')).toBeInTheDocument();
-    expect(within(studioCard).getByRole('progressbar', { name: 'Pages drawn' })).toHaveAttribute('aria-valuenow', '2');
-    const cover = within(studioCard).getByAltText('Spice Market cover');
+    // No stage read without an account: the studio comic reads "Open to see" and its listing row's counts.
+    expect(within(studioCard).getByText('Open to see')).toBeInTheDocument();
+    expect(statusOf(studioCard)).toMatch(/^2 of 6 pages drawn · edited /);
+    const cover = studioCard.querySelector('[data-slot="my-comic-cover"] img') as HTMLImageElement;
     expect(cover).toHaveAttribute('src', 'https://cdn.example/page1.webp');
-    // Portrait pages are framed from the top in the 16:9 card.
+    // Portrait pages are framed from the top; the heading names the comic, so the picture is decorative.
     expect(cover.className).toContain('object-top');
-    expect(within(studioCard).getByRole('button', { name: /open/i })).toBeInTheDocument();
+    expect(cover).toHaveAttribute('alt', '');
+    expect(within(studioCard).getByRole('link', { name: 'Open, Spice Market' })).toBeInTheDocument();
 
     const classicCard = cardFor('Old Wizard Comic');
-    expect(within(classicCard).queryByTestId('studio-badge')).toBeNull();
-    expect(within(classicCard).queryByTestId('studio-progress')).toBeNull();
+    expect(within(classicCard).getByText('Classic editor')).toBeInTheDocument();
+    expect(within(classicCard).queryByText('Open to see')).toBeNull();
     expect(within(classicCard).getByRole('button', { name: /edit/i })).toBeInTheDocument();
   });
 
@@ -274,61 +297,88 @@ describe('ProjectDashboard — Comic Studio v4 cards', () => {
       { ...studioProject({ studioPages: 0, studioRendered: 0, coverImageId: undefined, coverImageUrl: undefined }), id: 'studio-2', name: 'Blank Slate' }
     ]);
     const done = cardFor('Spice Market');
-    expect(within(done).getByText('3 of 3 pages')).toBeInTheDocument();
-    expect(within(done).getByText('Drawn')).toBeInTheDocument();
+    expect(statusOf(done)).toMatch(/^All 3 pages drawn · edited /);
+    expect(within(done).getByRole('button', { name: 'Read Spice Market' })).toBeInTheDocument();
 
     const blank = cardFor('Blank Slate');
-    expect(within(blank).getByText('No pages planned yet')).toBeInTheDocument();
-    expect(within(blank).queryByRole('progressbar')).toBeNull();
-    expect(within(blank).getByText('Nothing drawn yet')).toBeInTheDocument();
+    expect(statusOf(blank)).toMatch(/^No pages planned yet · edited /);
+    expect(within(blank).queryByRole('button', { name: /^Read/ })).toBeNull();
+    expect(blank.querySelector('[data-slot="my-comic-cover"] [data-slot="cover-empty"]')).not.toBeNull();
   });
 
-  it('disables Duplicate for studio comics with an explanation, keeps it for classic ones', () => {
+  it('disables Duplicate for studio comics with an explanation, keeps it for classic ones', async () => {
     const { props } = renderDashboard([studioProject(), classicProject()]);
 
-    const studioDuplicate = within(cardFor('Spice Market')).getByRole('button', { name: DUPLICATE_UNAVAILABLE_FOR_STUDIO });
-    expect(studioDuplicate).toBeDisabled();
-    expect(studioDuplicate.parentElement).toHaveAttribute('title', DUPLICATE_UNAVAILABLE_FOR_STUDIO);
+    const studioDuplicate = within(await openCardMenu('Spice Market')).getByRole('menuitem', { name: DUPLICATE_UNAVAILABLE_FOR_STUDIO });
+    expect(studioDuplicate).toHaveAttribute('aria-disabled', 'true');
+    expect(studioDuplicate).toHaveTextContent('Not yet for studio comics');
     fireEvent.click(studioDuplicate);
     expect(props.onDuplicateProject).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await flush();
 
-    fireEvent.click(within(cardFor('Old Wizard Comic')).getByRole('button', { name: /duplicate/i }));
+    await chooseFromMenu('Old Wizard Comic', 'Duplicate');
     expect(props.onDuplicateProject).toHaveBeenCalledWith('classic-1');
   });
 
-  it('deletes studio comics after confirmation', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  it('deletes a studio comic only after the confirm step says so, and Cancel keeps it', async () => {
+    const confirm = vi.spyOn(window, 'confirm');
     const { props } = renderDashboard([studioProject()]);
-    const remove = within(cardFor('Spice Market')).getByRole('button', { name: /delete/i });
 
-    fireEvent.click(remove);
+    await chooseFromMenu('Spice Market', 'Delete…');
+    let dialog = screen.getByRole('alertdialog', { name: 'Delete “Spice Market”?' });
+    expect(dialog).toHaveAccessibleDescription("This can't be undone.");
+    // Focus starts on Cancel, so Enter never deletes by accident.
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await flush();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(props.onDeleteProject).not.toHaveBeenCalled();
-    fireEvent.click(remove);
-    expect(props.onDeleteProject).toHaveBeenCalledWith('studio-1');
-    expect(confirm).toHaveBeenCalledWith('Delete "Spice Market"? This can\'t be undone.');
+
+    await chooseFromMenu('Spice Market', 'Delete…');
+    dialog = screen.getByRole('alertdialog', { name: 'Delete “Spice Market”?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete comic' }));
+    expect(props.onDeleteProject).toHaveBeenCalledExactlyOnceWith('studio-1');
+    // The browser's own confirm is gone (it threw in embedded webviews and deleted without asking).
+    expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('routes Read and Open through the dashboard callbacks', () => {
+  it('routes Read, the title and the next step through the dashboard callbacks', () => {
     const { props } = renderDashboard([studioProject()]);
     const card = cardFor('Spice Market');
-    fireEvent.click(within(card).getByRole('button', { name: /read/i }));
-    fireEvent.click(within(card).getByRole('button', { name: /open/i }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Read Spice Market' }));
     expect(props.onReadProject).toHaveBeenCalledWith('studio-1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Spice Market' }));
     expect(props.onOpenProject).toHaveBeenCalledWith('studio-1');
+    fireEvent.click(within(card).getByRole('link', { name: 'Open, Spice Market' }));
+    expect(props.onOpenProject).toHaveBeenCalledTimes(2);
+    expect(props.onReadProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a comic’s details from the menu, and Mark as featured stars it', async () => {
+    const { props } = renderDashboard([studioProject()]);
+    await chooseFromMenu('Spice Market', 'Mark as featured');
+    expect(props.onUpdateProject).toHaveBeenCalledTimes(1);
+    const [id, update] = vi.mocked(props.onUpdateProject).mock.calls[0] as [string, (prev: Project) => Partial<Project>];
+    expect(id).toBe('studio-1');
+    expect(update(studioProject()).state?.isFeatured).toBe(true);
+    await chooseFromMenu('Spice Market', 'Details');
+    expect(props.onUpdateProject).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('ProjectDashboard — rename', () => {
-  const rename = (from: string, to: string, key = 'Enter') => {
-    fireEvent.click(screen.getByRole('button', { name: `Rename ${from}` }));
+  const rename = async (from: string, to: string, key = 'Enter') => {
+    await chooseFromMenu(from, 'Rename');
     const input = screen.getByRole('textbox', { name: 'Comic title' });
+    expect(input).toHaveFocus();
     fireEvent.change(input, { target: { value: to } });
     fireEvent.keyDown(input, { key });
   };
 
   it('renames a studio comic on the dashboard AND in its studio document', async () => {
     const { props } = renderDashboard([studioProject()]);
-    rename('Spice Market', '  The   Spice Thief ');
+    await rename('Spice Market', '  The   Spice Thief ');
 
     expect(props.onUpdateProject).toHaveBeenCalledTimes(1);
     expect(props.onUpdateProject).toHaveBeenCalledWith('studio-1', { name: 'The Spice Thief' });
@@ -342,18 +392,20 @@ describe('ProjectDashboard — rename', () => {
     expect(screen.queryByRole('textbox', { name: 'Comic title' })).toBeNull();
   });
 
-  it('renames a classic comic without touching the studio API', () => {
+  it('renames a classic comic without touching the studio API', async () => {
     const { props } = renderDashboard([classicProject()]);
-    rename('Old Wizard Comic', 'New Wizard Comic');
+    await rename('Old Wizard Comic', 'New Wizard Comic');
     expect(props.onUpdateProject).toHaveBeenCalledWith('classic-1', { name: 'New Wizard Comic' });
     expect(studioApi.streamStudio).not.toHaveBeenCalled();
   });
 
-  it('ignores blank, unchanged and cancelled renames', () => {
+  it('ignores blank, unchanged and cancelled renames', async () => {
     const { props } = renderDashboard([studioProject()]);
-    rename('Spice Market', '   ');
-    rename('Spice Market', 'Spice Market');
-    rename('Spice Market', 'Something else', 'Escape');
+    await rename('Spice Market', '   ');
+    await rename('Spice Market', 'Spice Market');
+    await rename('Spice Market', 'Something else', 'Escape');
+    // A rename ended from the keyboard gives focus back to the title.
+    expect(screen.getByRole('button', { name: 'Spice Market' })).toHaveFocus();
     expect(props.onUpdateProject).not.toHaveBeenCalled();
     expect(studioApi.streamStudio).not.toHaveBeenCalled();
   });
@@ -361,7 +413,7 @@ describe('ProjectDashboard — rename', () => {
   it('tells the user when the studio could not take the new title', async () => {
     studioApi.streamStudio.mockRejectedValueOnce(new Error("Couldn't reach the studio server."));
     renderDashboard([studioProject()]);
-    rename('Spice Market', 'The Spice Thief');
+    await rename('Spice Market', 'The Spice Thief');
     expect(await screen.findByRole('status')).toHaveTextContent("the studio couldn't save it (Couldn't reach the studio server.)");
   });
 
@@ -536,10 +588,11 @@ describe('ProjectDashboard — library cards', () => {
     const fromCards = renderDashboard(cards);
     expect(snapshot(fromCards.container)).toEqual(expected);
 
-    expect(within(cardFor('Spice Market')).getByText('2 of 6 pages')).toBeInTheDocument();
-    expect(within(cardFor('Done Deal')).getByText('Drawn')).toBeInTheDocument();
+    expect(statusOf(cardFor('Spice Market'))).toMatch(/^2 of 6 pages drawn · /);
+    expect(statusOf(cardFor('Done Deal'))).toMatch(/^All 3 pages drawn · /);
     expect(within(cardFor('Old Wizard Comic')).getByRole('button', { name: /edit/i })).toBeInTheDocument();
-    expect(within(cardFor('Old Wizard Comic')).getByText('BUILDING')).toBeInTheDocument();
+    expect(statusOf(cardFor('Old Wizard Comic'))).toMatch(/^Building · 40% · about 2m left · /);
+    expect(within(cardFor('Old Wizard Comic')).getByRole('progressbar', { name: 'Building' })).toHaveAttribute('aria-valuenow', '40');
     expect(expected.images.join(' ')).toContain('https://cdn.example/pg1.webp');
     expect(expected.images.join(' ')).toContain('https://cdn.example/p1.webp');
   });

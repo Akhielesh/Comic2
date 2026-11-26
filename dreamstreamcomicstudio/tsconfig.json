@@ -34,6 +34,8 @@
     "api-proxy/src/index.ts",
     "api-proxy/src/backend.ts",
     "node_modules",
-    "dist"
+    "dist",
+    // The QA harness build (`npm run qa:build`, gitignored): built JS that allowJs would otherwise load.
+    "dist-qa"
   ]
 }

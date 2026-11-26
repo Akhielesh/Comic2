@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
-import { Plus, BookOpen, Edit, Trash2, Copy, Sparkles, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2, MessageSquare, Pencil, X } from 'lucide-react';
+import { Plus, AlertTriangle, Star, Filter, Clock, Loader2, MessageSquare, X } from 'lucide-react';
 import { AppStep, Project } from '../types';
-import { Badge, Button, IconButton, Input, INPUT_CLASSES, Select } from './ds';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, Button, EmptyState, IconButton, Input, Select, announce } from './ds';
 import { FIELD_LABEL } from './ds/Field';
 import { FILTER_CHIP, FILTER_CHIP_ON } from './ds/FilterChips';
 import {
-  CHIP,
   FOCUS_RING,
   HEADING,
-  LIFT,
   RADIUS_CONTROL,
   RADIUS_PANEL,
   RISE_IN,
@@ -18,7 +16,6 @@ import {
   STATUS_INK,
   STATUS_SURFACE,
   TEXT_3XL,
-  INVERSE_SURFACE,
   OVERLAY,
   Z
 } from './chat/studioDesign';
@@ -27,54 +24,83 @@ import { cn } from '../lib/utils';
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
 import { ReadinessChecklist } from './ReadinessChecklist';
-import { getFluxKeyInfo } from '../services/appSettings';
-import { SmartImage } from './common/SmartImage';
 import { LoadingState } from './ds/LoadingState';
 import { streamStudio } from './comicstudio/studioApi';
-import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../services/studioDeepLink';
+import { isStudioV4Project, studioPageProgress } from '../services/studioDeepLink';
 import { ComicIdeaForm, ComicWorkspaceFrame, WORKSPACE_NAV_DRAWER_BELOW } from './comicstudio/ComicCreationWorkspace';
 import { useFormFactor } from './comicstudio/mobile/useFormFactor';
 import { useComicIdeaDraft } from './comicstudio/comicIdeaDraft';
 import { ContinueCard } from './comicstudio/home/ContinueCard';
 import { OwnKeyLimitLine } from './comicstudio/home/OwnKeyLimitLine';
-import { coverCandidates, pickContinue } from './comicstudio/home/homeModel';
+import { MyComicCard, MyComicCardPlaceholder, type MyComicCardActions } from './comicstudio/home/MyComicCard';
+import { MyComicsEmpty } from './comicstudio/home/MyComicsEmpty';
+import { useComicStages } from './comicstudio/home/useComicStages';
+import { requestTaskTarget, type TaskDestination } from './comicstudio/home/workspaceTaskTarget';
+import {
+  matchesStageFilter,
+  myComicCard,
+  orderMyComics,
+  pickContinue,
+  PROJECT_NAME_MAX,
+  STAGE_FILTERS,
+  type CardStageRow,
+  type CardStageStatus,
+  type MyComicCardModel,
+  type MyComicsSort,
+  type StageFilter
+} from './comicstudio/home/homeModel';
+import { STAGE_LABEL } from '../shared/comic/stage';
+
+export { DUPLICATE_UNAVAILABLE_FOR_STUDIO } from './comicstudio/home/MyComicCard';
 
 /** How a new comic starts: the conversational Comic Studio (default) or a classic pipeline. */
 export type NewComicMode = 'studio' | 'classic' | 'pagestudio';
 
-/** Project names are capped server-side at 200 characters. */
-const PROJECT_NAME_MAX = 200;
-
-export const DUPLICATE_UNAVAILABLE_FOR_STUDIO = "Duplicate isn't available for studio comics yet";
-
+/** Cards shown at first, and added by each "Show more comics". */
+const PAGE_SIZE = 24;
+/** The first cards load their covers at once; the rest load as they come near. */
+const PRIORITY_COVERS = 3;
 /**
- * A comic card's Read / Open / Info row on a touch screen. With a mouse the row sits centred on a dimmed cover and
- * shows while the card is hovered, or when the keyboard reaches one of its buttons (`:focus-visible`; a mouse click
- * focuses a button too and must not hold the row open). A touch screen has no hover, so there the row is always
- * shown: along the bottom of the cover on a light scrim, each button at least 44 px.
- *
- * "A touch screen" is every screen that is not a mouse: the opposite of the app's `can-hover` screen
- * (tailwind.config.cjs, `(hover: hover) and (pointer: fine)`). That takes in a phone that claims it can hover and a
- * pen-only screen, which `(hover: none)` or `(pointer: coarse)` alone would each miss. Tailwind cannot build a
- * variant with a comma in it, so the query is written as `not all and ...`.
- *
- * What a cover centres (the empty-cover marks, the Generating notice) moves up by the row's height there
- * (`CARD_COVER_TOUCH`), so the row never sits on it; on the smallest phones that leaves the notice short of room, so
- * its progress bar keeps its height (`shrink-0`). On a 320 px phone a button is 72 px wide, so its side padding
- * drops to 4 px to keep the label inside (written against the small Button's own `has-[>svg]:` padding, which it
- * must outrank). The classes are written out in full because Tailwind reads them from this
- * file.
+ * Until a stage read has answered (this tab remembers the last one), the grid waits this long at most once it has cards
+ * to show (skeleton cards in the same footprint), so a comic that needs the person is placed first from the start
+ * instead of jumping there after paint.
  */
-const CARD_ACTIONS_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:top-auto [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-transparent [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-gradient-to-t [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:from-[var(--ds-scrim)] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pt-6 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:opacity-100';
-const CARD_ACTION_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-h-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-w-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:flex-1 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:has-[>svg]:px-1';
-const CARD_COVER_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-16';
-const CARD_BAR_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:shrink-0';
+const STAGE_WAIT_MS = 1200;
 
 /** A filter toggle in the search bar (Featured, Recent Changes, Has Cover, Has Comments): an outline chip, ink while on. */
 const filterToggle = (on: boolean): string =>
   cn(FILTER_CHIP, on ? FILTER_CHIP_ON : 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING);
-/** A quiet text action under a card (Duplicate, Delete): muted, ink on hover, 44 px on touch. */
-const CARD_FOOT_ACTION = `inline-flex min-h-8 items-center gap-1 ${RADIUS_CONTROL} px-1 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] ${FOCUS_RING} coarse:min-h-[var(--ds-density-touch)]`;
+
+/** The Step filter: the studio's stages (from the saved summary) and the classic editor's steps. */
+type StepFilter = 'all' | 'script' | 'style' | 'world' | 'cover' | 'layout' | 'build' | 'done' | `stage:${StageFilter}`;
+const stageFilterOf = (step: StepFilter): StageFilter | null => (step.startsWith('stage:') ? (step.slice(6) as StageFilter) : null);
+
+/** The grid: one column of row cards on a phone, then as many 17 rem cards as fit (the frame's sidebar may be open). */
+const MY_COMICS_GRID = 'm-0 mb-8 grid list-none grid-cols-1 gap-3 p-0 sm:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] sm:gap-4';
+
+/**
+ * Each card's words, kept per comic while its inputs are the same objects, so a star or a rename re-renders one card
+ * (MyComicCard is memoised) and 150 cards stay smooth.
+ */
+function useCardModels(projects: readonly Project[], rows: ReadonlyMap<string, CardStageRow>, status: CardStageStatus, now: number) {
+  const cache = useRef(new Map<string, { project: Project; row: CardStageRow | undefined; status: CardStageStatus; now: number; model: MyComicCardModel }>());
+  return useMemo(() => {
+    const next = new Map<string, MyComicCardModel>();
+    const kept = new Map<string, { project: Project; row: CardStageRow | undefined; status: CardStageStatus; now: number; model: MyComicCardModel }>();
+    for (const project of projects) {
+      const row = rows.get(project.id);
+      // The read's status only matters to a comic it has no row for yet (its placeholder): a read starting or ending
+      // leaves every other card as it was.
+      const own: CardStageStatus = row ? 'settled' : status;
+      const hit = cache.current.get(project.id);
+      const entry = hit && hit.project === project && hit.row === row && hit.status === own && hit.now === now ? hit : { project, row, status: own, now, model: myComicCard(project, row, own, now) };
+      kept.set(project.id, entry);
+      next.set(project.id, entry.model);
+    }
+    cache.current = kept;
+    return next;
+  }, [projects, rows, status, now]);
+}
 
 /** Creation failures from the studio API carry user-safe messages; anything else gets ours. */
 const friendlyCreateError = (err: unknown): string => {
@@ -103,33 +129,6 @@ export const syncStudioTitle = async (projectId: string, title: string): Promise
     failure = err instanceof Error && err.message ? err.message : 'the studio did not respond';
   }
   return failure;
-};
-
-/** Inline title editor: Enter/blur saves, Escape cancels. Commits at most once. */
-const TitleRenameInput: React.FC<{ initial: string; onDone: (value: string | null) => void }> = ({ initial, onDone }) => {
-  const [draft, setDraft] = useState(initial);
-  const doneRef = useRef(false);
-  const finish = (value: string | null) => {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    onDone(value);
-  };
-  return (
-    <input
-      autoFocus
-      aria-label="Comic title"
-      value={draft}
-      maxLength={PROJECT_NAME_MAX}
-      onChange={(e) => setDraft(e.target.value)}
-      onFocus={(e) => e.currentTarget.select()}
-      onBlur={() => finish(draft)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') finish(draft);
-        else if (e.key === 'Escape') finish(null);
-      }}
-      className={cn(INPUT_CLASSES, 'h-9 flex-1 px-2 text-[length:var(--ds-text-lg)] font-semibold')}
-    />
-  );
 };
 
 interface ProjectDashboardProps {
@@ -222,8 +221,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
   const infoProject = infoProjectId ? projects.find((p) => p.id === infoProjectId) : undefined;
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteTarget = deleteId ? projects.find((p) => p.id === deleteId) : undefined;
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useState<'updated' | 'created' | 'az' | 'za'>('updated');
+  const [sortOption, setSortOption] = useState<MyComicsSort>('updated');
   const [filterFeatured, setFilterFeatured] = useState(false);
   const [filterRecent, setFilterRecent] = useState(false);
   const [dateRange, setDateRange] = useState<'all' | '7' | '30' | '90'>('all');
@@ -231,7 +232,27 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'generating' | 'completed' | 'draft'>('all');
   const [hasCoverFilter, setHasCoverFilter] = useState(false);
   const [hasCommentsFilter, setHasCommentsFilter] = useState(false);
-  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'style' | 'world' | 'cover' | 'layout' | 'build' | 'done'>('all');
+  const [stepFilter, setStepFilter] = useState<StepFilter>('all');
+
+  // Every card's stage and "Needs you" come from ONE read of the saved summaries (never a full comic, never a request
+  // per card), made when the view opens and again when the list reloads; nothing refreshes on a timer.
+  const stages = useComicStages(accountId, projectsLoaded);
+  const hasStudioComics = useMemo(() => projects.some((p) => isStudioV4Project(p)), [projects]);
+  const [stageWaitOver, setStageWaitOver] = useState(false);
+  const waitingForStages = stages.status === 'loading' && !stages.known;
+  // Counted from when there are cards to show, whether the list is still reloading or not (back from the studio, the
+  // cards already in memory are on screen while it reloads).
+  const hasCards = projects.length > 0;
+  useEffect(() => {
+    if (!waitingForStages || !hasCards) return;
+    const timer = window.setTimeout(() => setStageWaitOver(true), STAGE_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [waitingForStages, hasCards]);
+  const holdGrid = hasStudioComics && waitingForStages && !stageWaitOver;
+  // The relative times ("edited 2 hours ago") are read once per list load and stage read, so a card's words only change
+  // when its comic does.
+  const now = useMemo(() => Date.now(), [projectsLoaded, stages.rows]);
+  const models = useCardModels(projects, stages.rows, stages.status, now);
 
   const filteredProjects = useMemo(() => {
     const now = Date.now();
@@ -241,6 +262,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
     const matchesStep = (project: Project) => {
       if (stepFilter === 'all') return true;
+      // A studio stage reads the saved summary; a comic without one matches no stage (never a guess).
+      const stage = stageFilterOf(stepFilter);
+      if (stage) return isStudioV4Project(project) && matchesStageFilter(stages.rows.get(project.id)?.stage, stage);
       // Wizard steps are a classic-editor concept; studio comics have no step.
       if (isStudioV4Project(project)) return false;
       const step = project.state.step;
@@ -256,69 +280,74 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       }
     };
 
-	    const matchesStatus = (project: Project) => {
-	      if (statusFilter === 'all') return true;
-	      const studioProgress = studioPageProgress(project);
-	      if (studioProgress) {
-	        // Studio comics: done when every planned page is drawn; renders run server-side.
-	        const done = studioProgress.pages > 0 && studioProgress.rendered >= studioProgress.pages;
-	        if (statusFilter === 'completed') return done;
-	        if (statusFilter === 'draft') return !done;
-	        return false;
-	      }
-	      const isGenerating = !!project.state.generationStatus?.isActive;
-	      const hasRenderedPageStudioPage = !!project.state.pageStudio?.pages?.some((page) => !!page.imageUrl);
-	      const isCompleted = (project.state.panels.length > 0 || hasRenderedPageStudioPage) && !isGenerating;
-	      const isDraft = project.state.panels.length === 0 && !hasRenderedPageStudioPage && !isGenerating;
+    const matchesStatus = (project: Project) => {
+      if (statusFilter === 'all') return true;
+      const studioProgress = studioPageProgress(project);
+      if (studioProgress) {
+        // Studio comics: done when every planned page is drawn; renders run server-side.
+        const done = studioProgress.pages > 0 && studioProgress.rendered >= studioProgress.pages;
+        if (statusFilter === 'completed') return done;
+        if (statusFilter === 'draft') return !done;
+        return false;
+      }
+      const isGenerating = !!project.state.generationStatus?.isActive;
+      const hasRenderedPageStudioPage = !!project.state.pageStudio?.pages?.some((page) => !!page.imageUrl);
+      const isCompleted = (project.state.panels.length > 0 || hasRenderedPageStudioPage) && !isGenerating;
+      const isDraft = project.state.panels.length === 0 && !hasRenderedPageStudioPage && !isGenerating;
       if (statusFilter === 'generating') return isGenerating;
       if (statusFilter === 'completed') return isCompleted;
       if (statusFilter === 'draft') return isDraft;
       return true;
     };
 
-    return projects
-      .filter((project) => {
-        const search = searchTerm.trim().toLowerCase();
-        const matchesSearch =
-          !search ||
-          project.name.toLowerCase().includes(search) ||
-          (project.state.overview || '').toLowerCase().includes(search);
+    const matched = projects.filter((project) => {
+      const search = searchTerm.trim().toLowerCase();
+      const matchesSearch =
+        !search ||
+        project.name.toLowerCase().includes(search) ||
+        (project.state.overview || '').toLowerCase().includes(search);
 
-        const matchesFeatured = !filterFeatured || !!project.state.isFeatured;
-        const matchesRecent = !filterRecent || project.updatedAt >= recentCutoff;
-        const matchesDateRange = !dateCutoff || project.updatedAt >= dateCutoff;
-        const matchesCover = !hasCoverFilter || !!project.state.coverImageUrl || !!project.state.coverImageId;
-        const matchesComments = !hasCommentsFilter || (project.state.comments?.length || 0) > 0;
+      const matchesFeatured = !filterFeatured || !!project.state.isFeatured;
+      const matchesRecent = !filterRecent || project.updatedAt >= recentCutoff;
+      const matchesDateRange = !dateCutoff || project.updatedAt >= dateCutoff;
+      const matchesCover = !hasCoverFilter || !!project.state.coverImageUrl || !!project.state.coverImageId;
+      const matchesComments = !hasCommentsFilter || (project.state.comments?.length || 0) > 0;
 
-        return (
-          matchesSearch &&
-          matchesFeatured &&
-          matchesRecent &&
-          matchesDateRange &&
-          matchesStatus(project) &&
-          matchesCover &&
-          matchesComments &&
-          matchesStep(project)
-        );
-      })
-      .sort((a, b) => {
-        if (sortOption === 'updated') return b.updatedAt - a.updatedAt;
-        if (sortOption === 'created') return b.createdAt - a.createdAt;
-        if (sortOption === 'az') return a.name.localeCompare(b.name);
-        if (sortOption === 'za') return b.name.localeCompare(a.name);
-        return 0;
-      });
-  }, [projects, searchTerm, filterFeatured, filterRecent, dateRange, sortOption, statusFilter, hasCoverFilter, hasCommentsFilter, stepFilter]);
+      return (
+        matchesSearch &&
+        matchesFeatured &&
+        matchesRecent &&
+        matchesDateRange &&
+        matchesStatus(project) &&
+        matchesCover &&
+        matchesComments &&
+        matchesStep(project)
+      );
+    });
+    // The default order puts every comic that waits on the person first ("Needs you"), then the most recently edited.
+    return orderMyComics(matched, sortOption, (project) => !!models.get(project.id)?.needsYou);
+  }, [projects, searchTerm, filterFeatured, filterRecent, dateRange, sortOption, statusFilter, hasCoverFilter, hasCommentsFilter, stepFilter, stages.rows, models]);
 
-  const [visibleCount, setVisibleCount] = useState(12);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Reset visible count when filters change
   useEffect(() => {
-    setVisibleCount(12);
+    setVisibleCount(PAGE_SIZE);
   }, [searchTerm, filterFeatured, filterRecent, dateRange, sortOption, statusFilter, hasCoverFilter, hasCommentsFilter, stepFilter]);
 
   const displayedProjects = filteredProjects.slice(0, visibleCount);
   const hasMore = visibleCount < filteredProjects.length;
+  const resetFilters = () => {
+    setSearchTerm('');
+    setSortOption('updated');
+    setFilterFeatured(false);
+    setFilterRecent(false);
+    setDateRange('all');
+    setStatusFilter('all');
+    setHasCoverFilter(false);
+    setHasCommentsFilter(false);
+    setStepFilter('all');
+  };
 
   // The studio asks for a title as before but doesn't require one ("Untitled comic" until
   // the user or the director names it). Creating talks to the server, so the form stays
@@ -379,18 +408,29 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     }
   };
 
-  const renderLanding = () => (
-    <div className={cn('text-center py-20 space-y-8', RISE_IN)}>
-      <div className="space-y-3 max-w-2xl mx-auto">
-        <h1 className={cn(TEXT_3XL, HEADING)}>No comics yet</h1>
-        <p className="text-[length:var(--ds-text-lg)] leading-7 text-[var(--ds-muted)]">Describe your idea and the studio plans, draws and letters it with you.</p>
-      </div>
-      <div className="flex justify-center gap-6">
-        <Button size="lg" onClick={beginNewComic}><Sparkles aria-hidden /> Create a new comic</Button>
-      </div>
-
-    </div>
-  );
+  // One stable set of card handlers (every card is memoised): each reads the latest props and state through a ref.
+  const latest = useRef({ projects, accountId, onOpenProject, onReadProject, onUpdateProject, onDuplicateProject, commitRename });
+  latest.current = { projects, accountId, onOpenProject, onReadProject, onUpdateProject, onDuplicateProject, commitRename };
+  const cardActions = useMemo<MyComicCardActions>(() => ({
+    // The next step deep-links: the studio opens at that place (task target), and never starts anything on arrival.
+    open: (id: string, destination: TaskDestination | null) => {
+      const { accountId: owner, onOpenProject: openProject } = latest.current;
+      if (destination && owner) requestTaskTarget(owner, id, destination);
+      openProject(id);
+    },
+    read: (id: string) => latest.current.onReadProject(id),
+    startRename: (id: string) => setRenamingId(id),
+    finishRename: (id: string, value: string | null) => {
+      const project = latest.current.projects.find((p) => p.id === id);
+      if (project) latest.current.commitRename(project, value);
+      else setRenamingId(null);
+    },
+    toggleFeatured: (id: string) => latest.current.onUpdateProject(id, (prev) => ({ state: { ...prev.state, isFeatured: !prev.state.isFeatured } })),
+    details: (id: string) => setInfoProjectId(id),
+    duplicate: (id: string) => latest.current.onDuplicateProject(id),
+    askDelete: (id: string) => setDeleteId(id)
+  }), []);
+  const openContinue = (id: string, destination?: TaskDestination | null) => cardActions.open(id, destination ?? null);
 
   const dashboard = (
     <div className={cn('max-w-7xl mx-auto p-4 medium:p-8', RISE_IN)}>
@@ -404,7 +444,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
             <div className="min-w-0">
               <h1 className={cn(TEXT_3XL, HEADING)}>My comics</h1>
-              <p className="mt-1 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Manage your studio projects</p>
+              <p className="mt-1 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Where each comic stands, and what’s next</p>
             </div>
             {/* One New comic per screen: the open form owns Create; in the comics workspace the frame's sidebar owns it,
                 and only where that sidebar folds into a drawer does the header keep a quiet outline one. */}
@@ -422,7 +462,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       {/* After the h1 so the page outline starts at "My comics"; still above the filters and the grid. */}
       {comicWorkspace && (
         <>
-          {continueProject && !isCreating && <ContinueCard project={continueProject} onOpen={onOpenProject} onRead={onReadProject} />}
+          {continueProject && !isCreating && (
+            <ContinueCard project={continueProject} stageRow={stages.rows.get(continueProject.id)} stageStatus={stages.status} now={now} onOpen={openContinue} onRead={onReadProject} />
+          )}
           <OwnKeyLimitLine onManageKeys={() => onNavigate?.('settings', 'settings')} />
         </>
       )}
@@ -483,7 +525,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         </div>
       )}
 
-      {projects.length === 0 ? (!projectsLoaded ? <LoadingState title="Loading your comics…" /> : renderLanding()) : (
+      {/* No comics yet: the empty state, until its Create opens the form above (the form is then the one action). */}
+      {projects.length === 0 ? (!projectsLoaded ? <LoadingState title="Loading your comics…" /> : isCreating ? null : <MyComicsEmpty onCreate={beginNewComic} />) : (
         <>
           <div className={cn('mb-6 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4', RADIUS_PANEL, SHADOW_SOFT)}>
             <div className="flex flex-col lg:flex-row lg:items-center gap-3">
@@ -529,9 +572,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   aria-label="Sort by"
                   wrapperClassName="w-full sm:w-auto"
                   value={sortOption}
-                  onChange={(e) => setSortOption(e.target.value as any)}
+                  onChange={(e) => setSortOption(e.target.value as MyComicsSort)}
                 >
-                  <option value="updated">Recent Updated</option>
+                  <option value="updated">Needs you, then recent</option>
                   <option value="created">Recent Created</option>
                   <option value="az">A–Z</option>
                   <option value="za">Z–A</option>
@@ -564,16 +607,24 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   size="sm"
                   aria-label="Step"
                   value={stepFilter}
-                  onChange={(e) => setStepFilter(e.target.value as any)}
+                  onChange={(e) => setStepFilter(e.target.value as StepFilter)}
                 >
                   <option value="all">All Steps</option>
-                  <option value="script">Script</option>
-                  <option value="style">Style</option>
-                  <option value="world">World</option>
-                  <option value="cover">Cover</option>
-                  <option value="layout">Layout</option>
-                  <option value="build">Build</option>
-                  <option value="done">Done</option>
+                  {/* The studio's stages read each comic's saved stage; a comic without one matches none of them. */}
+                  <optgroup label="Studio stage">
+                    {STAGE_FILTERS.map((stage) => (
+                      <option key={stage} value={`stage:${stage}`}>{stage === 'published' ? 'Published' : STAGE_LABEL[stage]}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Classic editor step">
+                    <option value="script">Script</option>
+                    <option value="style">Style</option>
+                    <option value="world">World</option>
+                    <option value="cover">Cover</option>
+                    <option value="layout">Layout</option>
+                    <option value="build">Build</option>
+                    <option value="done">Done</option>
+                  </optgroup>
                 </Select>
                 <div className="flex gap-2">
                   <button
@@ -593,204 +644,80 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                     Has Comments
                   </button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setSearchTerm('');
-                    setSortOption('updated');
-                    setFilterFeatured(false);
-                    setFilterRecent(false);
-                    setDateRange('all');
-                    setStatusFilter('all');
-                    setHasCoverFilter(false);
-                    setHasCommentsFilter(false);
-                    setStepFilter('all');
-                  }}
-                >
+                <Button size="sm" variant="ghost" onClick={resetFilters}>
                   Reset Filters
                 </Button>
               </div>
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-8">
-            {filteredProjects.length === 0 && (
-              <div className="col-span-full text-center text-[length:var(--ds-text-lg)] text-[var(--ds-muted)]">
-                No projects match the current filters.
-              </div>
-            )}
-	            {displayedProjects.map(project => {
-	              const firstPageStudioImage = project.state.pageStudio?.pages?.find((page) => page.imageUrl)?.imageUrl;
-	              // One candidate order for the grid and the Continue card (homeModel).
-	              const previewCandidates = coverCandidates(project);
-	              const primaryPreview = previewCandidates[0];
-	              const fallbackPreviews = previewCandidates.slice(1);
-	              const hasPanelPreview = project.state.panels.some((panel) => panel.imageUrl);
-	              const hasPageStudioPreview = Boolean(firstPageStudioImage);
-	              const hasStylePreview = project.state.styleVariants.some((variant) => variant.imageUrl);
-	              const hasCoverPreview = Boolean(project.state.coverImageUrl);
-	              // Comic Studio v4 comics: cover/page-1 thumbnail from the mirrored coverImageId,
-	              // a Studio badge and "N of M pages" progress. Their content lives server-side.
-	              const isStudio = isStudioV4Project(project);
-	              const studioProgress = studioPageProgress(project);
-
-              return (
-                <div key={project.id} className={cn('group flex flex-col overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)]', RADIUS_PANEL, SHADOW_SOFT, LIFT)}>
-                  <div className="aspect-video bg-[var(--ds-well-strong)] border-b border-[var(--ds-hairline)] relative overflow-hidden">
-                    {primaryPreview ? (
-                      <SmartImage
-                        src={primaryPreview}
-                        fallbackSources={fallbackPreviews}
-                        alt={`${project.name} cover`}
-	                        className={`w-full h-full object-cover ${isStudio ? 'object-top' : ''} ${!hasCoverPreview && !hasPanelPreview && !hasPageStudioPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
-                        loadingComponent={<LoadingState variant="inline" title="Loading cover…" className="h-full w-full justify-center bg-[var(--ds-canvas)]" />}
-                        fallbackIcon={<BookOpen className="size-8 text-[var(--ds-muted)]" aria-hidden />}
-                        containerClassName="w-full h-full"
-                      />
-                    ) : isStudio ? (
-                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-[var(--ds-well)] text-[var(--ds-muted)] ${CARD_COVER_TOUCH}`}>
-                        <MessageSquare className="h-9 w-9" aria-hidden />
-                        <span className="text-[length:var(--ds-text-sm)] font-medium">Nothing drawn yet</span>
-                      </div>
-                    ) : (
-                      <div className={`w-full h-full flex items-center justify-center bg-[var(--ds-well)] text-[var(--ds-muted)] ${CARD_COVER_TOUCH}`} role="img" aria-label="No cover yet"><BookOpen className="size-9" aria-hidden /></div>
-                    )}
-
-                    {isStudio && (
-                      <span
-                        data-testid="studio-badge"
-                        title="Made in the conversational Comic Studio"
-                        className={cn(CHIP, 'absolute left-2 top-2 border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)]')}
-                      >
-                        <Sparkles className="h-3 w-3" aria-hidden /> Studio
-                      </span>
-                    )}
-
-                    {project.state.generationStatus?.isActive && (
-                      <div className={`absolute inset-0 ${INVERSE_SURFACE} flex flex-col items-center justify-center p-4 ${CARD_COVER_TOUCH}`}>
-                        <div className="mb-2 text-[length:var(--ds-text-xl)] font-semibold leading-7 animate-pulse motion-reduce:animate-none">Generating...</div>
-                        <div className={`w-full h-2 mb-2 overflow-hidden rounded-[var(--ds-radius-pill)] bg-[color:color-mix(in_srgb,var(--ds-canvas)_20%,transparent)] ${CARD_BAR_TOUCH}`}>
-                          <div className="h-full bg-[var(--ds-canvas)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none" style={{ width: `${project.state.generationStatus.progress}%` }} />
-                        </div>
-                        <div className="text-[length:var(--ds-text-sm)] tabular-nums text-[color:color-mix(in_srgb,var(--ds-canvas)_75%,transparent)]">Est: {project.state.generationStatus.estimatedTimeRemaining}</div>
-                      </div>
-                    )}
-
-                    <div className={`absolute inset-0 ${SCRIM} flex items-center justify-center opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity gap-2 ${CARD_ACTIONS_TOUCH}`}>
-                      <Button size="sm" className={CARD_ACTION_TOUCH} onClick={() => onReadProject(project.id)}><BookOpen aria-hidden />Read</Button>
-                      <Button size="sm" variant="secondary" className={CARD_ACTION_TOUCH} onClick={() => onOpenProject(project.id)}><Edit aria-hidden />{isStudio ? 'Open' : 'Edit'}</Button>
-                      <Button size="sm" variant="outline" className={CARD_ACTION_TOUCH} onClick={() => setInfoProjectId(project.id)}><Info aria-hidden />Info</Button>
-                    </div>
-                  </div>
-                  <div className="p-5">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      {renamingId === project.id ? (
-                        <TitleRenameInput initial={project.name} onDone={(value) => commitRename(project, value)} />
-                      ) : (
-                        <div className="group/title flex min-w-0 items-center gap-1">
-                          <h3 className="truncate text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em]">{project.name}</h3>
-                          <IconButton
-                            size="sm"
-                            label={`Rename ${project.name}`}
-                            title="Rename"
-                            className="text-[var(--ds-muted)] hover:text-[var(--ds-ink)]"
-                            onClick={() => setRenamingId(project.id)}
-                          >
-                            <Pencil />
-                          </IconButton>
-                        </div>
-                      )}
-                      <IconButton
-                        onClick={() => onUpdateProject(project.id, (prev) => ({
-                          state: { ...prev.state, isFeatured: !prev.state.isFeatured }
-                        }))}
-                        className={project.state.isFeatured ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'}
-                        title="Toggle Featured"
-                        label={project.state.isFeatured ? "Unmark as featured" : "Mark as featured"}
-                      >
-                        <Star className={cn(project.state.isFeatured && 'fill-current')} />
-                      </IconButton>
-                    </div>
-                    <div className="flex justify-between items-center mb-4">
-                      <p className="text-[length:var(--ds-text-sm)] tabular-nums text-[var(--ds-muted)]">Updated: {new Date(project.updatedAt).toLocaleDateString()}</p>
-                      {project.state.generationStatus?.isActive && <Badge variant="secondary">BUILDING</Badge>}
-                    </div>
-
-                    {studioProgress && (
-                      <div className="-mt-2 mb-4" data-testid="studio-progress">
-                        <div className="flex items-center justify-between gap-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]">
-                          <span>{formatStudioProgress(studioProgress)}</span>
-                          {studioProgress.pages > 0 && studioProgress.rendered >= studioProgress.pages && (
-                            <span className={cn('inline-flex items-center gap-1', STATUS_INK.healthy)}><CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Drawn</span>
-                          )}
-                        </div>
-                        {studioProgress.pages > 0 && (
-                          <div
-                            className="mt-1 h-1.5 overflow-hidden rounded-[var(--ds-radius-pill)] bg-[var(--ds-well-strong)]"
-                            role="progressbar"
-                            aria-label="Pages drawn"
-                            aria-valuemin={0}
-                            aria-valuemax={studioProgress.pages}
-                            aria-valuenow={studioProgress.rendered}
-                          >
-                            <div className="h-full bg-[var(--ds-ink)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none" style={{ width: `${(studioProgress.rendered / studioProgress.pages) * 100}%` }} />
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex justify-between border-t border-[var(--ds-hairline)] pt-3">
-                      {isStudio ? (
-                        // A studio comic's content lives server-side (comic_docs); copying the
-                        // listing row would make a comic with no document — so not yet.
-                        <span title={DUPLICATE_UNAVAILABLE_FOR_STUDIO}>
-                          <button
-                            disabled
-                            aria-disabled="true"
-                            aria-label={DUPLICATE_UNAVAILABLE_FOR_STUDIO}
-                            className={cn(CARD_FOOT_ACTION, 'cursor-not-allowed opacity-50')}
-                          >
-                            <Copy size={14} aria-hidden /> Duplicate
-                          </button>
-                        </span>
-                      ) : (
-                        <button type="button" onClick={() => onDuplicateProject(project.id)} className={cn(CARD_FOOT_ACTION, 'hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')}>
-                          <Copy size={14} aria-hidden /> Duplicate
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          let confirmed = true;
-                          try {
-                            confirmed = window.confirm(`Delete "${project.name}"? This can't be undone.`);
-                          } catch {
-                            /* confirm unavailable (embedded webviews) — proceed as before */
-                          }
-                          if (confirmed) onDeleteProject(project.id);
-                        }}
-                        className={cn(CARD_FOOT_ACTION, 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]')}
-                      >
-                        <Trash2 size={14} aria-hidden /> Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          {filteredProjects.length === 0 ? (
+            <EmptyState
+              variant="inline"
+              title="No comics match"
+              description="Try another search, or clear the filters to see every comic."
+              action={{ label: 'Reset filters', onClick: resetFilters }}
+              className="mb-8"
+            />
+          ) : holdGrid ? (
+            // The first stage read is on its way: cards of the same footprint, so the real ones arrive in their final order.
+            <ul role="list" aria-label="Your comics, loading" aria-busy="true" className={MY_COMICS_GRID}>
+              {displayedProjects.map((project) => (
+                <li key={project.id} className="min-w-0">
+                  <MyComicCardPlaceholder />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul role="list" aria-label="Your comics" className={MY_COMICS_GRID}>
+              {displayedProjects.map((project, index) => {
+                const model = models.get(project.id);
+                if (!model) return null;
+                return (
+                  <li key={project.id} className="min-w-0">
+                    <MyComicCard project={project} model={model} renaming={renamingId === project.id} priority={index < PRIORITY_COVERS} actions={cardActions} />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           {hasMore && (
             <div className="flex justify-center mb-12">
               <Button
                 variant="outline"
-                onClick={() => setVisibleCount(prev => prev + 12)}
+                data-show-more=""
+                aria-label={`Show more comics, ${filteredProjects.length - visibleCount} more`}
+                onClick={() => setVisibleCount((prev) => prev + PAGE_SIZE)}
                 className="w-full max-w-xs"
               >
-                Load More Projects
+                Show more comics
               </Button>
             </div>
           )}
         </>
+      )}
+      {deleteTarget && (
+        <AlertDialog open onOpenChange={(open) => { if (!open) setDeleteId(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete “{deleteTarget.name.trim() || 'Untitled comic'}”?</AlertDialogTitle>
+              <AlertDialogDescription>This can't be undone.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  const name = deleteTarget.name.trim() || 'Untitled comic';
+                  onDeleteProject(deleteTarget.id);
+                  announce(`Deleted ${name}`);
+                }}
+              >
+                Delete comic
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
       {infoProject && (
         <Suspense fallback={<div className={cn('fixed inset-0 flex items-center justify-center', SCRIM, Z.dialog)}><div className={cn(OVERLAY, 'p-4')}><Loader2 className="animate-spin motion-reduce:animate-none w-8 h-8" aria-hidden /></div></div>}>
@@ -806,8 +733,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   // The apex dashboard paints its own canvas and ink across the full width, so the page reads in both themes.
   if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
-    onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
-    navigation={{ projects, accountId, onOpenStudioWork, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
+    onHome={showMyComics}
+    navigation={{ projects, projectsLoaded: projectsLoaded || projects.length > 0, accountId, onOpenStudioWork, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
+      stageRows: stages.rows,
       onNewComic: beginNewComic,
       onImages: onNavigate && (() => onNavigate('images')),
       onChat: onNavigate && (() => onNavigate('chat')),

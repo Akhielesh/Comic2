@@ -399,6 +399,8 @@ begin
 end $$;
 
 -- ── Orphan pub/ sweep (weekly; the server deletes through the Storage API) ──────────────────
+-- Studio Originals also live under pub/<asset_key>/ without a row here: re-apply
+-- server/sql/studio_original_orphan_guard.sql after this file so the function spares their folders.
 
 create or replace function public.comic_publication_orphan_keys(p_limit integer default 200)
 returns setof text

@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
 vi.mock('./comicstudio/studioApi', () => ({ streamStudio: vi.fn() }));
@@ -18,6 +18,8 @@ import { HOME_START_HELP } from './comicstudio/home/homeModel';
 import { addKey, clearAllKeys, recordKeyUsage } from '../services/apiKeys';
 
 const HOUR = 3_600_000;
+/** A card's status line as it reads (its parts are kept whole, so it is several elements; no-break spaces read as spaces). */
+const statusOf = (el: ParentNode) => el.querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ');
 
 const studioProject = (id: string, name: string, updatedAt = Date.now() - 2 * HOUR): Project => ({
   id,
@@ -64,8 +66,15 @@ const renderDashboard = (projects: Project[], overrides: Partial<React.Component
 };
 
 const brand = () => screen.getAllByRole('button', { name: 'DreamStream Comic Studio, home' })[0];
+const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; the cards' ⋯ menu measures with it.
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   sessionStorage.clear();
   localStorage.clear();
   clearAllKeys();
@@ -103,7 +112,7 @@ describe('ProjectDashboard in Comic Studio: the brand opens your comics', () => 
 
   it('opens standalone images from the creator navigation without starting a comic', () => {
     const { props } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Standalone images' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Images' }));
     expect(props.onNavigate).toHaveBeenCalledWith('images');
     expect(props.onCreateProject).not.toHaveBeenCalled();
   });
@@ -155,14 +164,15 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
     expect(screen.queryByRole('region', { name: /^Continue/ })).toBeNull();
   });
 
-  it('shows one Continue card for the newest studio comic, above the grid', () => {
+  it('shows one Continue card for the newest studio comic, above the grid', async () => {
     const { props } = renderDashboard(
       [studioProject('older', 'Older Tale', Date.now() - 30 * HOUR), studioProject('newest', 'Harbour Lights', Date.now() - 2 * HOUR)],
       { comicWorkspace: true }
     );
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
     expect(screen.getAllByRole('region', { name: /^Continue/ })).toHaveLength(1);
-    const grid = screen.getAllByRole('heading', { level: 3, name: 'Older Tale' })[0];
+    // The grid holds its place while the stage read answers (here it fails: another account), then shows the cards.
+    const grid = (await screen.findAllByRole('heading', { level: 3, name: 'Older Tale' }))[0];
     expect(card.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(within(card).getByRole('button', { name: /^Continue/ }));
     expect(props.onOpenProject).toHaveBeenCalledExactlyOnceWith('newest');
@@ -190,9 +200,9 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
   it('keeps the frame’s New comic as the only fill on All comics', () => {
     const { container } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
-    // The frame's own fills come from comicCreationWorkspace.css: New comic is filled unless its view is open
-    // (aria-current), and Start is always filled. The rest of the app marks a fill with the class or the variant.
-    const FILLS = '.comics-primary-action, [data-variant="create"], .comic-project-nav .comic-project-new:not([aria-current="page"]), .comic-idea-start';
+    // The frame's own fills: the side panel marks its New comic fill (only on All comics, panelStyles.ts PANEL_FILL), and
+    // Start is always filled (comicCreationWorkspace.css). The rest of the app marks a fill with the class or the variant.
+    const FILLS = '.comics-primary-action, [data-variant="create"], [data-panel-fill], .comic-idea-start';
     const fills = container.querySelectorAll(FILLS);
     expect(fills).toHaveLength(1);
     expect(fills[0]).toHaveAccessibleName('New comic');
@@ -224,7 +234,7 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
     expect(screen.queryByRole('region', { name: /^Continue/ })).toBeNull();
   });
 
-  it('keeps the Continue comic when another comic is starred, which stamps its updatedAt', () => {
+  it('keeps the Continue comic when another comic is starred, which stamps its updatedAt', async () => {
     // As useProjectManager.updateProject: every change, a star included, sets updatedAt to now.
     function Live({ initial }: { initial: Project[] }) {
       const [projects, setProjects] = React.useState(initial);
@@ -237,11 +247,16 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
     }
     render(<Live initial={[studioProject('older', 'Older Tale', Date.now() - 30 * HOUR), studioProject('newest', 'Harbour Lights', Date.now() - 2 * HOUR)]} />);
     expect(screen.getByRole('region', { name: 'Continue Harbour Lights' })).toBeInTheDocument();
-    const olderCard = screen.getByRole('heading', { level: 3, name: 'Older Tale' }).closest('.group') as HTMLElement;
-    fireEvent.click(within(olderCard).getByRole('button', { name: 'Mark as featured' }));
-    expect(within(olderCard).getByRole('button', { name: 'Unmark as featured' })).toBeInTheDocument();
+    const olderCard = (await screen.findByRole('heading', { level: 3, name: 'Older Tale' })).closest('article') as HTMLElement;
+    const more = within(olderCard).getByRole('button', { name: 'More for Older Tale' });
+    more.focus();
+    fireEvent.keyDown(more, { key: 'Enter' });
+    await flush();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark as featured' }));
+    await flush();
+    expect(within(olderCard).getByRole('img', { name: 'Featured' })).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
-    expect(within(card).getByText('3 of 10 pages · edited 2 hours ago')).toBeInTheDocument();
+    expect(statusOf(card)).toBe('3 of 10 pages drawn · edited 2 hours ago');
     expect(screen.getAllByRole('region', { name: /^Continue/ })).toHaveLength(1);
   });
 

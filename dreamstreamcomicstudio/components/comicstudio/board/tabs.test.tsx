@@ -607,6 +607,17 @@ describe('ReaderTab', () => {
     expect(document.body.querySelector('.gesture-root')).toBeNull();
   });
 
+  it('a share request (an open_share nobody else answered) opens the Share sheet once, not the reader', () => {
+    const request: ReaderRequest = { seq: 1, immersive: false, guided: false, share: true };
+    const studio = makeStudio(makeSampleDoc(), { readerRequest: request });
+    const { unmount } = render(<ReaderTab studio={studio} doc={studio.doc!} />);
+    expect(screen.getByRole('dialog', { name: /^Share/ })).toBeInTheDocument();
+    expect(document.body.querySelector('.gesture-root')).toBeNull();
+    unmount();
+    render(<ReaderTab studio={studio} doc={studio.doc!} />);
+    expect(screen.queryByRole('dialog', { name: /^Share/ })).toBeNull();
+  });
+
   it('"Preview as reader" opens the live link in this tab once published', () => {
     const assign = vi.fn();
     const location = window.location;

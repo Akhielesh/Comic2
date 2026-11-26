@@ -777,6 +777,29 @@ describe('publish', () => {
     expect(removed).toEqual([`pub/${'A'.repeat(22)}/`]);
   });
 
+  it('the orphan sweep never removes a Studio Original edition folder, which has no publication row', async () => {
+    const original = 'O'.repeat(22);
+    const orphan = 'P'.repeat(22);
+    store.orphanKeys = async () => [original, orphan];
+    store.editorialKeys = async () => [original];
+    const removed: string[] = [];
+    await sweepOrphanPublications({ removePrefix: async (p) => (removed.push(p), 1) });
+    expect(removed).toEqual([`pub/${orphan}/`]);
+  });
+
+  it('the orphan sweep deletes nothing when it cannot read which folders belong to Studio Originals', async () => {
+    store.orphanKeys = async () => ['Q'.repeat(22)];
+    const removed: string[] = [];
+    const sweeper = { removePrefix: async (p: string) => (removed.push(p), 1) };
+    store.editorialKeys = async () => null;
+    await expect(sweepOrphanPublications(sweeper)).resolves.toBe(0);
+    store.editorialKeys = async () => {
+      throw new Error('database down');
+    };
+    await expect(sweepOrphanPublications(sweeper)).resolves.toBe(0);
+    expect(removed).toEqual([]);
+  });
+
   it('the sweep is scheduled without a timer: it piggybacks on publication writes, at most once a day, never twice at once', async () => {
     __resetOrphanSweep();
     let scans = 0;

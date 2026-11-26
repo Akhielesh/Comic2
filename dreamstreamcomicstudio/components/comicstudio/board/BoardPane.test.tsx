@@ -153,6 +153,15 @@ describe('BoardPane', () => {
     expect(screen.getByRole('tabpanel').className).toContain('overflow-y-auto');
   });
 
+  it('a lead (the phone stage row) opens the scrolling panel, so it scrolls away with the work; Read keeps the reader alone', () => {
+    const lead = <nav aria-label="Comic stages">Stages</nav>;
+    const { rerender } = render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'pages' })} navigation="external" lead={lead} />);
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.firstElementChild).toBe(screen.getByRole('navigation', { name: 'Comic stages' }));
+    rerender(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'read' })} navigation="external" lead={lead} />);
+    expect(screen.queryByRole('navigation', { name: 'Comic stages' })).toBeNull();
+  });
+
   it('shows skeletons while loading and a retry on a load error', () => {
     const { unmount } = render(<BoardPane studio={makeStudio(null, { loading: true })} />);
     expect(screen.queryAllByRole('tab')).toHaveLength(0);

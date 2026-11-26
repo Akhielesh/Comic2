@@ -18,8 +18,6 @@ const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer
 const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
 // Comic Studio v4 — the conversational studio (docs/features/comic-studio-v4.md).
 const ComicStudio = lazyImportWithRetry(() => import('./components/comicstudio/ComicStudio').then(module => ({ default: module.ComicStudio })));
-// Recent-project navigation belongs to the workspace, including its drawer and frame styles.
-const ComicProjectNavigation = lazyImportWithRetry(() => import('./components/comicstudio/ComicCreationWorkspace').then(module => ({ default: module.ComicProjectNavigation })));
 const ImageWorkspace = lazyImportWithRetry(() => import('./components/images/ImageWorkspace').then(module => ({ default: module.ImageWorkspace })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
@@ -1177,6 +1175,11 @@ const App: React.FC = () => {
     !!user &&
     projects.some((project) => isStudioV4Project(project) && (project.state as unknown as { shareSlug?: unknown })?.shareSlug === publicComicRoute.slug);
   const publicComicIdentityReady = !authLoading && (!user || projectsLoaded);
+  // The Comic Studio side panel's destinations, the same inside a comic and around Images (components/comicstudio/panel).
+  // The project list is the panel's list once it has loaded; a reload (leaving a comic) keeps the one it had.
+  const comicPanelLinks = { projects, projectsLoaded: projectsLoaded || projects.length > 0, accountId: user?.id, onOpenStudioWork: openComicStudio,
+    onNewComic: handleStartCreating, onImages: () => handleNavigate('images'), onChat: () => handleNavigate('chat'), onLibrary: handleBrowseComicsLibrary,
+    onOpenProject: handleOpenProject };
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -1385,7 +1388,8 @@ const App: React.FC = () => {
           {(effectiveView === 'images' || (effectiveView === 'settings' && settingsReturnView === 'images')) && user && (
             // Keep private reference images and the generation retry key in memory during a trip to API settings.
             <div hidden={effectiveView !== 'images'}>
-              <ImageWorkspace key={user.id} userId={user.id} onBack={() => handleNavigate('dashboard')} />
+              {/* On the comics host Images sits in the same frame and side panel as My comics and New comic. */}
+              <ImageWorkspace key={user.id} userId={user.id} onBack={() => handleNavigate('dashboard')} panel={comicsHost.active ? comicPanelLinks : undefined} />
             </div>
           )}
 
@@ -1412,8 +1416,7 @@ const App: React.FC = () => {
                 <ComicStudio key={`${user?.id}:${activeProjectId}`} projectId={activeProjectId} onBack={leaveComicStudio}
                   initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
                   onInitialIdeaConsumed={consumeFirstIdea}
-                  navigationFooter={<Suspense fallback={null}><ComicProjectNavigation projects={projects} accountId={user?.id} onOpenStudioWork={openComicStudio} activeProjectId={activeProjectId}
-                    onNewComic={handleStartCreating} onImages={() => handleNavigate('images')} onAllComics={leaveComicStudio} onLibrary={handleBrowseComicsLibrary} onOpenProject={handleOpenProject} /></Suspense>} />
+                  panel={{ ...comicPanelLinks, onAllComics: leaveComicStudio }} />
               </StudioErrorBoundary>
             </div>
           )}

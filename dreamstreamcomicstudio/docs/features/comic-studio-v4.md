@@ -176,7 +176,10 @@ writes are server-only (service role). `server/sql/comic_docs.sql` also extends
 (`jsonb_path_query(doc, 'lax $.**.path')`) so the 45-day asset GC never deletes a
 studio asset. The `projects` row stays the listing record: the server mirrors
 `name`, `updated_at`, and a minimal legacy-compatible `state` (`studioVersion: 4`,
-empty legacy arrays, `coverImageId` = cover or page-1 asset, `overview` = logline).
+empty legacy arrays, `coverImageId` = cover or page-1 asset, `overview` = logline). `server/sql/comic_docs_listing.sql`
+adds `comic_docs.listing` (jsonb): the saved `workspaceActivity` summary and four scalars (gate, plan and draft status,
+the last card's type), written by a `before insert or update` trigger from the doc being written, so My comics lists
+every comic without opening (and decompressing) any doc (`docs/features/my-comics.md` §1).
 
 **Canonical hashes (back-compat F1, v5).** Postgres `jsonb` reorders object keys on save (shorter keys first), so a
 hash of `JSON.stringify` in memory order changed after a reload and drawn pages read "Out of date" for nothing. Every

@@ -4,8 +4,8 @@ This is the living plan for Comic Studio's current programme of work. It is upda
 production (`Dreamstrream-v1`), so a new session can pick the work up from here. The repository is public: this page
 holds no keys, no security details and no one's personal data.
 
-Last updated: 2026-11-20, with the release that brings the new register-interest questions, one progress card and
-settled chat options.
+Last updated: 2026-11-26, with the release that gives every comic a stage, rebuilds My comics and brings one side
+panel everywhere.
 
 ## How work ships
 
@@ -28,26 +28,48 @@ settled chat options.
 | #303 | Truer live data in Chat, research pictures that are safe to use, groundwork for the platform's own daily comics. |
 | #304 | Drawn looks wait for Approve, look pictures at once, big lettering styles, a calmer board, ink icons. |
 | #305 | The Director keeps working when you leave a comic; alerts with two chimes; one account menu with Settings. |
+| #306 | Register-interest questions a visitor can answer; one compact progress card when several pages draw; chat options that settle once answered and stay settled after a reload. |
+| #307 | Sign-up opens with a verified email or Google, with referrals (rewards "coming soon"); the Director's whole-book drawing approval and reader; standalone reference images; text and voice chat; branded account mail; your own provider usage on the dashboard and a balance view for operators; artwork backups. |
+| #308 | After a provider refuses for quota, drawing moves on to the next usable key or provider; older image drafts are kept; provider setup in place; approved translations keep running; ready for many creators at once. |
+| #309 | Story continuity across long books; visual corrections carried through a whole book; discovery and release tools. |
+| #310, #311 | Classic Review compares saved panel artwork; creators can dismiss and restore visual findings; new and older Director artwork is stored privately in the project. |
+| #312 to #315, #317, #318 | DreamStream Studio Originals in the public library, each edition published through its own PG review. |
+| #316 | Tactile page turns in the current and the historical readers. |
+| #320 | This plan brought up to date; a timing-dependent test steadied. |
+| #321 | Studio Originals' artwork is protected from the publication cleanup (the database guard is applied). |
 
-## In this release
-
-- **Register interest** asks only questions a visitor can answer (what they would like to make, how they heard of us,
-  anything else, and one unticked box to be kept updated). Nobody is emailed. The unexplained "other studios" lines
-  are gone from the form and from under the Register interest card.
-- **One compact progress card** when several pages draw, instead of one loading tile per page.
-- **Chat options settle** once answered, once the person types a reply, or once the agent moves on, and stay settled
-  after a reload. An open Approve stays live until it is answered, so typing a question never cancels a paid step.
-
-## Building now (release "stages, My comics, panel, money")
+## In this release (stages, My comics, one panel)
 
 | Package | What the person sees |
 | --- | --- |
-| SH-A | Every comic knows its stage: Story, Plan, Style, Draw, Publish, shown as a stage strip and a status line. |
-| SH-B | My comics, rebuilt: calmer, clearer cards, the stage of each comic, the next step one tap away. |
-| SH-C1 | One side panel everywhere that shows where you are, your comics and their status. |
-| SH-C2 | Inside a comic: a tree of its parts, a breadcrumb, and a stage map. |
-| MA (MN-1, 2, 3, 9) | A run stops at once when a key runs out; a check before spending with a "not enough" card; the real balance of your own OpenRouter key in the studio header and in Settings (people on DreamStream's allowance see a percent, never dollars). |
-| MB (MN-4, 5) | One price on every image surface, corrected with what drawing really costs (pages were costing about 1.3x the listed price on one model and about 2x on another), and planning, translation and checks priced from what is really paid. |
+| SH-A | Every comic knows its stage (Story, Plan, Style, Draw, Publish), shown as a stage strip and a status line in the studio. Each step goes to where that stage is worked; the next step only ever navigates, it never spends. |
+| SH-B | My comics, rebuilt: calmer cards with the cover, the comic's stage, a one-line status and the next step one tap away; comics that need you come first. |
+| SH-C1 | One side panel on My comics, New comic, Images and inside a comic: where you are, your comics with their stage, and the destinations. Open by default on wide screens, a rail when collapsed, a drawer on phones. "Open chat" now works inside a comic, and older comics no longer show as freshly finished. |
+| SH-C2 | Inside a comic: a tree of its parts (story, cast, style, every page with its drawn state, cover, read), a breadcrumb, and a stage map with what is left in each stage. |
+
+SQL to apply after this release (additive, optional): `server/sql/comic_docs_listing.sql` keeps a small listing
+summary per comic so My comics reads each comic's stage without opening its document. Until it is applied, My comics
+falls back to reading the document.
+
+## Building now
+
+**Money (ready, ships next).** MA: a drawing run stops at once when a key runs out of credit, with one card that says
+what to do; a balance check before any paid step, with a "Not enough credit" card; the real balance of your own
+OpenRouter key in the studio header and Settings (people on DreamStream's allowance see a percent). MB: one price from
+one price book on every surface, including the Images workspace, and planning, checks and translation priced from what
+is really paid. FU: chained and retried drawing runs never close a newer question; the "drawn" alert counts only real
+drawings; thumbs up or down on the Director's replies.
+
+**Handmade books.** A family photographs a child's handmade book. The child's real cover becomes the comic's cover,
+cleaned but never redrawn; the handwritten story is read (with the family checking every word), and the comic is drawn
+in the child's own style with the child's own words. Private by default; shared copies hide the artist's name. Five
+packages: pages from photos at no cost (NB-1), reading the book (NB-2), cast, look and storyboard from the child's art
+(NB-3), drawing page 1 first then the rest (NB-4), and private-by-default sharing (NB-5).
+
+**Fixes.** A sweep of the whole product found and independently confirmed over a hundred problems. The fixes release
+covers every serious one: the backend's ability to sleep, stopping a chat really stops its spending, money never shown
+to people on DreamStream's allowance, publishing checks on every path, the readers and library, and layouts on every
+screen size from small phones to very wide screens.
 
 ## Next
 
@@ -60,6 +82,24 @@ settled chat options.
 - AG-APPROVE, MN-6, MN-7, MN-8: one Approve card per request with the price once and what you have left; an old
   approval is closed when a new request replaces it; the Director says the cost before it spends.
 
+Also in this release: work receipts (what the Director changed and why, with an Undo for each), and talking to the
+Director while it works.
+
+**The Director sees and finishes**
+- Picking a running turn back up after a reload or a crash.
+- A free storyboard read-through before anything is drawn.
+- Fixing one panel without redrawing the page.
+- The Director looks at the art when asked, plus a free whole-comic review screen.
+- A Director dock in the thumb zone on phones.
+- Chat and Comic Studio as one: Chat knows the comic you are in and can turn an idea into a comic.
+
+**Finish and feel**
+- One motion and haptics grammar.
+- A first-comic coach.
+- A premiere when a book is finished, with the next steps.
+- Read to me: free narration on the device in every reader.
+- Sound words and effects by tap or by asking.
+
 **Wave 3**
 - Pages: the Director picks each page's shape from its beats (a splash, one to seven panels, wide, tall or inset),
   and no two pages in a row look the same; a "Your book" plan card with a shape picker; a better board.
@@ -69,21 +109,21 @@ settled chat options.
 - Motion: real covers loaded when needed, a hero that plays once with Replay, muted clips with Pause, one pricing
   strip, more hover and info tips.
 - Thinking: one live line while working, then two or three sentences of what was done and why, with detail on tap.
-- Rate a reply: thumbs up or down on agent replies, with text shared only when the person ticks the box.
 - Typing help: fixes after a pause, "fixed N words · Undo", free and with no AI call; on by default on desktop.
 - Comic Studio alerts (a reply, a question, a plan waiting, a drawing run that finished), live status in the panel,
   re-attaching to a running turn after a reload, and the free whole-comic review with its own screen.
 
 ## Known follow-ups
 
-- After a model switch with "redraw everything", or an automatic retry, the later drawing run can close a question the
-  Director asked meanwhile. The run should carry the time the switch or retry was confirmed.
-- The "drawn" alert while you are away can count a withheld or reused picture as drawn; it should use the same rule
-  as the progress card.
+- Both earlier follow-ups (chained runs closing questions, and the "drawn" alert) are fixed in the money release.
+- Studio Originals drawn before 2026-11-23 and older Director artwork still sit in the public bucket; moving them to
+  private storage is an operator step with no tooling yet.
+- Referral rewards are announced as "coming soon" and wait on the owner's choice of reward.
 
 ## Rules every release keeps
 
-- Sign-up stays closed; people can register interest, and nobody on that list is emailed.
+- Sign-up is open with a verified email or Google (since #307). Auth and account rules change only in a release that
+  is about them.
 - Shared and public links are read-only (readers may download). Public pages show only published comics within PG-13.
 - People on DreamStream's allowance never see dollars or cents. No colour sits on or beside a price or a control that
   spends. Paid steps wait for Approve, except small steps a person asks for directly, which say their cost.

@@ -8,13 +8,13 @@
  *    so it fell back to Inter), no face but the display token, no `--ds-*` token with a spelled fallback.
  * 2. The studio's frame: the header is `--header-h` tall (56, 48 under 600) on the canvas with the soft hairline, as
  *    ComicStudio's StudioHeader; the left column is the rail's 14rem on `--ds-surface-soft` with the rail's hairline;
- *    hover and current rows in the studio rail's own tints (WorkspaceNavigation, which this nav sits under as the
- *    rail's footer); the FOCUS_RING outline and the FIELD ring, with FIELD's transparent outline so forced colours
+ *    the header's controls in the side panel's hover tint (components/comicstudio/panel/panelStyles.ts, the one panel
+ *    in the frame and the studio); the FOCUS_RING outline and the FIELD ring, with FIELD's transparent outline so forced colours
  *    still paints focus; FIELD edges and the canvas on the fields; the z-ladder and the overlay shadow on the phone
  *    drawer; transitions only when motion is welcome.
- * 3. One fill per view, and no cobalt on work surfaces: New comic is an outline while the New comic view shows Start
- *    (the view's one fill), and neither carries `.comics-primary-action` (whose Paper block is the public chrome's
- *    cobalt, decision Q5).
+ * 3. One fill per view, and no cobalt on work surfaces: the panel's New comic is the All comics view's fill, an outline
+ *    while the New comic view shows Start (the view's one fill), a plain row elsewhere, and neither carries
+ *    `.comics-primary-action` (whose Paper block is the public chrome's cobalt, decision Q5).
  * 4. comicsShell.css: the Atlas values of `.comics-primary-action` are the skin's tokens, and under Atlas they resolve
  *    to the same pixels the literals painted, in light and dark. Outside a skin they take the root accent; that is
  *    accepted because the class renders only on the comics host, which always boots Atlas.
@@ -25,7 +25,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { APP_ROOT, indexCss, norm, parseRules, resolveColor, rgbaString, stripComments, tokenBlocks, tokensOf, type Rule } from './cssTokens';
-import { ComicIdeaForm, ComicProjectNavigation } from '../../components/comicstudio/ComicCreationWorkspace';
+import { ComicIdeaForm } from '../../components/comicstudio/ComicCreationWorkspace';
+import { ComicSidePanel } from '../../components/comicstudio/panel/ComicSidePanel';
+import { PANEL_CURRENT_TINT, PANEL_FILL, PANEL_HOVER_TINT, PANEL_OUTLINE, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_INK } from '../../components/comicstudio/panel/panelStyles';
 import { PHONE_HEADER_PX, phoneChromeVars } from '../../components/comicstudio/mobile/shell/phoneChrome';
 import { COMPACT_HEIGHT, SPLIT_MIN_WIDTH } from '../../components/comicstudio/mobile/formFactor';
 import { COMICS_HOST, comicsSkin } from '../../services/productHost';
@@ -132,20 +134,24 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     expect(column.get('border-right')).toBe('1px solid var(--ds-hairline)');
   });
 
-  it('rows hover and the current row take the studio rail’s own tints (one “current” tint in the rail)', () => {
-    // ComicProjectNavigation is also the studio rail's footer (App.tsx navigationFooter → WorkspaceNavigation), right
-    // under the stage tabs, so its rows read the tints WorkspaceNavigation gives its tabs.
-    const rail = read('components/comicstudio/mobile/shell/WorkspaceNavigation.tsx');
-    const tabs = /selected \? '([^']*)' : '([^']*)'/.exec(rail);
-    expect(tabs, 'WorkspaceNavigation stage tab classes').not.toBeNull();
-    const selectedTint = /(?:^|\s)bg-\[(var\(--ds-[\w-]+\))\]/.exec(tabs![1])?.[1];
-    const hoverTint = /(?:^|\s)hover:bg-\[(var\(--ds-[\w-]+\))\]/.exec(tabs![2])?.[1];
-    expect(selectedTint).toMatch(/^var\(--ds-/);
-    expect(hoverTint).toMatch(/^var\(--ds-/);
+  it('the panel’s rows hover and the current row take one tint each, and the frame’s header controls read the same hover', () => {
+    // The one side panel (frame and studio) styles its own rows from panelStyles.ts; this stylesheet keeps only the
+    // frame's chrome, whose header controls hover in the panel's tint. No overlay-row tint in navigation.
+    const tintOf = (classes: string, prefix: '' | 'hover:') => new RegExp(`(?:^|\\s)${prefix.replace(':', '\\:')}bg-\\[(var\\(--ds-[\\w-]+\\))\\]`).exec(classes)?.[1];
+    expect(tintOf(PANEL_ROW_CURRENT, '')).toBe(PANEL_CURRENT_TINT);
+    for (const row of [PANEL_ROW_IDLE, PANEL_ROW_INK]) expect(tintOf(row, 'hover:')).toBe(PANEL_HOVER_TINT);
+    expect(PANEL_ROW_CURRENT).toContain('font-semibold');
     expect(source).not.toContain('--ds-overlay-hover');
-    expect(baseDecls('.comic-project-nav button:hover:not(:disabled)').get('background')).toBe(hoverTint);
-    expect(baseDecls('.comic-workspace-icon:hover').get('background')).toBe(hoverTint);
-    expect(baseDecls('.comic-project-nav button[aria-current=page]:not(.comic-project-new)').get('background')).toBe(selectedTint);
+    expect(baseDecls('.comic-workspace-icon:hover').get('background')).toBe(PANEL_HOVER_TINT);
+    // The old navigation's rules are gone with it: the panel draws its rows.
+    expect(source).not.toMatch(/\.comic-project-|\.comic-task-/);
+  });
+
+  it('collapsed, the frame shows the panel’s slim rail under its header, in the column’s fill and hairline', () => {
+    const rail = baseDecls('.comic-workspace-rail');
+    expect(rail.get('width')).toBe('3.5rem');
+    expect(rail.get('background')).toBe('var(--ds-surface-soft)');
+    expect(rail.get('border-right')).toBe('1px solid var(--ds-hairline)');
   });
 
   it('every control shows the FOCUS_RING outline, the fields the FIELD ring', () => {
@@ -181,20 +187,20 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     }
   });
 
-  it('one fill per view: Start keeps the ink fill, New comic is an outline while the New comic view is open', () => {
+  it('one fill per view: Start keeps the ink fill; the panel’s New comic is the ink fill on All comics, an outline on its own view', () => {
     const start = baseDecls('.comic-idea-start');
     expect(start.get('background')).toBe('var(--ds-accent-fill)');
     expect(start.get('color')).toBe('var(--ds-on-accent)');
-    const current = baseDecls('.comic-project-nav .comic-project-new[aria-current=page]');
-    expect(current.get('background')).not.toMatch(/accent|spark/);
-    expect(current.get('color')).toBe('var(--ds-ink)');
-    expect(current.get('box-shadow')).toMatch(/^inset 0 0 0 1px var\(--ds-[\w-]+\)$/);
-    const hover = baseDecls('.comic-project-nav .comic-project-new[aria-current=page]:hover:not(:disabled)');
-    expect(hover.get('background')).toBe('var(--ds-hover)');
-    expect(hover.get('color')).toBe('var(--ds-ink)');
+    expect(baseDecls('.comic-idea-start:hover:not(:disabled)').get('background')).toBe('var(--ds-accent-fill-hover)');
+    expect(PANEL_FILL).toContain('bg-[var(--ds-accent-fill)]');
+    expect(PANEL_FILL).toContain('text-[var(--ds-on-accent)]');
+    expect(PANEL_OUTLINE).not.toMatch(/accent|spark/);
+    expect(PANEL_OUTLINE).toContain('text-[var(--ds-ink)]');
+    expect(PANEL_OUTLINE).toMatch(/shadow-\[inset_0_0_0_1px_var\(--ds-[\w-]+\)\]/);
+    expect(PANEL_OUTLINE).toContain('hover:bg-[var(--ds-hover)]');
   });
 
-  it('the phone drawer sits on the z-ladder with the overlay shadow (its edge shows in dark)', () => {
+  it('the phone drawer sits on the z-ladder with the overlay shadow (its edge shows in dark), clear of the home indicator', () => {
     const backdrop = baseDecls('.comic-workspace-drawer-backdrop');
     expect(backdrop.get('z-index')).toBe('var(--ds-z-scrim)');
     expect(backdrop.get('background')).toBe('var(--ds-scrim)');
@@ -202,6 +208,12 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     expect(drawer.get('z-index')).toBe('var(--ds-z-sheet)');
     expect(drawer.get('position')).toBe('relative');
     expect(drawer.get('box-shadow')).toBe('var(--ds-shadow-overlay)');
+    // Go to is pinned at the drawer's foot: it ends above the safe area (index.html sets viewport-fit=cover), as the
+    // studio's SideSheet does, and the sidebar's own zero bottom padding does not undo it.
+    expect(drawer.get('padding-bottom')).toBe('var(--sa-bottom-eff, 0px)');
+    const sidebar = rules.findIndex((r) => r.parents.length === 0 && selectorsOf(r.selector).includes('.comic-workspace-sidebar'));
+    const drawerRule = rules.findIndex((r) => r.parents.length === 0 && selectorsOf(r.selector).includes('.comic-workspace-drawer'));
+    expect(drawerRule).toBeGreaterThan(sidebar);
   });
 
   it('the heading is the studio heading size in the display face, and the error reads in --ds-danger-text', () => {
@@ -225,28 +237,36 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
 
 describe('ComicCreationWorkspace.tsx: no cobalt on work surfaces', () => {
   const noop = () => undefined;
-  const navigation = { projects: [], onNewComic: noop, onAllComics: noop, onLibrary: noop, onOpenProject: noop };
+  const links = { projects: [], onNewComic: noop, onAllComics: noop, onLibrary: noop, onOpenProject: noop };
 
-  it('the source never names the public chrome’s primary class', () => {
+  it('the sources never name the public chrome’s primary class', () => {
     expect(read(TSX)).not.toContain('comics-primary-action');
+    expect(read('components/comicstudio/panel/ComicSidePanel.tsx')).not.toContain('comics-primary-action');
   });
 
-  it('New comic (current on the New comic view) and Start render without it', () => {
+  it('New comic (current on the New comic view) and Start render without it; New comic fills only on All comics', () => {
     const html = renderToStaticMarkup(React.createElement(React.Fragment, null,
-      React.createElement(ComicProjectNavigation, { ...navigation, activeView: 'new' }),
+      React.createElement(ComicSidePanel, { place: 'new', links }),
       React.createElement(ComicIdeaForm, { name: '', idea: 'A lighthouse keeper finds a map.', pending: false, error: null, onName: noop, onIdea: noop, onStart: noop, onDraft: noop, onStartBlank: noop, onClassic: noop, onLibrary: noop })
     ));
-    const buttonWith = (cls: string) => {
-      const tag = new RegExp(`<button[^>]*class="([^"]*\\b${cls}\\b[^"]*)"[^>]*>`).exec(html);
-      expect(tag, cls).not.toBeNull();
-      return { classes: tag![1].split(/\s+/), tag: tag![0] };
+    const tagOf = (pattern: RegExp) => {
+      const tag = pattern.exec(html);
+      expect(tag, String(pattern)).not.toBeNull();
+      return tag![0];
     };
-    const newComic = buttonWith('comic-project-new');
-    expect(newComic.tag).toContain('aria-current="page"');
-    expect(newComic.classes).not.toContain('comics-primary-action');
-    const start = buttonWith('comic-idea-start');
-    expect(start.tag).toContain('type="submit"');
-    expect(start.classes).not.toContain('comics-primary-action');
+    // The current place in Go to (its look; "Where you are" carries the screen readers' current-page mark).
+    const newComic = tagOf(/<button[^>]*data-panel-current="true"[^>]*>(?:(?!<\/button>).)*New comic<\/span><\/button>/);
+    expect(newComic).not.toContain('comics-primary-action');
+    expect(newComic).not.toContain('data-panel-fill');
+    expect(newComic).not.toContain('--ds-accent-fill');
+    const start = tagOf(/<button[^>]*class="[^"]*\bcomic-idea-start\b[^"]*"[^>]*>/);
+    expect(start).toContain('type="submit"');
+    expect(start).not.toContain('comics-primary-action');
+    const all = renderToStaticMarkup(React.createElement(ComicSidePanel, { place: 'all', links }));
+    expect(all.match(/data-panel-fill="true"/g)).toHaveLength(1);
+    expect(all).not.toContain('comics-primary-action');
+    const comic = renderToStaticMarkup(React.createElement(ComicSidePanel, { place: 'comic', links }));
+    expect(comic).not.toContain('data-panel-fill');
   });
 });
 
