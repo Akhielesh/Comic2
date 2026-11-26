@@ -107,6 +107,23 @@ describe('a studio comic with a saved stage', () => {
     expect(card(studio('s'), { ...gate, attention: 'question' }).next).toMatchObject({ label: 'Next: review the estimate' });
   });
 
+  it('a redraw that failed over a standing picture leads with the problem; failed pages the stage already names keep its words', () => {
+    // The page keeps its earlier picture, so the stage counts it drawn and is ready to publish; the summary says a render failed.
+    const redrawFailed = saved(drawing(2, 2, (doc) => {
+      doc.pages[1].render = { ...render('failed', picture()), error: 'timeout' } as RenderState;
+    }));
+    expect(redrawFailed.attention).toBe('render_failed');
+    expect(redrawFailed.stage?.next).toBe('publish');
+    const model = card(studio('s'), redrawFailed);
+    expect(model.needsYou).toBe(true);
+    expect(model.next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
+    // A first draw that failed (no picture): the stage's own "Review 1 failed page".
+    const firstFailed = saved(drawing(2, 1, (doc) => {
+      doc.pages[1].render = render('failed');
+    }));
+    expect(card(studio('s'), firstFailed).next).toMatchObject({ label: 'Next: review 1 failed page', destination: 'pages' });
+  });
+
   it('every page drawn and published: Published, and Read is the next step (no second button)', () => {
     const model = card(studio('s', { studioRendered: 12 }), saved(drawing(12, 12, live)));
     expect(model.stageWord).toBe('Published');
@@ -183,6 +200,12 @@ describe('older comics and an unanswered stage read', () => {
     // A published comic without a stage still says so from its row, and a blank title reads Untitled comic.
     expect(card(studio('s', {}, { isPublic: true, name: '  ' })).status).toBe('Published · edited 2 hours ago');
     expect(card(studio('s', {}, { name: '  ' })).title).toBe('Untitled comic');
+  });
+
+  it('a row whose edit time cannot be read keeps its words and drops the time, never a wrong one or a crash', () => {
+    expect(card(studio('s', {}, { updatedAt: Number.NaN }), saved(drawing(12, 6))).status).toBe('6 of 12 pages drawn');
+    expect(card(classic('c', { step: 99 }))).toMatchObject({ status: 'Edited 2 hours ago' });
+    expect(card({ ...classic('c', { step: 99 }), updatedAt: Number.NaN }).status).toBe('');
   });
 });
 

@@ -12,8 +12,8 @@ import { CARD } from '../../ds/Card';
 import { CLIP_TEXT, HEADING, LIFT, MUTED, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
 import { LoadingState } from '../../ds/LoadingState';
 import { SmartImage } from '../../common/SmartImage';
-import { coverCandidates, myComicCard, type CardStageRow as StageRowFacts, type CardStageStatus } from './homeModel';
-import { CardStageRow, NextStep } from './MyComicCard';
+import { coverCandidates, myComicCard, type CardStageRow, type CardStageStatus } from './homeModel';
+import { CardStageLine, NextStep } from './MyComicCard';
 import type { TaskDestination } from './workspaceTaskTarget';
 
 export interface ContinueCardProps {
@@ -22,7 +22,7 @@ export interface ContinueCardProps {
   onOpen(id: string, destination?: TaskDestination | null): void;
   onRead(id: string): void;
   /** The comic's row from the page's stage read; absent before stages or until the read answers. */
-  stageRow?: StageRowFacts;
+  stageRow?: CardStageRow;
   /** Whether the stage read has answered: until it does, the stage line is a placeholder. */
   stageStatus?: CardStageStatus;
   /** For tests and scenes; the card reads the clock when it renders otherwise. */
@@ -84,7 +84,7 @@ export function ContinueCard({ project, onOpen, onRead, stageRow, stageStatus = 
           <h2 id={`${id}-title`} className={cn('m-0 text-[length:var(--ds-text-xl)] leading-7', HEADING, CLIP_TEXT)} title={title}>
             {title}
           </h2>
-          <CardStageRow model={model} />
+          <CardStageLine model={model} />
           <p className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED)}>{model.status}</p>
           {/* Its own controls: a tap on one never also opens the card behind it. */}
           <div className="mt-2 flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>

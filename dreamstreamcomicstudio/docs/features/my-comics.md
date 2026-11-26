@@ -31,7 +31,7 @@ Each card has the cover, the title, the stage, one status line, the next step, R
 | Comic | Stage row | Status line | Next step | Read |
 | --- | --- | --- | --- | --- |
 | Studio, stage saved | five ink marks (StageStrip's `StageMark`) + the stage word ("Drawing", "Ready to publish", "Publishing paused", "Published") | the stage's progress · edited … ("6 of 12 pages drawn · edited 2 hours ago") | `Next: <step>` (the strip's words), opening where it is worked | when a page is drawn (`drawn > 0`: a withheld picture never counts) |
-| Studio, a question waiting | as above | as above | `Next: answer the Director` (the conversation), unless the stage itself is waiting (an approval, the Director planning, a draft to resume) | as above |
+| Studio, a question waiting, or a redraw that failed over a standing picture | as above | as above | `Next: answer the Director` (the conversation) or `Next: review the drawing problem` (the Pages tab), unless the stage itself is waiting (an approval, the Director planning, a draft to resume) or already says it ("Review 2 failed pages") | as above |
 | Studio, every stage done | marks + "Published" | as above | none: Read is the next step (outline, the only button) | yes |
 | Studio, saved before stages or unreadable | "Open to see" | the row's counts ("3 of 10 pages drawn", "All 4 pages drawn", "No pages planned yet", "Published") | what waits, if the activity data says ("Next: review the estimate"), else `Open` | the row's `studioRendered > 0` |
 | Studio, the read not answered yet | a placeholder line of the same height | the row's counts | `Open` | the row's count |

@@ -88,7 +88,7 @@ export function StageLine({ view, className }: { view: StageView; className?: st
 }
 
 /** The stage row for any card: the marks and word, a same-size placeholder while the stage read runs, or plain words. */
-export function CardStageRow({ model, className }: { model: MyComicCardModel; className?: string }) {
+export function CardStageLine({ model, className }: { model: MyComicCardModel; className?: string }) {
   if (model.stage) return <StageLine view={model.stage} className={className} />;
   if (model.pending) {
     return (
@@ -331,7 +331,7 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
             </MenuContent>
           </Menu>
         </div>
-        <CardStageRow model={model} />
+        <CardStageLine model={model} />
         <p data-slot="card-status" className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED, CLIP_TEXT)} title={model.status}>
           {model.status}
         </p>

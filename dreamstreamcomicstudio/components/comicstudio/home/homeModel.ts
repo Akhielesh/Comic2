@@ -103,14 +103,20 @@ const rowWords = (project: Project): string | null => {
 
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** "edited 2 hours ago", or null when the row's time is unreadable (an older row): a line never shows a wrong time. */
+const editedOf = (updatedAt: number, now: number, locale?: string): string | null =>
+  Number.isFinite(updatedAt) && Number.isFinite(now) ? editedAgo(updatedAt, now, locale) : null;
+
+/** The status words and the edit time as one line ("3 of 10 pages drawn · edited 2 hours ago"). */
+const statusLine = (words: string | null, edited: string | null): string =>
+  words ? (edited ? `${words} · ${edited}` : words) : edited ? capitalise(edited) : '';
+
 /**
  * A studio comic's one-line status: its stage's progress when the saved stage is known ("6 of 12 pages drawn · edited 2
  * hours ago", the strip's words), else the row's counts ("3 of 10 pages drawn · edited 2 hours ago").
  */
 export function continueLine(project: Project, now: number, locale?: string, facts?: StageFacts | null): string {
-  const progress = facts ? stageView(facts).progress : rowWords(project);
-  const edited = editedAgo(project.updatedAt, now, locale);
-  return progress ? `${progress} · ${edited}` : capitalise(edited);
+  return statusLine(facts ? stageView(facts).progress : rowWords(project), editedOf(project.updatedAt, now, locale));
 }
 
 /** True when at least one page is drawn, so the comic can be read: the saved stage when known, else the row's count. */
@@ -204,8 +210,15 @@ const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
   render_failed: 'Review the drawing problem'
 };
 
-/** The stage's own waits: a question never replaces them (they are what the conversation shows first). */
+/** The stage's own waits: what waits on the person never replaces them (they are what the conversation shows first). */
 const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'follow_planning', 'resume_draft']);
+/**
+ * What waits on the person that a stage does not name: a question from the Director, and a drawing that failed while an
+ * earlier picture still stands (the stage counts the page as drawn). Each leads the card's next step unless the stage is
+ * already waiting or already says it ("Review 2 failed pages"). The rest (an approval, a plan, a look, an interrupted
+ * draft) are the stage's own steps.
+ */
+const ATTENTION_LEADS: ReadonlySet<WorkAttention> = new Set<WorkAttention>(['question', 'render_failed']);
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const nextTo = (label: string, destination: TaskDestination): MyComicNext => ({ label: `Next: ${lowerFirst(label)}`, destination, hint: DESTINATION_HINT[destination] });
@@ -240,7 +253,6 @@ export function myComicCard(project: Project, row: CardStageRow | undefined, sta
   const kind = kindOf(project);
   const title = project.name.trim() || 'Untitled comic';
   const featured = !!project.state.isFeatured;
-  const edited = editedAgo(project.updatedAt, now, locale);
   if (kind !== 'studio') {
     const generation = project.state.generationStatus;
     const building = generation?.isActive
@@ -254,7 +266,7 @@ export function myComicCard(project: Project, row: CardStageRow | undefined, sta
       stage: null,
       pending: false,
       stageWord: kind === 'pagestudio' ? 'Page Studio' : 'Classic editor',
-      status: words ? `${words} · ${edited}` : capitalise(edited),
+      status: statusLine(words, editedOf(project.updatedAt, now, locale)),
       needsYou: false,
       next: { label: 'Edit', destination: null, hint: kind === 'pagestudio' ? 'Opens Page Studio' : 'Opens the classic editor' },
       canRead,
@@ -270,8 +282,9 @@ export function myComicCard(project: Project, row: CardStageRow | undefined, sta
   const canRead = hasDrawnPage(project, facts);
   let next: MyComicNext | null;
   if (view) {
-    if (attention === 'question' && !WAIT_STEPS.has(view.next.key)) next = nextTo(ATTENTION_NEXT.question, 'conversation');
-    else if (view.next.key === 'read' && canRead) next = null;
+    if (attention && ATTENTION_LEADS.has(attention) && !WAIT_STEPS.has(view.next.key) && view.next.key !== 'review_failed') {
+      next = nextTo(ATTENTION_NEXT[attention], taskDestination(attention));
+    } else if (view.next.key === 'read' && canRead) next = null;
     else next = nextTo(view.next.label, STAGE_PLACE_DESTINATION[view.next.place]);
   } else if (attention) {
     next = nextTo(ATTENTION_NEXT[attention], taskDestination(attention));
