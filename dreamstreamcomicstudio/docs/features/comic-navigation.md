@@ -186,9 +186,10 @@ each visible row is one `treeitem` with its level, position and set size, so a c
   with focus on it.
 - The last crumb is `aria-current="page"`; the separators are decoration.
 - **Folding**: from 1024 px every crumb; below, My comics is left to the panel's drawer (whose first row it is); on a
-  phone only the deepest crumb follows the name. The name shrinks first (to 4rem, 2.5rem on a phone), the area and the
-  part clip with an ellipsis (their tooltips have every word), and the breadcrumb clips sideways rather than push the
-  header's controls, so nothing scrolls sideways at 320 px. 44 px targets on touch.
+  phone only the deepest crumb follows the name. The name shrinks first (to 4rem, 2.5rem on a phone), the area keeps
+  its short word, the part clips with an ellipsis but never below a 44 px target (its tooltip has every word), and the
+  breadcrumb clips sideways rather than push the header's controls, so nothing scrolls sideways at 320 px. 44 px
+  targets on touch.
 
 ## 7. Key files and tests
 

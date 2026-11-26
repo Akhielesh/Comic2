@@ -6,8 +6,8 @@
 // - The area (Pages, Cast, …) shows while the board is on screen and goes back to the top of that area.
 // - The part (Page 3, Maya, Cover) brings its card back into view with focus on it.
 // The last crumb is the current page for screen readers. Truncation: the name shrinks first (to 4rem, 2.5rem on a phone),
-// the area and the part clip with an ellipsis (their tooltips have every word); on phones only the deepest crumb follows
-// the name. The breadcrumb clips rather than ever pushing the header's controls, so nothing scrolls sideways at 320 px.
+// the area keeps its (short) word, the part clips with an ellipsis down to a 44 px target (its tooltip has every word);
+// on phones only the deepest crumb follows the name. The breadcrumb clips rather than ever pushing the header's controls, so nothing scrolls sideways at 320 px.
 // Ink only: muted words for the way back, ink for where you are.
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -100,7 +100,8 @@ export function StudioBreadcrumb({ title, onRename, onMyComics, area, item, room
       aria-current={current === key ? 'page' : undefined}
       title={label}
       data-crumb={key}
-      className={cn(CRUMB, current === key ? 'font-medium text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]')}
+      // A part's name can be long: it clips, but never below a 44 px target.
+      className={cn(CRUMB, key === 'item' && 'min-w-11', current === key ? 'font-medium text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]')}
     >
       <span className="min-w-0 truncate">{label}</span>
     </button>
@@ -118,14 +119,15 @@ export function StudioBreadcrumb({ title, onRename, onMyComics, area, item, room
         <li className="flex min-w-[2.5rem] items-center sm:min-w-[4rem]">
           <TitleField title={title} onCommit={onRename} current={current === 'title'} />
         </li>
+        {/* An area's name is short (a tab's): it keeps its words, and the comic's name gives way. */}
         {has('area') && area && (
-          <li className="flex min-w-0 max-w-[10rem] items-center gap-0.5">
+          <li className="flex max-w-[10rem] shrink-0 items-center gap-0.5">
             {separator}
             {crumb('area', area.label, area.onGo)}
           </li>
         )}
         {has('item') && item && (
-          <li className="flex min-w-0 max-w-[10rem] items-center gap-0.5">
+          <li className="flex max-w-[10rem] items-center gap-0.5">
             {separator}
             {crumb('item', item.label, item.onGo)}
           </li>

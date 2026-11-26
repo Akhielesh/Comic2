@@ -84,8 +84,9 @@ describe('StudioBreadcrumb', () => {
     const part = within(nav()).getByRole('button', { name: /^Maya/ });
     expect(part).toHaveAttribute('title', 'Maya the cartographer of the salt flats');
     expect(part.querySelector('.truncate')).not.toBeNull();
-    expect(part.closest('li')!.className).toMatch(/(?:^|\s)min-w-0(?:\s|$)/);
     expect(part.closest('li')!.className).toContain('max-w-[10rem]');
+    // It clips, but never below a 44 px target; an area keeps its word.
+    expect(part.className.split(' ')).toContain('min-w-11');
     const name = within(nav()).getByRole('textbox', { name: 'Comic title' });
     expect(name.className).toContain('truncate');
     expect(name.closest('li')!.className.split(' ')).toEqual(expect.arrayContaining(['min-w-[2.5rem]', 'sm:min-w-[4rem]']));
