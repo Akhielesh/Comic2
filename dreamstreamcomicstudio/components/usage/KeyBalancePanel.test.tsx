@@ -1,14 +1,15 @@
 // Settings → API keys: the own OpenRouter key's balance, shown first (credit-safety.md MN-3). Synthetic readings.
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderBalanceReport } from '../../shared/providerBalances';
 import { checkPersonalProviderBalance } from '../../services/accountProviderUsage';
 import { getProviderKeyValue } from '../../services/apiKeys';
 import { __resetKeyBalanceForTests, seedKeyBalance } from '../../services/keyBalance';
 import { KeyBalancePanel } from './KeyBalancePanel';
+import { PersonalProviderBalance } from './ProviderActivity';
 
-vi.mock('../../services/accountProviderUsage', () => ({ checkPersonalProviderBalance: vi.fn() }));
+vi.mock('../../services/accountProviderUsage', () => ({ checkPersonalProviderBalance: vi.fn(), fetchAccountProviderUsage: vi.fn() }));
 vi.mock('../../services/apiKeys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/apiKeys')>()),
   getProviderKeyValue: vi.fn(),
@@ -85,5 +86,38 @@ describe('the OpenRouter balance in Settings', () => {
     // The DS Button's own invalid-state edge (aria-invalid only) is not colour on the money.
     const markup = container.innerHTML.replace(/aria-\[invalid=true\]:[^\s"]+/g, '');
     expect(markup).not.toMatch(/--ds-(?:hue|spark|success|warning|danger)|text-(?:red|amber|green)-/);
+  });
+});
+
+describe('one OpenRouter balance in Settings', () => {
+  it('a Check now in the balance panel shows in the OpenRouter card too, instead of an older saved figure', async () => {
+    const saved = reading({ checkedAt: Date.now() - 60 * 60_000, keyQuotaUsd: { limit: 20, remaining: 15.1, usage: 4.9 } });
+    seedKeyBalance(reading());
+    render(
+      <>
+        <KeyBalancePanel ownerId="owner-synthetic" />
+        <PersonalProviderBalance ownerId="owner-synthetic" provider="openrouter" hasKey enabled scope={{}} saved={saved} onSaved={vi.fn()} />
+      </>
+    );
+    const card = () => screen.getByRole('region', { name: 'Provider balance and limits' });
+    // The panel's reading (3 min ago) is newer than the saved one (an hour old): the card shows it, not "last saved".
+    expect(within(card()).getByText(/USD\s*12\.40/)).toBeInTheDocument();
+    expect(within(card()).queryByText(/USD\s*15\.10/)).toBeNull();
+    expect(within(card()).queryByText('Last saved reading for your account key')).toBeNull();
+    check.mockResolvedValue({ report: reading({ checkedAt: Date.now(), keyQuotaUsd: { limit: 20, remaining: 11, usage: 9 } }), saved: true });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check now/ }));
+    });
+    expect(await screen.findByText('$11.00')).toBeInTheDocument();
+    expect(within(card()).getByText(/USD\s*11\.00/)).toBeInTheDocument();
+    expect(within(card()).queryByText(/USD\s*12\.40/)).toBeNull();
+  });
+
+  it('with no newer shared reading the card keeps the saved one, and other providers never take the OpenRouter reading', () => {
+    const saved = reading({ checkedAt: Date.now() - 60_000, keyQuotaUsd: { limit: 20, remaining: 15.1, usage: 4.9 } });
+    seedKeyBalance(reading());
+    render(<PersonalProviderBalance ownerId="owner-synthetic" provider="openrouter" hasKey enabled scope={{}} saved={saved} onSaved={vi.fn()} />);
+    expect(screen.getByText(/USD\s*15\.10/)).toBeInTheDocument();
+    expect(screen.getByText('Last saved reading for your account key')).toBeInTheDocument();
   });
 });

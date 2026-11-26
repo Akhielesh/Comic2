@@ -1,7 +1,7 @@
 // The studio header's own-key balance (credit-safety.md MN-3): who sees it, when it reads, what it says, and that it
 // carries no colour beside money. Synthetic owner, key and readings.
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
@@ -9,7 +9,8 @@ import type { ProviderBalanceReport } from '../../../shared/providerBalances';
 import { checkPersonalProviderBalance } from '../../../services/accountProviderUsage';
 import { getProviderKeyValue } from '../../../services/apiKeys';
 import { __resetKeyBalanceForTests, seedKeyBalance } from '../../../services/keyBalance';
-import { makeSampleDoc } from '../conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { StudioHeader } from '../ComicStudio';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { KeyBalanceSheetLine } from './KeyBalanceSheetLine';
 import { KEY_BALANCE_PILL_MIN_WIDTH, KeyBalanceSlot } from './KeyBalanceSlot';
@@ -197,5 +198,27 @@ describe('the Spending sheet balance (phone headers without room for the pill)',
     rerender(line(360));
     await act(async () => undefined);
     expect(container.querySelector('[data-key-balance-line]')).toBeNull();
+  });
+});
+
+describe('the real studio header at phone width', () => {
+  // The Spending sheet is the phone's only home for the balance below KEY_BALANCE_PILL_MIN_WIDTH. StudioHeader renders
+  // it there; this pins it, so a merge of the header that drops the line fails here.
+  it('360 px: no balance pill in the header, and the Spending sheet carries the balance line', async () => {
+    seedKeyBalance(reading(12.4));
+    const ff = formFactorFor({ w: 360, h: 780, coarse: true });
+    const studio = makeFakeStudio({ doc: idle(), caps: OWN });
+    render(
+      <FormFactorProvider value={ff}>
+        <StudioHeader studio={studio} doc={studio.doc!} ff={ff} onBack={vi.fn()} onRead={vi.fn()} onOpenSettings={vi.fn()} paneMode="both" onPaneMode={vi.fn()} />
+      </FormFactorProvider>
+    );
+    const header = screen.getByRole('banner');
+    expect(within(header).queryByRole('button', { name: /OpenRouter balance/ })).toBeNull();
+    fireEvent.click(within(header).getByRole('button', { name: /^Spent / }));
+    const sheet = await screen.findByRole('dialog', { name: 'Spending' });
+    expect(sheet.querySelector('[data-key-balance-line]')).not.toBeNull();
+    expect(within(sheet).getByRole('region', { name: 'Your OpenRouter balance' })).toHaveTextContent('$12.40 left');
+    expect(within(sheet).getByRole('button', { name: /Check now/ })).toBeInTheDocument();
   });
 });
