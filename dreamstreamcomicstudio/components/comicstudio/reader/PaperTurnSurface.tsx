@@ -1,11 +1,29 @@
 import React, { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import { TurnEngine } from '../immersive/leafEngine';
+import type { PageTurnStyle } from '../../../shared/comic/doc';
+import { durationFor, TurnEngine } from '../immersive/leafEngine';
 import { type Vec } from '../immersive/flipGeometry';
+import { FLIP_DECODE_MS, flipClass, playFlip } from './pageFlip';
 import './paperTurnSurface.css';
+
+// The inline readers' page-turn stage (Classic ComicReader, ComicReaderView, the landing sample). One component for every
+// page-turn style (`turnStyle`):
+//   flip   the new page swings in from the spine (pageFlip.ts: index.css's classes, no per-frame JS). A turn first
+//          mounts the incoming page in a hidden layer and waits (≤ FLIP_DECODE_MS) until its pictures have decoded,
+//          so a slow phone never swings in a blank page; then the host commits and the new page swings in.
+//   paper  the drag-to-fold paper turn (TurnEngine); the only style that follows the finger.
+//   slide, fade  the TurnEngine's slide and crossfade, on the incoming page over (or under) the current one.
+// Buttons, keys, taps and the host's jumps (Home / End) call the handle; a horizontal swipe turns every style (paper
+// follows it). A pinch or a zoomed page never turns. Reduced motion (the OS setting or `reducedMotion`, the reader's
+// own) lands every turn at once.
 
 export type PaperTurnDirection = -1 | 1;
 export interface PaperTurnHandle {
   turn(direction: PaperTurnDirection): void;
+  /**
+   * Go to a page that is not adjacent (Home, End): `commit` moves the host there. The flip waits for `preview` (the
+   * target page) to decode, then swings it in; the other styles change at once.
+   */
+  jump(direction: PaperTurnDirection, commit: () => void, preview?: React.ReactNode): void;
   cancel(): void;
 }
 export interface PaperTurnProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onTurn'> {
@@ -18,9 +36,20 @@ export interface PaperTurnProps extends Omit<React.HTMLAttributes<HTMLDivElement
   onTurn(direction: PaperTurnDirection): void;
   renderAdjacent(direction: PaperTurnDirection): React.ReactNode;
   elementRef?: React.Ref<HTMLDivElement>;
-  /** Actual sheet inside a larger reading mat. */
+  /** Actual sheet inside a larger reading mat (the flip swings it; the paper folds it). */
   paperElement?: () => HTMLElement | null;
+  /** How the page turns (default 'paper'). */
+  turnStyle?: PageTurnStyle;
+  /** The reader's own Reduce motion: every turn lands at once (the OS setting always counts as well). */
+  reducedMotion?: boolean;
+  /** Flip: the swing's transform-origin (a spread swings as a pair around its spine); default the page's spine edge. */
+  flipOrigin?: string;
 }
+
+/** A horizontal swipe at least this long (and mostly horizontal) turns a page that does not follow the finger. */
+const SWIPE_MIN_PX = 45;
+/** A committed flip swings in only if the host shows the new page within this long (a refused commit never swings later). */
+const FLIP_COMMIT_WINDOW_MS = 1500;
 
 interface Gesture {
   id: number;
@@ -33,6 +62,7 @@ interface Gesture {
 }
 interface Turn {
   key: PaperTurnProps['pageKey'];
+  kind: 'paper' | 'slide' | 'fade';
   dir: PaperTurnDirection;
   width: number;
   height: number;
@@ -45,7 +75,14 @@ interface Turn {
   released?: 'commit' | 'cancel';
 }
 const point = (e: { clientX: number; clientY: number }): Vec => ({ x: e.clientX, y: e.clientY });
-const prefersStill = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+/** A flip waiting for its incoming page to decode. */
+interface FlipWait {
+  key: PaperTurnProps['pageKey'];
+  dir: PaperTurnDirection;
+  node: React.ReactNode;
+  commit(): void;
+}
+const osStill = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const onControl = (target: EventTarget | null) =>
   target instanceof Element &&
   !!target.closest(
@@ -126,6 +163,9 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     renderAdjacent,
     elementRef,
     paperElement,
+    turnStyle = 'paper',
+    reducedMotion = false,
+    flipOrigin,
     children,
     className,
     style,
@@ -146,9 +186,21 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
   const pointers = useRef(new Set<number>());
   const suppressClickUntil = useRef(0);
   const pointerTouchAt = useRef(-Infinity);
+  const decode = useRef<HTMLDivElement>(null);
+  const waiting = useRef<FlipWait | null>(null);
+  const [wait, setWait] = useState<FlipWait | null>(null);
+  /** A committed flip that swings in once the host shows the new page (its pageKey changes). */
+  const pendingFlip = useRef<{ dir: PaperTurnDirection; from: PaperTurnProps['pageKey']; at: number } | null>(null);
+  const stopFlip = useRef<(() => void) | null>(null);
   const zoomed = () =>
     (typeof isZoomed === 'function' ? isZoomed() : isZoomed) ||
     (typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01);
+  const prefersStill = () => latest.current.reducedMotion === true || osStill();
+  /** The stage has a box on screen (a hidden or unmeasured stage turns at once: nobody would see a swing). */
+  const laidOut = () => {
+    const box = root.current?.getBoundingClientRect();
+    return !!box && box.width >= 2 && box.height >= 2;
+  };
 
   function cancel() {
     gesture.current = null;
@@ -156,6 +208,18 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     engine.current?.destroy();
     engine.current = null;
     setTurn(null);
+    if (waiting.current) {
+      waiting.current = null;
+      setWait(null);
+    }
+    stopFlip.current?.();
+    stopFlip.current = null;
+  }
+  /** Flip: mount the incoming page hidden, then (once it has decoded) commit and swing it in. */
+  function flipTo(dir: PaperTurnDirection, commit: () => void, node: React.ReactNode) {
+    const w: FlipWait = { key: latest.current.pageKey, dir, node, commit };
+    waiting.current = w;
+    setWait(w);
   }
   function finish(t: Turn, commit: boolean) {
     if (active.current !== t) return;
@@ -163,9 +227,16 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     if (commit && latest.current.pageKey === t.key && latest.current.canTurn(t.dir)) latest.current.onTurn(t.dir);
   }
   function begin(dir: PaperTurnDirection, drag?: Gesture) {
-    if (active.current || !canTurn(dir)) return;
+    if (active.current || waiting.current || !canTurn(dir)) return;
+    // Only the paper follows a finger; every other style turns on the swipe's release.
+    if (drag && turnStyle !== 'paper') return;
+    if (turnStyle === 'flip') {
+      if (!enabled || prefersStill() || zoomed() || !laidOut()) onTurn(dir);
+      else flipTo(dir, () => latest.current.onTurn(dir), renderAdjacent(dir));
+      return;
+    }
     const stage = root.current?.getBoundingClientRect();
-    const box = paperElement?.()?.getBoundingClientRect() ?? stage;
+    const box = (turnStyle === 'paper' ? paperElement?.()?.getBoundingClientRect() : undefined) ?? stage;
     if (
       !enabled ||
       prefersStill() ||
@@ -173,27 +244,33 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
       !box ||
       box.width < 2 ||
       box.height < 2 ||
-      (window.CSS?.supports && !window.CSS.supports('clip-path', 'polygon(0 0,100% 0,0 100%)'))
+      (turnStyle === 'paper' && window.CSS?.supports && !window.CSS.supports('clip-path', 'polygon(0 0,100% 0,0 100%)'))
     ) {
       if (!drag) onTurn(dir);
       return;
     }
     const t: Turn = {
       key: pageKey,
+      kind: turnStyle,
       dir,
       width: box.width,
       height: box.height,
       left: box.left,
       top: box.top,
       offset: { x: box.left - (stage?.left ?? box.left), y: box.top - (stage?.top ?? box.top) },
-      mirrored: rtl !== dir < 0,
+      mirrored: turnStyle === 'paper' ? rtl !== dir < 0 : rtl,
       spread,
       drag
     };
     active.current = t;
     setTurn(t);
   }
-  useImperativeHandle(ref, () => ({ turn: (dir) => begin(dir), cancel }));
+  function jump(dir: PaperTurnDirection, commit: () => void, preview?: React.ReactNode) {
+    cancel();
+    if (turnStyle === 'flip' && enabled && !prefersStill() && !zoomed() && laidOut()) flipTo(dir, commit, preview ?? null);
+    else commit();
+  }
+  useImperativeHandle(ref, () => ({ turn: (dir) => begin(dir), jump, cancel }));
   useLayoutEffect(() => {
     cancel();
     pointers.current.clear();
@@ -202,7 +279,54 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
       engine.current?.destroy();
       engine.current = null;
     };
-  }, [pageKey, rtl, spread, enabled]);
+  }, [pageKey, rtl, spread, enabled, turnStyle]);
+  useLayoutEffect(() => () => stopFlip.current?.(), []);
+
+  // Flip, step 1: the incoming page waits, hidden, until its pictures have decoded (or FLIP_DECODE_MS), then commits.
+  useLayoutEffect(() => {
+    const w = wait;
+    if (!w || waiting.current !== w) return;
+    let over = false;
+    let stop: (() => void) | undefined;
+    const go = () => {
+      if (over || waiting.current !== w) return;
+      over = true;
+      window.clearTimeout(deadline);
+      stop?.();
+      waiting.current = null;
+      setWait(null);
+      // The host moved on meanwhile (another page, a mode change): nothing to commit.
+      if (latest.current.pageKey !== w.key) return;
+      pendingFlip.current = { dir: w.dir, from: w.key, at: performance.now() };
+      w.commit();
+    };
+    const deadline = window.setTimeout(go, FLIP_DECODE_MS);
+    if (decode.current) stop = whenPagePaints(decode.current, go);
+    else go();
+    return () => {
+      over = true;
+      window.clearTimeout(deadline);
+      stop?.();
+    };
+  }, [wait]);
+
+  // Flip, step 2: the host shows the new page (a new pageKey): it swings in from the spine.
+  useLayoutEffect(() => {
+    const p = pendingFlip.current;
+    if (!p) return;
+    pendingFlip.current = null;
+    // A commit the host refused leaves the page where it was: no swing on a later, unrelated change.
+    if (p.from === pageKey || performance.now() - p.at > FLIP_COMMIT_WINDOW_MS) return;
+    const el = latest.current.paperElement?.() ?? current.current;
+    if (!el || prefersStill()) return;
+    stopFlip.current?.();
+    stopFlip.current = playFlip(el, flipClass(p.dir, rtl), {
+      origin: latest.current.flipOrigin,
+      done: () => {
+        stopFlip.current = null;
+      }
+    });
+  }, [pageKey]);
 
   useLayoutEffect(() => {
     const onResize = () => {
@@ -227,14 +351,44 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
   }, []);
 
   useLayoutEffect(() => {
-    if (!turn || active.current !== turn || !current.current || !back.current) return;
+    if (!turn || active.current !== turn || !current.current || (turn.kind === 'paper' && !back.current)) return;
     const t = turn;
     let stopped = false;
     let deadline: number | undefined;
-    const width = t.spread ? t.width / 2 : t.width;
+    const width = t.spread && t.kind === 'paper' ? t.width / 2 : t.width;
     const start = () => {
       if (stopped || active.current !== t || engine.current) return;
       if (deadline !== undefined) window.clearTimeout(deadline);
+      if (t.kind !== 'paper') {
+        // Slide and fade: the incoming page (the preview) over, or under, the current one.
+        const runner = new TurnEngine(
+          {
+            W: width,
+            H: t.height,
+            bookW: t.width,
+            spineX: 0,
+            durationMs: durationFor(t.kind, t.spread, false),
+            plan: {
+              kind: t.kind,
+              dir: t.dir,
+              from: 0,
+              to: t.dir,
+              leafSide: 'center',
+              mirrored: t.mirrored,
+              mode: t.dir > 0 ? 'forward' : 'reverse',
+              staticKeys: [],
+              underKeys: [],
+              incomingKeys: [],
+              outgoingKeys: []
+            }
+          },
+          { incoming: [{ root: adjacent.current }], outgoing: [{ root: current.current }] },
+          { onDone: (outcome) => finish(t, outcome === 'commit') }
+        );
+        engine.current = runner;
+        runner.startAuto();
+        return;
+      }
       const runner = new TurnEngine(
         {
           W: width,
@@ -293,7 +447,7 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
       cancel();
       return;
     }
-    if (!enabled || active.current || zoomed() || onControl(target)) return;
+    if (!enabled || active.current || waiting.current || zoomed() || onControl(target)) return;
     gesture.current = {
       id,
       down: p,
@@ -332,7 +486,8 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
         return;
       }
       g.accepted = true;
-      begin(direction, g);
+      // Paper lifts the leaf now and follows the finger; the other styles turn when the swipe is released.
+      if (turnStyle === 'paper') begin(direction, g);
     }
     const t = active.current;
     if (t) engine.current?.dragTo(leafPoint(t, p));
@@ -348,6 +503,12 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     suppressClickUntil.current = performance.now() + 350;
     const dx = p.x - g.down.x,
       dy = p.y - g.down.y;
+    if (turnStyle !== 'paper') {
+      // A swipe: at least SWIPE_MIN_PX, mostly horizontal, one finger, never while zoomed (the Classic reader's rule).
+      if (aborted || zoomed() || Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      begin(dx < 0 !== rtl ? 1 : -1);
+      return;
+    }
     const t = active.current;
     const dir = t?.dir ?? (dx < 0 !== rtl ? 1 : -1);
     const distance = dx * (rtl ? dir : -dir);
@@ -370,9 +531,10 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     cancel();
     gesture.current = null;
   };
-  const W = turn ? (turn.spread ? turn.width / 2 : turn.width) : 0;
-  const frontX = turn?.spread && !turn.mirrored ? W : 0;
-  const backX = turn?.mirrored ? frontX + W : frontX - W;
+  const paperTurn = turn?.kind === 'paper' ? turn : null;
+  const W = paperTurn ? (paperTurn.spread ? paperTurn.width / 2 : paperTurn.width) : 0;
+  const frontX = paperTurn?.spread && !paperTurn.mirrored ? W : 0;
+  const backX = paperTurn?.mirrored ? frontX + W : frontX - W;
   const setRoot = useCallback(
     (el: HTMLDivElement | null) => {
       root.current = el;
@@ -386,7 +548,13 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
       {...html}
       ref={setRoot}
       data-paper-turn-surface=""
+      data-turn-style={turnStyle}
       data-turning={turn ? 'true' : undefined}
+      data-turn-kind={turn?.kind}
+      data-turn-dir={turn ? turn.dir : undefined}
+      data-rtl={rtl ? '' : undefined}
+      data-spread={spread ? '' : undefined}
+      aria-busy={wait ? true : undefined}
       className={['paper-turn-surface', className].filter(Boolean).join(' ')}
       style={{ touchAction: enabled && !zoomed() ? 'pan-y pinch-zoom' : undefined, ...style }}
       onPointerDown={(e) => {
@@ -463,22 +631,39 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
       <div className="paper-turn-face" ref={current}>
         {children}
       </div>
-      {turn && (
+      {wait && (
+        // The incoming page of a flip, decoding out of sight (never read out, never focusable).
+        <div ref={decode} inert aria-hidden data-decode="" className="paper-turn-preview">
+          {wait.node}
+        </div>
+      )}
+      {turn && turn.kind !== 'paper' && (
+        <div
+          ref={adjacent}
+          inert
+          aria-hidden
+          className="paper-turn-preview"
+          style={{ left: turn.offset.x, top: turn.offset.y, width: turn.width, height: turn.height }}
+        >
+          {renderAdjacent(turn.dir)}
+        </div>
+      )}
+      {paperTurn && (
         <>
           <div
             ref={adjacent}
             inert
             aria-hidden
             className="paper-turn-preview"
-            style={{ left: turn.offset.x, top: turn.offset.y, width: turn.width, height: turn.height }}
+            style={{ left: paperTurn.offset.x, top: paperTurn.offset.y, width: paperTurn.width, height: paperTurn.height }}
           >
-            {renderAdjacent(turn.dir)}
+            {renderAdjacent(paperTurn.dir)}
           </div>
           <div
             inert
             aria-hidden
             className="paper-turn-cast-clip"
-            style={{ left: turn.offset.x + frontX, top: turn.offset.y, width: W, height: turn.height }}
+            style={{ left: paperTurn.offset.x + frontX, top: paperTurn.offset.y, width: W, height: paperTurn.height }}
           >
             <div ref={cast} className="paper-turn-cast" />
           </div>
@@ -487,11 +672,11 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
             inert
             aria-hidden
             className="paper-turn-back"
-            style={{ left: turn.offset.x + backX, top: turn.offset.y, width: W, height: turn.height }}
+            style={{ left: paperTurn.offset.x + backX, top: paperTurn.offset.y, width: W, height: paperTurn.height }}
           >
-            {turn.spread && (
-              <div className="paper-turn-verso" style={{ left: -backX, width: turn.width }}>
-                {renderAdjacent(turn.dir)}
+            {paperTurn.spread && (
+              <div className="paper-turn-verso" style={{ left: -backX, width: paperTurn.width }}>
+                {renderAdjacent(paperTurn.dir)}
               </div>
             )}
             <div ref={curl} className="paper-turn-curl" />
