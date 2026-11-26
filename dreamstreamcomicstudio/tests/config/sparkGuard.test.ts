@@ -71,7 +71,7 @@ export const SPECIMENS: Record<string, string> = {
 export const SPARK_DEFINITIONS: readonly string[] = ['components/ds/Button.tsx', 'components/ds/Progress.tsx', 'components/ds/recipes.ts', 'components/chat/studioDesign.ts'];
 
 /** The panel and navigation: ink only, whatever the allowlist says (rule 3). */
-export const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx'];
+export const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx', 'components/comicstudio/panel/**'];
 /** The one spark navigation may carry: the making dot beside its words ("Drawing page 3", §3.8's exception). */
 const INK_ONLY_EXCEPT = new Set(['MAKING_DOT', 'tone=making']);
 

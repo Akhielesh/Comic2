@@ -50,7 +50,7 @@ export const SPECIMENS: readonly string[] = ['components/ds/specimens/**', 'qa/a
 /** Where the recipes are defined, not used. */
 const DEFINITIONS: readonly string[] = ['components/chat/studioDesign.ts', 'components/ds/recipes.ts'];
 /** sparkGuard's ink-only navigation, and its no-spark reader. */
-const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx'];
+const INK_ONLY: readonly string[] = ['components/nav/**', 'components/chat/ChatSidebar.tsx', '**/NavRail.tsx', '**/TabBar.tsx', '**/PlaceNav.tsx', 'components/comicstudio/panel/**'];
 const NO_COLOUR: readonly string[] = ['components/comicstudio/reader/**', 'components/comicstudio/immersive/**'];
 
 // ── The detector ──────────────────────────────────────────────────────────────────────────────────
