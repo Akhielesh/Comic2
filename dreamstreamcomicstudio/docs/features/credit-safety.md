@@ -130,8 +130,9 @@ when a view that shows it opens and the reading is missing or older than 15 minu
 
 ## Gotchas
 
-- The check compares the **quote**, which is never under the real price (models.md §2.3), so a run that would just
-  fit at list price may be refused; Draw what fits covers that case.
+- The check compares the **quote**, which is never under the real price (models.md §2.3; the one price book,
+  [pricing.md](pricing.md)), so a run that would just fit at list price may be refused; Draw what fits covers that
+  case. The card's own-key figures ("needs ≈ $X", "has $Y left") print through the studio's one cost format.
 - A reading is HMAC-bound to owner, provider and exact key (`provider_balance_observations`); a server without
   `SUPABASE_SERVICE_ROLE_KEY` treats every own-key balance as unknown.
 - No SQL: the observations table already exists (`server/sql/account_provider_analytics.sql`).
