@@ -1,7 +1,7 @@
 # Comic stages (Comic Studio)
 
-**Status:** shipped. The studio shows it as a stage strip; the AI activity feed's "In progress" rows read it from the
-saved summary.
+**Status:** shipped. The studio shows it as a stage strip and in the side panel's own section; the side panel's Your
+comics reads it from the saved summary (`comic-navigation.md`).
 
 **What it is for.** Every comic says where it stands, in one of five stages, how far along that stage is, and the one
 next step: "Drawing · 6 of 12 pages drawn · Next: draw the rest". The studio shows it as a stage strip (under the
@@ -93,8 +93,10 @@ prices, models or paths. It stays private: `sanitizePublicDoc` strips `workspace
   (`STAGE_UNKNOWN`) for a comic saved before stages or with an unreadable stage. Lists never guess a stage.
 - `stageView(readStageFacts(saved))` equals `comicStage(doc)` for the doc it was saved from (tested), so a list and the
   studio always say the same words.
-- `services/comicWorkspaceActivity.ts` keeps a stored stage only when it validates. The AI activity feed's "In progress"
-  rows show it ("Drawing · 6 of 12 pages drawn"); a comic saved before stages keeps "Last reported in progress".
+- `services/comicWorkspaceActivity.ts` keeps a stored stage only when it validates. The side panel's Your comics (which
+  took in the old AI activity feed, SH-C1) shows it on every row: the five marks, and the words on "In progress" and
+  Recent rows ("Drawing · 6 of 12 pages drawn"); a comic saved before stages keeps "Last reported in progress" in
+  progress and "Open to see" elsewhere.
 
 No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the existing
 `activity:doc->workspaceActivity` selector.
@@ -129,8 +131,9 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
     its dot in forced colours (Windows high contrast).
   - Coarse pointers get 44 px targets. It hides while the on-screen keyboard is up (`html.kb-open`), like the tab bar.
     On phones the board's tabs live in a drawer, so the strip is also a quick way between Story, Style, Pages and Read.
-- The workspace navigation's list (`mobile/shell/WorkspaceNavigation.tsx`) is labelled "Board" (it was "Project
-  stages"): those are the board's tabs, not the comic's stages.
+- The side panel's own section for the comic (`panel/ComicSection.tsx`, SH-C1; `comic-navigation.md`) says the same
+  words as one button ("Drawing · 6 of 12 pages drawn" / "Next: draw the rest", the five marks beside "This comic"),
+  and its tab list is labelled "Board" (it was "Project stages"): those are the board's tabs, not the comic's stages.
 
 ## 6. Key files and tests
 
@@ -142,7 +145,8 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
   `conversation/DirectorDraftControl.tsx` (+ test), `conversation/ConversationPane.tsx` (`revealApiRef`),
   `conversation/cards/GateCard.tsx` (the open card is marked and focusable), `board/BoardPane.tsx` (`lead`, + test).
 - `shared/comic/workspaceActivity.ts`, `server/src/comic/store.test.ts`: the saved summary.
-- `services/comicWorkspaceActivity.ts` (+ test), `components/comicstudio/home/ComicTaskActivity.tsx` (+ test).
+- `services/comicWorkspaceActivity.ts` (+ test); the side panel's Your comics reads it (`components/comicstudio/panel/`,
+  `comic-navigation.md`).
 - `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, the 360 px row
   and its opened stages, Escape from the stage button, forced-colour marks, 320 px, foldable, the server's "behind", one
   count with the Board badge), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
@@ -150,8 +154,8 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
 
 ## 7. Left out on purpose
 
-- My comics cards and the side panel do not show the stage yet; they are the next readers of this summary
-  (`stageSummaryOf`), so they will say the same words without loading a full comic.
+- My comics cards do not show the stage yet; they are the next reader of this summary (`stageSummaryOf`). The side
+  panel's Your comics reads it already (SH-C1, `comic-navigation.md`).
 - Counting a cast as a story (the Director's suggestions treat a cast as an idea): the brief defines Story by the story
   or premise, so a cast alone keeps Story current, with the words "No story yet".
 - A "question waiting" next step: see §3.

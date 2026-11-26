@@ -49,6 +49,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/discovery.md` | Discover's public listing: the edge routes /api/comic/public/discover[/shelves], the item allow-list (bylines only with Show my username), the ask-first SQL comic_discovery.sql, featured seeding, tests. |
 | `features/comic-research.md` | Comic Studio research as it works today: the composer's research sheet and the Director's `research_comic` tool, what goes to Wikipedia and Wikimedia Commons, the link and picture-licence allowlist, budget, cache, failure states and key files. |
 | `features/comic-stages.md` | Every comic's stage (Story, Style, Plan, Draw, Publish): the boundaries from real doc fields, progress and the navigate-only next step, the saved summary lists read ("Open to see" before stages), and the studio's stage strip (under the header, or at the top of the board on a phone). |
+| `features/comic-navigation.md` | Comic Studio's one side panel (My comics, New comic, Images, inside a comic): where you are, the comic's own section, Your comics (the merged AI activity: Needs you, In progress, Finished, Recent; older comics never freshly finished), Go to; when it fetches (never on a timer), open or rail per viewer, phone drawers, keyboard. |
 
 ## Conventions
 
