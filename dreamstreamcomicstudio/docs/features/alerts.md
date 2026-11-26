@@ -40,7 +40,7 @@ the core makes a network request or wakes the backend.
 | `plan` | The page plan waits for its OK (draft, pages, a live plan or breakdown card, nothing drawing) | Needs you |
 | `approval` | A paid step is held for Approve (an open gate) | Needs you |
 | `style` | Looks drawn and waiting to be picked | Needs you |
-| `drawn` / `drawn_issues` | Pages, cover or sheets drawn since the stream started (a redraw counts) / some failed | Ready / Needs you |
+| `drawn` / `drawn_issues` | Pages, cover or sheets drawn since the stream started (a redraw counts) / some failed or were withheld. A picture counts as drawn by the progress card's own rule (`shared/comic/renderOutcome.ts` `progressState`, with the `since` of the newest renders card that includes it): never a take the content check withheld (it needs a look, like a failure), and never an earlier picture put back (a reuse or a kept take), so a run that drew nothing new says nothing is ready | Ready / Needs you |
 | `translated` / `translate_issues` | A stream that translated (a Translate action, an approved translate gate, or a turn that posted a translation card) wrote these languages, each now complete / one incomplete. An edit that only leaves an edition stale is not a translation | Ready / Needs you |
 | `published` / `publish_failed` | The chat Publish card moved to done / failed | Ready / Needs you |
 | `failed` | A stream ended with a server error (never Stop, BUSY or a lost connection) | Needs you |
@@ -50,7 +50,9 @@ A turn that replied and started drawing (or publishing) does not alert at the re
 gives at most one alert, in this order: failed, a new needs-you, drawn, translated, published, a reply nobody alerted
 yet. A needs-you that already waited when the stream started is not new. A stream that ends while Stop winds down is the
 person's own Stop and stays silent; a transport failure with no server code (a lost connection) is never alerted, because
-the server may still finish the turn. Patch streams (silent saves) are ignored everywhere.
+the server may still finish the turn. Patch streams (silent saves) are ignored everywhere. The "drawn" rule is tested in
+`components/comicstudio/alerts/studioTransitions.test.ts` ("drawn" counts only real drawings: withheld, reused, mixed,
+an older run's picture).
 
 ## Copy
 

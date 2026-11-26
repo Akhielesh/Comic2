@@ -8,7 +8,9 @@
 //    while pictures are drawing or a publish runs, nothing yet (the settle reports the work); otherwise "The Director
 //    replied", keyed by the reply's message id.
 //  - Settled: a stream left. At most one alert, in this order: failed (a server error inside the stream, or a new studio
-//    error with a server code, never Stop, BUSY or a lost connection), a new needs-you, drawn / drawn with issues,
+//    error with a server code, never Stop, BUSY or a lost connection), a new needs-you, drawn / drawn with issues (a
+//    picture counts as drawn by the progress card's rule, renderOutcome.ts progressState: never a withheld take, which
+//    needs a look, nor an earlier picture put back),
 //    translated / a translation that needs a look, published / couldn't publish, a reply nobody alerted yet.
 //    Translation alerts come only from a stream that translated (a translate action, an approved translate gate, or a
 //    turn that posted a translation card), and name only the languages it wrote: an edit that leaves an edition stale is
@@ -18,8 +20,9 @@
 //
 // Keys use message, card, gate and picture ids, so a replayed stream (liveturn's attach) dedupes against the first.
 
-import type { Card, ComicDoc, LanguageEdition, Msg, RenderState, TextTranslation, TranslationFailure } from '../../../shared/comic/doc';
+import { renderTargetKey, type Card, type ComicDoc, type LanguageEdition, type Msg, type RenderState, type TextTranslation, type TranslationFailure } from '../../../shared/comic/doc';
 import { editionProgress } from '../../../shared/comic/i18n';
+import { progressState } from '../../../shared/comic/renderOutcome';
 import { anyRenderBusy, needsYouOf, type NeedsWhy, type NeedsYou } from '../../../shared/comic/attention';
 import type { AlertDraft, AlertKind } from '../../../services/alerts/types';
 import type { StreamInfo, StudioState } from '../studioReducer';
@@ -130,10 +133,37 @@ const newNeeds = (memo: TransitionMemo, doc: ComicDoc | null, start: ComicDoc | 
   return needs;
 };
 
+/**
+ * When the newest run that includes each picture queued it: its live progress card's `since` (server clock, the same
+ * time the card itself reads), by render target key. Older progress cards for the same picture lose to newer ones.
+ */
+const runSinceOf = (doc: ComicDoc | null | undefined): Map<string, number> => {
+  const out = new Map<string, number>();
+  for (const m of conv(doc)) {
+    for (const c of Array.isArray(m?.cards) ? (m.cards as Card[]) : []) {
+      if (c?.type !== 'renders' || typeof c.since !== 'number' || !Number.isFinite(c.since) || !Array.isArray(c.targets)) continue;
+      for (const t of c.targets) {
+        if (!t || typeof t !== 'object' || typeof t.kind !== 'string') continue;
+        const key = renderTargetKey(t);
+        const was = out.get(key);
+        if (was === undefined || c.since > was) out.set(key, c.since);
+      }
+    }
+  }
+  return out;
+};
+
+/**
+ * Drawn / drawn with issues. A picture that changed in this stream counts by the progress card's own rule
+ * (renderOutcome.ts progressState, with its card's `since`): only a picture this run drew and the person can see is
+ * drawn; a take the content check withheld needs a look, like a failure; an earlier picture put back (a reuse, a kept
+ * take) is neither, so a run that drew nothing new never says "Pages are ready".
+ */
 const drawnDraft = (frame: StudioAlertFrame, memo: TransitionMemo, start: ComicDoc | null): AlertDraft | null => {
   const before = targetsOf(start);
+  const since = runSinceOf(frame.doc);
   const drawn: string[] = [];
-  const failed: string[] = [];
+  const issues: string[] = [];
   let allPages = true;
   for (const [key, entry] of targetsOf(frame.doc)) {
     const now = entry.render;
@@ -144,12 +174,15 @@ const drawnDraft = (frame: StudioAlertFrame, memo: TransitionMemo, start: ComicD
     else if (now.status === 'failed' && (was?.status !== 'failed' || was.updatedAt !== now.updatedAt)) mark = `${key}@failed:${now.updatedAt ?? 0}`;
     if (!mark || memo.reported.has(mark)) continue;
     remember(memo, mark);
-    (now.status === 'ready' ? drawn : failed).push(mark);
-    if (!entry.page) allPages = false;
+    const state = progressState(now, since.get(key));
+    if (state === 'drawn') {
+      drawn.push(mark);
+      if (!entry.page) allPages = false;
+    } else if (state === 'failed' || state === 'withheld') issues.push(mark);
   }
-  if (!drawn.length && !failed.length) return null;
-  const reported = [...drawn, ...failed].sort().join(',');
-  if (failed.length) return { kind: 'drawn_issues', key: `comic:${frame.projectId}:drawn:${reported}`, ...draftBase(frame), count: drawn.length, failedCount: failed.length };
+  if (!drawn.length && !issues.length) return null;
+  const reported = [...drawn, ...issues].sort().join(',');
+  if (issues.length) return { kind: 'drawn_issues', key: `comic:${frame.projectId}:drawn:${reported}`, ...draftBase(frame), count: drawn.length, failedCount: issues.length };
   return { kind: 'drawn', key: `comic:${frame.projectId}:drawn:${reported}`, ...draftBase(frame), count: drawn.length, pictures: !allPages };
 };
 

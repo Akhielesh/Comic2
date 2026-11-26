@@ -6,6 +6,7 @@ import type { StudioEvent } from '../../../shared/comic/events';
 import type { DocOp } from '../../../shared/comic/ops';
 import { emptyRender, type Card, type ComicDoc, type Gate, type Msg, type RenderState, type RenderTarget } from '../../../shared/comic/doc';
 import { lineSourceHash } from '../../../shared/comic/i18n';
+import type { SafetyVerdict } from '../../../shared/comic/safety';
 import { initialStudioState, studioReducer, type StreamKind, type StudioReducerAction, type StudioState } from '../studioReducer';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
 import type { AlertDraft } from '../../../services/alerts/types';
@@ -193,6 +194,78 @@ describe('a Director turn', () => {
     const s = new Studio(doc);
     s.start('r1', 'action', 'render_pages').ops('r1', [drawn('pg_1')], 'job').end('r1');
     expect(s.kinds()).toEqual(['drawn']);
+  });
+});
+
+describe('"drawn" counts only real drawings (the progress card’s rule, renderOutcome.ts progressState)', () => {
+  const BLOCKED: SafetyVerdict = { assessed: 'X', categories: ['graphic_gore'], by: 'qc', at: T };
+  const pages = (n: number): ComicDoc => {
+    const doc = baseDoc();
+    return { ...doc, pages: Array.from({ length: n }, (_, i) => ({ ...doc.pages[0], id: `pg_${i + 1}`, n: i + 1, render: emptyRender() })) };
+  };
+  /** The run's live progress card: `since` is when it queued its targets (server clock). */
+  const progress = (id: string, pageIds: string[], since = T): DocOp =>
+    reply(id, [{ type: 'renders', id: `rc_${id}`, targets: pageIds.map((p) => ({ kind: 'page' as const, id: p })), label: 'Drawing pages', since }], 'Drawing pages.');
+  const withheld = (id: string): DocOp =>
+    render({ kind: 'page', id }, { status: 'ready', asset: { path: `u/x/p/${id}-blocked.webp`, source: 'generated', at: T + 5, safety: BLOCKED }, updatedAt: T + 5 });
+  /** The run put back an earlier take from the page's history (a reuse): it predates the run. */
+  const reused = (id: string, path: string, at: number): DocOp => render({ kind: 'page', id }, { status: 'ready', asset: { path, source: 'generated', at }, updatedAt: T + 5 });
+
+  it('a take the content check withheld is never "drawn": it needs a look (with or without a progress card)', () => {
+    const s = new Studio(pages(2));
+    s.start('r1', 'action', 'render_pages').ops('r1', [drawing('pg_1'), drawing('pg_2')], 'job');
+    s.ops('r1', [drawn('pg_1'), withheld('pg_2')], 'job').end('r1');
+    expect(s.alerts).toHaveLength(1);
+    expect(s.alerts[0]).toMatchObject({ kind: 'drawn_issues', count: 1, failedCount: 1 });
+  });
+
+  it('a withheld take alone never reads "Pages are ready"', () => {
+    const s = new Studio(pages(1));
+    s.start('r1', 'action', 'render_pages').ops('r1', [progress('a1', ['pg_1']), drawing('pg_1')], 'job').ops('r1', [withheld('pg_1')], 'job').end('r1');
+    expect(s.kinds()).toEqual(['drawn_issues']);
+    expect(s.alerts[0]).toMatchObject({ count: 0, failedCount: 1 });
+  });
+
+  it('a reused earlier picture is not "drawn": a run that only put earlier takes back says nothing is ready', () => {
+    const doc = pages(2);
+    const early = { path: 'u/x/p/early.webp', source: 'generated' as const, at: T - 5000 };
+    doc.pages = doc.pages.map((p) => ({ ...p, render: { status: 'stale', history: [early], asset: { path: `u/x/p/${p.id}-late.webp`, source: 'generated', at: T - 1000 } } }));
+    const s = new Studio(doc);
+    s.start('r1', 'action', 'render_pages').ops('r1', [progress('a1', ['pg_1', 'pg_2']), drawing('pg_1'), drawing('pg_2')], 'job');
+    s.ops('r1', [reused('pg_1', early.path, early.at), reused('pg_2', early.path, early.at)], 'job').end('r1');
+    expect(s.kinds()).toEqual([]);
+  });
+
+  it('mixed: one new picture, one reused, one withheld → "1 drawn, 1 needs a look"', () => {
+    const doc = pages(3);
+    const early = { path: 'u/x/p/early.webp', source: 'generated' as const, at: T - 5000 };
+    doc.pages[1] = { ...doc.pages[1], render: { status: 'stale', history: [early], asset: { path: 'u/x/p/late.webp', source: 'generated', at: T - 1000 } } };
+    const s = new Studio(doc);
+    s.start('r1', 'action', 'render_pages').ops('r1', [progress('a1', ['pg_1', 'pg_2', 'pg_3']), drawing('pg_1'), drawing('pg_2'), drawing('pg_3')], 'job');
+    s.ops('r1', [render({ kind: 'page', id: 'pg_1' }, { status: 'ready', asset: { path: 'u/x/p/new.webp', source: 'generated', at: T + 5 }, updatedAt: T + 5 })], 'job');
+    s.ops('r1', [reused('pg_2', early.path, early.at), withheld('pg_3')], 'job').end('r1');
+    expect(s.alerts).toHaveLength(1);
+    expect(s.alerts[0]).toMatchObject({ kind: 'drawn_issues', count: 1, failedCount: 1 });
+  });
+
+  it('"Pictures" only when a drawn picture is not a page: a reused cover beside drawn pages still reads "Pages are ready"', () => {
+    const doc = pages(1);
+    const early = { path: 'u/x/p/cover-early.webp', source: 'generated' as const, at: T - 5000 };
+    doc.cover = { ...doc.cover, render: { status: 'stale', history: [early], asset: { path: 'u/x/p/cover-late.webp', source: 'generated', at: T - 1000 } } };
+    const s = new Studio(doc);
+    const card: Card = { type: 'renders', id: 'rc', targets: [{ kind: 'page', id: 'pg_1' }, { kind: 'cover' }], label: 'Drawing', since: T };
+    s.start('r1', 'action', 'render_pages').ops('r1', [reply('a1', [card], 'Drawing.'), drawing('pg_1')], 'job');
+    s.ops('r1', [drawn('pg_1', 'u/x/p/pg_1-new.webp'), render({ kind: 'cover' }, { status: 'ready', asset: early, updatedAt: T + 5 })], 'job').end('r1');
+    expect(s.alerts).toEqual([expect.objectContaining({ kind: 'drawn', count: 1, pictures: false })]);
+  });
+
+  it('the newest progress card that includes a picture decides: a picture drawn by an earlier run is not this run’s', () => {
+    const doc = pages(1);
+    const s = new Studio(doc);
+    // An older run (since T - 9000) is in the history; this run's card (since T) is the newest that includes page 1.
+    s.start('r1', 'action', 'render_pages').ops('r1', [progress('a0', ['pg_1'], T - 9000), progress('a1', ['pg_1'], T), drawing('pg_1')], 'job');
+    s.ops('r1', [reused('pg_1', 'u/x/p/from-older-run.webp', T - 8000)], 'job').end('r1');
+    expect(s.kinds()).toEqual([]);
   });
 });
 
