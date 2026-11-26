@@ -209,8 +209,10 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
   logger.info('comic_model_changed', { projectId: ctx.projectId, from: priorId, to: spec.id, redraw: action.redraw, quotedUsd: action.quotedUsd });
 
   if (!actions.length) return finished({ status: 'done', message: text, nextSteps: steps });
-  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render.
-  const redrawOpts: RunActionOptions = { ...opts, confirmed: true };
+  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render. It was confirmed
+  // with the switch, so everything it posts says so (runAt): the pages run that starts once the sheets are ready never
+  // closes a question the Director asked while they drew.
+  const redrawOpts: RunActionOptions = { ...opts, confirmed: true, runAt: at };
   const first = await startAction(ctx, actions[0], redrawOpts);
   if (actions.length === 1) return first;
   return chainAfterSheets(ctx, opts, redrawOpts, spec, actions, first, prices, route.byok);

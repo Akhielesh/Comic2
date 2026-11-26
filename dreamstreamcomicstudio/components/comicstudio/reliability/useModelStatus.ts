@@ -207,7 +207,8 @@ export function useAutoRetry(studio: Pick<StudioController, 'act'>): ModelStatus
       const claimed = claimRetry(intent.cardId);
       if (!claimed) continue;
       Promise.resolve()
-        .then(() => actRef.current(claimed.action))
+        // Confirmed when the person armed it: what it posts never closes a question the Director asked meanwhile.
+        .then(() => actRef.current(claimed.action, { confirmedAt: claimed.armedAt }))
         .then(
           (result) => settleRetry(claimed.cardId, !refused(result)),
           () => settleRetry(claimed.cardId, false)

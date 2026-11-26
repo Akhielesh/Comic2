@@ -1,6 +1,8 @@
 // change_image_model (models.md §3.4 item 7, §3.6 F; §5.1 M1-LOCK-SERVER tests). Fakes only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ComicDoc, ImageModelLock } from '../../../../shared/comic/doc.js';
+import type { ComicDoc, ImageModelLock, Msg } from '../../../../shared/comic/doc.js';
+import { needsYouOf } from '../../../../shared/comic/attention.js';
+import { cardSettle } from '../../../../shared/comic/settle.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { getImageModel } from '../../../../shared/comic/models.js';
 import { redrawQuote, type PriceBook } from '../../../../shared/comic/modelLock.js';
@@ -241,6 +243,73 @@ describe("change_image_model 'all': sheets first, pages only on new-model sheets
     const notice = session.doc.conversation.at(-1)!;
     expect(notice.text).toBe('Redrawing 5 pages and the cover waits for the new character sheets, so it hasn\'t started and nothing was charged for it. Start it once the sheets are drawn.');
     expect(notice.nextSteps?.[0]).toMatchObject({ label: expect.stringMatching(/^Redraw 5 pages and the cover · /), action: { type: 'render_pages', force: true, includeCover: true, quotedUsd: expect.any(Number) } });
+  });
+
+  it('a question the Director asks while the sheets draw stays open after the pages and cover are redrawn', async () => {
+    // The run that starts once the sheets are ready was confirmed with the switch: it settles nothing asked since.
+    let clock = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let release!: () => void;
+    const sheetsDone = new Promise<void>((resolve) => (release = resolve));
+    let holding = true;
+    const images = fakeImages(async () => {
+      if (holding) await sheetsDone;
+      return undefined;
+    });
+    const { session, ctx } = setup(lake(), { images });
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    expect(started.outcome.status).toBe('started');
+    const switchedAt = (session.doc.imageModel as ImageModelLock).lockedAt;
+    for (let i = 0; i < 200 && !ctx.imagesFake.calls.length; i += 1) await new Promise((r) => setTimeout(r, 1));
+    expect(ctx.imagesFake.calls.length).toBeGreaterThan(0);
+    // A minute later, while the sheets draw, the Director asks something.
+    clock += 60_000;
+    const question: Msg = {
+      id: 'msg_q',
+      role: 'assistant',
+      text: 'Should the lake freeze over in the last scene?',
+      at: clock,
+      cards: [{ type: 'options', id: 'card_q', question: 'Freeze the lake?', choices: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] }]
+    };
+    session.commit([{ op: 'message', msg: question }]);
+    // Another minute on, the sheets land and the pages + cover start.
+    clock += 60_000;
+    holding = false;
+    release();
+    await started.done;
+    expect(pageRuns(ctx)).toHaveLength(1);
+    const conversation = session.doc.conversation;
+    const at = conversation.findIndex((m) => m.id === 'msg_q');
+    expect(cardSettle(session.doc, at, conversation[at].cards![0]).state).toBe('open');
+    expect(needsYouOf(session.doc)).toEqual({ why: 'question', key: 'card:msg_q:card_q' });
+    // Everything the redraw posted after the question says when the switch was confirmed.
+    const after = conversation.slice(at + 1);
+    expect(after.length).toBeGreaterThan(0);
+    for (const m of after) expect(m.runAt).toBe(switchedAt);
+  });
+
+  it('the chain’s own notices carry the switch time, so a question asked meanwhile stays open', async () => {
+    let clock = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let release!: () => void;
+    const sheetsFail = new Promise<void>((resolve) => (release = resolve));
+    const images = fakeImages(async () => {
+      await sheetsFail;
+      return new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 400, retryable: false });
+    });
+    const { session, ctx } = setup(lake(), { images });
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quoteFor(session.doc, 'nano-banana-pro', 'all')), UI);
+    const switchedAt = (session.doc.imageModel as ImageModelLock).lockedAt;
+    for (let i = 0; i < 200 && !ctx.imagesFake.calls.length; i += 1) await new Promise((r) => setTimeout(r, 1));
+    clock += 60_000;
+    session.commit([{ op: 'message', msg: { id: 'msg_q', role: 'assistant', text: 'Which ending?', at: clock, cards: [{ type: 'options', id: 'card_q', question: 'Which ending?', choices: [{ id: 'a', label: 'Happy' }, { id: 'b', label: 'Sad' }] }] } }]);
+    clock += 60_000;
+    release();
+    await started.done;
+    const notice = session.doc.conversation.find((m) => /so I didn't start 5 pages and the cover/.test(m.text));
+    expect(notice?.runAt).toBe(switchedAt);
+    expect(needsYouOf(session.doc)).toEqual({ why: 'question', key: 'card:msg_q:card_q' });
   });
 
   it('a sheet that fails upstream → the pages do not start; one honest notice offers them as a priced chip', async () => {

@@ -1206,7 +1206,18 @@ export interface RunActionOptions {
   staleFrom?: number;
   /** Ops origin for session.commit (undo + "saved by software" attribution). Absent ⇒ 'director' when collecting, else none. */
   origin?: OpsOrigin;
+  /**
+   * When the person confirmed this work, for work that starts later than the confirm: the redraw a model switch chains
+   * after its sheets, or a "wait and retry" the client re-sends once the model is back. Every message the action and
+   * its run post carries it as Msg.runAt, so they never move the chat past a question asked since (settle.ts movesOn).
+   * Absent: a run's messages carry the run's own start; an action's own answer is a plain turn.
+   */
+  runAt?: number;
 }
+
+/** The message as background work confirmed at `opts.runAt` posts it (unchanged without one). */
+const stampRunAt = (opts: Pick<RunActionOptions, 'runAt'>, msg: Msg): Msg =>
+  typeof opts.runAt === 'number' && Number.isFinite(opts.runAt) ? { ...msg, runAt: opts.runAt } : msg;
 
 export type ActionOutcome =
   | { status: 'done'; message: string; nextSteps?: NextStep[] }
@@ -1241,7 +1252,7 @@ const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards
     if (objects.length) opts.collectNextSteps?.(objects);
     return;
   }
-  commitAs(ctx, [{ op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], 'job');
+  commitAs(ctx, [{ op: 'message', msg: stampRunAt(opts, governMsg(ctx, assistantMessage(text, cards, steps))) }], 'job');
 };
 
 /**
@@ -1254,7 +1265,7 @@ export const commitWithMessage = (ctx: StudioContext, opts: RunActionOptions, op
     deliver(ctx, opts, text, cards, steps);
     return;
   }
-  commitAs(ctx, [...ops, { op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], opts.origin ?? 'job', label);
+  commitAs(ctx, [...ops, { op: 'message', msg: stampRunAt(opts, governMsg(ctx, assistantMessage(text, cards, steps))) }], opts.origin ?? 'job', label);
 };
 
 /** A render run is under way for this comic: a target is queued or drawing, or a run still holds pending spend. */
@@ -2719,10 +2730,12 @@ class RenderRun {
   /** A job message in the user's terms (the governed-dollars safety net). */
   /**
    * Every message this run posts says when the run started (Msg.runAt): its outcome, landing after a reply the director
-   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn).
+   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn). A run the person
+   * confirmed earlier (a chained redraw, a "wait and retry") says when they confirmed it (RunActionOptions.runAt).
    */
   private message(msg: Msg): Msg {
-    return governMsg(this.ctx, { ...msg, runAt: this.started });
+    const confirmed = this.opts.runAt;
+    return governMsg(this.ctx, { ...msg, runAt: typeof confirmed === 'number' && Number.isFinite(confirmed) ? confirmed : this.started });
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────

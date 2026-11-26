@@ -195,7 +195,8 @@ describe('ModelStatusBanner', () => {
     states = { [NB21]: 'ok' };
     await flush(STATUS_POLL_MS);
     expect(studio.act).toHaveBeenCalledTimes(1);
-    expect(studio.act).toHaveBeenCalledWith(card.blockedAction);
+    // Sent as confirmed when the wait was chosen: it never closes a question the Director asked meanwhile.
+    expect(studio.act).toHaveBeenCalledWith(card.blockedAction, { confirmedAt: getRetry('card_out_9')!.armedAt });
   });
 
   it('dismiss hides this incident; it returns when the trouble gets worse, and after a recovery', async () => {

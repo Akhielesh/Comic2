@@ -119,6 +119,24 @@ describe('send with SendOptions', () => {
   });
 });
 
+describe('act with a confirm time', () => {
+  it('a re-sent action says how long ago it was confirmed; a fresh click or a junk time says nothing', async () => {
+    const { result } = await setup();
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    await act(async () => {
+      await result.current.act({ type: 'render_cover' }, { confirmedAt: now - 150_000 });
+    });
+    expect(requests.at(-1)).toEqual({ kind: 'action', action: { type: 'render_cover' }, confirmedAgoMs: 150_000 });
+    for (const confirmedAt of [now, now + 60_000, Number.NaN]) {
+      await act(async () => {
+        await result.current.act({ type: 'render_cover' }, { confirmedAt });
+      });
+      expect(requests.at(-1)).toEqual({ kind: 'action', action: { type: 'render_cover' } });
+    }
+  });
+});
+
 describe('next steps and client actions', () => {
   it('routes a chip by kind: action → act, client → board, say → message', async () => {
     const { result } = await setup();
