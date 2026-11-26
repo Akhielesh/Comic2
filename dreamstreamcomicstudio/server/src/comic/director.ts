@@ -197,6 +197,9 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
   return parts.length ? `Focus: the user is looking at ${parts.join('; ')}` : '';
 };
 
+/** How long a director turn waits for real prices for its summary (else the registry list, as before). */
+export const DIRECTOR_PRICES_WAIT_MS = 500;
+
 /**
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
@@ -743,7 +746,9 @@ async function directorTurnBody(
   const prompt = rules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${rules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
-  const pricesSoon = priceBookWithin(ctx);
+  // The request's PriceBook when it is ready in time (it is memoised: a spend this turn starts reuses it), so the
+  // summary's page and planning prices are the chips' and the gate's. A cold catalog never holds a turn long.
+  const pricesSoon = priceBookWithin(ctx, DIRECTOR_PRICES_WAIT_MS);
   const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
   const prices = await pricesSoon;
   const system = [
