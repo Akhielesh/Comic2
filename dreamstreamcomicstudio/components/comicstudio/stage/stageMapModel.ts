@@ -16,6 +16,11 @@ export interface StageMapRow {
   /** What is left in the stage: "6 pages to draw · 2 drawing now", "Nothing left". */
   left: string;
   target: { label: string; place: StagePlace };
+  /**
+   * The row whose target is the comic's next step: the current stage's, or the published comic's Publish ("Read your
+   * comic", "Publish your changes"). The map opens with focus on it.
+   */
+  leads: boolean;
   /** The row as one sentence, for a screen reader: "Draw, now. 6 pages to draw, 2 drawing now." */
   sentence: string;
 }
@@ -80,6 +85,6 @@ export function stageMapRows(facts: StageFacts): StageMapRow[] {
     const stateWord = view.complete && stage === 'publish' ? 'Published' : STATE_WORD[state];
     const left = leftIn(stage, isDone, view.complete, facts);
     const label = STAGE_LABEL[stage];
-    return { stage, label, state, stateWord, left, target, sentence: `${label}, ${stateWord.toLowerCase()}. ${left.split(' · ').join(', ')}.` };
+    return { stage, label, state, stateWord, left, target, leads, sentence: `${label}, ${stateWord.toLowerCase()}. ${left.split(' · ').join(', ')}.` };
   });
 }

@@ -89,10 +89,11 @@ import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import { ComicSidePanel, PANEL_ID, PANEL_LABEL, type ComicPanelLinks } from './panel/ComicSidePanel';
 import { ComicSection } from './panel/ComicSection';
 import { usePanelOpen } from './panel/panelPreference';
-import { revealBoardTop, revealPart, useBoardPart } from './board/boardPart';
+import { revealBoardTop, revealPart, useBoardPartTracker } from './board/boardPart';
 import { partLabelOf, partTab, type BoardPart } from './panel/partsModel';
 import { boardTabsFor } from './board/boardNavigation';
-import { StudioBreadcrumb, type StudioTrail } from './breadcrumb/StudioBreadcrumb';
+import { LiveStudioBreadcrumb, type StudioTrail, type StudioTrailSource } from './breadcrumb/StudioBreadcrumb';
+import { BREADCRUMB_TRAIL_MIN_WIDTH } from './breadcrumb/breadcrumbModel';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -288,7 +289,7 @@ export interface StudioHeaderProps {
   ask?: { busy: boolean; onAsk: () => void; onViewChat: () => void };
   navigation?: { expanded: boolean; overlay: boolean; onToggle: () => void; buttonRef: React.RefObject<HTMLButtonElement | null> };
   /** The breadcrumb past the comic's name: the board's area and the part you are on (StudioBreadcrumb). */
-  trail?: StudioTrail;
+  trail?: StudioTrailSource;
 }
 
 /**
@@ -445,13 +446,13 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
         </button>
       )}
       {/* My comics › the comic (its name field) › the board's area › the part you are on. */}
-      <StudioBreadcrumb
+      <LiveStudioBreadcrumb
         title={doc.brief.title || 'Untitled comic'}
         onRename={(title) => void studio.patch([{ op: 'brief', patch: { title } }])}
         onMyComics={navigation ? onBack : undefined}
-        room={variant === 'regular' ? 'wide' : phone ? 'narrow' : 'medium'}
-        area={trail?.area}
-        item={trail?.item}
+        // A phone held upright has room for the name only; held sideways, the name and the trail.
+        room={variant === 'regular' ? 'wide' : phone && ff.width < BREADCRUMB_TRAIL_MIN_WIDTH ? 'narrow' : 'medium'}
+        trail={trail}
       />
     </>
   );
@@ -989,8 +990,8 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
   // The card the person is on in the board (a character, a page, the cover): the parts tree's current row and the
-  // breadcrumb's last crumb.
-  const boardPart = useBoardPart();
+  // breadcrumb's last crumb. Kept in a store the shell never reads, so moving between cards re-renders only those two.
+  const partStore = useBoardPartTracker();
   const behind = studio.publication?.behind;
   // Where the comic stands, for the panel's own section and its row in Your comics (the strip reads the same facts).
   const facts = useMemo(() => (doc ? stageFacts(doc, { behind }) : null), [doc, behind]);
@@ -1203,6 +1204,8 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       <ComicSidePanel
         place="comic"
         compact={compact}
+        // The header's breadcrumb is the document's one current page.
+        hereInBreadcrumb
         links={links}
         onMyComics={closing(onBack)}
         comic={{ id: doc.id, title: doc.brief.title || '', facts, summary }}
@@ -1218,7 +1221,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
               onConversation={closing(skipToComposer)}
               onGo={closing(goToStage)}
               focusedPageId={studio.focusedPageId}
-              part={boardPart}
+              partStore={partStore}
               onOpenPart={closing(openPart)}
             />
           )
@@ -1234,25 +1237,41 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const boardHiddenFromChat = phone ? view !== 'board' : paneMode === 'chat';
 
   // The breadcrumb past the comic's name (SH-C2): the board's area while the board is on screen, and the part you are on
-  // in it (the page in the editor, else the card you are on).
+  // in it (the page in the editor, else the card you are on, which the breadcrumb reads from the store itself).
   const areaLabel = boardHiddenFromChat ? undefined : boardTabsFor(doc, studio.caps, studio.tab).find((t) => t.id === studio.tab)?.label;
-  const crumbPart: BoardPart | null =
-    studio.focusedPageId && studio.tab === 'pages' ? { kind: 'page', id: studio.focusedPageId } : boardPart && partTab(boardPart) === studio.tab ? boardPart : null;
-  const crumbLabel = crumbPart ? partLabelOf(doc, crumbPart) : null;
-  const trail: StudioTrail = {
-    area: areaLabel
-      ? {
-          label: areaLabel,
-          // Back to the top of the area: the page editor closes, the board scrolls up and takes focus.
-          onGo: () => {
-            if (studio.focusedPageId) openPage(null);
-            showBoard();
-            revealBoardTop({ reducedMotion: ff.reducedMotion });
+  const editorPage = studio.focusedPageId && studio.tab === 'pages' ? studio.focusedPageId : null;
+  const buildTrail = (boardPart: BoardPart | null): StudioTrail => {
+    const crumbPart: BoardPart | null = editorPage ? { kind: 'page', id: editorPage } : boardPart && partTab(boardPart) === studio.tab ? boardPart : null;
+    const crumbLabel = crumbPart ? partLabelOf(doc, crumbPart) : null;
+    return {
+      area: areaLabel
+        ? {
+            label: areaLabel,
+            // Back to the top of the area: the page editor closes, the board scrolls up and takes focus.
+            onGo: () => {
+              if (studio.focusedPageId) openPage(null);
+              showBoard();
+              revealBoardTop({ reducedMotion: ff.reducedMotion });
+            }
           }
-        }
-      : null,
-    item: areaLabel && crumbPart && crumbLabel ? { label: crumbLabel, onGo: () => openPart(crumbPart) } : null
+        : null,
+      item:
+        areaLabel && crumbPart && crumbLabel
+          ? {
+              label: crumbLabel,
+              // The page in the editor is opened again; a card you were on comes back into view with focus on it (a page's
+              // card stays a card: its crumb never opens the page editor over the board).
+              onGo: editorPage
+                ? () => openPart(crumbPart)
+                : () => {
+                    showBoard();
+                    revealPart(crumbPart, { reducedMotion: ff.reducedMotion });
+                  }
+            }
+          : null
+    };
   };
+  const trail: StudioTrailSource = { partStore, build: buildTrail };
 
   const navItems: StudioNavItem[] = [
     {

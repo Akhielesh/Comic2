@@ -6,17 +6,20 @@
 // An ARIA tree, drawn flat (each visible row is a treeitem with its level, position and set size), so a collapsed group
 // renders nothing and a 200-page book is about ten rows. One tab stop (the current row); Up and Down, Home and End move;
 // Right opens a group or steps into it, Left closes it or steps out; Enter or Space goes there. Moving never navigates, so
-// the phone drawer stays open while you explore. Books over 10 pages get "Find a page" (StoryMap's index): while it has
-// words the matching pages replace the tree.
+// the phone drawer stays open while you explore. The path to where you are opens by itself, and a deliberate move (a tab,
+// a page opened) brings its row into view. Books over 10 pages get "Find a page" (StoryMap's index, in the ds
+// SearchField): while it has words the matching pages replace the tree.
 
-import React, { useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { BookImage, Check, ChevronRight } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioTab } from '../types';
 import type { ShownTab } from '../board/boardNavigation';
 import { matchStoryPages, storyPageIndex } from '../breakdown/storyMapIndex';
+import { useBoardPart, type BoardPartStore } from '../board/boardPartStore';
+import { SearchField } from '../../ds/SearchField';
 import { cn } from '../../../lib/utils';
-import { CLIP_TEXT, FIELD, MUTED, TRANSITION } from '../../chat/studioDesign';
+import { CLIP_TEXT, MUTED, TRANSITION } from '../../chat/studioDesign';
 import { ancestorKeys, currentPartKey, indexParts, partsTree, STANDING_WORD, visibleRows, type BoardPart, type PartRow, type PartTarget } from './partsModel';
 import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_SHORT } from './panelStyles';
 
@@ -48,15 +51,17 @@ export function PartsTree({ doc, tabs, tab, focusedPageId, part, onOpen }: Parts
   const tree = useMemo(() => partsTree({ doc, tabs }), [doc, tabsKey]);
   const index = useMemo(() => indexParts(tree), [tree]);
   const current = currentPartKey(index, { tab, focusedPageId, part });
-  // Where the person deliberately went (the tab, the page they opened): that path opens by itself. A card they move to
-  // inside the board marks its row, but does not open groups under them.
+  // Where the person deliberately went (the tab, the page they opened): its row comes into view.
   const navKey = currentPartKey(index, { tab, focusedPageId });
-  const auto = useMemo(() => new Set([...ancestorKeys(index, navKey), `tab:${tab}`]), [index, navKey, tab]);
+  // The path to where you are opens by itself, a card you are on in the board included, so the current row shows and is
+  // the one selected row. A card is only reached from the board, so its group opens while the tree has no focus, never
+  // under the person exploring it.
+  const auto = useMemo(() => new Set([...ancestorKeys(index, current), `tab:${tab}`]), [index, current, tab]);
   const [manual, setManual] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const [navSeen, setNavSeen] = useState(navKey);
-  if (navSeen !== navKey) {
+  const [seen, setSeen] = useState(current);
+  if (seen !== current) {
     // Going somewhere opens its path again, whatever was closed by hand before.
-    setNavSeen(navKey);
+    setSeen(current);
     setManual((prev) => new Map([...prev].filter(([key]) => !auto.has(key))));
   }
   const expanded = useMemo(() => new Set([...index.keys()].filter((key) => manual.get(key) ?? auto.has(key))), [index, manual, auto]);
@@ -73,6 +78,16 @@ export function PartsTree({ doc, tabs, tab, focusedPageId, part, onOpen }: Parts
     return rows[0]?.node.key ?? null;
   };
   const tabbable = shown(focusKey) ? focusKey : nearestShown(current);
+  // Where you are, inside a group closed by hand: the row that holds it says so to a screen reader too.
+  const holder = current && !shown(current) ? nearestShown(current) : null;
+  const holderHintId = useId();
+  const currentLabel = current ? index.get(current)?.node.label : undefined;
+
+  useEffect(() => {
+    // A deliberate move (another tab, a page opened in the editor), and the panel opening: the row comes into view in the
+    // panel's scrolling list (no smooth scroll; nothing moves when it is already in view).
+    if (navKey) elements.current.get(navKey)?.scrollIntoView?.({ block: 'nearest' });
+  }, [navKey]);
 
   const setOpen = (key: string, open: boolean) => setManual((prev) => new Map(prev).set(key, open));
   const focusRow = (key: string | undefined) => {
@@ -164,6 +179,7 @@ export function PartsTree({ doc, tabs, tab, focusedPageId, part, onOpen }: Parts
             aria-expanded={row.expanded}
             aria-selected={selected || undefined}
             aria-label={node.name}
+            aria-describedby={node.key === holder ? holderHintId : undefined}
             title={node.hint}
             tabIndex={node.key === tabbable ? 0 : -1}
             data-part-key={node.key}
@@ -209,8 +225,19 @@ export function PartsTree({ doc, tabs, tab, focusedPageId, part, onOpen }: Parts
           </div>
         );
       })}
+      {holder && currentLabel && (
+        <span id={holderHintId} hidden>
+          Holds {currentLabel}, where you are
+        </span>
+      )}
     </div>
   );
+}
+
+/** The tree with the card the person is on read from the board's part store (only the tree re-renders on a move). */
+export function LivePartsTree({ partStore, ...props }: Omit<PartsTreeProps, 'part'> & { partStore?: BoardPartStore | null }) {
+  const part = useBoardPart(partStore);
+  return <PartsTree {...props} part={part} />;
 }
 
 /** "Find a page" for a long book: the breakdown card's StoryMap index, matched as there. */
@@ -219,31 +246,20 @@ export function PageSearch({ doc, query, onQuery, onPage }: { doc: ComicDoc; que
   // Built only while searching: it reads the scenes of every page.
   const index = useMemo(() => (active ? storyPageIndex(doc) : []), [doc, active]);
   const matches = active ? matchStoryPages(index, query) : [];
-  const listId = useId();
+  const count = !active ? '' : matches.length ? `${matches.length} ${matches.length === 1 ? 'page' : 'pages'}` : 'No matching pages. Try a name or a shorter phrase.';
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <input
-        type="search"
-        value={query}
-        onChange={(event) => onQuery(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape' && query) {
-            event.preventDefault();
-            onQuery('');
-          }
-        }}
-        aria-label="Find a page"
-        aria-controls={active ? listId : undefined}
-        placeholder="Find a page"
-        enterKeyHint="search"
-        className={cn(FIELD, 'h-9 w-full min-w-0 px-3 text-sm coarse:h-11 coarse:text-base')}
-      />
+      {/* The one search box: Escape clears it while it has words (in the drawer too, before a second Escape closes it),
+          and Clear is there on touch. */}
+      <SearchField label="Find a page" placeholder="Find a page" value={query} onChange={onQuery} resultText={count || undefined} />
+      {/* Always rendered, empty while there are no words: a live region that mounts with its first message often goes
+          unannounced. */}
+      <p role="status" className={cn('m-0 px-3 text-xs', MUTED)}>
+        {count}
+      </p>
       {active && (
         <>
-          <p role="status" className={cn('m-0 px-3 text-xs', MUTED)}>
-            {matches.length ? `${matches.length} ${matches.length === 1 ? 'page' : 'pages'}` : 'No matching pages. Try a name or a shorter phrase.'}
-          </p>
-          <ol id={listId} aria-label="Matching pages" className="m-0 flex list-none flex-col gap-0.5 p-0">
+          <ol aria-label="Matching pages" className="m-0 flex list-none flex-col gap-0.5 p-0">
             {matches.slice(0, PAGE_SEARCH_SHOWN).map((page) => (
               <li key={page.id} className="min-w-0">
                 <button

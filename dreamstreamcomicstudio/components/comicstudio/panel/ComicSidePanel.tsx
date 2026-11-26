@@ -1,7 +1,8 @@
 // The one side panel of Comic Studio (SH-C1): the same panel on My comics, New comic, Images and inside a comic, docked
 // beside the work on wide screens (open, or a slim rail) and in a drawer on phones (the shells own the docking:
 // ComicWorkspaceFrame and ComicStudioShell). From the top:
-//   1. Where you are: My comics, then the place itself (the comic, New comic or Images) as the current page.
+//   1. Where you are: My comics, then the place itself (the comic, New comic or Images) as the current page (inside a
+//      comic it only looks current: the studio header's breadcrumb is the page's one current page, hereInBreadcrumb).
 //   2. Inside a comic: the comic's own section (ComicSection: its stage and next step, Ask the Director, the board).
 //   3. Your comics: every comic once, grouped Needs you, In progress, Finished, Recent (PanelComics).
 //   4. Go to: New comic, Images, Chat, Library, the studio guide, Report a problem. On a tall window this group stays
@@ -62,6 +63,11 @@ export interface ComicSidePanelProps {
   comicSection?: React.ReactNode;
   /** The slim rail. */
   compact?: boolean;
+  /**
+   * The page has a breadcrumb that marks where you are (the studio header's, SH-C2): "Where you are" then only looks
+   * current, so a screen reader hears one current page in the document, the breadcrumb's.
+   */
+  hereInBreadcrumb?: boolean;
   id?: string;
   className?: string;
 }
@@ -83,7 +89,7 @@ interface Destination {
 
 const HERE: Readonly<Record<Exclude<PanelPlace, 'all'>, string>> = { comic: 'Untitled comic', new: 'New comic', images: 'Images' };
 
-export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, compact = false, id = PANEL_ID, className }: ComicSidePanelProps) {
+export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, compact = false, hereInBreadcrumb = false, id = PANEL_ID, className }: ComicSidePanelProps) {
   const disabled = links?.disabled;
   const myComics = onMyComics ?? links?.onAllComics;
   const onList = place === 'all';
@@ -156,7 +162,7 @@ export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, 
         <ol aria-label="Where you are" className="m-0 flex list-none flex-col gap-0.5 p-0" data-panel-here>
           {myComicsButton && <li className="min-w-0">{myComicsButton}</li>}
           {here && (
-            <li aria-current="page" className="flex min-h-9 min-w-0 items-center px-3 text-sm font-semibold text-[var(--ds-ink)]" title={here}>
+            <li aria-current={hereInBreadcrumb ? undefined : 'page'} data-panel-here-current className="flex min-h-9 min-w-0 items-center px-3 text-sm font-semibold text-[var(--ds-ink)]" title={here}>
               <span className={CLIP_TEXT}>{here}</span>
             </li>
           )}

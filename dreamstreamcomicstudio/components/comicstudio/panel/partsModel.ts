@@ -142,7 +142,10 @@ export interface PartsInput {
   tabs: ReadonlyArray<{ id: StudioTab; label: string }>;
 }
 
-/** The comic's parts. The Cover follows Pages (it leads the Pages grid, where it is edited). */
+/**
+ * The comic's parts. The Cover follows Pages (it leads the Pages grid, where it is edited), once there is a page: before
+ * that the Pages tab is its "No pages planned yet" hint and has no cover card to go to.
+ */
 export function partsTree({ doc, tabs }: PartsInput): PartNode[] {
   const out: PartNode[] = [];
   for (const tab of tabs) {
@@ -166,6 +169,7 @@ export function partsTree({ doc, tabs }: PartsInput): PartNode[] {
         return n.children ? n.children.flatMap(leaves) : [n];
       });
       out.push({ ...area, count: pages ? `${drawnOf(flat)}/${pages}` : undefined, children: groups.length ? groups : undefined });
+      if (!pages) continue;
       const standing = pictureStanding(doc?.cover?.render);
       const word = standing === 'empty' || standing === 'planned' ? 'Not drawn' : STANDING_WORD[standing];
       out.push({ key: 'cover', kind: 'cover', label: 'Cover', name: `Cover, ${word}`, target: { kind: 'cover' }, standing, hint: 'Cover' });

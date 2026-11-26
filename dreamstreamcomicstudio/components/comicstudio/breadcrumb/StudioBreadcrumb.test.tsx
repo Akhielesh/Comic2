@@ -22,10 +22,12 @@ describe('breadcrumbCrumbs', () => {
     expect(keys({ myComics: false, room: 'wide', area: 'Cast' })).toEqual(['title', 'area*']);
   });
 
-  it('folds below 1024 px (My comics is the drawer’s first row) and on a phone (only the deepest crumb follows)', () => {
+  it('folds below 1024 px (My comics is the drawer’s first row) and on a phone held upright (the name alone)', () => {
     expect(keys({ myComics: true, room: 'medium', area: 'Pages', item: 'Page 3' })).toEqual(['title', 'area', 'item*']);
-    expect(keys({ myComics: true, room: 'narrow', area: 'Pages', item: 'Page 3' })).toEqual(['title', 'item*']);
-    expect(keys({ myComics: true, room: 'narrow', area: 'Pages' })).toEqual(['title', 'area*']);
+    expect(keys({ myComics: true, room: 'medium', area: 'Pages' })).toEqual(['title', 'area*']);
+    // 40 to 110 px of header: no crumb beside the name, which stays readable; the drawer's tree marks where you are.
+    expect(keys({ myComics: true, room: 'narrow', area: 'Pages', item: 'Page 3' })).toEqual(['title*']);
+    expect(keys({ myComics: true, room: 'narrow', area: 'Pages' })).toEqual(['title*']);
     expect(keys({ myComics: true, room: 'narrow' })).toEqual(['title*']);
   });
 });
@@ -77,23 +79,40 @@ describe('StudioBreadcrumb', () => {
     expect(h.onRename).toHaveBeenCalledTimes(1);
   });
 
-  it('truncates gracefully: the name shrinks first to a floor, the part clips with its words in the tooltip', () => {
-    mount({ room: 'narrow' });
+  it('truncates gracefully: the name shrinks first to a readable floor, then each crumb ends in an ellipsis at 44 px', () => {
+    mount({ room: 'medium' });
     expect(within(nav()).queryByRole('button', { name: 'My comics' })).toBeNull();
-    expect(within(nav()).queryByRole('button', { name: 'Cast' })).toBeNull();
-    const part = within(nav()).getByRole('button', { name: /^Maya/ });
-    expect(part).toHaveAttribute('title', 'Maya the cartographer of the salt flats');
-    expect(part.querySelector('.truncate')).not.toBeNull();
-    expect(part.closest('li')!.className).toContain('max-w-[10rem]');
-    // It clips, but never below a 44 px target; an area keeps its word.
-    expect(part.className.split(' ')).toContain('min-w-11');
     const name = within(nav()).getByRole('textbox', { name: 'Comic title' });
-    expect(name.className).toContain('truncate');
-    expect(name.closest('li')!.className.split(' ')).toEqual(expect.arrayContaining(['min-w-[2.5rem]', 'sm:min-w-[4rem]']));
-    // The breadcrumb shrinks and clips sideways rather than ever pushing the header's controls.
+    expect(name.closest('li')!.className.split(' ')).toContain('min-w-[5rem]');
+    for (const crumb of [within(nav()).getByRole('button', { name: 'Cast' }), within(nav()).getByRole('button', { name: /^Maya/ })]) {
+      const li = crumb.closest('li')!;
+      // It may shrink (never a fixed width that the nav would cut mid-word), down to its 44 px target, ending in "…".
+      expect(li.className.split(' ')).not.toContain('shrink-0');
+      expect(li.className).toContain('max-w-[10rem]');
+      expect(crumb.className.split(' ')).toEqual(expect.arrayContaining(['min-w-11', 'coarse:h-11']));
+      expect(crumb.querySelector('.truncate')).not.toBeNull();
+      expect(crumb).toHaveAttribute('title', crumb.textContent);
+    }
+    // The breadcrumb shrinks, and clips sideways only as a last resort, rather than ever pushing the header's controls.
     expect(nav().className.split(' ')).toEqual(expect.arrayContaining(['min-w-0', 'overflow-x-clip']));
-    // Touch targets.
-    expect(part.className).toContain('coarse:h-11');
+  });
+
+  it('a phone held upright: the name alone, taking all the room there is', () => {
+    mount({ room: 'narrow' });
+    expect(within(nav()).queryAllByRole('button')).toEqual([]);
+    const name = within(nav()).getByRole('textbox', { name: 'Comic title' });
+    expect(name).toHaveAttribute('aria-current', 'page');
+    expect(name.closest('li')!.className.split(' ')).toContain('min-w-0');
+    expect(name.className).toContain('truncate');
+  });
+
+  it('the name ends where its words do: the field is one character wide by itself, its hidden copy sets the width', () => {
+    mount();
+    const name = within(nav()).getByRole('textbox', { name: 'Comic title' });
+    expect(name).toHaveAttribute('size', '1');
+    expect(name.className.split(' ')).toEqual(expect.arrayContaining(['w-full', 'min-w-0']));
+    const copy = name.parentElement!.querySelector('[aria-hidden]')!;
+    expect(copy.textContent).toBe('Salt Road ');
   });
 
   it('stays ink: muted words for the way back, ink for where you are', () => {

@@ -23,6 +23,10 @@ const FOCUSABLE =
 // Open sheets, innermost last — Esc closes only the top one.
 const openStack: string[] = [];
 
+/** A field that clears itself on Escape (`data-escape-clears`) and still has words. */
+const clearsOnEscape = (target: EventTarget | null): boolean =>
+  target instanceof HTMLInputElement && target.hasAttribute('data-escape-clears') && target.value !== '';
+
 /** Is this sheet the topmost open one? */
 export const isTopSheet = (id: string): boolean => openStack[openStack.length - 1] === id;
 
@@ -72,6 +76,9 @@ export const useSheetBehaviour = (
     const onKey = (e: KeyboardEvent) => {
       if (openStack[openStack.length - 1] !== id) return;
       if (e.key === 'Escape') {
+        // A field that clears itself on Escape (the ds SearchField) takes the first press while it has words; the next
+        // closes the sheet.
+        if (clearsOnEscape(e.target)) return;
         e.preventDefault();
         e.stopPropagation();
         onCloseRef.current();

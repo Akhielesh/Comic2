@@ -31,7 +31,7 @@ describe('parseQaParams', () => {
 
   it('reads every documented parameter and rejects junk', () => {
     const p = parseQaParams('?surface=editor&fixture=deep-40p&tab=cast&page=7&lang=te&theme=dark&state=streaming&mode=pro&rtl=1&public=not-found&img=png&still=1');
-    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true, script: null });
+    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true, script: null, byok: false });
     const bad = parseQaParams('?surface=admin&fixture=../../etc&tab=x&page=-3&lang=<script>&state=boom&kit=<img src=x>');
     expect(bad).toMatchObject({ surface: 'studio', fixture: 'heist-12p', tab: 'pages', page: null, lang: null, state: 'idle', kit: null });
     expect(parseQaParams('?surface=kit&kit=refs-drawer')).toMatchObject({ surface: 'kit', kit: 'refs-drawer' });
@@ -39,6 +39,9 @@ describe('parseQaParams', () => {
     expect(parseQaParams('?surface=reader&share=1').share).toBe(true);
     expect(parseQaParams('?surface=reader&share=yes').share).toBe(false);
     expect(parseQaParams('?p=4').page).toBe(4);
+    expect(parseQaParams('?byok=1').byok).toBe(true);
+    expect(qaSceneFromParams(parseQaParams('?byok=1')).caps).toMatchObject({ byok: true });
+    expect(qaSceneFromParams(parseQaParams('')).caps).toBeUndefined();
   });
 });
 

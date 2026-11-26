@@ -89,6 +89,8 @@ describe('the stage map', () => {
       ['Publish', 'Published', 'Nothing left', 'Read your comic', 'read']
     ]);
     expect(table({ ...done, next: 'update_published' })[4]).toEqual(['Publish', 'Published', 'Changes not published yet', 'Publish your changes', 'share']);
+    // One row leads (the map opens on it): Publish's, the comic's next step, never the first done row.
+    expect(stageMapRows(done).map((r) => r.leads)).toEqual([false, false, false, false, true]);
   });
 
   it('live with a new page to draw: Publish stays done and says the new work is not out yet', () => {
@@ -101,7 +103,9 @@ describe('the stage map', () => {
     const doc = createEmptyDoc('c1', 'Salt Road', 1);
     doc.brief.premise = 'A road along the salt flats.';
     const view = comicStage(doc);
-    const current = stageMapRows(stageFacts(doc)).find((r) => r.state === 'current')!;
+    const rows = stageMapRows(stageFacts(doc));
+    const current = rows.find((r) => r.state === 'current')!;
     expect(current.target).toEqual({ label: view.next.label, place: view.next.place });
+    expect(rows.filter((r) => r.leads)).toEqual([current]);
   });
 });

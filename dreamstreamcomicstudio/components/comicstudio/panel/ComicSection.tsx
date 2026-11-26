@@ -17,8 +17,9 @@ import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE, TRANSITION, WRAP_TEXT } from '.
 import { PLACE_HINT } from '../stage/stageMarks';
 import { StageMap } from '../stage/StageMap';
 import { StageMarks } from './StageMarks';
-import { PageSearch, PAGE_SEARCH_MIN, PartsTree } from './PartsTree';
-import type { BoardPart, PartTarget } from './partsModel';
+import { LivePartsTree, PageSearch, PAGE_SEARCH_MIN } from './PartsTree';
+import type { PartTarget } from './partsModel';
+import type { BoardPartStore } from '../board/boardPartStore';
 import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_INK, RAIL_ITEM } from './panelStyles';
 
 export interface ComicSectionProps {
@@ -34,15 +35,15 @@ export interface ComicSectionProps {
   onGo: (place: StagePlace) => void;
   /** The page open in the page editor (the tree's current row). */
   focusedPageId?: string | null;
-  /** The card the person is on in the board (the tree's current row when it is in the open tab). */
-  part?: BoardPart | null;
+  /** The card the person is on in the board (the tree's current row when it is in the open tab); only the tree reads it. */
+  partStore?: BoardPartStore | null;
   /** Open a character's card, a page or the cover (an area opens through onSelect). */
   onOpenPart?: (target: Exclude<PartTarget, { kind: 'area' }>) => void;
 }
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect, onConversation, onGo, focusedPageId, part, onOpenPart }: ComicSectionProps) {
+export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect, onConversation, onGo, focusedPageId, partStore, onOpenPart }: ComicSectionProps) {
   const tabs = boardTabsFor(doc, caps, tab);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const view = useMemo(() => stageView(facts), [facts]);
@@ -181,7 +182,7 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
       <p className={cn('m-0 px-3 pt-3', OVERLINE)}>Board</p>
       <div className="flex flex-col gap-1 border-t border-[var(--ds-hairline)] pt-2">
         {searching && <PageSearch doc={doc} query={query} onQuery={setQuery} onPage={(id) => onOpenPart?.({ kind: 'page', id })} />}
-        {!(searching && query.trim()) && <PartsTree doc={doc} tabs={tabs} tab={tab} focusedPageId={focusedPageId} part={part} onOpen={openPart} />}
+        {!(searching && query.trim()) && <LivePartsTree doc={doc} tabs={tabs} tab={tab} focusedPageId={focusedPageId} partStore={partStore} onOpen={openPart} />}
       </div>
     </div>
   );

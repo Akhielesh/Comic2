@@ -4,10 +4,15 @@
 export type CrumbKey = 'comics' | 'title' | 'area' | 'item';
 
 /**
- * The header's room (headerVariantFor): 'wide' from 1024 px shows every crumb; 'medium' (tablets, narrow splits) leaves
- * My comics to the panel's drawer; 'narrow' (phones) also keeps only the deepest crumb after the comic's name.
+ * The header's room: 'wide' from 1024 px shows every crumb; 'medium' (tablets, narrow splits, a phone held sideways)
+ * leaves My comics to the panel's drawer; 'narrow' (a phone held upright, below BREADCRUMB_TRAIL_MIN_WIDTH) has room for
+ * the comic's name only. There, beside the panel toggle, Share, the wallet, Ask and ⋯, the name has 40 to 110 px: a crumb
+ * beside it would cut both to slivers, so the trail folds away into the drawer, whose parts tree marks where you are.
  */
 export type CrumbRoom = 'wide' | 'medium' | 'narrow';
+
+/** A phone narrower than this has room for the comic's name only (the trail folds into the drawer). */
+export const BREADCRUMB_TRAIL_MIN_WIDTH = 600;
 
 export interface Crumb {
   key: CrumbKey;
@@ -29,8 +34,10 @@ export function breadcrumbCrumbs({ myComics, room, area, item }: CrumbInput): Cr
   const keys: CrumbKey[] = [];
   if (myComics && room === 'wide') keys.push('comics');
   keys.push('title');
-  const hasItem = !!area && !!item;
-  if (area && !(room === 'narrow' && hasItem)) keys.push('area');
-  if (hasItem) keys.push('item');
+  if (room !== 'narrow' && area) {
+    keys.push('area');
+    // A part needs its area: with the board out of sight there is neither.
+    if (item) keys.push('item');
+  }
   return keys.map((key, i) => ({ key, current: i === keys.length - 1 }));
 }

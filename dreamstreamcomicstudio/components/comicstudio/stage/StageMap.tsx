@@ -2,10 +2,11 @@
 // and a target that goes there. Calm and ink only: a check for done, a filled dot for now, a ring for the rest, joined by a
 // hairline; heavier ink for the current stage; no hue, no spark, no price. Every target only navigates (stageMapModel.ts).
 //
-// Two ways in: the stage strip's "Stage map" button opens it as a popover (a bottom sheet on phones), and the side
-// panel's "This comic" marks open it inline (ComicSection). Keyboard: the targets are buttons in reading order; Arrow Up
-// and Down (or Left and Right), Home and End move between them; Enter opens one; Escape closes the popover and returns
-// focus to its button.
+// Two ways in: from the stage strip as a popover (a bottom sheet on phones): its "Stage map" button in the one-row layout,
+// its five marks in the compact row; and from the side panel, where the "This comic" marks open it inline (ComicSection).
+// Keyboard: the targets are buttons in reading order; Arrow Up and Down (or Left and Right), Home and End move between
+// them; Enter opens one; the popover opens on the row that leads (the next step), and Escape closes it and returns focus
+// to its button.
 
 import React, { useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Map as MapIcon } from 'lucide-react';
@@ -73,7 +74,7 @@ export function StageMap({ facts, onGo, className }: StageMapProps) {
                 onClick={() => onGo(row.target.place)}
                 aria-describedby={`${id}-${row.stage}`}
                 data-stage-map-target={row.stage}
-                data-autofocus={strong || undefined}
+                data-autofocus={row.leads || undefined}
                 className={cn(
                   '-ml-1.5 inline-flex h-8 max-w-full items-center gap-1 rounded-[var(--ds-radius-control)] px-1.5 text-xs font-medium text-[var(--ds-ink)] underline-offset-2 hover:underline coarse:h-11',
                   FOCUS_RING
@@ -93,11 +94,23 @@ export function StageMap({ facts, onGo, className }: StageMapProps) {
   );
 }
 
+export interface StageMapButtonProps {
+  facts: StageFacts;
+  onGo: (place: StagePlace) => void;
+  /** The button's name ("Stage map"; the compact strip's marks say where the comic stands). */
+  label?: string;
+  /** What the button shows: a map glyph, or the compact strip's five marks. */
+  children?: React.ReactNode;
+  className?: string;
+  /** The popover's edge on a wide screen: under the button's end (the strip's last control) or its start (the marks). */
+  align?: 'start' | 'end';
+}
+
 /**
- * The stage strip's way in: a "Stage map" button that opens the map as a popover (a bottom sheet on phones). Choosing a
- * target closes it and goes there; Escape or a click outside closes it and returns focus to the button.
+ * The stage strip's way in: a button that opens the map as a popover (a bottom sheet on phones). Choosing a target closes
+ * it and goes there; Escape or a click outside closes it and returns focus to the button.
  */
-export function StageMapButton({ facts, onGo }: { facts: StageFacts; onGo: (place: StagePlace) => void }) {
+export function StageMapButton({ facts, onGo, label = 'Stage map', children, className, align = 'end' }: StageMapButtonProps) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement | null>(null);
   return (
@@ -108,15 +121,17 @@ export function StageMapButton({ facts, onGo }: { facts: StageFacts; onGo: (plac
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label="Stage map"
+        aria-label={label}
         title="Stage map"
         data-stage-map-toggle
         className={cn(
-          'inline-flex h-8 min-w-8 shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] coarse:h-11 coarse:min-w-11',
-          FOCUS_RING
+          'inline-flex shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] hover:bg-[var(--ds-hover)]',
+          children ? 'h-11 min-w-11 gap-0.5 px-1.5' : 'h-8 min-w-8 text-[var(--ds-muted)] hover:text-[var(--ds-ink)] coarse:h-11 coarse:min-w-11',
+          FOCUS_RING,
+          className
         )}
       >
-        <MapIcon className="h-4 w-4" aria-hidden />
+        {children ?? <MapIcon className="h-4 w-4" aria-hidden />}
       </button>
       <AdaptiveSheet
         open={open}
@@ -125,7 +140,7 @@ export function StageMapButton({ facts, onGo }: { facts: StageFacts; onGo: (plac
         title="Stage map"
         anchorRef={button}
         placement="below"
-        align="end"
+        align={align}
         className="w-[min(20rem,calc(100vw-2rem))]"
       >
         <div className="px-4 py-3">

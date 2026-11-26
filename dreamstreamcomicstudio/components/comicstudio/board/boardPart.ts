@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { characterCardId } from './CharacterDetail';
 import { COVER_CARD_ID, pageCardId } from './cardIds';
+import { createBoardPartStore, type BoardPartStore } from './boardPartStore';
 import type { BoardPart } from '../panel/partsModel';
 
 /** The board's scrolling panel (BoardPane). */
@@ -27,24 +28,22 @@ export const partOfElement = (el: Element | null | undefined): BoardPart | null 
   return { kind: 'page', id: card.id.slice(PAGE_PREFIX.length) };
 };
 
-const samePart = (a: BoardPart | null, b: BoardPart | null): boolean =>
-  a === b || (!!a && !!b && a.kind === b.kind && (a.kind === 'cover' || (b.kind !== 'cover' && a.id === b.id)));
-
 /**
- * The card the person is on in the board: set when focus or a press lands inside one, cleared when it lands elsewhere in
- * the board (focus in the conversation, the header or the side panel keeps it, so the tree and the breadcrumb still say
- * where on the board they were). Listens on the document, so it costs nothing per card.
+ * Track the card the person is on in the board: set when focus or a press lands inside one, cleared when it lands
+ * elsewhere in the board (focus in the conversation, the header or the side panel keeps it, so the tree and the
+ * breadcrumb still say where on the board they were). Listens on the document, so it costs nothing per card. The part
+ * lives in a store (board/boardPartStore.ts), not in the caller's state: the shell calls this and never re-renders for a
+ * move between cards; the tree and the breadcrumb read it with useBoardPart(store).
  */
-export function useBoardPart(): BoardPart | null {
-  const [part, setPart] = useState<BoardPart | null>(null);
+export function useBoardPartTracker(): BoardPartStore {
+  const [store] = useState(createBoardPartStore);
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const onEvent = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
       const board = document.getElementById(BOARD_PANEL_ID);
       if (!target || !board || !board.contains(target)) return;
-      const next = partOfElement(target);
-      setPart((cur) => (samePart(cur, next) ? cur : next));
+      store.set(partOfElement(target));
     };
     document.addEventListener('focusin', onEvent);
     document.addEventListener('pointerdown', onEvent, { passive: true });
@@ -52,8 +51,8 @@ export function useBoardPart(): BoardPart | null {
       document.removeEventListener('focusin', onEvent);
       document.removeEventListener('pointerdown', onEvent);
     };
-  }, []);
-  return part;
+  }, [store]);
+  return store;
 }
 
 const later = (run: () => void) => {

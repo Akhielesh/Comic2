@@ -70,23 +70,58 @@ describe('PartsTree', () => {
     expect(item('Cast')).toHaveTextContent('2');
   });
 
-  it('the page in the editor is current, its block opens; a card you are on is current without opening anything', () => {
+  it('the page in the editor is current and its block opens; so does the block of a card you are on', () => {
     const doc = comic(60);
     const { rerenderWith } = mount(doc, { tab: 'pages', focusedPageId: 'pg_37' });
     expect(item('Pages 21–40, 0 of 20 drawn')).toHaveAttribute('aria-expanded', 'true');
     expect(item('Page 37, Planned')).toHaveAttribute('aria-selected', 'true');
     expect(item('Page 37, Planned')).toHaveAttribute('tabindex', '0');
     rerenderWith({ tab: 'pages', part: { kind: 'page', id: 'pg_45' } });
-    // The block it is in shows the way in heavier ink; the person's tree does not jump open under them.
-    const block = item('Pages 41–60, 0 of 20 drawn');
-    expect(block).toHaveAttribute('aria-expanded', 'false');
-    expect(block.className).toContain('font-semibold');
-    expect(block).toHaveAttribute('tabindex', '0');
+    // The card you are on is the one selected row: its block opens, the one opened for page 37 closes again.
+    expect(item('Pages 41–60, 0 of 20 drawn')).toHaveAttribute('aria-expanded', 'true');
+    expect(item('Page 45, Planned')).toHaveAttribute('aria-selected', 'true');
+    expect(item('Page 45, Planned')).toHaveAttribute('tabindex', '0');
+    expect(tree().querySelectorAll('[aria-selected="true"]')).toHaveLength(1);
+    expect(item('Pages 21–40, 0 of 20 drawn')).toHaveAttribute('aria-expanded', 'false');
     rerenderWith({ tab: 'cast', part: { kind: 'character', id: 'c_ossie' } });
     expect(item('Ossie')).toHaveAttribute('aria-selected', 'true');
     expect(item('Cast')).toHaveAttribute('aria-expanded', 'true');
     // Pages closed again: it was open only because you were there.
     expect(item('Pages')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('where you are, inside a group closed by hand: the group row holds the tab stop and says so to a screen reader', () => {
+    mount(comic(60), { tab: 'pages', part: { kind: 'page', id: 'pg_45' } });
+    const block = item('Pages 41–60, 0 of 20 drawn');
+    fireEvent.click(block.querySelector('[data-part-toggle]') as HTMLElement);
+    expect(block).toHaveAttribute('aria-expanded', 'false');
+    expect(tree().querySelectorAll('[aria-selected="true"]')).toHaveLength(0);
+    expect(block).toHaveAttribute('tabindex', '0');
+    expect(block.className).toContain('font-semibold');
+    expect(block).toHaveAccessibleDescription('Holds Page 45, where you are');
+    // Every other row has no such words.
+    expect(items().filter((i) => i.hasAttribute('aria-describedby'))).toEqual([block]);
+  });
+
+  it('a deliberate move brings its row into view in the panel; a card you move to in the board does not scroll it', () => {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const { rerenderWith } = mount(comic(24), { tab: 'pages' });
+      expect(scrolled).toEqual([item('Pages')]);
+      // A card you move to in the board: marked, not scrolled to (the panel does not move while you work).
+      rerenderWith({ tab: 'pages', part: { kind: 'page', id: 'pg_3' } });
+      expect(item('Page 3, Planned')).toHaveAttribute('aria-selected', 'true');
+      expect(scrolled).toHaveLength(1);
+      // A page opened in the editor (from the book timeline, say): its row, 22 rows down, comes into view.
+      rerenderWith({ tab: 'pages', focusedPageId: 'pg_22', part: { kind: 'page', id: 'pg_3' } });
+      expect(scrolled).toEqual([item('Pages'), item('Page 22, Planned')]);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it('a 200-page book renders about ten rows under Pages until a block opens', () => {

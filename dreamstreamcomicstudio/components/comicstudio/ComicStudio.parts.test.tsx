@@ -1,17 +1,23 @@
 // Inside a comic (SH-C2), in the studio shell: the header's breadcrumb (My comics › the comic › the board's area › the
-// part you are on) where every crumb but the comic's own name field navigates, folding on a phone; and the side panel's
-// parts tree going where each part is edited (a character's card and the cover's come into view with focus, a page
-// opens in the page editor), in the docked panel and the phone drawer. Nothing here spends: act and send are never
-// called. The board is a small stand-in with the real card ids.
+// part you are on) where every crumb but the comic's own name field navigates, folding on a phone, and the document's one
+// current page; the side panel's parts tree going where each part is edited (a character's card and the cover's come
+// into view with focus, a page opens in the page editor), in the docked panel and the phone drawer, with Find a page's
+// Escape clearing before it closes the drawer; and a move between cards re-rendering neither the shell nor the board.
+// Nothing here spends: act and send are never called. The board is a small stand-in with the real card ids.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicStudioController } from './useStudio';
 import { makeFakeStudio, resetUsageStatus, showDollarPrices, type FakeStudio } from './conversation/testing/fixtures';
+import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
+
+const renders = vi.hoisted(() => ({ board: 0 }));
 
 vi.mock('./board/BoardPane', () => ({
-  // The real pane's scrolling panel (#board-panel) with the cards the tree and the breadcrumb point at.
+  // The real pane's scrolling panel (#board-panel) with the cards the tree and the breadcrumb point at. It counts its
+  // renders: a move between cards must not re-render the board (a 200-page book's every card).
   BoardPane: ({ studio }: { studio: ComicStudioController }) => (
+    renders.board++,
     <div data-testid="board">
       <div id="board-panel" role="tabpanel" tabIndex={-1} aria-label={`${studio.tab} workspace`}>
         {studio.tab === 'cast' &&
@@ -45,6 +51,13 @@ import { resetPanelPreferenceForTests } from './panel/panelPreference';
 
 const DESK = formFactorFor({ w: 1280, h: 800 });
 const PHONE = formFactorFor({ w: 360, h: 740, coarse: true });
+const PHONE_SIDEWAYS = formFactorFor({ w: 852, h: 393, coarse: true });
+/** The sample comic, grown to 12 pages (Find a page shows from 11). */
+const longDoc = () => {
+  const doc = makeSampleDoc();
+  doc.pages = [...doc.pages, ...Array.from({ length: 6 }, (_, i) => ({ ...doc.pages[1], id: `pg_${7 + i}`, n: 7 + i }))];
+  return doc;
+};
 
 const mountAt = (ff: FormFactor, studio: FakeStudio, onBack = vi.fn()) => {
   const ui = (s: FakeStudio) => (
@@ -116,20 +129,63 @@ describe('the breadcrumb', () => {
     expect(within(crumbs()).getByRole('textbox', { name: 'Comic title' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('folds on a phone: no My comics (the drawer starts with it), the area gives way to the part, the part clips', () => {
+  it('a page card’s crumb brings the card back into view with focus; it never opens the page editor', async () => {
+    const studio = makeFakeStudio({ tab: 'pages' });
+    mountAt(DESK, studio);
+    const card = document.getElementById('board-page-card-pg_2')!;
+    fireEvent.focusIn(within(card).getByRole('button'));
+    expect(crumbNames()).toEqual(['My comics', 'title', 'Pages', 'Page 2']);
+    // Away from the card, then back by its crumb.
+    fireEvent.focusIn(within(screen.getByRole('banner')).getByRole('textbox', { name: 'Comic title' }));
+    fireEvent.click(within(crumbs()).getByRole('button', { name: 'Page 2' }));
+    await waitFor(() => expect(card).toHaveFocus());
+    expect(studio.openPage).not.toHaveBeenCalled();
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
+  it('is the document’s one current page, with the panel open beside it', () => {
+    mountAt(DESK, makeFakeStudio({ tab: 'cast' }));
+    expect(screen.getByRole('navigation', { name: 'Project navigation' })).toBeInTheDocument();
+    const current = document.querySelectorAll('[aria-current="page"]');
+    expect(current).toHaveLength(1);
+    expect(crumbs().contains(current[0])).toBe(true);
+  });
+
+  it('a phone held upright has room for the name alone: the trail folds into the drawer, where the tree marks the part', () => {
     mountAt(PHONE, makeFakeStudio({ tab: 'pages', focusedPageId: 'pg_3' }));
-    // The conversation is on screen: the comic is where you are.
     expect(crumbNames()).toEqual(['title']);
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Board/ }));
-    expect(crumbNames()).toEqual(['title', 'Page 3']);
-    const part = within(crumbs()).getByRole('button', { name: 'Page 3' });
-    expect(part.closest('li')!.className).toContain('max-w-[10rem]');
-    expect(part.querySelector('.truncate')).not.toBeNull();
-    expect(part.className).toContain('coarse:h-11');
-    // The name shrinks first, down to a readable minimum, and never pushes the header sideways.
-    expect(within(crumbs()).getByRole('textbox', { name: 'Comic title' }).closest('li')!.className).toContain('min-w-[2.5rem]');
+    // On the board too: no crumb is squeezed beside the name (the header has 40 to 110 px for it there).
+    expect(crumbNames()).toEqual(['title']);
     expect(crumbs()).toHaveAttribute('data-room', 'narrow');
+    const name = within(crumbs()).getByRole('textbox', { name: 'Comic title' });
+    expect(name).toHaveAttribute('aria-current', 'page');
+    expect(name.closest('li')!.className.split(' ')).toContain('min-w-0');
     expect(crumbs().className).toContain('overflow-x-clip');
+    fireEvent.click(screen.getByRole('button', { name: 'Open project navigation' }));
+    const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
+    expect(within(drawer).getByRole('treeitem', { name: /^Page 3,/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('a phone held sideways has the room: the name, the area and the part (My comics stays in the drawer)', () => {
+    mountAt(PHONE_SIDEWAYS, makeFakeStudio({ tab: 'pages', focusedPageId: 'pg_3' }));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Board/ }));
+    expect(crumbs()).toHaveAttribute('data-room', 'medium');
+    expect(crumbNames()).toEqual(['title', 'Pages', 'Page 3']);
+  });
+});
+
+describe('moving between cards', () => {
+  it('re-renders the breadcrumb and the tree, never the shell or the board', () => {
+    mountAt(DESK, makeFakeStudio({ tab: 'pages' }));
+    fireEvent.focusIn(within(document.getElementById('board-page-card-pg_1')!).getByRole('button'));
+    const before = renders.board;
+    for (const id of ['pg_2', 'pg_3', 'pg_1']) fireEvent.focusIn(within(document.getElementById(`board-page-card-${id}`)!).getByRole('button'));
+    fireEvent.pointerDown(document.getElementById('board-cover-card')!);
+    expect(renders.board).toBe(before);
+    // …and both still follow the card.
+    expect(crumbNames()).toEqual(['My comics', 'title', 'Pages', 'Cover']);
+    expect(within(tree()).getByRole('treeitem', { name: /^Cover/ })).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -160,6 +216,22 @@ describe('the parts tree in the studio', () => {
     expect(studio.setTab).toHaveBeenCalledWith('pages');
     await waitFor(() => expect(document.getElementById('board-cover-card')).toHaveFocus());
     expect(crumbNames()).toEqual(['My comics', 'title', 'Pages', 'Cover']);
+  });
+
+  it('in the drawer, Escape in Find a page clears it first; the next Escape closes the drawer', () => {
+    mountAt(PHONE, makeFakeStudio({ tab: 'pages', doc: longDoc() }));
+    const toggle = screen.getByRole('button', { name: 'Open project navigation' });
+    fireEvent.click(toggle);
+    const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
+    const field = within(drawer).getByRole('searchbox', { name: 'Find a page' });
+    fireEvent.change(field, { target: { value: 'nothing like this' } });
+    expect(within(drawer).queryByRole('tree')).toBeNull();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Project navigation' })).toBeInTheDocument();
+    expect(field).toHaveValue('');
+    expect(within(drawer).getByRole('tree', { name: 'Board' })).toBeInTheDocument();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Project navigation' })).toBeNull();
   });
 
   it('in the phone drawer a part closes the drawer first, then its card takes focus', async () => {

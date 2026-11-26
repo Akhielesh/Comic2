@@ -85,9 +85,11 @@ describe('the parts, in board order', () => {
     expect(pages.count).toBe(`${pageProgress(doc).ready}/${pageProgress(doc).total}`);
   });
 
-  it('an empty comic has its areas and nothing under Cast or Pages; an empty page says so', () => {
+  it('an empty comic has its areas and nothing under Cast or Pages, and no Cover until a page; an empty page says so', () => {
     const empty = tree(createEmptyDoc('c0', 'Untitled comic', NOW));
-    expect(keys(empty)).toEqual(['tab:story', 'tab:cast', 'tab:style', 'tab:pages', 'cover', 'tab:read']);
+    // The Cover is edited on its card in the Pages grid, which a comic with no pages does not have yet.
+    expect(keys(empty)).toEqual(['tab:story', 'tab:cast', 'tab:style', 'tab:pages', 'tab:read']);
+    expect(keys(tree(comic(1)))).toEqual(['tab:story', 'tab:cast', 'tab:style', 'tab:pages', 'cover', 'tab:read']);
     expect(empty.find((n) => n.key === 'tab:cast')).toMatchObject({ count: undefined, children: undefined });
     expect(empty.find((n) => n.key === 'tab:pages')).toMatchObject({ count: undefined, children: undefined });
     const blank = tree(comic(1, (d) => (d.pages[0].panels = [])));

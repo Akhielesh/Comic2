@@ -114,6 +114,24 @@ describe('the stage map from the strip', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('on a published comic, where every stage is done, it opens on the next step (Publish’s), not on Story', async () => {
+    const doc = drawing();
+    doc.pages = doc.pages.map((p) => ({ ...p, render: render_('ready', picture()) }));
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'night-ferry', publishedRev: 1, publishedAt: NOW + 1, languages: ['en'] };
+    render(
+      <FormFactorProvider value={DESK}>
+        <StageStrip doc={doc} onGo={vi.fn()} />
+      </FormFactorProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stage map' }));
+    const sheet = screen.getByRole('dialog', { name: 'Stage map' });
+    const rows = within(sheet).getAllByRole('listitem');
+    expect(rows.map((r) => r.getAttribute('data-stage-map-state'))).toEqual(['done', 'done', 'done', 'done', 'done']);
+    const publish = within(rows[4]).getByRole('button');
+    await waitFor(() => expect(publish).toHaveFocus());
+    expect(publish).not.toHaveAccessibleName('Open Story');
+  });
+
   it('a target closes the map and goes there; nothing spends', () => {
     const onGo = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Stage map' }));
@@ -122,13 +140,14 @@ describe('the stage map from the strip', () => {
     expect(screen.queryByRole('dialog', { name: 'Stage map' })).toBeNull();
   });
 
-  it('on a phone it is a bottom sheet with its title, and its button is a 44 px target in the strip’s one row', () => {
+  it('on a phone it is a bottom sheet with its title, opened by the strip’s five marks (a 44 px target, its one stage control)', () => {
     mount(PHONE);
     const nav = screen.getByRole('navigation', { name: 'Comic stages' });
     expect(nav).toHaveAttribute('data-stage-strip', 'compact');
-    const toggle = within(nav).getByRole('button', { name: 'Stage map' });
-    expect(toggle.className).toContain('coarse:h-11');
-    expect(toggle.className).toContain('coarse:min-w-11');
+    expect(within(nav).queryByRole('button', { name: 'Stage map' })).toBeNull();
+    const toggle = within(nav).getByRole('button', { name: /^Stages:/ });
+    expect(toggle).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(toggle.className.split(' ')).toEqual(expect.arrayContaining(['h-11', 'min-w-11']));
     fireEvent.click(toggle);
     const sheet = screen.getByRole('dialog', { name: 'Stage map' });
     expect(within(sheet).getByText('Stage map')).toBeInTheDocument();
