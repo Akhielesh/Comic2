@@ -44,6 +44,38 @@ export function comicActivityRow(row: StoredRow): ComicActivityRow {
   return { ...base, v: 1, attention, working: row.draft === 'planning', finished };
 }
 
+/**
+ * My comics' one read for every card's stage and "Needs you" (never a full doc, never one request per card): the saved
+ * summary, plus the three scalars comicActivityRow reads "Needs you" from in a doc saved before summaries existed.
+ */
+export const STAGE_SELECT = [
+  'project_id', 'activity:doc->workspaceActivity',
+  'gate:doc->gate->>status', 'plan:doc->>planStatus', 'draft:doc->directorDraft->>status', 'lastCard:doc->conversation->-1->cards->0->>type'
+].join(',');
+export const STAGE_PAGE_SIZE = 200;
+
+/** What a card reads from the summary: its validated stage (absent before stages) and what waits on the person. */
+export type ComicStageRow = Pick<ComicActivityRow, 'id' | 'stage' | 'attention' | 'working'>;
+
+/** Every comic's stage row by project id, newest first, paged until the owner's comics run out. */
+export async function loadComicStages(accountId: string, signal: AbortSignal): Promise<Map<string, ComicStageRow>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (signal.aborted || session?.user.id !== accountId || !isStoredSession(session)) throw new Error('Account changed');
+  const out = new Map<string, ComicStageRow>();
+  for (let offset = 0; ; offset += STAGE_PAGE_SIZE) {
+    const { data, error } = await supabase.from('comic_docs').select(STAGE_SELECT)
+      .eq('user_id', accountId).order('updated_at', { ascending: false }).order('project_id')
+      .range(offset, offset + STAGE_PAGE_SIZE - 1).abortSignal(signal);
+    if (error || !Array.isArray(data) || signal.aborted) throw new Error('Comic stages unavailable');
+    for (const raw of data as unknown as StoredRow[]) {
+      if (!raw?.project_id) continue;
+      const { id, stage, attention, working } = comicActivityRow(raw);
+      out.set(id, { id, ...(stage ? { stage } : {}), attention, working });
+    }
+    if (data.length < STAGE_PAGE_SIZE) return out;
+  }
+}
+
 export async function loadComicActivity(accountId: string, offset: number, signal: AbortSignal) {
   const { data: { session } } = await supabase.auth.getSession();
   if (signal.aborted || session?.user.id !== accountId || !isStoredSession(session)) throw new Error('Account changed');

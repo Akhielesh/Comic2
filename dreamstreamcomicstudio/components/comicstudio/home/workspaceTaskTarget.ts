@@ -1,10 +1,11 @@
 import type { FinishedKind, WorkAttention } from '../../../shared/comic/workspaceActivity';
 import type { StudioTab } from '../../../shared/comic/doc';
 
-export type TaskDestination = 'conversation' | Extract<StudioTab, 'pages' | 'cast' | 'style' | 'languages' | 'read'>;
+/** Where a list sends a comic when it opens: a board tab, the conversation, or the Share sheet (My comics' next steps). */
+export type TaskDestination = 'conversation' | 'share' | Extract<StudioTab, 'story' | 'pages' | 'cast' | 'style' | 'languages' | 'read'>;
 export const TASK_TARGET_EVENT = 'dreamstream:comic-task-target';
 export const WORK_CHANGED_EVENT = 'dreamstream:comic-work-changed';
-const destinations = new Set<TaskDestination>(['conversation', 'pages', 'cast', 'style', 'languages', 'read']);
+const destinations = new Set<TaskDestination>(['conversation', 'share', 'story', 'pages', 'cast', 'style', 'languages', 'read']);
 let pending: { accountId: string; projectId: string; destination: TaskDestination } | undefined;
 
 export function taskDestination(kind: FinishedKind | WorkAttention): TaskDestination {

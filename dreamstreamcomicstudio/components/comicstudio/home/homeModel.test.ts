@@ -85,7 +85,7 @@ describe('pickContinue', () => {
 
 describe('continueLine', () => {
   it('names partial progress and the time of the last edit', () => {
-    expect(continueLine(studio('a', NOW - 2 * HOUR), NOW, 'en')).toBe('3 of 10 pages · edited 2 hours ago');
+    expect(continueLine(studio('a', NOW - 2 * HOUR), NOW, 'en')).toBe('3 of 10 pages drawn · edited 2 hours ago');
   });
 
   it('says when no pages are planned yet', () => {
@@ -104,7 +104,7 @@ describe('continueLine', () => {
   it('formats the relative time in the given locale and never crashes on an unknown one', () => {
     expect(continueLine(studio('a', NOW - 2 * HOUR), NOW, 'hi')).toContain('घंटे');
     expect(() => continueLine(studio('a', NOW - 2 * HOUR), NOW, 'not a locale!')).not.toThrow();
-    expect(continueLine(studio('a', NOW - 2 * HOUR), NOW, 'not a locale!')).toBe('3 of 10 pages · edited 2 hours ago');
+    expect(continueLine(studio('a', NOW - 2 * HOUR), NOW, 'not a locale!')).toBe('3 of 10 pages drawn · edited 2 hours ago');
   });
 });
 

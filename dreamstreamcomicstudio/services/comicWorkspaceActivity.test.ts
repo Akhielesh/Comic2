@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 const auth = vi.hoisted(() => ({ getSession: vi.fn(), from: vi.fn() }));
 vi.mock('./supabase', () => ({ supabase: { auth, from: auth.from }, isStoredSession: () => true }));
-import { comicActivityRow, loadComicActivity, WORK_SELECT } from './comicWorkspaceActivity';
+import { comicActivityRow, loadComicActivity, loadComicStages, STAGE_PAGE_SIZE, STAGE_SELECT, WORK_SELECT } from './comicWorkspaceActivity';
 describe('owner task listing', () => {
   it('reads small scalar projections under the current owner with bounded paging', async () => {
     const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: vi.fn().mockReturnThis(), abortSignal: vi.fn().mockResolvedValue({ data: [], error: null }) };
@@ -32,5 +32,41 @@ describe('owner task listing', () => {
     expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: { ...stage, stage: 'publish' } } as never })).toBe(false);
     expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: 'Drawing' } as never })).toBe(false);
     expect(comicActivityRow({ project_id: 'p', gate: 'open' }).stage).toBeUndefined();
+  });
+  it('My comics reads every card’s stage in one paged list read: scalar paths only, the owner’s rows, until they run out', async () => {
+    const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next: 'draw_rest' };
+    const rows = Array.from({ length: STAGE_PAGE_SIZE + 2 }, (_, i) => ({ project_id: `p${i}`, activity: { v: 1, attention: i === 1 ? 'approval' : null, working: false, finished: [], stage } }));
+    rows.push({ project_id: 'old', gate: 'open' } as never, { project_id: '' } as never);
+    const pages = [rows.slice(0, STAGE_PAGE_SIZE), rows.slice(STAGE_PAGE_SIZE)];
+    const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: vi.fn().mockReturnThis(), abortSignal: vi.fn() };
+    query.abortSignal.mockImplementation(() => Promise.resolve({ data: pages.shift() ?? [], error: null }));
+    auth.from.mockClear();
+    auth.from.mockReturnValue(query);
+    auth.getSession.mockResolvedValue({ data: { session: { user: { id: 'A' }, access_token: 'example' } } });
+    const signal = new AbortController().signal;
+    await expect(loadComicStages('B', signal)).rejects.toThrow();
+    expect(auth.from).not.toHaveBeenCalled();
+
+    const out = await loadComicStages('A', signal);
+    expect(auth.from).toHaveBeenCalledTimes(2);
+    expect(auth.from).toHaveBeenCalledWith('comic_docs');
+    expect(query.select).toHaveBeenCalledWith(STAGE_SELECT);
+    expect(query.eq).toHaveBeenCalledWith('user_id', 'A');
+    expect(query.range.mock.calls).toEqual([[0, STAGE_PAGE_SIZE - 1], [STAGE_PAGE_SIZE, 2 * STAGE_PAGE_SIZE - 1]]);
+    // Never the doc itself, its text or anything private: the summary and four scalar keys.
+    expect(STAGE_SELECT.split(',')).toEqual(['project_id', 'activity:doc->workspaceActivity', 'gate:doc->gate->>status', 'plan:doc->>planStatus', 'draft:doc->directorDraft->>status', 'lastCard:doc->conversation->-1->cards->0->>type']);
+    expect(out.size).toBe(STAGE_PAGE_SIZE + 3);
+    expect(out.get('p0')).toEqual({ id: 'p0', stage, attention: null, working: false });
+    expect(out.get('p1')?.attention).toBe('approval');
+    // A doc saved before summaries: no stage, and its open approval still reads as waiting on the person.
+    expect(out.get('old')).toEqual({ id: 'old', attention: 'approval', working: false });
+    expect(out.has('')).toBe(false);
+  });
+
+  it('a failed page fails the read (the cards keep their row counts and read "Open to see")', async () => {
+    const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: vi.fn().mockReturnThis(), abortSignal: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' } }) };
+    auth.from.mockReturnValue(query);
+    auth.getSession.mockResolvedValue({ data: { session: { user: { id: 'A' }, access_token: 'example' } } });
+    await expect(loadComicStages('A', new AbortController().signal)).rejects.toThrow('Comic stages unavailable');
   });
 });

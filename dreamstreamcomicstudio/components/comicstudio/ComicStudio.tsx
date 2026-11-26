@@ -1050,7 +1050,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
 
   // Card clicks inside the conversation ("open page 3", "see the cast") reveal the board — on phones
   // by switching to it, on a collapsed split by showing both panes (this session only, not persisted).
-  const { setTab, openPage } = studio;
+  const { setTab, openPage, runClientAction } = studio;
   const showBoard = useCallback(() => {
     if (phone) setView('board');
     else if (paneMode === 'chat') setPaneModeState('both');
@@ -1066,12 +1066,14 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       if (!target) return;
       setNavigationOpen(false);
       if (target === 'conversation') showChat();
+      // My comics' "Publish your changes" / "See why it is paused": the header's Share sheet (the Read tab without one).
+      else if (target === 'share') runClientAction({ type: 'open_share' });
       else { setTab(target); showBoard(); }
     };
     openTask();
     window.addEventListener(TASK_TARGET_EVENT, openTask);
     return () => window.removeEventListener(TASK_TARGET_EVENT, openTask);
-  }, [doc?.id, user?.id, setTab, showBoard, showChat]);
+  }, [doc?.id, user?.id, setTab, showBoard, showChat, runClientAction]);
 
   const chatStudio = useMemo<ComicStudioController>(
     () => ({
