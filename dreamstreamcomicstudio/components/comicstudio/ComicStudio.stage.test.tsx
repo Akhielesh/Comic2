@@ -201,6 +201,7 @@ describe('the studio stage strip', () => {
     expect(nav).toHaveAttribute('data-comic-panel', 'open');
     expect(within(nav).queryByText('Project stages')).toBeNull();
     expect(within(nav).getByText('Board')).toBeInTheDocument();
-    expect(within(nav).getByRole('tablist', { name: 'Board' })).toBeInTheDocument();
+    // The board's tabs grew into the comic's parts (SH-C2): the tree keeps the board's name.
+    expect(within(nav).getByRole('tree', { name: 'Board' })).toBeInTheDocument();
   });
 });

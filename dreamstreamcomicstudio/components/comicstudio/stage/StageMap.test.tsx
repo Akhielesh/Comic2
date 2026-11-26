@@ -1,12 +1,14 @@
 // The stage map (SH-C2): five ink-only rows (done, now, next or later), what is left in each, one target that only
-// navigates; from the stage strip as a popover (a bottom sheet on phones).
+// navigates; from the stage strip as a popover (a bottom sheet on phones) and from the side panel's "This comic" marks.
 // Keyboard: arrows, Home and End between the targets, Enter to go, Escape back to the button. Synthetic docs only.
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createEmptyDoc, type AssetRef, type ComicDoc, type Page, type RenderState } from '../../../shared/comic/doc';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { stageFacts } from '../../../shared/comic/stage';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { ComicSection } from '../panel/ComicSection';
 import { StageMap } from './StageMap';
 import { StageStrip } from './StageStrip';
 
@@ -131,5 +133,25 @@ describe('the stage map from the strip', () => {
     const sheet = screen.getByRole('dialog', { name: 'Stage map' });
     expect(within(sheet).getByText('Stage map')).toBeInTheDocument();
     expect(within(sheet).getAllByRole('listitem')).toHaveLength(5);
+  });
+});
+
+describe('the stage map from the side panel', () => {
+  it('the five marks beside “This comic” open the map in place; its targets only navigate', () => {
+    const doc = drawing();
+    const onGo = vi.fn();
+    render(<ComicSection doc={doc} caps={DEFAULT_CAPS} tab="pages" facts={stageFacts(doc)} onSelect={vi.fn()} onConversation={vi.fn()} onGo={onGo} />);
+    const section = screen.getByRole('group', { name: 'This comic' });
+    const toggle = within(section).getByRole('button', { name: 'Stage map' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(section).queryByRole('list', { name: 'Stage map' })).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const inline = within(section).getByRole('list', { name: 'Stage map' });
+    expect(toggle).toHaveAttribute('aria-controls', inline.parentElement!.id);
+    fireEvent.click(within(inline).getByRole('button', { name: 'Open Read' }));
+    expect(onGo).toHaveBeenCalledWith('read');
+    fireEvent.click(toggle);
+    expect(within(section).queryByRole('list', { name: 'Stage map' })).toBeNull();
   });
 });

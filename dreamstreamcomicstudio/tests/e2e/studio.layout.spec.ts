@@ -116,11 +116,11 @@ test.describe('studio layout', () => {
       await qa.toBoard();
       expect.soft(await page.locator('[role="radiogroup"][aria-label="Card size"]').count(), `Card size is on the Pages tab (${at})`).toBe(1);
       expect.soft(await cutRadioLabels(page, /^Card size$/), `Card size labels whole at ${at}`).toEqual([]);
-      // The project rail expands (or opens as a drawer) to show the stage counts.
+      // The project rail expands (or opens as a drawer) to show the board's counts (its parts tree, SH-C2).
       const navigation = page.getByRole('button', { name: /^(Open|Expand) project navigation$/ });
       if (await navigation.isVisible()) await navigation.click();
       const badgePx = await page.evaluate(() =>
-        [...document.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Board"] [role="tab"] > span.tabular-nums')].map((b) => parseFloat(getComputedStyle(b).fontSize))
+        [...document.querySelectorAll<HTMLElement>('[role="tree"][aria-label="Board"] [role="treeitem"] > span.tabular-nums')].map((b) => parseFloat(getComputedStyle(b).fontSize))
       );
       expect.soft(badgePx.length, `a board tab carries a count (${at})`).toBeGreaterThan(0);
       for (const px of badgePx) expect.soft(px, `board tab count font size at ${at}`).toBeGreaterThanOrEqual(11);

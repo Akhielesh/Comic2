@@ -104,7 +104,7 @@ describe('ComicStudio shell', () => {
     fireEvent.click(within(nav).getByRole('button', { name: 'Chat' }));
     expect(links.onChat).toHaveBeenCalledTimes(1);
     expect(within(nav).getByRole('link', { name: /^Recent comic/ })).toBeInTheDocument();
-    fireEvent.click(within(nav).getByRole('tab', { name: 'Story' }));
+    fireEvent.click(within(nav).getByRole('treeitem', { name: 'Story' }));
     expect(studio.setTab).toHaveBeenCalledWith('story');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse project navigation' }));
     expect(screen.getByRole('navigation', { name: 'Project navigation' })).toHaveAttribute('data-comic-panel', 'rail');
@@ -132,7 +132,7 @@ describe('ComicStudio shell', () => {
     fireEvent.click(toggle);
     const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
     expect(within(drawer).getByRole('link', { name: /^Recent comic/ })).toBeInTheDocument();
-    fireEvent.click(within(drawer).getByRole('tab', { name: 'Story' }));
+    fireEvent.click(within(drawer).getByRole('treeitem', { name: 'Story' }));
     expect(studio.setTab).toHaveBeenCalledWith('story');
     expect(pane('board')).not.toHaveAttribute('inert');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Project navigation' })).not.toBeInTheDocument());

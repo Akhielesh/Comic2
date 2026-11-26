@@ -89,6 +89,8 @@ import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import { ComicSidePanel, PANEL_ID, PANEL_LABEL, type ComicPanelLinks } from './panel/ComicSidePanel';
 import { ComicSection } from './panel/ComicSection';
 import { usePanelOpen } from './panel/panelPreference';
+import { revealPart, useBoardPart } from './board/boardPart';
+import { partTab, type BoardPart } from './panel/partsModel';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -1017,6 +1019,9 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const conversationApi = useRef<ConversationRevealHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
+  // The card the person is on in the board (a character, a page, the cover): the parts tree's current row and the
+  // breadcrumb's last crumb.
+  const boardPart = useBoardPart();
   const behind = studio.publication?.behind;
   // Where the comic stands, for the panel's own section and its row in Your comics (the strip reads the same facts).
   const facts = useMemo(() => (doc ? stageFacts(doc, { behind }) : null), [doc, behind]);
@@ -1188,6 +1193,25 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   // adds no fixed chrome: the conversation keeps its room, and its activity line already reports drawing).
   const stageStrip = <StageStrip doc={doc} behind={behind} onGo={goToStage} />;
 
+  // A part of the comic (the parts tree, the breadcrumb): a page opens in the page editor; a character's card or the
+  // cover's comes into view in its tab, with focus on it. Only navigates.
+  const openPart = (target: BoardPart) => {
+    if (target.kind === 'page') {
+      openPage(target.id);
+      showBoard();
+      return;
+    }
+    if (studio.focusedPageId) openPage(null);
+    setTab(partTab(target));
+    showBoard();
+    revealPart(target, { reducedMotion: ff.reducedMotion });
+  };
+  const openArea = (tab: StudioTab) => {
+    if (studio.focusedPageId) openPage(null);
+    setTab(tab);
+    showBoard();
+  };
+
   // The one side panel (SH-C1): where you are, this comic's own section, your comics, and App's destinations. In the
   // drawer every choice closes it first; docked, it stays.
   const sidePanel = (compact: boolean, drawer: boolean) => {
@@ -1221,12 +1245,12 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
               tab={studio.tab}
               facts={facts}
               compact={compact}
-              onSelect={closing((tab: StudioTab) => {
-                setTab(tab);
-                showBoard();
-              })}
+              onSelect={closing(openArea)}
               onConversation={closing(skipToComposer)}
               onGo={closing(goToStage)}
+              focusedPageId={studio.focusedPageId}
+              part={boardPart}
+              onOpenPart={closing(openPart)}
             />
           )
         }

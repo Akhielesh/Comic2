@@ -40,16 +40,18 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
         expect(box.x, 'navigation is a left drawer').toBe(0);
         expect(box.height).toBeGreaterThan(viewport.height - 10);
       }
-      for (const tab of await nav.getByRole('tab').all()) {
-        expect((await tab.boundingBox())!.height, 'every stage has a 44px touch target').toBeGreaterThanOrEqual(44);
+      // The board's tabs grew into the comic's parts tree (SH-C2): its areas are 44 px rows everywhere, every row on touch.
+      for (const row of await nav.getByRole('treeitem').all()) {
+        const level = await row.getAttribute('aria-level');
+        if (phone || level === '1') expect((await row.boundingBox())!.height, 'every part has a 44px touch target').toBeGreaterThanOrEqual(44);
       }
       await qa.check('studio', 'project-navigation', { checks: ['overflow', 'offscreen', ...(phone ? ['hit-target' as const] : []), 'collision', 'popover', 'landmarks', 'axe'] });
       await page.screenshot({ path: testInfo.outputPath('navigation.png') });
-      const story = nav.getByRole('tab', { name: 'Story', exact: true });
+      const story = nav.getByRole('treeitem', { name: 'Story', exact: true });
       await story.focus();
       await page.keyboard.press('ArrowDown');
-      await expect(nav.getByRole('tab', { name: 'Cast', exact: true })).toBeFocused();
-      await expect(nav.getByRole('tab', { name: 'Pages', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(nav.getByRole('treeitem', { name: 'Cast', exact: true })).toBeFocused();
+      await expect(nav.getByRole('treeitem', { name: 'Pages', exact: true })).toHaveAttribute('aria-selected', 'true');
       await page.keyboard.press('Home');
       await expect(story).toBeFocused();
       await page.keyboard.press('Enter');
@@ -60,11 +62,11 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
         await expect(toggle).toBeFocused();
         await toggle.click();
       }
-      await nav.getByRole('tab', { name: 'Assets', exact: true }).click();
+      await nav.getByRole('treeitem', { name: 'Assets', exact: true }).click();
       await expect(panel).toHaveAttribute('aria-label', 'Assets workspace');
       expect(await composer.inputValue(), 'draft after Assets stage').toBe('Keep the rooftop scene quiet.');
       if (phone) await toggle.click();
-      await nav.getByRole('tab', { name: 'Pages', exact: true }).click();
+      await nav.getByRole('treeitem', { name: 'Pages', exact: true }).click();
       await expect(panel).toHaveAttribute('aria-label', 'Pages workspace');
       await panel.evaluate((el) => { el.scrollTop = 200; });
       const scrollBefore = await panel.evaluate((el) => el.scrollTop);

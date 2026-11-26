@@ -175,23 +175,27 @@ describe('keyboard, focus order and the phone drawer', () => {
     expect(names.filter((n) => ['Story', 'Cast', 'Style', 'Read'].includes(n ?? ''))).toEqual([]);
   });
 
-  it('arrow keys, Home and End move along the board tabs without opening them', () => {
+  it('arrow keys, Home and End move along the board’s parts without opening them; a click opens one', () => {
     const onSelect = vi.fn();
     comicPanel(onSelect);
-    const tabs = within(panel()).getAllByRole('tab');
-    const pages = within(panel()).getByRole('tab', { name: 'Pages' });
+    // The board's tabs grew into the comic's parts (SH-C2): one tree, still one tab stop (the open tab).
+    const tree = within(panel()).getByRole('tree', { name: 'Board' });
+    const items = () => within(tree).getAllByRole('treeitem');
+    const pages = within(tree).getByRole('treeitem', { name: 'Pages' });
+    expect(pages).toHaveAttribute('tabindex', '0');
     pages.focus();
     fireEvent.keyDown(pages, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(tabs[tabs.indexOf(pages) + 1]);
+    expect(document.activeElement).toBe(items()[items().indexOf(pages) + 1]);
     fireEvent.keyDown(document.activeElement!, { key: 'Home' });
-    expect(document.activeElement).toBe(tabs[0]);
+    expect(document.activeElement).toBe(items()[0]);
+    // A tree does not wrap: Up on the first row stays there.
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(tabs[tabs.length - 1]);
+    expect(document.activeElement).toBe(items()[0]);
     fireEvent.keyDown(document.activeElement!, { key: 'End' });
-    expect(document.activeElement).toBe(tabs[tabs.length - 1]);
+    expect(document.activeElement).toBe(items()[items().length - 1]);
     expect(onSelect).not.toHaveBeenCalled();
-    fireEvent.click(tabs[0]);
-    expect(onSelect).toHaveBeenCalledWith(tabs[0].id.replace('board-tab-', ''));
+    fireEvent.click(items()[0]);
+    expect(onSelect).toHaveBeenCalledWith('story');
   });
 
   it('on a phone the panel is a drawer: it takes focus, Escape returns it to the toggle, and a choice closes it', () => {

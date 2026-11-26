@@ -1,20 +1,24 @@
 // The side panel's own section for the comic you are in (SH-C1): where it stands and its one next step (SH-A's stage,
-// the same words as the strip under the header), Ask the Director, and the board's tabs. Ink only; the next step and
-// every tab only open a place, so nothing here can start a paid step. In the slim rail it is Ask the Director and the
-// tabs as icons. SH-C2 grows the comic's parts here.
+// the same words as the strip under the header), Ask the Director, and the board. Open (and in the phone drawer) the
+// board is the comic's parts tree (SH-C2, PartsTree: each character, each page with its drawn state, the cover), with
+// "Find a page" on a long book, and the five marks beside "This comic" open the stage map. Ink only; the next step, the
+// map and every part only open a place, so nothing here can start a paid step. In the slim rail it is Ask the Director
+// and the tabs as icons.
 
-import React, { useEffect, useId, useMemo, useRef } from 'react';
-import { ArrowRight, MessageSquare } from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ArrowRight, ChevronDown, MessageSquare } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { stageView, type StageFacts, type StagePlace } from '../../../shared/comic/stage';
 import type { StudioTab } from '../types';
 import { boardTabsFor } from '../board/boardNavigation';
-import { pageProgress } from '../board/boardModel';
 import { cn } from '../../../lib/utils';
-import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE } from '../../chat/studioDesign';
-import { PLACE_HINT } from '../stage/StageStrip';
+import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE, TRANSITION } from '../../chat/studioDesign';
+import { PLACE_HINT } from '../stage/stageMarks';
+import { StageMap } from '../stage/StageMap';
 import { StageMarks } from './StageMarks';
+import { PageSearch, PAGE_SEARCH_MIN, PartsTree } from './PartsTree';
+import type { BoardPart, PartTarget } from './partsModel';
 import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_INK, RAIL_ITEM } from './panelStyles';
 
 export interface ComicSectionProps {
@@ -28,20 +32,28 @@ export interface ComicSectionProps {
   onConversation: () => void;
   /** Open where the next step is worked (the studio's stage navigation). */
   onGo: (place: StagePlace) => void;
+  /** The page open in the page editor (the tree's current row). */
+  focusedPageId?: string | null;
+  /** The card the person is on in the board (the tree's current row when it is in the open tab). */
+  part?: BoardPart | null;
+  /** Open a character's card, a page or the cover (an area opens through onSelect). */
+  onOpenPart?: (target: Exclude<PartTarget, { kind: 'area' }>) => void;
 }
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect, onConversation, onGo }: ComicSectionProps) {
+export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect, onConversation, onGo, focusedPageId, part, onOpenPart }: ComicSectionProps) {
   const tabs = boardTabsFor(doc, caps, tab);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
-  const progress = pageProgress(doc);
   const view = useMemo(() => stageView(facts), [facts]);
   const labelId = useId();
   const hintId = useId();
+  const mapId = useId();
+  const [mapOpen, setMapOpen] = useState(false);
+  const [query, setQuery] = useState('');
   useEffect(() => {
-    // Only when the tab or the layout changes, not on every list update.
-    refs.current[tabs.findIndex((item) => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    // The rail: only when the tab or the layout changes, not on every list update.
+    if (compact) refs.current[tabs.findIndex((item) => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }, [tab, compact]);
   const move = (event: React.KeyboardEvent, index: number) => {
     const next =
@@ -52,15 +64,14 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
       : -1;
     if (next < 0) return;
     event.preventDefault();
-    // Manual activation keeps a phone drawer open while arrow keys explore the tabs.
     refs.current[next]?.focus();
   };
 
+  // The slim rail's board: the tabs as icons (open, the parts tree below takes their place).
   const tabList = (
-    <div role="tablist" aria-label="Board" aria-orientation="vertical" className={cn('flex shrink-0 flex-col gap-1', compact && 'items-center')}>
+    <div role="tablist" aria-label="Board" aria-orientation="vertical" className="flex shrink-0 flex-col items-center gap-1">
       {tabs.map((item, index) => {
         const selected = item.id === tab;
-        const count = item.id === 'cast' ? doc.cast.length : item.id === 'pages' && progress.total ? `${progress.ready}/${progress.total}` : null;
         return (
           <button
             key={item.id}
@@ -71,24 +82,18 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
             role="tab"
             id={`board-tab-${item.id}`}
             aria-label={item.label}
-            title={compact ? item.label : undefined}
+            title={item.label}
             aria-selected={selected}
             aria-controls="board-panel"
             tabIndex={selected ? 0 : -1}
             data-action={item.id === 'media' ? 'media' : undefined}
             onClick={() => onSelect(item.id)}
             onKeyDown={(event) => move(event, index)}
-            className={cn(compact ? RAIL_ITEM : PANEL_ROW, selected ? PANEL_ROW_CURRENT : PANEL_ROW_IDLE)}
+            className={cn(RAIL_ITEM, selected ? PANEL_ROW_CURRENT : PANEL_ROW_IDLE)}
           >
             <span className="flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden>
               {item.icon}
             </span>
-            {!compact && (
-              <>
-                <span className={cn('flex-1 text-left', CLIP_TEXT)}>{item.label}</span>
-                {count !== null && <span className={cn('text-xs font-normal tabular-nums', MUTED)}>{count}</span>}
-              </>
-            )}
           </button>
         );
       })}
@@ -117,13 +122,29 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
     );
   }
 
+  const openPart = (target: PartTarget) => (target.kind === 'area' ? onSelect(target.tab) : onOpenPart?.(target));
+  const searching = (Array.isArray(doc.pages) ? doc.pages.length : 0) > PAGE_SEARCH_MIN;
+
   return (
     <div role="group" aria-labelledby={labelId} data-panel-comic="open" className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2 px-3 pt-3">
-        <p id={labelId} className={cn('m-0', OVERLINE)}>
+      <div className="flex items-center justify-between gap-2 pl-3 pt-1">
+        <p id={labelId} className={cn('m-0 pt-2', OVERLINE)}>
           This comic
         </p>
-        <StageMarks steps={view.steps} />
+        {/* The five marks open the stage map: each stage, what is left in it, and a way there. */}
+        <button
+          type="button"
+          onClick={() => setMapOpen((open) => !open)}
+          aria-expanded={mapOpen}
+          aria-controls={mapOpen ? mapId : undefined}
+          aria-label="Stage map"
+          title="Stage map"
+          data-panel-stage-map
+          className={cn('mt-1 inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--ds-radius-control)] px-1.5 hover:bg-[var(--ds-hover)] coarse:h-11', FOCUS_RING)}
+        >
+          <StageMarks steps={view.steps} />
+          <ChevronDown className={cn('h-3 w-3 shrink-0', MUTED, TRANSITION, mapOpen && 'rotate-180')} aria-hidden />
+        </button>
       </div>
       {/* Where it stands, then the next step, as one button: it only opens a place (a tab, the conversation, the
           composer or the Share sheet), never a paid step. */}
@@ -150,9 +171,17 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
       <span id={hintId} hidden>
         {PLACE_HINT[view.next.place]}
       </span>
+      {mapOpen && (
+        <div id={mapId} className="border-y border-[var(--ds-hairline)] px-3 py-2" data-panel-stage-map-open>
+          <StageMap facts={facts} onGo={onGo} />
+        </div>
+      )}
       {ask}
       <p className={cn('m-0 px-3 pt-3', OVERLINE)}>Board</p>
-      <div className="border-t border-[var(--ds-hairline)] pt-2">{tabList}</div>
+      <div className="flex flex-col gap-1 border-t border-[var(--ds-hairline)] pt-2">
+        {searching && <PageSearch doc={doc} query={query} onQuery={setQuery} onPage={(id) => onOpenPart?.({ kind: 'page', id })} />}
+        {!(searching && query.trim()) && <PartsTree doc={doc} tabs={tabs} tab={tab} focusedPageId={focusedPageId} part={part} onOpen={openPart} />}
+      </div>
     </div>
   );
 }
