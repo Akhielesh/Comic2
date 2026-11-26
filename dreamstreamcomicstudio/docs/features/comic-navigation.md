@@ -92,9 +92,10 @@ response for a previous account is dropped. Without an account (previews, QA sce
 
 ## 5. App wiring
 
-- `App.tsx` gives the studio its `panel` links (projects, account, New comic, Images, **Chat**, My comics, Library, open
-  a comic): Chat was missing from the studio before. On the comics host Images is framed (`ComicWorkspaceFrame`, title
-  "Images"; `ImageWorkspace framed` drops its own Back and main landmark).
+- `App.tsx` keeps one set of links (projects, account, New comic, Images, **Chat**, Library, open a comic) and gives it to
+  the studio (`panel`, with My comics = leave the studio): Chat was missing from the studio before. On the comics host it
+  gives the same links to Images (`ImageWorkspace panel`), which then sits in `ComicWorkspaceFrame` (title "Images",
+  loaded lazily from the image chunk, so the first load does not carry it) and drops its own Back and main landmark.
 - `ComicWorkspaceFrame` lost its unused `onAccount` prop (the header's account menu opens Settings).
 - `ProjectDashboard` passes the same links for My comics and New comic.
 

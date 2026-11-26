@@ -7,7 +7,7 @@ import { openApiKeysLink } from '../account/accountNav';
 import { readAttachmentBatch } from '../../services/attachmentBatch';
 import { MAX_INLINE_ATTACHMENT_CHARS } from '../../shared/attachmentLimits';
 import { userFacingErrorMessage } from '../../services/apiErrors';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Download, Image as ImageIcon, Paperclip, RefreshCw, X } from 'lucide-react';
 import { Button } from '../ds/Button';
 import { Field } from '../ds/Field';
@@ -16,13 +16,18 @@ import { Select } from '../ds/Select';
 import { IMAGE_PROMPT_LIMIT, IMAGE_RATIOS, MAX_IMAGE_REFS, REF_MIME_TYPES, type SavedStandaloneImage, type StandaloneRoute, type ImageFormatChoice, suggestedImageRatio } from '../../shared/standaloneImage';
 import { downloadStandalone, loadImageHistory, loadStandaloneRoute, loadReference, reopenStandalone, renderStandalone, reuseStandalone } from '../../services/standaloneImages';
 import { API_KEYS_HREF } from '../usage/links';
+import { lazyImportWithRetry } from '../../services/lazyImportWithRetry';
+import type { ComicPanelLinks } from '../comicstudio/panel/ComicSidePanel';
 import './imageWorkspace.css';
 
 export interface ImageWorkspaceProps {
   userId: string;
   onBack: () => void;
-  /** Inside the comics host's frame: the frame holds the page's main landmark and the way back (its side panel). */
-  framed?: boolean;
+  /**
+   * On the comics host: App's side-panel links. The page then sits in the frame of My comics and New comic, which holds
+   * the main landmark and the way back (its side panel), so the page drops its own Back.
+   */
+  panel?: Omit<ComicPanelLinks, 'activeView' | 'onAllComics'>;
 }
 type Reference = Awaited<ReturnType<typeof loadReference>>;
 const ratioLabels = ['Square · 1:1', 'Landscape · 4:3', 'Portrait · 3:4', 'Wide · 16:9', 'Tall · 9:16'];
@@ -38,10 +43,24 @@ function readDraft(key: string): { prompt: string; ratio: ImageFormatChoice } {
   } catch { return { prompt: '', ratio: 'auto' }; }
 }
 
-/** Remount on an account switch so the previous account’s files, signed links and pending results never appear. */
-export const ImageWorkspace = (props: ImageWorkspaceProps) => <Workspace key={props.userId} {...props} />;
+/** The frame is loaded only on the comics host (components/comicstudio/ComicCreationWorkspace.tsx). */
+const ComicWorkspaceFrame = lazyImportWithRetry(() => import('../comicstudio/ComicCreationWorkspace').then((module) => ({ default: module.ComicWorkspaceFrame })));
 
-function Workspace({ userId, onBack, framed }: ImageWorkspaceProps) {
+/** Remount on an account switch so the previous account’s files, signed links and pending results never appear. */
+export const ImageWorkspace = (props: ImageWorkspaceProps) => {
+  const { panel, onBack } = props;
+  const workspace = <Workspace key={props.userId} {...props} framed={!!panel} />;
+  if (!panel) return workspace;
+  return (
+    <Suspense fallback={null}>
+      <ComicWorkspaceFrame title="Images" onHome={onBack} navigation={{ ...panel, activeView: 'images', onAllComics: onBack }}>
+        {workspace}
+      </ComicWorkspaceFrame>
+    </Suspense>
+  );
+};
+
+function Workspace({ userId, onBack, framed }: Omit<ImageWorkspaceProps, 'panel'> & { framed: boolean }) {
   const draftKey = 'dreamstream.image-draft.' + userId;
   const [draft, setDraft] = useState(() => readDraft(draftKey));
   const [refs, setRefs] = useState<Reference[]>([]);
