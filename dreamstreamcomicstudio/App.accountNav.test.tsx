@@ -82,20 +82,27 @@ vi.mock('./components/AccountSettings', () => ({
     </div>
   )
 }));
-// The open comic: a stand-in that asks for Settings → API keys the way the studio's own links will (NT-2b).
+// The open comic: a stand-in that asks for Settings → API keys the way the studio's own links will (NT-2b), and
+// offers Chat from the side-panel links App gives it (the studio's panel draws them; SH-C1).
 vi.mock('./components/comicstudio/ComicStudio', async () => {
   const { requestAccountSettings: request } = await import('./components/account/accountNav');
   return {
-    ComicStudio: ({ projectId }: { projectId: string }) => (
+    ComicStudio: ({ projectId, panel }: { projectId: string; panel?: { onChat?: () => void } }) => (
       <div data-testid="studio">
         <p>Studio open on {projectId}</p>
         <button type="button" onClick={() => request('settings')}>
           Your API keys
         </button>
+        {panel?.onChat && (
+          <button type="button" onClick={panel.onChat}>
+            Chat
+          </button>
+        )}
       </div>
     )
   };
 });
+vi.mock('./components/chat/AIChatPlatform', () => ({ AIChatPlatform: () => <p>Chat open</p> }));
 const standalone = vi.hoisted(() => ({ render: vi.fn() }));
 vi.mock('./services/standaloneImages', async (original) => ({
   ...(await original<object>()),
@@ -212,13 +219,25 @@ describe('App: the account menu opens the DreamStream settings in the app, and B
     goTo('?view=dashboard');
     render(<App />);
     await findTrigger();
-    // The frame's Recent comics list opens a comic.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Glass Harbour' })[0]);
+    // The side panel's Your comics opens a comic.
+    fireEvent.click(screen.getAllByRole('link', { name: /^Glass Harbour/ })[0]);
     expect(await screen.findByText('Studio open on p2', undefined, SLOW)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Your API keys' }));
     expect(await screen.findByText('Settings at settings')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByText('Studio open on p2')).toBeInTheDocument();
+  });
+
+  it('a comic → Chat: App gives the studio’s side panel its Chat destination', async () => {
+    projectsState.list = [project('p1', 'Salt Road', NOW)];
+    goTo('?view=dashboard');
+    render(<App />);
+    await findTrigger();
+    fireEvent.click(screen.getAllByRole('link', { name: /^Salt Road/ })[0]);
+    const studio = await screen.findByTestId('studio', undefined, SLOW);
+    fireEvent.click(within(studio).getByRole('button', { name: 'Chat' }));
+    expect(await screen.findByText('Chat open', undefined, SLOW)).toBeInTheDocument();
+    expect(screen.queryByTestId('studio')).toBeNull();
   });
 
   it('a Settings deep link, signed in on the comics host, goes Back to My comics, and draws no suite header', async () => {

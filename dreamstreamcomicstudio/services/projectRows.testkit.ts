@@ -245,6 +245,8 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
         q.single = true;
         return builder;
       },
+      // A request's AbortSignal: the fake answers at once, so there is nothing to cancel.
+      abortSignal: () => builder,
       maybeSingle: () => {
         q.single = true;
         return builder;

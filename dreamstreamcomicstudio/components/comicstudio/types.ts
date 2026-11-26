@@ -77,6 +77,8 @@ export interface ReaderRequest {
   seq: number;
   immersive: boolean;
   guided: boolean;
+  /** Open the Share sheet (an `open_share` that no mounted Share button answered: the Read tab opens it). */
+  share?: boolean;
 }
 
 // --- live agent (agent-editor plan §3 A1/A2/A4; K3 contract) ---

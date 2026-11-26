@@ -96,6 +96,23 @@ export const COMIC_CARD_ROW = 'min-h-[72px] flex-row items-center gap-3 px-3 py-
 export const COMIC_CARD_HERO = 'flex-col items-start gap-4 p-4 sm:flex-row sm:items-stretch';
 /** Clicks on these never open the card: they are controls of their own. */
 const OWN_CONTROLS = 'a,button,input,select,textarea,label,summary,[role="checkbox"],[role="switch"],[role="menuitem"],[data-card-ignore]';
+/** The card's focus outline while its primary control has keyboard focus (the control itself draws none). */
+export const COMIC_CARD_FOCUS =
+  'has-[[data-card-primary]:focus-visible]:outline has-[[data-card-primary]:focus-visible]:outline-2 has-[[data-card-primary]:focus-visible]:outline-offset-2 has-[[data-card-primary]:focus-visible]:outline-[color:var(--ds-focus)]';
+
+/**
+ * A pointer press on a card, handed to its one primary control. Not when it landed on a control of its own, outside the
+ * card's own elements (a portalled menu or dialog: React bubbles its clicks through the card), or ended a drag-to-select
+ * of the title or the meta (that is reading, not opening).
+ */
+export function handCardClickToPrimary(event: React.MouseEvent<HTMLElement>, primary: HTMLElement | null): void {
+  if (event.defaultPrevented) return;
+  const target = event.target as Element | null;
+  if (!target || !event.currentTarget.contains(target) || target.closest(OWN_CONTROLS)) return;
+  const selection = typeof window !== 'undefined' ? window.getSelection?.() : null;
+  if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+  primary?.click();
+}
 
 const actionButton = (a: ComicCardAction | undefined, fallback: string, Icon: React.ComponentType<{ className?: string }>, variant: 'outline' | 'ghost') => {
   if (!a || (!a.onClick && !a.href)) return null;
@@ -146,13 +163,7 @@ export function ComicCard({
   const primaryRef = React.useRef<HTMLAnchorElement & HTMLButtonElement>(null);
   const interactive = !!(onOpen || href);
   const onCardClick = (e: React.MouseEvent<HTMLElement>) => {
-    if (!interactive || e.defaultPrevented) return;
-    const target = e.target as Element | null;
-    if (!target || target.closest(OWN_CONTROLS)) return;
-    // A drag-to-select of the title or the meta is reading, not opening.
-    const selection = typeof window !== 'undefined' ? window.getSelection?.() : null;
-    if (selection && !selection.isCollapsed && selection.toString().trim()) return;
-    primaryRef.current?.click();
+    if (interactive) handCardClickToPrimary(e, primaryRef.current);
   };
 
   // The two-line clamp lives on the words, not on the heading: a clamp clips (overflow: hidden), and the heading
@@ -233,7 +244,7 @@ export function ComicCard({
       className={cn(
         COMIC_CARD,
         interactive && cn(LIFT, 'cursor-pointer'),
-        'has-[[data-card-primary]:focus-visible]:outline has-[[data-card-primary]:focus-visible]:outline-2 has-[[data-card-primary]:focus-visible]:outline-offset-2 has-[[data-card-primary]:focus-visible]:outline-[color:var(--ds-focus)]',
+        COMIC_CARD_FOCUS,
         row ? COMIC_CARD_ROW : hero ? COMIC_CARD_HERO : 'overflow-hidden',
         variant === 'rail' && 'w-full',
         className

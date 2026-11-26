@@ -19,7 +19,7 @@
 // line with no controls. The rows are memoised (PF-7a) over a controller kept while only the drafts change, and the
 // entrance baseline is seeded on the first render of each doc (MO-2: stored messages never rise in again).
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { WRAP_TEXT } from '../../chat/studioDesign';
 import { buildSettleIndex, settledCardsOn } from '../../../shared/comic/settle';
@@ -38,6 +38,7 @@ import { AgentThinking } from '../../studio/kit/streamMotion';
 import { subscribeKeyboardInset } from '../mobile/useKeyboardInset';
 import type { ActivityItem } from '../types';
 import { cx } from './ui';
+import { prefersReducedMotion } from '../../ds/useReducedMotion';
 
 const NEAR_BOTTOM_PX = 96;
 const MAX_VISIBLE_STEPS = 5;
@@ -90,6 +91,18 @@ export interface ConversationPaneProps {
   onViewActivity?: () => void;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
+  /** Brings a waiting step into view for the shell (the stage strip's "Next: review the estimate / follow the Director"). */
+  revealApiRef?: React.Ref<ConversationRevealHandle>;
+}
+
+/** What the conversation can bring into view: the open approval card, or the Director's draft control. */
+export type ConversationRevealTarget = 'approval' | 'draft';
+export interface ConversationRevealHandle {
+  /**
+   * Scrolls the target into view and moves focus to it, so a keyboard or screen-reader user lands on it: the newest open
+   * approval card (focus on the card, never on its Approve), or the latest message with focus on the draft control.
+   */
+  reveal: (target: ConversationRevealTarget) => void;
 }
 
 /** Messages before the last few skip offscreen rendering (`content-visibility: auto`). */
@@ -101,8 +114,9 @@ const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null) => {
   else (ref as React.MutableRefObject<T | null>).current = value;
 };
 
-export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity, initialIdea, onInitialIdeaConsumed }) => {
+export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity, initialIdea, onInitialIdeaConsumed, revealApiRef }) => {
   const { doc, drafts, pendingMessage, messageBusy } = studio;
+  const sectionRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<StudioComposerHandle | null>(null);
@@ -213,6 +227,28 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replaceList, scrollToBottom]);
 
+  useImperativeHandle(
+    revealApiRef,
+    () => ({
+      reveal: (target) => {
+        const root = sectionRef.current;
+        if (!root) return;
+        if (target === 'approval') {
+          const cards = root.querySelectorAll<HTMLElement>('[data-approval-open]');
+          const card = cards[cards.length - 1];
+          if (card) {
+            if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+            card.focus({ preventScroll: true });
+            return;
+          }
+        }
+        scrollToBottom(!prefersReducedMotion());
+        root.querySelector<HTMLElement>('[data-draft-control]')?.focus({ preventScroll: true });
+      }
+    }),
+    [scrollToBottom]
+  );
+
   // ── Drop anywhere on the conversation ──────────────────────────────────────
 
   const onDragOver = (e: React.DragEvent) => {
@@ -225,7 +261,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   };
 
   return (
-    <section aria-label="Conversation" className={cx('relative flex h-full min-h-0 w-full flex-col', className)} onDragOver={onDragOver} onDrop={onDrop}>
+    <section ref={sectionRef} aria-label="Conversation" className={cx('relative flex h-full min-h-0 w-full flex-col', className)} onDragOver={onDragOver} onDrop={onDrop}>
       {doc && !replaceList && <DirectorDraftControl key={doc.id} studio={studio} readComposerDraft={() => composerRef.current?.readDraft?.() ?? ''} />}
       {replaceList ? (
         <div className="min-h-0 flex-1 overflow-hidden">{replaceList}</div>

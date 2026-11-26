@@ -54,6 +54,8 @@ export type QaQuery = Partial<{
   skin: 'atlas' | 'none';
   /** 'route': Hugging Face fetches reach the network, for the spec's own route to answer (qa/ComicQaApp.tsx). */
   hf: 'route';
+  /** The person draws on their own key: dollars, and the header's wider wallet chip (qa/ComicQaApp.tsx). */
+  byok: boolean;
 }>;
 
 /** One app scene as the harness publishes it (window.__QA_APP_SCENES__). */

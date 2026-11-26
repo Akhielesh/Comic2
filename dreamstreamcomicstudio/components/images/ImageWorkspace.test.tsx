@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   renderStandalone: vi.fn(), loadStandaloneRoute: vi.fn(), loadImageHistory: vi.fn(), loadReference: vi.fn(), downloadStandalone: vi.fn(), reopenStandalone: vi.fn(), reuseStandalone: vi.fn()
 }));
 vi.mock('../../services/standaloneImages', () => api);
+vi.mock('../account/AccountMenu', () => ({ AccountMenu: () => null }));
 import { ImageWorkspace } from './ImageWorkspace';
 
 const result = { imageId: 'a', imageUrl: 'https://test.invalid/rendered', createdAt: '2026-11-20T12:00:00.000Z' };
@@ -285,4 +286,18 @@ it.each(['ambiguous','different payer','second rejection'] as const)('never auto
   await screen.findByRole('alert');
   expect(api.renderStandalone).toHaveBeenCalledTimes(kind === 'second rejection' ? 2 : 1);
   expect(screen.getByLabelText(/Describe your image/)).toHaveValue('My station');
+});
+
+it('on the comics host it sits in the frame and side panel of My comics: one main, no second Back, Images marked current', async () => {
+  const onBack = vi.fn();
+  const panel = { projects: [], onNewComic: vi.fn(), onLibrary: vi.fn(), onOpenProject: vi.fn(), onChat: vi.fn(), onImages: vi.fn() };
+  render(<ImageWorkspace userId="first" onBack={onBack} panel={panel} />);
+  // The frame is its own lazy chunk; the first import in a test run takes a moment.
+  const nav = await screen.findByRole('navigation', { name: 'Project navigation' }, { timeout: 10_000 });
+  expect(screen.getAllByRole('main')).toHaveLength(1);
+  expect(screen.getByRole('main').contains(screen.getByRole('heading', { level: 1, name: 'Create an image' }))).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+  expect(nav.querySelector('[aria-current="page"]')?.textContent).toBe('Images');
+  fireEvent.click(screen.getByRole('button', { name: 'Back to My comics' }));
+  expect(onBack).toHaveBeenCalledTimes(1);
 });

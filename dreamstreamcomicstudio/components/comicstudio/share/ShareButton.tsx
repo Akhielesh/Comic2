@@ -8,7 +8,7 @@
 // Icon + label from 768 px, icon-only when compact; 44 px targets. The sheet can also be opened
 // from anywhere with `openShareSheet()` (a window event the mounted button listens for).
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Share2 } from 'lucide-react';
 import type { StudioController } from '../types';
 import { cx } from '../conversation/ui';
@@ -103,9 +103,17 @@ const ReaderShareTarget: React.FC<{ target: ShareTarget; compact?: boolean }> = 
 export const ShareButton: React.FC<ShareButtonProps> = ({ studio, target, compact }) => {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
+  // Only a button that renders its sheet (the comic has loaded) answers an open request.
+  const canOpen = useRef(false);
+  canOpen.current = !!studio?.doc;
   useEffect(() => {
     if (!studio) return;
-    const onOpen = () => setOpen(true);
+    const onOpen = (event: Event) => {
+      if (!canOpen.current) return;
+      setOpen(true);
+      // Answered: useStudio's open_share then leaves the board where it is and asks the Read tab for no second sheet.
+      event.preventDefault();
+    };
     window.addEventListener(OPEN_SHARE_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_SHARE_EVENT, onOpen);
   }, [studio]);

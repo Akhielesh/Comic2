@@ -57,6 +57,15 @@ describe('project Director drafting control', () => {
     expect(studio.act).not.toHaveBeenCalled();
   });
 
+  it('counts pages the way the stage strip does: a withheld picture is not ready, so it never offers Read comic', () => {
+    const doc = makeSampleDoc({ directorDraft: { status: 'review', idea: 'Existing plan' } });
+    doc.pages = [doc.pages[0]];
+    doc.pages[0].render = { ...doc.pages[0].render, asset: { ...doc.pages[0].render.asset!, safety: { quarantined: true, at: 1 } } };
+    render(<DirectorDraftControl studio={makeFakeStudio({ doc })} readComposerDraft={() => ''} />);
+    expect(screen.queryByRole('button', { name: 'Read comic' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Review page plan' })).toBeTruthy();
+  });
+
   it('retains an edited brief when another tab changes the comic and refreshes before retry', async () => {
     const studio = makeFakeStudio({ doc: { ...empty(), rev: 2 } });
     studio.act.mockResolvedValue({ ok: false, gated: false, aborted: false, error: 'This comic changed.' });

@@ -5,7 +5,8 @@
  *
  *   - the label is real (visually hidden by default) and the placeholder only hints;
  *   - `/` focuses it from anywhere on the page (`shortcut`), unless the person is already typing in a field;
- *   - Esc clears it while it holds text, else blurs; Clear puts focus back in the field;
+ *   - Esc clears it while it holds text, else blurs; Clear puts focus back in the field. Inside a sheet the first Esc
+ *     clears it too (`data-escape-clears`, which the sheets' Escape handling leaves to the field), the next closes it;
  *   - input is capped at `maxLength` (60: Discover's server-side search accepts at most 60 characters);
  *   - `resultText` ("12 comics") is tied to the field as its description, so the count is read with it.
  *
@@ -85,6 +86,7 @@ export function SearchField({ value, onChange, label, placeholder, onSubmit, sho
           disabled={disabled}
           aria-describedby={resultText ? descId : undefined}
           aria-keyshortcuts={shortcut ? '/' : undefined}
+          data-escape-clears=""
           onChange={(e) => onChange(e.target.value.slice(0, maxLength))}
           onKeyDown={(e) => {
             if (e.key === 'Enter') onSubmit?.(value);

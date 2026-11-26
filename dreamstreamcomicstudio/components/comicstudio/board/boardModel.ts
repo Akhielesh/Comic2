@@ -20,6 +20,7 @@ import {
   type StyleBible
 } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
+import { progressState } from '../../../shared/comic/renderOutcome';
 import {
   getImageModel,
   resolveImageJob,
@@ -221,9 +222,13 @@ export const formatSpend = (usd: number): string => {
   return `$${usd.toFixed(2)}`;
 };
 
-/** Pages drawn and current (not stale) / total — the Pages tab badge. */
+/**
+ * Pages drawn and current (not stale) / total — the Pages tab badge, the phone Board badge and the reader's count. A
+ * picture the content check withheld is stored as ready but is never shown, so it is not counted (progressState): the
+ * same count the stage strip shows (shared/comic/stage.ts `current`).
+ */
 export const pageProgress = (doc: ComicDoc): { ready: number; total: number } => ({
-  ready: doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length,
+  ready: doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready' && progressState(p.render) === 'drawn').length,
   total: doc.pages.length
 });
 
