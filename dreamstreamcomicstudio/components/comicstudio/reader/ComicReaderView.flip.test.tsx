@@ -164,6 +164,12 @@ describe('reader-turn fixes', () => {
     scroller.scrollTop = 700;
     press('ArrowLeft');
     expect(scroller.scrollTop).toBe(2400);
+    // A jump (Home, End) opens its page at the top.
+    press('End');
+    expect(scroller.scrollTop).toBe(0);
+    scroller.scrollTop = 500;
+    press('Home');
+    expect(scroller.scrollTop).toBe(0);
   });
 
   it('each page is named against the book’s page count, not the drawn pages', () => {

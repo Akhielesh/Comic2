@@ -820,11 +820,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     return bookGeometry({ view, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment && hingeX ? hingeX : undefined });
   }, [stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
   const geo = useMemo(() => currentView && layout !== 'scroll' ? geometryFor(currentView) : null, [currentView, layout, geometryFor]);
-  // Fit to width, the page scrolls inside the stage box: a new page opens at its top going forward, at its foot coming
-  // back (where you left the page before it), never mid-page where the last one was scrolled to.
+  // Fit to width, the page scrolls inside the stage box: a new page opens at its top, and the page before it (one step
+  // back) at its foot, where you left it; never mid-page where the last one was scrolled to. Home and End open at the top.
   const lastView = useRef(viewIdx);
   useLayoutEffect(() => {
-    const back = viewIdx < lastView.current;
+    const back = viewIdx === lastView.current - 1;
     lastView.current = viewIdx;
     const box = stageScroller.current;
     if (!box || decision.fit !== 'width' || layout === 'scroll') return;
