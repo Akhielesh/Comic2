@@ -323,8 +323,11 @@ describe('MyComicCard on a phone (360 px, 16 px gutters)', () => {
     const title = card.querySelector('[data-card-primary] [data-user-content]')!;
     expect(tokens(title)).toEqual(expect.arrayContaining(['line-clamp-2', '[overflow-wrap:anywhere]']));
     const next = within(card).getByRole('link', { name: /^Next:/ });
-    expect(tokens(next)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1']));
-    expect(next.querySelector('[data-slot="button-label"]')).toHaveClass('truncate');
+    expect(tokens(next)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'h-auto', 'min-h-8']));
+    // The next step's words say what happens: they wrap inside the button, never end in an ellipsis.
+    const label = next.querySelector('[data-slot="button-label"]')!;
+    expect(tokens(label)).toEqual(expect.arrayContaining(['whitespace-normal', '[overflow-wrap:anywhere]', 'min-w-0']));
+    expect(tokens(label)).not.toContain('truncate');
     expect(tokens(card.querySelector('[data-slot="card-actions"]')!)).toEqual(expect.arrayContaining(['flex-wrap', 'min-w-0']));
   });
 
@@ -336,8 +339,10 @@ describe('MyComicCard on a phone (360 px, 16 px gutters)', () => {
     expect(tokens(within(card).getByRole('button', { name: 'More for Spice Market' }))).toEqual(
       expect.arrayContaining(['coarse:min-h-[var(--ds-density-touch)]', 'coarse:min-w-[var(--ds-density-touch)]'])
     );
-    // The title's own control reaches 44 px through its hit area.
+    // The title's own control reaches 44 px through its hit area, which reaches under ⋯ beside it: ⋯ is positioned and
+    // later in the page, so it paints above that area and keeps its own 44 px.
     expect(tokens(within(card).getByRole('button', { name: 'Spice Market' }))).toEqual(expect.arrayContaining(["coarse:before:-inset-3"]));
+    expect(tokens(within(card).getByRole('button', { name: 'More for Spice Market' }))).toContain('relative');
   });
 
   it('the placeholder has the same footprint as a card', () => {

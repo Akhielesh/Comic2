@@ -128,6 +128,17 @@ describe('ContinueCard', () => {
     expect(within(card).queryByRole('button', { name: /^Continue/ })).toBeNull();
   });
 
+  it('on a phone the buttons run under the cover and the words, so the next step keeps its words; beside the cover from 640 px', () => {
+    renderCard(project(), { row: { stage: drawing, attention: null } });
+    const card = screen.getByTestId('continue-card');
+    expect(card.className).toContain('grid-cols-[5rem_minmax(0,1fr)]');
+    expect(card.className).toContain('sm:grid-cols-[7rem_minmax(0,1fr)]');
+    const actions = card.querySelector('[data-slot="continue-actions"]') as HTMLElement;
+    expect(actions.className.split(' ')).toEqual(expect.arrayContaining(['col-span-2', 'sm:col-span-1', 'sm:col-start-2', 'flex-wrap']));
+    expect(actions.contains(screen.getByRole('link', { name: /^Next:/ }))).toBe(true);
+    expect(screen.getByRole('link', { name: /^Next:/ }).querySelector('[data-slot="button-label"]')).not.toHaveClass('truncate');
+  });
+
   it('while the stage read runs, the stage line is a placeholder of the same height', () => {
     const { container } = renderCard(project(), { status: 'loading' });
     const line = container.querySelector('[data-slot="stage-line"]') as HTMLElement;

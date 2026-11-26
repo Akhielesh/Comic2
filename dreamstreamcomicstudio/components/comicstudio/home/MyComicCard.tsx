@@ -17,7 +17,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, BookOpen, Copy, Info, MoreHorizontal, Pencil, Star, Trash2 } from 'lucide-react';
 import type { Project } from '../../../types';
 import { cn } from '../../../lib/utils';
-import { Button, buttonClasses, labelChildren } from '../../ds/Button';
+import { Button, buttonClasses } from '../../ds/Button';
 import { COMIC_CARD, COMIC_CARD_PRIMARY } from '../../ds/ComicCard';
 import { revealKeyOf, RevealImage } from '../../ds/CoverImage';
 import { IconButton } from '../../ds/IconButton';
@@ -25,7 +25,7 @@ import { INPUT_CLASSES } from '../../ds/Input';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '../../ds/Menu';
 import { Progress } from '../../ds/Progress';
 import { Skeleton } from '../../ds/Skeleton';
-import { CHIP, CLIP_TEXT, LIFT, MUTED } from '../../chat/studioDesign';
+import { CHIP, CLIP_TEXT, LIFT, MUTED, WRAP_TEXT } from '../../chat/studioDesign';
 import { COMIC_STAGES, type StageView } from '../../../shared/comic/stage';
 import { EmptyArt } from '../library/procedural/EmptyArt';
 import { StageMark } from '../stage/StageStrip';
@@ -100,16 +100,22 @@ export function CardStageLine({ model, className }: { model: MyComicCardModel; c
   return <p data-slot="stage-line" className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5', MUTED, CLIP_TEXT, className)}>{model.stageWord}</p>;
 }
 
+/** A next step's own height: it grows to a second line rather than cut its words (they say what happens next). */
+const NEXT_GROWS: Record<'sm' | 'default', string> = { sm: 'h-auto min-h-8 py-1.5', default: 'h-auto min-h-9 py-1.5' };
+
 /**
  * The next step: a link to the studio place (so a new tab opens it there) that, on a plain click, opens the comic in this
  * tab at that place. Classic comics open their own editor (a button: they have no studio URL). It never starts a step.
+ * Its words never end in an ellipsis: on the narrowest card they wrap inside the button.
  */
 export function NextStep({ id, title, next, kind, onOpen, size = 'sm', className }: { id: string; title: string; next: MyComicNext; kind: MyComicCardModel['kind']; onOpen: MyComicCardActions['open']; size?: 'sm' | 'default'; className?: string }) {
   const hintId = useId();
   const name = `${next.label}, ${title}`;
   const content = (
     <>
-      {labelChildren(next.label)}
+      <span data-slot="button-label" className={cn(WRAP_TEXT, 'whitespace-normal text-left leading-5')}>
+        {next.label}
+      </span>
       {next.destination ? <ArrowRight aria-hidden="true" /> : null}
     </>
   );
@@ -136,7 +142,7 @@ export function NextStep({ id, title, next, kind, onOpen, size = 'sm', className
         aria-label={name}
         aria-describedby={hintId}
         data-card-next={next.destination ?? 'open'}
-        className={buttonClasses({ variant: 'outline', size, className: cn('no-underline', className) })}
+        className={buttonClasses({ variant: 'outline', size, className: cn('no-underline', NEXT_GROWS[size], className) })}
         onClick={(event) => {
           // A new tab or window (a modifier, or the middle button through auxclick) follows the link itself.
           if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -275,8 +281,9 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
           </h3>
           {model.featured ? <Star role="img" aria-label="Featured" className="mt-1.5 size-3.5 shrink-0 fill-current text-[var(--ds-ink)]" /> : null}
           <Menu modal={false}>
+            {/* ⋯ is positioned, so it sits above the title's 44 px touch area where the two meet. */}
             <MenuTrigger asChild>
-              <IconButton size="sm" label={`More for ${title}`} title="More" className={cn('-mr-1 -mt-0.5 shrink-0', MUTED, 'hover:text-[var(--ds-ink)]')}>
+              <IconButton size="sm" label={`More for ${title}`} title="More" className={cn('relative -mr-1 -mt-0.5 shrink-0', MUTED, 'hover:text-[var(--ds-ink)]')}>
                 <MoreHorizontal />
               </IconButton>
             </MenuTrigger>

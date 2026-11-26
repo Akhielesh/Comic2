@@ -67,8 +67,9 @@ Each card has the cover, the title, the stage, one status line, the next step, R
 - Grid (`ProjectDashboard` `MY_COMICS_GRID`): one column of row cards below 640 px (the cover in a 6 rem column, the
   words beside it, the buttons across both); from 640 px as many 17 rem cards as fit (`auto-fill`, so the frame's
   sidebar, open or collapsed, never squeezes a card). At 360 px a card is 328 px inside 16 px gutters; titles clamp to two
-  lines, the status clips with its words in a tooltip, the next step's label ends in an ellipsis before it pushes, and the
-  button row wraps. Every control is a 44 px target on a coarse pointer. Nothing is hover-only (the old Read / Open / Info
+  lines, the status clips with its words in a tooltip, the button row wraps, and the next step's words wrap inside their
+  button rather than end in an ellipsis (they say what happens next; the layout smoke's truncated-label check holds that
+  at 0). Every control is a 44 px target on a coarse pointer. Nothing is hover-only (the old Read / Open / Info
   row that showed on hover is gone).
 - 24 cards at first, then "Show more comics" (its name says how many more). Cards are memoised and their words cached per
   comic, so a star or a rename re-renders one card; 150 comics are tested.
@@ -85,7 +86,8 @@ Each card has the cover, the title, the stage, one status line, the next step, R
 
 - **Continue** (`ContinueCard.tsx`, comics host only): the most recently edited studio comic within 14 days (the pick is
   unchanged, made once per list load). It shows the same stage row and status as the comic's card, and its next step (a
-  deep link) or Continue when the stage is unknown, plus Read. No fill.
+  deep link) or Continue when the stage is unknown, plus Read. No fill. On a phone its buttons run under the cover and the
+  words, so the next step keeps its words on one line; from 640 px they sit under the words, beside the cover.
 - **No comics yet** (`MyComicsEmpty.tsx`, the main dashboard; the comics host shows the idea form instead): the page's one
   warm moment, the empty-state wash (`WASH_EMPTY`, listed in `tests/config/colourUseGuard.test.ts` WASH_FILES), a line
   drawing, one sentence and Create a new comic, which opens the form and spends nothing.

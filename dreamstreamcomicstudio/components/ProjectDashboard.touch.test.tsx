@@ -247,9 +247,10 @@ describe('My comics on a touch screen: every control always shown, every one a 4
     const actions = card.querySelector('[data-slot="card-actions"]') as HTMLElement;
     expect(tokens(actions)).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'min-w-0', 'col-span-2']));
     const next = within(card).getByRole('link', { name: 'Open, Spice Market' });
-    // The next step takes the rest of the row and may shrink; its label ends in an ellipsis before it pushes.
-    expect(tokens(next)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0']));
-    expect(next.querySelector('[data-slot="button-label"]')).toHaveClass('truncate');
+    // The next step takes the rest of the row and may shrink; its words wrap inside it before it pushes, never cut.
+    expect(tokens(next)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0', 'h-auto']));
+    expect(next.querySelector('[data-slot="button-label"]')).toHaveClass('whitespace-normal');
+    expect(next.querySelector('[data-slot="button-label"]')).not.toHaveClass('truncate');
     // At 320 px the row is 262 px (16 px gutters, a 1 px edge, 12 px padding): Read (about 74 px) and an 8 px gap leave
     // the next step 180 px, past its 44 px floor.
     const row = 320 - 2 * 16 - 2 - 2 * 12;

@@ -34,6 +34,12 @@ export interface ContinueCardProps {
 const pageLocale = (): string | undefined =>
   typeof document !== 'undefined' ? document.documentElement.lang || undefined : undefined;
 
+/**
+ * The card: a grid of the cover (a 5 rem column, 7 rem from 640 px) and the words; the buttons run under both on a phone
+ * and sit under the words beside the cover from 640 px.
+ */
+const CONTINUE_LAYOUT = 'cursor-pointer grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-4 gap-y-3 p-3 sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-x-5 sm:p-4';
+
 /** Explicit size for the cover (a portrait page, framed from the top); the box sets what is shown. */
 const COVER_W = 240;
 const COVER_H = 320;
@@ -56,9 +62,9 @@ export function ContinueCard({ project, onOpen, onRead, stageRow, stageStatus = 
       <div
         data-testid="continue-card"
         onClick={open}
-        className={cn(CARD, SHADOW_SOFT, LIFT, 'cursor-pointer flex-row items-center gap-4 p-3 sm:gap-5 sm:p-4')}
+        className={cn(CARD, SHADOW_SOFT, LIFT, CONTINUE_LAYOUT)}
       >
-        <div className={cn('relative aspect-[3/4] w-20 shrink-0 overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-well)] sm:w-28', RADIUS_CONTROL)}>
+        <div className={cn('relative aspect-[3/4] w-full overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-well)] sm:row-span-2', RADIUS_CONTROL)}>
           {cover ? (
             <SmartImage
               src={cover}
@@ -79,28 +85,29 @@ export function ContinueCard({ project, onOpen, onRead, stageRow, stageStatus = 
             </div>
           )}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-1 sm:self-end">
           <p id={`${id}-label`} className={cn('m-0', OVERLINE)}>Continue</p>
           <h2 id={`${id}-title`} className={cn('m-0 text-[length:var(--ds-text-xl)] leading-7', HEADING, CLIP_TEXT)} title={title}>
             {title}
           </h2>
           <CardStageLine model={model} />
           <p className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED)}>{model.status}</p>
-          {/* Its own controls: a tap on one never also opens the card behind it. */}
-          <div className="mt-2 flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
-            {next ? (
-              <NextStep id={project.id} title={title} next={next} kind={model.kind} onOpen={(comic, destination) => onOpen(comic, destination)} size="default" className="max-w-full" />
-            ) : (
-              <Button variant="outline" onClick={only(open)}>
-                Continue <ArrowRight aria-hidden />
-              </Button>
-            )}
-            {model.canRead && (
-              <Button variant="ghost" aria-label={`Read ${title}`} onClick={only(() => onRead(project.id))}>
-                <BookOpen aria-hidden /> Read
-              </Button>
-            )}
-          </div>
+        </div>
+        {/* Its own controls: a tap on one never also opens the card behind it. Under the cover and the words on a phone, so
+            the next step keeps its words on one line; beside the cover, under the words, from 640 px. */}
+        <div data-slot="continue-actions" className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-1 sm:col-start-2 sm:self-start" onClick={(event) => event.stopPropagation()}>
+          {next ? (
+            <NextStep id={project.id} title={title} next={next} kind={model.kind} onOpen={(comic, destination) => onOpen(comic, destination)} size="default" className="max-w-full" />
+          ) : (
+            <Button variant="outline" onClick={only(open)}>
+              Continue <ArrowRight aria-hidden />
+            </Button>
+          )}
+          {model.canRead && (
+            <Button variant="ghost" aria-label={`Read ${title}`} onClick={only(() => onRead(project.id))}>
+              <BookOpen aria-hidden /> Read
+            </Button>
+          )}
         </div>
       </div>
     </section>
