@@ -124,6 +124,15 @@ describe('panelComics: freshly finished, and older comics', () => {
     expect(panelComics({ projects: [], rows: [], now: NOW }).empty).toBe(true);
   });
 
+  it('a kind of news a newer server writes still reads as words, never a blank line', () => {
+    const rows = [row('a', { attention: 'later' as never }), row('b', { finished: [{ kind: 'later' as never, at: NOW - HOUR }] })];
+    const result = panelComics({ projects: [], rows, now: NOW });
+    expect(result.groups.map((g) => [g.group, g.comics[0].status])).toEqual([
+      ['needs', STAGE_UNKNOWN],
+      ['finished', 'Work finished']
+    ]);
+  });
+
   it('a row’s name carries its stage when the status is something else', () => {
     const [needs] = panelComics({ projects: [], rows: [row('a', { title: 'Salt Road', attention: 'approval', stage: drawing })], now: NOW }).groups[0].comics;
     expect(comicRowName(needs)).toBe('Salt Road · Review drawing estimate · Drawing · 6 of 12 pages drawn');

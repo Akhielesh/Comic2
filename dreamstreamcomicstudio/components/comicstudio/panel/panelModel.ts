@@ -60,6 +60,9 @@ export function finishedLabel(work: FinishedWork): string {
       return 'Comic published';
     case 'reply':
       return 'Director replied';
+    default:
+      // A kind a newer server writes: say it finished, never nothing.
+      return 'Work finished';
   }
 }
 
@@ -159,7 +162,7 @@ export function panelComics({ projects, rows, now, isCleared, current, recentLim
     const fresh = (row?.finished ?? []).filter((work) => isFreshWork(id, work, now, isCleared)).sort((a, b) => b.at - a.at);
     const base = { id, title, stage, studio, fresh };
     if (row?.attention) {
-      return { ...base, group: 'needs', status: ATTENTION_LABEL[row.attention], task: taskDestination(row.attention), at: updatedAt };
+      return { ...base, group: 'needs', status: ATTENTION_LABEL[row.attention] ?? STAGE_UNKNOWN, task: taskDestination(row.attention), at: updatedAt };
     }
     if (row?.working) {
       const stalled = !!row.updatedAt && now - row.updatedAt > STALLED_MS;
