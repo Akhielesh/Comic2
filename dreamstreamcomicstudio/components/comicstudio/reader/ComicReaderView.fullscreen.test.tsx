@@ -134,16 +134,22 @@ describe('the viewport mode has a history entry of its own (a Back-stack layer)'
     opening = { __viewportEntry: ++entryNo };
     window.history.pushState(opening, '', window.location.href);
   });
-  /** Let every traversal under way land. */
+  /**
+   * Let every traversal under way land. A pop can queue the next one (a closing layer's deferred back()), so this waits
+   * several rounds: on a loaded machine one 30 ms timer could fire before a traversal queued behind a late one.
+   */
+  const rounds = async () => {
+    for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 30));
+  };
   const settle = async () => {
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 30));
+      await rounds();
     });
   };
   const back = async () => {
     await act(async () => {
       window.history.back();
-      await new Promise((r) => setTimeout(r, 30));
+      await rounds();
     });
   };
 
