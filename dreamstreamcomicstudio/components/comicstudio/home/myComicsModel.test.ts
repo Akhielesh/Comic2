@@ -67,7 +67,11 @@ const openGate = (doc: ComicDoc) => {
 /** The row a list holds for a doc: its saved summary, through the JSON a database returns, read by comicActivityRow. */
 const saved = (doc: ComicDoc): CardStageRow => {
   const row = comicActivityRow({ project_id: doc.id, activity: JSON.parse(JSON.stringify(summarizeComicWork(doc))) });
-  return { ...(row.stage ? { stage: row.stage } : {}), attention: row.attention };
+  return { ...(row.stage ? { stage: row.stage } : {}), attention: row.attention, working: row.working };
+};
+/** A look the Director drew that failed (a quota refusal, say). It stays failed after another look is picked. */
+const failedLook = (doc: ComicDoc) => {
+  doc.style.options = [...(doc.style.options ?? []), { id: 'so_fail', name: 'Failed look', spec: 'Bold inks.', render: { ...render('failed'), error: 'quota' } as RenderState }];
 };
 const card = (project: Project, row?: CardStageRow, status: 'loading' | 'settled' = 'settled') => myComicCard(project, row, status, NOW, 'en');
 
@@ -124,6 +128,57 @@ describe('a studio comic with a saved stage', () => {
     expect(card(studio('s'), firstFailed).next).toMatchObject({ label: 'Next: review 1 failed page', destination: 'pages' });
   });
 
+  it('a failed look, cover or cast sheet never sends the card to the Pages tab: the stage keeps its own step', () => {
+    // Published, every page current: Read stays the next step, whatever failed elsewhere.
+    const published = saved(drawing(5, 5, (doc) => {
+      live(doc);
+      failedLook(doc);
+    }));
+    expect(published.attention).toBe('render_failed');
+    const done = card(studio('s', { studioPages: 5, studioRendered: 5 }), published);
+    expect(done.next).toBeNull();
+    expect(done.canRead).toBe(true);
+    // Still marked: something failed and the person may want to see it.
+    expect(done.needsYou).toBe(true);
+    // A new comic whose look failed: the story is still what comes next.
+    const story = saved(comic(failedLook));
+    expect(story.attention).toBe('render_failed');
+    expect(story.stage?.stage).toBe('story');
+    expect(card(studio('s', { studioPages: 0, studioRendered: 0 }), story).next).toMatchObject({ label: 'Next: tell the Director your idea', destination: 'conversation' });
+    // Every look asked for failed: choosing a look (the Style tab) is still the step.
+    const style = saved(comic((doc) => {
+      doc.brief.premise = 'A ferry that only runs after midnight.';
+      failedLook(doc);
+    }));
+    expect(card(studio('s', { studioPages: 0, studioRendered: 0 }), style).next).toMatchObject({ label: 'Next: choose a look', destination: 'style' });
+    // A failed cover or cast sheet while drawing: the pages' own step.
+    const cover = saved(drawing(12, 6, (doc) => {
+      doc.cover.render = { ...render('failed'), error: 'timeout' } as RenderState;
+    }));
+    expect(cover.attention).toBe('render_failed');
+    expect(card(studio('s'), cover).next).toMatchObject({ label: 'Next: draw the rest', destination: 'pages' });
+  });
+
+  it('a failed look beside a page redraw still running: nothing says the page failed, so the stage step stays', () => {
+    const row = saved(drawing(2, 2, (doc) => {
+      doc.pages[1].render = render('rendering', picture());
+      failedLook(doc);
+    }));
+    expect(row).toMatchObject({ attention: 'render_failed', working: true });
+    expect(card(studio('s'), row).next).toMatchObject({ label: 'Next: read and publish', destination: 'read' });
+    // Without the working flag (a row that never said), the standing picture that is not ready reads as a failed redraw.
+    expect(card(studio('s'), { ...row, working: undefined }).next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
+  });
+
+  it('a failed page while others still draw leads with the problem, on the Pages tab', () => {
+    const row = saved(drawing(3, 1, (doc) => {
+      doc.pages[1].render = render('failed');
+      doc.pages[2].render = render('rendering');
+    }));
+    expect(row.stage?.next).toBe('watch_drawing');
+    expect(card(studio('s'), row).next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
+  });
+
   it('every page drawn and published: Published, and Read is the next step (no second button)', () => {
     const model = card(studio('s', { studioRendered: 12 }), saved(drawing(12, 12, live)));
     expect(model.stageWord).toBe('Published');
@@ -176,6 +231,12 @@ describe('older comics and an unanswered stage read', () => {
     expect(model.status).toBe('3 of 10 pages drawn · edited 2 hours ago');
     expect(model.next).toEqual({ label: 'Open', destination: null, hint: 'Opens the comic in the studio' });
     expect(model.canRead).toBe(true);
+  });
+
+  it('saved before stages, with a render that failed: Needs you, and the comic opens as it was left (nothing says where)', () => {
+    const model = card(studio('s'), { attention: 'render_failed' });
+    expect(model.needsYou).toBe(true);
+    expect(model.next).toEqual({ label: 'Next: review the drawing problem', destination: null, hint: 'Opens the comic in the studio' });
   });
 
   it('saved before summaries, with an approval waiting: still Needs you, from the activity data', () => {
@@ -231,6 +292,17 @@ describe('classic and Page Studio comics', () => {
     const model = card(classic('c', { generationStatus: { isActive: true, progress: 40, estimatedTimeRemaining: '2m', logs: [] } }));
     expect(model.building).toEqual({ progress: 40, remaining: '2m' });
     expect(model.status).toBe('Building · 40% · about 2m left · edited 2 hours ago');
+  });
+
+  it('a build that has not timed itself yet (or stopped) says only how far it is, never "about Calculating... left"', () => {
+    for (const remaining of ['Calculating...', 'Done', 'Error', '0s', '', 'Stopped at panel 3']) {
+      const model = card(classic('c', { generationStatus: { isActive: true, progress: 0, estimatedTimeRemaining: remaining, logs: [] } }));
+      expect(model.status, remaining).toBe('Building · 0% · edited 2 hours ago');
+      expect(model.building, remaining).toEqual({ progress: 0, remaining: '' });
+    }
+    for (const remaining of ['45s', '3m 12s', '1m 0s']) {
+      expect(card(classic('c', { generationStatus: { isActive: true, progress: 10, estimatedTimeRemaining: remaining, logs: [] } })).status).toBe(`Building · 10% · about ${remaining} left · edited 2 hours ago`);
+    }
   });
 
   it('Page Studio comics count pages', () => {

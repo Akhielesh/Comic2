@@ -18,7 +18,7 @@ import { ArrowRight, BookOpen, Copy, Info, MoreHorizontal, Pencil, Star, Trash2 
 import type { Project } from '../../../types';
 import { cn } from '../../../lib/utils';
 import { Button, buttonClasses } from '../../ds/Button';
-import { COMIC_CARD, COMIC_CARD_PRIMARY } from '../../ds/ComicCard';
+import { COMIC_CARD, COMIC_CARD_FOCUS, COMIC_CARD_PRIMARY, handCardClickToPrimary } from '../../ds/ComicCard';
 import { revealKeyOf, RevealImage } from '../../ds/CoverImage';
 import { IconButton } from '../../ds/IconButton';
 import { INPUT_CLASSES } from '../../ds/Input';
@@ -51,13 +51,6 @@ export interface MyComicCardActions {
 /** The studio URL a next step deep-links to (a new tab opens it there too): `/?view=studio&id=…&task=…`. */
 export const studioHref = (id: string, destination: TaskDestination | null): string =>
   '/?' + new URLSearchParams({ view: 'studio', id, ...(destination ? { task: destination } : {}) }).toString();
-
-/** Clicks on these never open the card: they are controls of their own (ComicCard's list, plus menu rows). */
-const OWN_CONTROLS = 'a,button,input,select,textarea,label,summary,[role="menuitem"],[role="menu"],[data-card-ignore]';
-
-/** The card's own focus outline while its title control has keyboard focus (ComicCard's). */
-const CARD_FOCUS =
-  'has-[[data-card-primary]:focus-visible]:outline has-[[data-card-primary]:focus-visible]:outline-2 has-[[data-card-primary]:focus-visible]:outline-offset-2 has-[[data-card-primary]:focus-visible]:outline-[color:var(--ds-focus)]';
 
 /** Below 640 px: a row, the cover in a 6 rem column and the buttons under both. From 640 px: the cover on top. */
 export const MY_COMIC_CARD = 'grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-3 overflow-hidden p-3 sm:flex sm:flex-col sm:gap-0 sm:p-0';
@@ -98,6 +91,30 @@ export function CardStageLine({ model, className }: { model: MyComicCardModel; c
     );
   }
   return <p data-slot="stage-line" className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5', MUTED, CLIP_TEXT, className)}>{model.stageWord}</p>;
+}
+
+/** Where a status line's parts meet ("6 of 12 pages drawn · edited 2 hours ago"; homeModel and the stage's words). */
+const STATUS_SEPARATOR = ' · ';
+
+/**
+ * The status line, never cut (its words are the only place the edit time and the out-of-date count show): its parts sit
+ * on one line while they fit, and otherwise a part moves to the next line whole, so a 328 px phone card reads
+ * "6 of 12 pages drawn ·" over "edited 2 hours ago". A part wider than the card wraps inside itself.
+ */
+export function CardStatus({ text, className }: { text: string; className?: string }) {
+  const parts = text.split(STATUS_SEPARATOR);
+  return (
+    <p data-slot="card-status" className={cn('m-0 min-w-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED, className)}>
+      {parts.map((part, i) => (
+        <React.Fragment key={i}>
+          {i > 0 ? ' ' : null}
+          <span data-slot="status-part" className={cn('inline-block max-w-full', WRAP_TEXT)}>
+            {i < parts.length - 1 ? `${part}\u00a0·` : part}
+          </span>
+        </React.Fragment>
+      ))}
+    </p>
+  );
 }
 
 /** A next step's own height: it grows to a second line rather than cut its words (they say what happens next). */
@@ -207,7 +224,8 @@ function CardCover({ project, priority, needsYou, studio }: { project: Project; 
     <span data-slot="my-comic-cover" className={MY_COMIC_COVER}>
       {picture}
       {needsYou ? (
-        <span data-slot="needs-you" className={cn(CHIP, 'absolute left-1.5 top-1.5 border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] sm:left-2 sm:top-2')}>
+        // Seen on the cover; heard after the title (the card says it there), so it is not read twice.
+        <span aria-hidden="true" data-slot="needs-you" className={cn(CHIP, 'absolute left-1.5 top-1.5 border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] sm:left-2 sm:top-2')}>
           Needs you
         </span>
       ) : null}
@@ -242,12 +260,7 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
   }, [renaming]);
 
   const onCardClick = (event: React.MouseEvent<HTMLElement>) => {
-    if (renaming || event.defaultPrevented) return;
-    const target = event.target as Element | null;
-    if (!target || target.closest(OWN_CONTROLS) || !event.currentTarget.contains(target)) return;
-    const selection = typeof window !== 'undefined' ? window.getSelection?.() : null;
-    if (selection && !selection.isCollapsed && selection.toString().trim()) return;
-    primaryRef.current?.click();
+    if (!renaming) handCardClickToPrimary(event, primaryRef.current);
   };
 
   return (
@@ -257,7 +270,7 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
       data-kind={model.kind}
       data-needs-you={model.needsYou || undefined}
       onClick={onCardClick}
-      className={cn(COMIC_CARD, LIFT, CARD_FOCUS, 'h-full cursor-pointer', MY_COMIC_CARD)}
+      className={cn(COMIC_CARD, LIFT, COMIC_CARD_FOCUS, 'h-full cursor-pointer', MY_COMIC_CARD)}
     >
       <CardCover project={project} priority={priority} needsYou={model.needsYou} studio={studio} />
       <div className="flex min-w-0 flex-col gap-1 sm:px-3 sm:pt-3">
@@ -279,6 +292,8 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
               </button>
             )}
           </h3>
+          {/* Right after the title, for anyone who moves by heading: the reason this comic is listed first. */}
+          {model.needsYou ? <span className="sr-only">Needs you</span> : null}
           {model.featured ? <Star role="img" aria-label="Featured" className="mt-1.5 size-3.5 shrink-0 fill-current text-[var(--ds-ink)]" /> : null}
           <Menu modal={false}>
             {/* ⋯ is positioned, so it sits above the title's 44 px touch area where the two meet. */}
@@ -339,9 +354,7 @@ function MyComicCardImpl({ project, model, renaming, priority = false, actions }
           </Menu>
         </div>
         <CardStageLine model={model} />
-        <p data-slot="card-status" className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED, CLIP_TEXT)} title={model.status}>
-          {model.status}
-        </p>
+        <CardStatus text={model.status} />
         {model.building ? (
           <Progress
             value={model.building.progress}

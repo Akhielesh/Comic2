@@ -21,9 +21,9 @@ vi.mock('../services/supabase', async () => ({ supabase: (await import('../servi
 
 import { ProjectDashboard } from './ProjectDashboard';
 import { fakeSupabase } from '../services/projectRows.testkit';
-import { STAGE_SELECT, type ComicStageRow } from '../services/comicWorkspaceActivity';
-import { ComicStagesSource, type ComicStagesLoader } from './comicstudio/home/useComicStages';
-import { consumeTaskTarget } from './comicstudio/home/workspaceTaskTarget';
+import { STAGE_DOC_SELECT, STAGE_SELECT, type ComicStageRow } from '../services/comicWorkspaceActivity';
+import { ComicStagesSource, forgetComicStages, STAGE_READ_TIMEOUT_MS, STAGE_REFRESH_DELAY_MS, type ComicStagesLoader } from './comicstudio/home/useComicStages';
+import { consumeTaskTarget, WORK_CHANGED_EVENT } from './comicstudio/home/workspaceTaskTarget';
 import { WASH_EMPTY } from './chat/studioDesign';
 import { clearOtherComicIdeaDrafts } from './comicstudio/comicIdeaDraft';
 
@@ -42,12 +42,17 @@ const studio = (id: string, name: string, ageHours: number, pages = 12, drawn = 
 const draw = (pages: number, drawn: number, next: StageFacts['next'] = 'draw_rest'): StageFacts => ({
   v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages, planned: pages, drawn, current: drawn, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next
 });
-const docRow = (id: string, ageHours: number, activity: Record<string, unknown> | null, extra: Record<string, unknown> = {}) => ({
-  project_id: id,
-  user_id: ACCOUNT,
-  updated_at: new Date(Date.now() - ageHours * HOUR).toISOString(),
-  doc: { brief: { title: id, premise: 'A long, private premise the list never reads.' }, conversation: [{ role: 'user', text: 'private words' }], ...(activity ? { workspaceActivity: activity } : {}), ...extra }
-});
+/** A comic_docs row with its `listing` as the comic_docs_listing trigger writes it from the doc. */
+const docRow = (id: string, ageHours: number, activity: Record<string, unknown> | null, extra: Record<string, unknown> = {}) => {
+  const doc: Record<string, any> = { brief: { title: id, premise: 'A long, private premise the list never reads.' }, conversation: [{ role: 'user', text: 'private words' }], ...(activity ? { workspaceActivity: activity } : {}), ...extra };
+  return {
+    project_id: id,
+    user_id: ACCOUNT,
+    updated_at: new Date(Date.now() - ageHours * HOUR).toISOString(),
+    doc,
+    listing: { activity: doc.workspaceActivity ?? null, gate: doc.gate?.status ?? null, plan: doc.planStatus ?? null, draft: doc.directorDraft?.status ?? null, lastCard: doc.conversation?.at(-1)?.cards?.[0]?.type ?? null }
+  };
+};
 
 const renderDashboard = (projects: Project[], overrides: Partial<React.ComponentProps<typeof ProjectDashboard>> = {}, loader?: ComicStagesLoader) => {
   const props = {
@@ -74,6 +79,7 @@ const showMore = () => document.querySelector<HTMLButtonElement>('button[data-sh
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   fakeSupabase.reset();
+  forgetComicStages();
   sessionStorage.clear();
   clearOtherComicIdeaDrafts(ACCOUNT);
 });
@@ -98,20 +104,35 @@ describe('My comics: one stage read, Needs you first', () => {
     await screen.findByRole('list', { name: 'Your comics' });
     expect(gridTitles()).toEqual(['Waiting', 'Older Waiting', 'Newest', 'Middle']);
 
+    // One read of the listing column: no path into any doc, so the database opens none of them.
     const queries = fakeSupabase.queriesOn('comic_docs');
     expect(queries).toHaveLength(1);
     expect(queries[0].columns).toBe(STAGE_SELECT);
+    expect(queries[0].columns).not.toMatch(/doc/);
     expect(queries[0].filters).toEqual(expect.arrayContaining(['user_id=eq.user-1', 'order=updated_at.desc']));
 
     const waiting = screen.getByRole('article', { name: 'Waiting' });
-    expect(within(waiting).getByText('Needs you')).toBeInTheDocument();
+    expect(within(waiting).getByText('Needs you', { selector: '.sr-only' })).toBeInTheDocument();
     expect(within(waiting).getByText('Drawing')).toBeInTheDocument();
     expect(within(waiting).getByRole('link', { name: 'Next: review the estimate, Waiting' })).toBeInTheDocument();
     const older = screen.getByRole('article', { name: 'Older Waiting' });
     expect(within(older).getByText('Open to see')).toBeInTheDocument();
-    expect(within(older).getByText('Needs you')).toBeInTheDocument();
+    expect(within(older).getByText('Needs you', { selector: '.sr-only' })).toBeInTheDocument();
     expect(within(screen.getByRole('article', { name: 'Middle' })).getByText('Open to see')).toBeInTheDocument();
-    expect(within(screen.getByRole('article', { name: 'Newest' })).queryByText('Needs you')).toBeNull();
+    expect(within(screen.getByRole('article', { name: 'Newest' })).queryAllByText('Needs you')).toHaveLength(0);
+  });
+
+  it('before the listing column exists, the same cards come from scalar paths in the doc (one extra request)', async () => {
+    fakeSupabase.state.missingColumns.add('listing');
+    fakeSupabase.state.tables.comic_docs = [
+      docRow('newest', 1, { v: 1, attention: null, working: false, finished: [], stage: draw(12, 6) }),
+      docRow('older-waiting', 50, null, { gate: { status: 'open' } })
+    ];
+    renderDashboard([studio('newest', 'Newest', 1), studio('older-waiting', 'Older Waiting', 50)]);
+    await screen.findByRole('list', { name: 'Your comics' });
+    expect(gridTitles()).toEqual(['Older Waiting', 'Newest']);
+    expect(fakeSupabase.queriesOn('comic_docs').map((q) => q.columns)).toEqual([STAGE_SELECT, STAGE_DOC_SELECT]);
+    expect(within(screen.getByRole('article', { name: 'Newest' })).getByText('Drawing')).toBeInTheDocument();
   });
 
   it('an explicit sort is exactly that; the default puts Needs you first again', async () => {
@@ -132,7 +153,7 @@ describe('My comics: one stage read, Needs you first', () => {
     await screen.findByRole('list', { name: 'Your comics' });
     expect(gridTitles()).toEqual(['Bravo', 'Alpha']);
     expect(within(screen.getByRole('article', { name: 'Alpha' })).getByText('Open to see')).toBeInTheDocument();
-    expect(within(screen.getByRole('article', { name: 'Alpha' })).getByText(/^6 of 12 pages drawn · /)).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Alpha' }).querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ')).toMatch(/^6 of 12 pages drawn · /);
   });
 
   it('the next step deep-links: the studio opens at that place, and nothing else happens', async () => {
@@ -216,6 +237,100 @@ describe('My comics: when the stage read runs', () => {
     rerenderWith({ projectsLoaded: true });
     await act(async () => void vi.advanceTimersByTime(30 * 60_000));
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it('after a run settles in this tab, the cards read again (once, after the burst), so they agree with the AI activity feed', async () => {
+    vi.useFakeTimers();
+    let rows: ReadonlyMap<string, ComicStageRow> = new Map([['a', { id: 'a', stage: draw(12, 6, 'follow_planning'), attention: null, working: true }]]);
+    const loader = vi.fn<ComicStagesLoader>(async () => rows);
+    renderDashboard([studio('a', 'Alpha', 1), studio('b', 'Bravo', 0.5)], {}, loader);
+    await act(async () => void (await Promise.resolve()));
+    expect(gridTitles()).toEqual(['Bravo', 'Alpha']);
+    expect(within(screen.getByRole('article', { name: 'Alpha' })).getByRole('link', { name: 'Next: follow the Director, Alpha' })).toBeInTheDocument();
+    // The Director's draft settles with a whole-book drawing approval.
+    rows = new Map([['a', { id: 'a', stage: draw(12, 6, 'review_estimate'), attention: 'approval', working: false }]]);
+    const settle = (accountId: string) => window.dispatchEvent(new CustomEvent(WORK_CHANGED_EVENT, { detail: { accountId } }));
+    act(() => {
+      settle('someone-else');
+      settle(ACCOUNT);
+      settle(ACCOUNT);
+    });
+    await act(async () => void vi.advanceTimersByTime(STAGE_REFRESH_DELAY_MS - 1));
+    expect(loader).toHaveBeenCalledTimes(1);
+    await act(async () => void vi.advanceTimersByTime(1));
+    await act(async () => void (await Promise.resolve()));
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(gridTitles()).toEqual(['Alpha', 'Bravo']);
+    const alpha = screen.getByRole('article', { name: 'Alpha' });
+    expect(within(alpha).getByRole('link', { name: 'Next: review the estimate, Alpha' })).toBeInTheDocument();
+    expect(within(alpha).getByText('Needs you', { selector: '.sr-only' })).toBeInTheDocument();
+  });
+
+  it('a run that settles while the tab is hidden is read when the tab shows again', async () => {
+    vi.useFakeTimers();
+    const loader = vi.fn<ComicStagesLoader>(async () => new Map());
+    renderDashboard([studio('a', 'Alpha', 1)], {}, loader);
+    await act(async () => void (await Promise.resolve()));
+    let state: DocumentVisibilityState = 'hidden';
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state);
+    act(() => void window.dispatchEvent(new CustomEvent(WORK_CHANGED_EVENT, { detail: { accountId: ACCOUNT } })));
+    await act(async () => void vi.advanceTimersByTime(5_000));
+    expect(loader).toHaveBeenCalledTimes(1);
+    state = 'visible';
+    act(() => void document.dispatchEvent(new Event('visibilitychange')));
+    await act(async () => void vi.advanceTimersByTime(STAGE_REFRESH_DELAY_MS));
+    expect(loader).toHaveBeenCalledTimes(2);
+    // Showing again with nothing missed reads nothing.
+    act(() => void document.dispatchEvent(new Event('visibilitychange')));
+    await act(async () => void vi.advanceTimersByTime(STAGE_REFRESH_DELAY_MS));
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it('back from a comic, while the list reloads: the cards already known paint at once, in their order, and are read again', async () => {
+    const loader = vi.fn<ComicStagesLoader>(async () => new Map([['b', { id: 'b', stage: draw(12, 6, 'review_estimate'), attention: 'approval', working: false }]]));
+    const first = renderDashboard([studio('a', 'Alpha', 1), studio('b', 'Bravo', 5)], {}, loader);
+    await screen.findByRole('list', { name: 'Your comics' });
+    expect(gridTitles()).toEqual(['Bravo', 'Alpha']);
+    first.unmount();
+    // leaveComicStudio: the dashboard mounts again with the comics in memory while the list reload runs.
+    let answer!: (rows: ReadonlyMap<string, ComicStageRow>) => void;
+    loader.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    renderDashboard([studio('a', 'Alpha', 1), studio('b', 'Bravo', 5)], { projectsLoaded: false }, loader);
+    expect(screen.queryByRole('list', { name: 'Your comics, loading' })).toBeNull();
+    expect(gridTitles()).toEqual(['Bravo', 'Alpha']);
+    expect(within(screen.getByRole('article', { name: 'Bravo' })).getByText('Drawing')).toBeInTheDocument();
+    expect(loader).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      answer(new Map());
+      await Promise.resolve();
+    });
+    expect(within(screen.getByRole('article', { name: 'Bravo' })).getByText('Open to see')).toBeInTheDocument();
+  });
+
+  it('with no earlier answer, the wait is still at most a moment while the list reloads', async () => {
+    vi.useFakeTimers();
+    const loader: ComicStagesLoader = () => new Promise(() => undefined);
+    renderDashboard([studio('a', 'Alpha', 1)], { projectsLoaded: false }, loader);
+    expect(screen.getByRole('list', { name: 'Your comics, loading' })).toBeInTheDocument();
+    await act(async () => void vi.advanceTimersByTime(1300));
+    expect(screen.getByRole('list', { name: 'Your comics' })).toBeInTheDocument();
+  });
+
+  it('a read that never answers is given up: the cards fall back to their rows and "Open to see"', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const loader: ComicStagesLoader = (_account, s) => {
+      signal = s;
+      return new Promise(() => undefined);
+    };
+    renderDashboard([studio('a', 'Alpha', 1)], {}, loader);
+    await act(async () => void vi.advanceTimersByTime(1300));
+    const alpha = () => screen.getByRole('article', { name: 'Alpha' });
+    expect(alpha().querySelector('[data-slot="stage-line"] [data-slot="skeleton"]')).not.toBeNull();
+    await act(async () => void vi.advanceTimersByTime(STAGE_READ_TIMEOUT_MS));
+    expect(signal?.aborted).toBe(true);
+    expect(within(alpha()).getByText('Open to see')).toBeInTheDocument();
+    expect(within(alpha()).getByRole('link', { name: 'Open, Alpha' })).toBeInTheDocument();
   });
 
   it('a slow read stops holding the grid after a moment; its answer still lands', async () => {

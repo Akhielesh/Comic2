@@ -502,8 +502,10 @@ describe('client actions', () => {
     window.removeEventListener('ds:open-share', onOpen);
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(result.current.tab).toBe('cast'); // handled by the sheet: the board stays put
+    expect(result.current.readerRequest).toEqual({ seq: 2, immersive: false, guided: true });
     act(() => result.current.runClientAction({ type: 'open_share' }));
-    expect(result.current.tab).toBe('read'); // nobody listening: the Read tab, where sharing lives
+    expect(result.current.tab).toBe('read'); // nobody listening: the Read tab, where sharing lives…
+    expect(result.current.readerRequest).toEqual({ seq: 3, immersive: false, guided: false, share: true }); // …opens its Share sheet
   });
 });
 

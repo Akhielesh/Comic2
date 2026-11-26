@@ -61,8 +61,9 @@ const PAGE_SIZE = 24;
 /** The first cards load their covers at once; the rest load as they come near. */
 const PRIORITY_COVERS = 3;
 /**
- * On the first open the grid waits this long at most for the stage read (skeleton cards in the same footprint), so a comic
- * that needs the person is placed first from the start instead of jumping there after paint.
+ * Until a stage read has answered (this tab remembers the last one), the grid waits this long at most once it has cards
+ * to show (skeleton cards in the same footprint), so a comic that needs the person is placed first from the start
+ * instead of jumping there after paint.
  */
 const STAGE_WAIT_MS = 1200;
 
@@ -88,8 +89,11 @@ function useCardModels(projects: readonly Project[], rows: ReadonlyMap<string, C
     const kept = new Map<string, { project: Project; row: CardStageRow | undefined; status: CardStageStatus; now: number; model: MyComicCardModel }>();
     for (const project of projects) {
       const row = rows.get(project.id);
+      // The read's status only matters to a comic it has no row for yet (its placeholder): a read starting or ending
+      // leaves every other card as it was.
+      const own: CardStageStatus = row ? 'settled' : status;
       const hit = cache.current.get(project.id);
-      const entry = hit && hit.project === project && hit.row === row && hit.status === status && hit.now === now ? hit : { project, row, status, now, model: myComicCard(project, row, status, now) };
+      const entry = hit && hit.project === project && hit.row === row && hit.status === own && hit.now === now ? hit : { project, row, status: own, now, model: myComicCard(project, row, own, now) };
       kept.set(project.id, entry);
       next.set(project.id, entry.model);
     }
@@ -235,12 +239,16 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const stages = useComicStages(accountId, projectsLoaded);
   const hasStudioComics = useMemo(() => projects.some((p) => isStudioV4Project(p)), [projects]);
   const [stageWaitOver, setStageWaitOver] = useState(false);
+  const waitingForStages = stages.status === 'loading' && !stages.known;
+  // Counted from when there are cards to show, whether the list is still reloading or not (back from the studio, the
+  // cards already in memory are on screen while it reloads).
+  const hasCards = projects.length > 0;
   useEffect(() => {
-    if (stages.status !== 'loading' || !projectsLoaded) return;
+    if (!waitingForStages || !hasCards) return;
     const timer = window.setTimeout(() => setStageWaitOver(true), STAGE_WAIT_MS);
     return () => window.clearTimeout(timer);
-  }, [stages.status, projectsLoaded]);
-  const holdGrid = hasStudioComics && stages.status === 'loading' && !stageWaitOver;
+  }, [waitingForStages, hasCards]);
+  const holdGrid = hasStudioComics && waitingForStages && !stageWaitOver;
   // The relative times ("edited 2 hours ago") are read once per list load and stage read, so a card's words only change
   // when its comic does.
   const now = useMemo(() => Date.now(), [projectsLoaded, stages.rows]);

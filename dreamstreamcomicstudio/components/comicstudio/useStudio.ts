@@ -1609,12 +1609,15 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           return;
         case 'open_share': {
           // The mounted Share button opens its sheet on this event (and may preventDefault to say
-          // so); otherwise fall back to the Read tab, where sharing lives.
+          // so); otherwise the Read tab, where sharing lives, opens its own Share sheet.
           let handled = false;
           if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
             handled = !window.dispatchEvent(new CustomEvent(OPEN_SHARE_EVENT, { cancelable: true }));
           }
-          if (!handled) setTab('read');
+          if (!handled) {
+            setTab('read');
+            setReaderRequest((prev) => ({ seq: (prev?.seq ?? 0) + 1, immersive: false, guided: false, share: true }));
+          }
           return;
         }
         case 'open_settings': {

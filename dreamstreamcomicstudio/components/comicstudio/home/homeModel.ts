@@ -138,10 +138,14 @@ export function coverCandidates(project: Project): string[] {
 // One model per card, from the card row the list already has and the comic's row from the one stage read
 // (services/comicWorkspaceActivity.ts loadComicStages): never a full doc, never a request of its own.
 
-/** What the stage read says about one comic: its validated stage (absent before stages) and what waits on the person. */
+/**
+ * What the stage read says about one comic: its validated stage (absent before stages), what waits on the person, and
+ * whether a render or the Director's plan is running (absent: not known, read as not running).
+ */
 export interface CardStageRow {
   stage?: StageFacts;
   attention: WorkAttention | null;
+  working?: boolean;
 }
 
 /** Where the stage read is: still loading (the row shows a placeholder), or settled (a missing row reads unknown). */
@@ -212,15 +216,36 @@ const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
 
 /** The stage's own waits: what waits on the person never replaces them (they are what the conversation shows first). */
 const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'follow_planning', 'resume_draft']);
+
 /**
- * What waits on the person that a stage does not name: a question from the Director, and a drawing that failed while an
- * earlier picture still stands (the stage counts the page as drawn). Each leads the card's next step unless the stage is
- * already waiting or already says it ("Review 2 failed pages"). The rest (an approval, a plan, a look, an interrupted
- * draft) are the stage's own steps.
+ * A page whose drawing failed, by the stage's own counts. The summary's "render_failed" means ANY render failed: a page,
+ * the cover, a cast or place sheet, or a look (and a look that failed stays failed after another is picked), so on its
+ * own it never says the problem is on the Pages tab. In Draw or Publish the counts do: a page with no picture whose
+ * drawing failed, or a picture that still stands but is neither current nor out of date while nothing is drawing (its
+ * redraw failed). Anywhere else the stage's own step stays (the card still says Needs you).
  */
-const ATTENTION_LEADS: ReadonlySet<WorkAttention> = new Set<WorkAttention>(['question', 'render_failed']);
+const pageFailed = (facts: StageFacts, working: boolean): boolean =>
+  (facts.stage === 'draw' || facts.stage === 'publish') && (facts.failed > 0 || (!working && facts.drawn > facts.current + facts.outOfDate));
+
+/**
+ * What waits on the person when it leads the card's next step instead of the stage's own: a question from the Director,
+ * or a failed page the stage does not already name ("Review 2 failed pages"), unless the stage is itself waiting. The
+ * rest (an approval, a plan, a look, an interrupted draft) are the stage's own steps.
+ */
+const leadingAttention = (attention: WorkAttention | null, view: StageView, facts: StageFacts, working: boolean): WorkAttention | null => {
+  if (!attention || WAIT_STEPS.has(view.next.key)) return null;
+  if (attention === 'question') return attention;
+  return attention === 'render_failed' && view.next.key !== 'review_failed' && pageFailed(facts, working) ? attention : null;
+};
+
+/** A classic build's time left only when it is a duration ("45s", "3m 12s"): never "Calculating...", "Done" or "0s". */
+const timeLeft = (value: unknown): string => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return /^(?:\d+m ?)?\d+s$|^\d+m$/.test(text) && /[1-9]/.test(text) ? text : '';
+};
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+const OPEN_HINT = 'Opens the comic in the studio';
 const nextTo = (label: string, destination: TaskDestination): MyComicNext => ({ label: `Next: ${lowerFirst(label)}`, destination, hint: DESTINATION_HINT[destination] });
 
 /** The classic editor's steps, as the Step filter names them. */
@@ -256,7 +281,7 @@ export function myComicCard(project: Project, row: CardStageRow | undefined, sta
   if (kind !== 'studio') {
     const generation = project.state.generationStatus;
     const building = generation?.isActive
-      ? { progress: Math.min(100, Math.max(0, Number(generation.progress) || 0)), remaining: typeof generation.estimatedTimeRemaining === 'string' ? generation.estimatedTimeRemaining.trim() : '' }
+      ? { progress: Math.min(100, Math.max(0, Number(generation.progress) || 0)), remaining: timeLeft(generation.estimatedTimeRemaining) }
       : null;
     const words = building ? `Building · ${Math.round(building.progress)}%${building.remaining ? ` · about ${building.remaining} left` : ''}` : legacyWords(project, kind);
     const canRead = (project.state.panels ?? []).some(hasPicture) || (project.state.pageStudio?.pages ?? []).some(hasPicture);
@@ -281,15 +306,18 @@ export function myComicCard(project: Project, row: CardStageRow | undefined, sta
   const attention = row?.attention ?? null;
   const canRead = hasDrawnPage(project, facts);
   let next: MyComicNext | null;
-  if (view) {
-    if (attention && ATTENTION_LEADS.has(attention) && !WAIT_STEPS.has(view.next.key) && view.next.key !== 'review_failed') {
-      next = nextTo(ATTENTION_NEXT[attention], taskDestination(attention));
-    } else if (view.next.key === 'read' && canRead) next = null;
+  if (view && facts) {
+    const lead = leadingAttention(attention, view, facts, row?.working === true);
+    if (lead) next = nextTo(ATTENTION_NEXT[lead], taskDestination(lead));
+    else if (view.next.key === 'read' && canRead) next = null;
     else next = nextTo(view.next.label, STAGE_PLACE_DESTINATION[view.next.place]);
+  } else if (attention === 'render_failed') {
+    // Without a stage nothing says which render failed: the words, and the comic opens as it was left.
+    next = { label: `Next: ${lowerFirst(ATTENTION_NEXT.render_failed)}`, destination: null, hint: OPEN_HINT };
   } else if (attention) {
     next = nextTo(ATTENTION_NEXT[attention], taskDestination(attention));
   } else {
-    next = { label: 'Open', destination: null, hint: 'Opens the comic in the studio' };
+    next = { label: 'Open', destination: null, hint: OPEN_HINT };
   }
   return {
     kind,

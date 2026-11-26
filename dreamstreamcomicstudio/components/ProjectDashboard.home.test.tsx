@@ -18,6 +18,8 @@ import { HOME_START_HELP } from './comicstudio/home/homeModel';
 import { addKey, clearAllKeys, recordKeyUsage } from '../services/apiKeys';
 
 const HOUR = 3_600_000;
+/** A card's status line as it reads (its parts are kept whole, so it is several elements; no-break spaces read as spaces). */
+const statusOf = (el: ParentNode) => el.querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ');
 
 const studioProject = (id: string, name: string, updatedAt = Date.now() - 2 * HOUR): Project => ({
   id,
@@ -254,7 +256,7 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
     await flush();
     expect(within(olderCard).getByRole('img', { name: 'Featured' })).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
-    expect(within(card).getByText('3 of 10 pages drawn · edited 2 hours ago')).toBeInTheDocument();
+    expect(statusOf(card)).toBe('3 of 10 pages drawn · edited 2 hours ago');
     expect(screen.getAllByRole('region', { name: /^Continue/ })).toHaveLength(1);
   });
 

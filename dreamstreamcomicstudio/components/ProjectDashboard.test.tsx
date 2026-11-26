@@ -80,6 +80,8 @@ const renderDashboard = (projects: Project[], overrides: Partial<React.Component
 };
 
 /** The card that holds a project's title. */
+/** A card's status line as it reads (its parts are kept whole, so it is several elements; no-break spaces read as spaces). */
+const statusOf = (el: ParentNode) => el.querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ');
 const cardFor = (name: string): HTMLElement => {
   const title = screen.getByRole('heading', { name });
   const card = title.closest('article') as HTMLElement | null;
@@ -275,7 +277,7 @@ describe('ProjectDashboard — Comic Studio v4 cards', () => {
     const studioCard = cardFor('Spice Market');
     // No stage read without an account: the studio comic reads "Open to see" and its listing row's counts.
     expect(within(studioCard).getByText('Open to see')).toBeInTheDocument();
-    expect(within(studioCard).getByText(/^2 of 6 pages drawn · edited /)).toBeInTheDocument();
+    expect(statusOf(studioCard)).toMatch(/^2 of 6 pages drawn · edited /);
     const cover = studioCard.querySelector('[data-slot="my-comic-cover"] img') as HTMLImageElement;
     expect(cover).toHaveAttribute('src', 'https://cdn.example/page1.webp');
     // Portrait pages are framed from the top; the heading names the comic, so the picture is decorative.
@@ -295,11 +297,11 @@ describe('ProjectDashboard — Comic Studio v4 cards', () => {
       { ...studioProject({ studioPages: 0, studioRendered: 0, coverImageId: undefined, coverImageUrl: undefined }), id: 'studio-2', name: 'Blank Slate' }
     ]);
     const done = cardFor('Spice Market');
-    expect(within(done).getByText(/^All 3 pages drawn · edited /)).toBeInTheDocument();
+    expect(statusOf(done)).toMatch(/^All 3 pages drawn · edited /);
     expect(within(done).getByRole('button', { name: 'Read Spice Market' })).toBeInTheDocument();
 
     const blank = cardFor('Blank Slate');
-    expect(within(blank).getByText(/^No pages planned yet · edited /)).toBeInTheDocument();
+    expect(statusOf(blank)).toMatch(/^No pages planned yet · edited /);
     expect(within(blank).queryByRole('button', { name: /^Read/ })).toBeNull();
     expect(blank.querySelector('[data-slot="my-comic-cover"] [data-slot="cover-empty"]')).not.toBeNull();
   });
@@ -586,10 +588,10 @@ describe('ProjectDashboard — library cards', () => {
     const fromCards = renderDashboard(cards);
     expect(snapshot(fromCards.container)).toEqual(expected);
 
-    expect(within(cardFor('Spice Market')).getByText(/^2 of 6 pages drawn · /)).toBeInTheDocument();
-    expect(within(cardFor('Done Deal')).getByText(/^All 3 pages drawn · /)).toBeInTheDocument();
+    expect(statusOf(cardFor('Spice Market'))).toMatch(/^2 of 6 pages drawn · /);
+    expect(statusOf(cardFor('Done Deal'))).toMatch(/^All 3 pages drawn · /);
     expect(within(cardFor('Old Wizard Comic')).getByRole('button', { name: /edit/i })).toBeInTheDocument();
-    expect(within(cardFor('Old Wizard Comic')).getByText(/^Building · 40% · about 2m left · /)).toBeInTheDocument();
+    expect(statusOf(cardFor('Old Wizard Comic'))).toMatch(/^Building · 40% · about 2m left · /);
     expect(within(cardFor('Old Wizard Comic')).getByRole('progressbar', { name: 'Building' })).toHaveAttribute('aria-valuenow', '40');
     expect(expected.images.join(' ')).toContain('https://cdn.example/pg1.webp');
     expect(expected.images.join(' ')).toContain('https://cdn.example/p1.webp');

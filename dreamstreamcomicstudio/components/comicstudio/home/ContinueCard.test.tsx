@@ -13,6 +13,8 @@ import type { CardStageRow } from './homeModel';
 import type { StageFacts } from '../../../shared/comic/stage';
 
 const NOW = Date.UTC(2026, 10, 19, 12);
+/** A card's status line as it reads (its parts are kept whole, so it is several elements; no-break spaces read as spaces). */
+const statusOf = (el: ParentNode) => el.querySelector('[data-slot="card-status"]')?.textContent?.replace(/\s+/g, ' ');
 
 const project = (patch: Record<string, unknown> = {}, row: Partial<Project> = {}): Project => ({
   id: 'studio-7',
@@ -58,7 +60,8 @@ describe('ContinueCard', () => {
     const { onOpen, onRead } = renderCard();
     fireEvent.click(screen.getByRole('button', { name: /^Continue/ }));
     expect(onOpen).toHaveBeenCalledExactlyOnceWith('studio-7', null);
-    fireEvent.click(screen.getByText('3 of 10 pages drawn · edited 2 hours ago'));
+    expect(statusOf(document)).toBe('3 of 10 pages drawn · edited 2 hours ago');
+    fireEvent.click(document.querySelector('[data-slot="card-status"]')!);
     expect(onOpen).toHaveBeenCalledTimes(2);
     expect(onOpen).toHaveBeenLastCalledWith('studio-7', null);
     expect(onRead).not.toHaveBeenCalled();
@@ -82,7 +85,7 @@ describe('ContinueCard', () => {
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
     expect(screen.getAllByRole('region')).toHaveLength(1);
     expect(within(card).getByRole('heading', { name: 'Harbour Lights' })).toBeInTheDocument();
-    expect(within(card).getByText('3 of 10 pages drawn · edited 2 hours ago')).toBeInTheDocument();
+    expect(statusOf(card)).toBe('3 of 10 pages drawn · edited 2 hours ago');
     // A comic saved before stages says so, instead of a guessed stage.
     expect(within(card).getByText('Open to see')).toBeInTheDocument();
   });
@@ -117,7 +120,7 @@ describe('ContinueCard', () => {
     expect(within(card).getByText('Drawing')).toBeInTheDocument();
     expect(within(card).getByText('Stage 4 of 5:')).toHaveClass('sr-only');
     expect(container.querySelectorAll('[data-stage-mark]')).toHaveLength(5);
-    expect(within(card).getByText('3 of 10 pages drawn · edited 2 hours ago')).toBeInTheDocument();
+    expect(statusOf(card)).toBe('3 of 10 pages drawn · edited 2 hours ago');
     const next = within(card).getByRole('link', { name: 'Next: draw the rest, Harbour Lights' });
     expect(next).toHaveAttribute('href', '/?view=studio&id=studio-7&task=pages');
     expect(next).toHaveAccessibleDescription('Opens the comic’s Pages tab');

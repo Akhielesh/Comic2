@@ -49,12 +49,15 @@ describe('a next step from My comics, arriving in the studio', () => {
     expect(studio.act).not.toHaveBeenCalled();
   });
 
-  it('the Share sheet ("Publish your changes", "See why it is paused")', () => {
+  it('the Share sheet ("Publish your changes", "See why it is paused"): asked for, with the board shown on a phone', () => {
     const studio = makeFakeStudio({ doc: createEmptyDoc('c1', 'Night ferry', 1) });
     requestTaskTarget('author-1', 'c1', 'share');
     mount(studio);
     expect(studio.runClientAction).toHaveBeenCalledWith({ type: 'open_share' });
     expect(studio.setTab).not.toHaveBeenCalledWith('share');
+    // A phone opens on the conversation: the sheet opens over the Read tab, so the board comes forward, not the chat.
+    expect(pane('board')).not.toHaveAttribute('inert');
+    expect(pane('chat')).toHaveAttribute('inert');
     expect(studio.act).not.toHaveBeenCalled();
   });
 

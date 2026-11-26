@@ -53,7 +53,7 @@ const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
  * One stage as a mark on the compact stage button (and on My comics' cards): a check when done, a filled dot when
  * current, a ring otherwise.
  */
-export const StageMark =({ done, current }: { done: boolean; current: boolean }) =>
+export const StageMark = ({ done, current }: { done: boolean; current: boolean }) =>
   done ? (
     <Check className="h-2.5 w-2.5" strokeWidth={current ? 3.5 : 2.5} />
   ) : (

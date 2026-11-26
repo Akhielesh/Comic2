@@ -13,7 +13,7 @@ import { CLIP_TEXT, HEADING, LIFT, MUTED, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT 
 import { LoadingState } from '../../ds/LoadingState';
 import { SmartImage } from '../../common/SmartImage';
 import { coverCandidates, myComicCard, type CardStageRow, type CardStageStatus } from './homeModel';
-import { CardStageLine, NextStep } from './MyComicCard';
+import { CardStageLine, CardStatus, NextStep } from './MyComicCard';
 import type { TaskDestination } from './workspaceTaskTarget';
 
 export interface ContinueCardProps {
@@ -91,7 +91,7 @@ export function ContinueCard({ project, onOpen, onRead, stageRow, stageStatus = 
             {title}
           </h2>
           <CardStageLine model={model} />
-          <p className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED)}>{model.status}</p>
+          <CardStatus text={model.status} />
         </div>
         {/* Its own controls: a tap on one never also opens the card behind it. Under the cover and the words on a phone, so
             the next step keeps its words on one line; beside the cover, under the words, from 640 px. */}

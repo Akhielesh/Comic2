@@ -96,8 +96,10 @@ prices, models or paths. It stays private: `sanitizePublicDoc` strips `workspace
 - `services/comicWorkspaceActivity.ts` keeps a stored stage only when it validates. The AI activity feed's "In progress"
   rows show it ("Drawing · 6 of 12 pages drawn"); a comic saved before stages keeps "Last reported in progress".
 
-No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the existing
-`activity:doc->workspaceActivity` selector.
+No SQL for the summary itself: it lives in the existing `comic_docs.doc` jsonb, which the AI activity feed reads with
+the existing `activity:doc->workspaceActivity` selector. My comics, which reads every comic of the account at once, reads
+the same summary from `comic_docs.listing` instead, a small copy a trigger keeps in step with `doc`
+(`server/sql/comic_docs_listing.sql`, `docs/features/my-comics.md` §1), so its read never opens a doc.
 
 ## 5. The studio strip (`components/comicstudio/stage/StageStrip.tsx`)
 

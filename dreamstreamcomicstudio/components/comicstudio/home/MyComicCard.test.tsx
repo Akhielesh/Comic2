@@ -65,6 +65,9 @@ const openMenu = async (card: HTMLElement, title: string) => {
 };
 
 const tokens = (el: Element): string[] => (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+const statusLine = (card: HTMLElement) => card.querySelector('[data-slot="card-status"]') as HTMLElement;
+/** The status line as it reads (its parts' no-break spaces read as spaces). */
+const statusOf = (card: HTMLElement) => statusLine(card).textContent?.replace(/\s+/g, ' ');
 const INTERACTIVE = 'a[href],button,input,select,textarea,[role="button"],[role="link"],[role="menuitem"],[tabindex]:not([tabindex="-1"])';
 
 describe('MyComicCard: structure', () => {
@@ -85,13 +88,22 @@ describe('MyComicCard: structure', () => {
 
   it('a tap anywhere on the card opens the comic as it was left; its own controls never also open it', () => {
     const { card, actions: a } = renderCard(studio(), { stage: draw(6), attention: null });
-    fireEvent.click(within(card).getByText('6 of 12 pages drawn · edited 2 hours ago'));
+    expect(statusOf(card)).toBe('6 of 12 pages drawn · edited 2 hours ago');
+    fireEvent.click(statusLine(card));
     expect(a.open).toHaveBeenCalledExactlyOnceWith('s1', null);
     fireEvent.click(within(card).getByRole('button', { name: 'Read Spice Market' }));
     expect(a.read).toHaveBeenCalledExactlyOnceWith('s1');
     fireEvent.click(within(card).getByRole('link', { name: /^Next:/ }));
     expect(a.open).toHaveBeenCalledTimes(2);
     expect(a.open).toHaveBeenLastCalledWith('s1', 'pages');
+  });
+
+  it('a click on the open ⋯ menu’s own surface (outside the card, though React bubbles it through) never opens the comic', async () => {
+    const { card, actions: a } = renderCard(studio(), { stage: draw(6), attention: null });
+    const menu = await openMenu(card, 'Spice Market');
+    fireEvent.click(menu);
+    fireEvent.click(menu.querySelector('[role="separator"]') ?? menu);
+    expect(a.open).not.toHaveBeenCalled();
   });
 });
 
@@ -101,9 +113,12 @@ describe('MyComicCard: stage, status and the next step', () => {
     const line = card.querySelector('[data-slot="stage-line"]') as HTMLElement;
     expect([...line.querySelectorAll('[data-stage-mark]')].map((m) => m.getAttribute('data-stage-mark'))).toEqual(['done', 'done', 'done', 'current', 'upcoming']);
     expect(line).toHaveTextContent('Stage 4 of 5: Drawing');
-    const status = within(card).getByText('6 of 12 pages drawn · edited 2 hours ago');
-    expect(status).toHaveAttribute('title', '6 of 12 pages drawn · edited 2 hours ago');
-    expect(tokens(status)).toEqual(expect.arrayContaining(['truncate', 'min-w-0']));
+    expect(statusOf(card)).toBe('6 of 12 pages drawn · edited 2 hours ago');
+    // Never cut, so no tooltip stands in for it (touch has none): each part moves to the next line whole.
+    const status = statusLine(card);
+    expect(status).not.toHaveAttribute('title');
+    expect(tokens(status)).not.toContain('truncate');
+    expect([...status.querySelectorAll('[data-slot="status-part"]')].map((part) => part.textContent)).toEqual(['6 of 12 pages drawn\u00a0·', 'edited 2 hours ago']);
     const next = within(card).getByRole('link', { name: 'Next: draw the rest, Spice Market' });
     expect(next).toHaveAttribute('href', studioHref('s1', 'pages'));
     expect(studioHref('s1', 'pages')).toBe('/?view=studio&id=s1&task=pages');
@@ -123,11 +138,20 @@ describe('MyComicCard: stage, status and the next step', () => {
     expect(a.open).toHaveBeenCalledExactlyOnceWith('s1', 'pages');
   });
 
-  it('Needs you: an ink chip on the cover, and the next step is what waits', () => {
+  it('Needs you: an ink chip on the cover, heard right after the title, and the next step is what waits', () => {
     const { card } = renderCard(studio(), { stage: draw(6, 'review_estimate'), attention: 'approval' });
     expect(card).toHaveAttribute('data-needs-you', 'true');
-    const chip = within(card).getByText('Needs you');
+    const chip = card.querySelector('[data-slot="needs-you"]') as HTMLElement;
+    expect(chip).toHaveTextContent('Needs you');
     expect(tokens(chip)).toEqual(expect.arrayContaining(['text-[var(--ds-ink)]', 'bg-[var(--ds-raised)]']));
+    // The cover's chip is seen, not read (it comes before the heading); the words after the heading say it once.
+    expect(chip).toHaveAttribute('aria-hidden', 'true');
+    const heading = within(card).getByRole('heading', { level: 3, name: 'Spice Market' });
+    const after = document.createRange();
+    after.setStartAfter(heading);
+    after.setEndAfter(card.lastChild!);
+    expect(after.toString()).toMatch(/^Needs you/);
+    expect(within(card).getAllByText('Needs you').filter((el) => !el.closest('[aria-hidden="true"]'))).toHaveLength(1);
     expect(within(card).getByRole('link', { name: 'Next: review the estimate, Spice Market' })).toHaveAttribute('href', '/?view=studio&id=s1&task=conversation');
   });
 
@@ -150,7 +174,7 @@ describe('MyComicCard: stage, status and the next step', () => {
   it('an older comic reads "Open to see" with its row counts and a plain Open; while the read runs, a placeholder', () => {
     const older = renderCard(studio({ studioPages: 10, studioRendered: 3 }), { attention: null });
     expect(within(older.card).getByText('Open to see')).toBeInTheDocument();
-    expect(within(older.card).getByText('3 of 10 pages drawn · edited 2 hours ago')).toBeInTheDocument();
+    expect(statusOf(older.card)).toBe('3 of 10 pages drawn · edited 2 hours ago');
     const open = within(older.card).getByRole('link', { name: 'Open, Spice Market' });
     expect(open).toHaveAttribute('href', '/?view=studio&id=s1');
     fireEvent.click(open);
@@ -169,6 +193,11 @@ describe('MyComicCard: stage, status and the next step', () => {
     expect(within(card).queryByRole('link')).toBeNull();
     fireEvent.click(within(card).getByRole('button', { name: 'Edit, Old Wizard Comic' }));
     expect(a.open).toHaveBeenCalledExactlyOnceWith('c1', null);
+    cleanup();
+    // Before its first batch a build has no time left to give: the bar and the line say only how far it is.
+    const starting = renderCard(classic({ generationStatus: { isActive: true, progress: 0, estimatedTimeRemaining: 'Calculating...', logs: [] } }));
+    expect(within(starting.card).getByRole('progressbar', { name: 'Building' })).toHaveAttribute('aria-valuetext', '0%');
+    expect(statusOf(starting.card)).toBe('Building · 0% · edited 2 hours ago');
   });
 });
 
@@ -315,6 +344,21 @@ describe('MyComicCard on a phone (360 px, 16 px gutters)', () => {
     // At 360 px the card is 328 px (16 px gutters): 12 px padding, a 96 px cover, a 12 px gap, 196 px of words.
     const inner = 360 - 2 * 16 - 2 - 2 * 12;
     expect(inner - 96 - 12).toBeGreaterThanOrEqual(180);
+  });
+
+  it('the whole status shows at 360 px: its parts break onto their own lines, nothing is cut or left to a tooltip', async () => {
+    const { card } = renderCard(studio(), { stage: { ...draw(11), outOfDate: 1, current: 10 }, attention: null });
+    expect(statusOf(card)).toBe('10 of 12 pages drawn · 1 out of date · edited 2 hours ago');
+    const status = statusLine(card);
+    // 13 px words in a 194 px column hold about 27 characters: the line has to break, and it may only between parts.
+    expect(tokens(status)).not.toEqual(expect.arrayContaining(['truncate']));
+    expect(tokens(status).some((t) => t.startsWith('line-clamp'))).toBe(false);
+    const parts = [...status.querySelectorAll('[data-slot="status-part"]')];
+    expect(parts.map((part) => part.textContent)).toEqual(['10 of 12 pages drawn\u00a0·', '1 out of date\u00a0·', 'edited 2 hours ago']);
+    for (const part of parts) expect(tokens(part)).toEqual(expect.arrayContaining(['inline-block', 'max-w-full', '[overflow-wrap:anywhere]']));
+    const root = await compile(['inline-block', 'max-w-full']);
+    expect(rule(root, 'inline-block').decls).toEqual({ display: 'inline-block' });
+    expect(rule(root, 'max-w-full').decls).toEqual({ 'max-width': '100%' });
   });
 
   it('nothing can push the card wider than its column: every text clips or wraps, every flex child may shrink', () => {
