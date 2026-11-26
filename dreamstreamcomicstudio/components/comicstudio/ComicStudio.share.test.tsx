@@ -95,13 +95,18 @@ describe('open_share opens exactly one Share sheet', () => {
 
   it('the Director’s "Update the published version" chip, and the strip’s next step, open one sheet each time', async () => {
     await mount();
+    // The header's Share button is what answers the request. Wait for it: fired before it is on screen, the request
+    // rightly falls back to the Read tab's own sheet (a separate chunk), which is not what this test is about.
+    await screen.findByRole('button', { name: /^Share \(/ }, { timeout: 5_000 });
     expect(shareSheets()).toHaveLength(0);
     act(() => studioRef!.runClientAction({ type: 'open_share' }));
-    await waitFor(() => expect(shareSheets()).toHaveLength(1));
+    await waitFor(() => expect(shareSheets()).toHaveLength(1), { timeout: 5_000 });
     // Closed once, it is gone: no second sheet waits under it.
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
-    await waitFor(() => expect(shareSheets()).toHaveLength(0));
+    await waitFor(() => expect(shareSheets()).toHaveLength(0), { timeout: 5_000 });
     act(() => studioRef!.runClientAction({ type: 'open_share' }));
-    await waitFor(() => expect(shareSheets()).toHaveLength(1));
+    await waitFor(() => expect(shareSheets()).toHaveLength(1), { timeout: 5_000 });
+    // Both times the header's sheet answered: the board never moved to the Read tab.
+    expect(studioRef?.tab).not.toBe('read');
   });
 });
