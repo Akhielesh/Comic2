@@ -13,10 +13,13 @@
 .comic-workspace-icon { width:44px; height:44px; display:grid; place-items:center; flex:none; border-radius:var(--ds-radius-control); }
 .comic-workspace-icon svg { width:20px; height:20px; }
 .comic-workspace-content { min-width:0; min-height:0; flex:1; overflow:auto; overscroll-behavior:contain; }
-/* The studio rail: 14rem on --ds-surface-soft with the rail's hairline; the brand row is centred on the header row. Rows
-   take the rail's own tints (WorkspaceNavigation's stage tabs; this nav is also that rail's footer): one "current" tint. */
-.comic-workspace-sidebar { width:14rem; flex:none; padding:calc(var(--sa-top, 0px) + (var(--header-h, 56px) - 44px) / 2) 6px 16px; overflow-y:auto; border-right:1px solid var(--ds-hairline); background:var(--ds-surface-soft); color:var(--ds-ink); }
-.comic-workspace-brand { min-height:44px; margin:0 6px 20px; }
+/* The panel's column: 14rem on --ds-surface-soft with the rail's hairline; the brand row is centred on the header row.
+   The panel (components/comicstudio/panel) brings its own rows and scrolling; the header's controls read its hover tint. */
+.comic-workspace-sidebar { width:14rem; flex:none; display:flex; flex-direction:column; min-height:0; padding:calc(var(--sa-top, 0px) + (var(--header-h, 56px) - 44px) / 2) 0 0; overflow:hidden; border-right:1px solid var(--ds-hairline); background:var(--ds-surface-soft); color:var(--ds-ink); }
+.comic-workspace-brand { min-height:44px; margin:0 12px 8px; }
+/* Collapsed: the panel's slim rail under the header (the studio's own 3.5rem rail). */
+.comic-workspace-row { min-width:0; min-height:0; flex:1; display:flex; }
+.comic-workspace-rail { width:3.5rem; flex:none; min-height:0; border-right:1px solid var(--ds-hairline); background:var(--ds-surface-soft); color:var(--ds-ink); }
 .comic-workspace-header-brand { margin-inline-end: 4px; }
 .comic-workspace-header-brand + .comic-workspace-title { padding-inline-start: 8px; border-inline-start: 1px solid var(--ds-hairline); }
 @media (max-width: 359px) {
@@ -24,28 +27,16 @@
   .comic-workspace-header .comic-workspace-header-brand { margin-inline: 0; }
   .comic-workspace-header-brand + .comic-workspace-title { padding-inline-start: 4px; font-size: var(--ds-text-sm); }
 }
-.comic-project-nav { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--ds-ink); font-size:var(--ds-text-base); }
-.comic-project-nav button { display:flex; align-items:center; gap:12px; min-height:44px; width:100%; padding:0 12px; border-radius:var(--ds-radius-control); text-align:left; }
-.comic-project-nav svg { width:16px; height:16px; flex:none; }
-.comic-project-nav button:hover:not(:disabled), .comic-workspace-icon:hover { background:var(--ds-hover); }
-.comic-project-nav button[aria-current=page]:not(.comic-project-new) { background:var(--ds-hover); font-weight:600; }
-/* One fill per view. Start is the New comic view's fill and New comic the All comics view's (ink in Atlas and Paper: the
-   skin's --ds-accent-fill, never the public chrome's cobalt); on the New comic view New comic is an outline (Button outline). */
-.comic-project-nav .comic-project-new, .comic-idea-start { background:var(--ds-accent-fill); color:var(--ds-on-accent); font-weight:600; }
-.comic-project-nav .comic-project-new:hover:not(:disabled), .comic-idea-start:hover:not(:disabled) { background:var(--ds-accent-fill-hover); color:var(--ds-on-accent); }
-.comic-project-nav .comic-project-new[aria-current=page] { background:var(--ds-raised); color:var(--ds-ink); box-shadow:inset 0 0 0 1px var(--ds-hairline); }
-.comic-project-nav .comic-project-new[aria-current=page]:hover:not(:disabled) { background:var(--ds-hover); color:var(--ds-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--ds-ink) 25%, transparent); }
-.comic-project-recents-toggle { margin-top:14px; font-weight:600; }
-.comic-project-recents-toggle .is-closed { transform:rotate(-90deg); }
-.comic-project-recents { min-width:0; display:flex; flex-direction:column; gap:4px; }
-.comic-project-recents button { padding-left:16px; }
-.comic-project-recents span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.comic-project-recents p { margin:4px 12px 16px; color:var(--ds-muted); font-size:12px; line-height:1.5; }
-.comic-project-destinations { display:flex; flex-direction:column; gap:4px; border-top:1px solid var(--ds-hairline); padding-top:14px; margin-top:18px; }
+.comic-workspace-icon:hover { background:var(--ds-hover); }
+/* One fill per view. Start is the New comic view's fill (ink in Atlas and Paper: the skin's --ds-accent-fill, never the
+   public chrome's cobalt); the panel's New comic is the All comics view's, and an outline on the New comic view
+   (components/comicstudio/panel/panelStyles.ts PANEL_FILL, PANEL_OUTLINE). */
+.comic-idea-start { background:var(--ds-accent-fill); color:var(--ds-on-accent); font-weight:600; }
+.comic-idea-start:hover:not(:disabled) { background:var(--ds-accent-fill-hover); color:var(--ds-on-accent); }
 /* FOCUS_RING: a 2 px outline in --ds-focus, 2 px off the control (3 px under "increase contrast"). */
-.comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible, .comic-project-nav button:focus-visible { outline:2px solid var(--ds-focus); outline-offset:2px; }
-@media (prefers-contrast: more) { .comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible, .comic-project-nav button:focus-visible { outline-width:3px; } }
-.comic-creation-workspace button:disabled, .comic-project-nav button:disabled { opacity:.5; cursor:default; }
+.comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible { outline:2px solid var(--ds-focus); outline-offset:2px; }
+@media (prefers-contrast: more) { .comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible { outline-width:3px; } }
+.comic-creation-workspace button:disabled { opacity:.5; cursor:default; }
 /* The phone drawer: the scrim rung, the sheet rung above it, the overlay shadow (its edge reads in dark too). */
 .comic-workspace-drawer-backdrop { position:fixed; inset:0; z-index:var(--ds-z-scrim); background:var(--ds-scrim); }
 .comic-workspace-drawer { position:relative; z-index:var(--ds-z-sheet); width:min(300px,calc(100% - 32px)); height:100%; padding-top:calc(var(--sa-top, 0px) + 12px); box-shadow:var(--ds-shadow-overlay); outline:none; }
@@ -115,7 +106,7 @@
 .comic-idea-alternatives button { min-height:44px; color:var(--ds-muted); font-size:var(--ds-text-sm); text-decoration:underline; text-underline-offset:3px; }
 /* Motion only when it is welcome (the layout smoke records any transition under reduced motion). */
 @media (prefers-reduced-motion: no-preference) {
-  .comic-project-nav button, .comic-workspace-icon { transition:background-color var(--ds-motion-fast) var(--ds-ease), box-shadow var(--ds-motion-fast) var(--ds-ease); }
+  .comic-workspace-icon { transition:background-color var(--ds-motion-fast) var(--ds-ease), box-shadow var(--ds-motion-fast) var(--ds-ease); }
   .comic-idea-form input, .comic-idea-compose { transition:border-color var(--ds-motion-medium) var(--ds-ease), box-shadow var(--ds-motion-medium) var(--ds-ease); }
 }
 @media (max-width: 1140px) {
@@ -131,23 +122,5 @@
   .comic-starter-caption { border-top: 0; border-inline-start: 1px solid var(--ds-hairline); padding-inline: 8px; }
 }
 @media (max-height:500px) { .comic-idea-entry { margin-top:24px; } .comic-idea-intro { margin-bottom:24px; } .comic-idea-compose textarea { min-height:120px; max-height:240px; } }
-@media (forced-colors:active) { .comic-project-new, .comic-idea-start { border:1px solid ButtonText; } .comic-workspace-drawer-backdrop { background:Canvas; } }
+@media (forced-colors:active) { .comic-idea-start, [data-panel-fill] { border:1px solid ButtonText; } .comic-workspace-drawer-backdrop { background:Canvas; } }
 
-.comic-project-destinations > a { display:flex; align-items:center; gap:12px; min-height:44px; padding:0 12px; border-radius:var(--ds-radius-control); }
-.comic-project-destinations > a:hover, .comic-task-link:hover { background:var(--ds-hover); }
-.comic-project-nav a:focus-visible { outline:2px solid var(--ds-focus); outline-offset:2px; }
-.comic-task-toggle > span { flex:1; }
-.comic-task-toggle small { color:var(--ds-muted); font-size:var(--ds-text-xs); }
-.comic-task-toggle svg:last-child { width:12px; }
-.comic-task-toggle svg.is-open { transform:rotate(90deg); }
-.comic-task-body { margin:0 6px 8px; padding:2px 0 6px 8px; border-inline-start:1px solid var(--ds-hairline); }
-.comic-task-body h3 { margin:12px 6px 2px; font-size:var(--ds-text-xs); font-weight:600; color:var(--ds-ink); }
-.comic-task-body p, .comic-task-body small, .comic-task-sync { color:var(--ds-muted); font-size:var(--ds-text-xs); }
-.comic-task-body p { margin:6px; line-height:1.5; }
-.comic-task-sync { display:flex; align-items:center; justify-content:space-between; gap:4px; padding-left:6px; }
-.comic-task-sync > [role="status"] { min-width:0; overflow-wrap:anywhere; }
-.comic-task-sync small { display:block; }
-.comic-task-sync button { flex:0 0 44px; width:44px; justify-content:center; padding:0; }
-.comic-task-link { display:flex; min-height:44px; flex-direction:column; justify-content:center; gap:2px; padding:4px 6px; border-radius:var(--ds-radius-control); }
-.comic-task-link span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.comic-task-body .comic-task-secondary { font-size:var(--ds-text-xs); min-height:44px; padding-inline:6px; color:var(--ds-muted); }

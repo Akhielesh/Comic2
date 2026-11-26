@@ -212,8 +212,8 @@ describe('App: the account menu opens the DreamStream settings in the app, and B
     goTo('?view=dashboard');
     render(<App />);
     await findTrigger();
-    // The frame's Recent comics list opens a comic.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Glass Harbour' })[0]);
+    // The side panel's Your comics opens a comic.
+    fireEvent.click(screen.getAllByRole('link', { name: /^Glass Harbour/ })[0]);
     expect(await screen.findByText('Studio open on p2', undefined, SLOW)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Your API keys' }));
     expect(await screen.findByText('Settings at settings')).toBeInTheDocument();

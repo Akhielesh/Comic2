@@ -806,7 +806,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   // The apex dashboard paints its own canvas and ink across the full width, so the page reads in both themes.
   if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
-    onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
+    onHome={showMyComics}
     navigation={{ projects, accountId, onOpenStudioWork, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
       onNewComic: beginNewComic,
       onImages: onNavigate && (() => onNavigate('images')),

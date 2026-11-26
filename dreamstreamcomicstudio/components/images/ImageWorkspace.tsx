@@ -18,7 +18,12 @@ import { downloadStandalone, loadImageHistory, loadStandaloneRoute, loadReferenc
 import { API_KEYS_HREF } from '../usage/links';
 import './imageWorkspace.css';
 
-export interface ImageWorkspaceProps { userId: string; onBack: () => void }
+export interface ImageWorkspaceProps {
+  userId: string;
+  onBack: () => void;
+  /** Inside the comics host's frame: the frame holds the page's main landmark and the way back (its side panel). */
+  framed?: boolean;
+}
 type Reference = Awaited<ReturnType<typeof loadReference>>;
 const ratioLabels = ['Square · 1:1', 'Landscape · 4:3', 'Portrait · 3:4', 'Wide · 16:9', 'Tall · 9:16'];
 const ratios = [{ value: 'auto', label: 'Automatic' }, ...IMAGE_RATIOS.map((value, i) => ({ value, label: ratioLabels[i] }))];
@@ -36,7 +41,7 @@ function readDraft(key: string): { prompt: string; ratio: ImageFormatChoice } {
 /** Remount on an account switch so the previous account’s files, signed links and pending results never appear. */
 export const ImageWorkspace = (props: ImageWorkspaceProps) => <Workspace key={props.userId} {...props} />;
 
-function Workspace({ userId, onBack }: ImageWorkspaceProps) {
+function Workspace({ userId, onBack, framed }: ImageWorkspaceProps) {
   const draftKey = 'dreamstream.image-draft.' + userId;
   const [draft, setDraft] = useState(() => readDraft(draftKey));
   const [refs, setRefs] = useState<Reference[]>([]);
@@ -301,12 +306,13 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
   };
 
   const inferredRatio = draft.ratio === 'auto' ? suggestedImageRatio(draft.prompt) : undefined;
+  const Root = framed ? 'div' : 'main';
   const formatSummary = draft.ratio === 'auto' ? `Automatic${inferredRatio ? ' · ' + inferredRatio : ''}` : draft.ratio;
 
   return (
-    <main className="image-workspace">
+    <Root className="image-workspace">
       <header className="image-workspace-header">
-        <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden /> Back</Button>
+        {!framed && <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden /> Back</Button>}
         <h1>Create an image</h1>
         <p>Tell the studio what you have in mind. It can choose the framing, lighting and style from your description.</p>
       </header>
@@ -415,6 +421,6 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
         </li>)}</ul>}
         {hasMore && <Button type="button" variant="outline" disabled={historyBusy} onClick={() => setPage(current => ({ offset: images.length, version: current.version + 1 }))}>Load more</Button>}
       </section>
-    </main>
+    </Root>
   );
 }

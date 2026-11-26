@@ -158,10 +158,30 @@ describe('the studio stage strip', () => {
     expect(studio.send).not.toHaveBeenCalled();
   });
 
-  it('the navigation’s list is labelled as the board it is, not as stages', () => {
-    mountAt(DESK, makeFakeStudio());
-    fireEvent.click(screen.getByRole('button', { name: 'Expand project navigation' }));
+  it('the side panel’s own section says the same as the strip, and its next step only opens the place', () => {
+    const studio = makeFakeStudio({ doc: awaitingApproval() });
+    mountAt(DESK, studio);
     const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    const section = within(nav).getByRole('group', { name: 'This comic' });
+    const card = within(pane('chat')).getByRole('region', { name: 'Spend approval' });
+    card.scrollIntoView = vi.fn();
+    const next = within(section).getByRole('button', { name: 'Style · Not chosen yet · Next: review the estimate' });
+    expect(next).toHaveAccessibleDescription('Shows the approval in the conversation');
+    fireEvent.click(next);
+    expect(card).toHaveFocus();
+    expect(studio.act).not.toHaveBeenCalled();
+    expect(studio.send).not.toHaveBeenCalled();
+    // Where you are: My comics, then this comic as the current page.
+    const here = within(nav).getByRole('list', { name: 'Where you are' });
+    expect(within(here).getByRole('button', { name: 'Back to My comics' })).toBeInTheDocument();
+    expect(within(here).getByText('Night ferry').closest('li')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('the navigation’s list is labelled as the board it is, not as stages', () => {
+    // A wide desktop opens the side panel by default (SH-C1); the comic's own section holds the board.
+    mountAt(DESK, makeFakeStudio());
+    const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    expect(nav).toHaveAttribute('data-comic-panel', 'open');
     expect(within(nav).queryByText('Project stages')).toBeNull();
     expect(within(nav).getByText('Board')).toBeInTheDocument();
     expect(within(nav).getByRole('tablist', { name: 'Board' })).toBeInTheDocument();

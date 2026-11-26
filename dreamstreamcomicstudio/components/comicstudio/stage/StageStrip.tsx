@@ -28,7 +28,8 @@ export const STAGE_STRIP_ONE_ROW_MIN = 768;
 /** Below this width a done stage in the opened list shows only its check. */
 export const STAGE_STRIP_FULL_LABELS_MIN = 360;
 
-const PLACE_HINT: Readonly<Record<StagePlace, string>> = {
+/** Where each place is, in words: the next step's description (the side panel's next step reads it too). */
+export const PLACE_HINT: Readonly<Record<StagePlace, string>> = {
   story: 'Opens the Story tab',
   style: 'Opens the Style tab',
   pages: 'Opens the Pages tab',
@@ -50,7 +51,7 @@ export interface StageStripProps {
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** One stage as a mark on the compact stage button: a check when done, a filled dot when current, a ring otherwise. */
-const StageMark = ({ done, current }: { done: boolean; current: boolean }) =>
+export const StageMark = ({ done, current }: { done: boolean; current: boolean }) =>
   done ? (
     <Check className="h-2.5 w-2.5" strokeWidth={current ? 3.5 : 2.5} />
   ) : (

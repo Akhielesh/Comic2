@@ -103,7 +103,7 @@ describe('ProjectDashboard in Comic Studio: the brand opens your comics', () => 
 
   it('opens standalone images from the creator navigation without starting a comic', () => {
     const { props } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Standalone images' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Images' }));
     expect(props.onNavigate).toHaveBeenCalledWith('images');
     expect(props.onCreateProject).not.toHaveBeenCalled();
   });
@@ -190,9 +190,9 @@ describe('ProjectDashboard in Comic Studio: Continue, and no setup box', () => {
   it('keeps the frame’s New comic as the only fill on All comics', () => {
     const { container } = renderDashboard([studioProject('a', 'Harbour Lights')], { comicWorkspace: true });
     const card = screen.getByRole('region', { name: 'Continue Harbour Lights' });
-    // The frame's own fills come from comicCreationWorkspace.css: New comic is filled unless its view is open
-    // (aria-current), and Start is always filled. The rest of the app marks a fill with the class or the variant.
-    const FILLS = '.comics-primary-action, [data-variant="create"], .comic-project-nav .comic-project-new:not([aria-current="page"]), .comic-idea-start';
+    // The frame's own fills: the side panel marks its New comic fill (only on All comics, panelStyles.ts PANEL_FILL), and
+    // Start is always filled (comicCreationWorkspace.css). The rest of the app marks a fill with the class or the variant.
+    const FILLS = '.comics-primary-action, [data-variant="create"], [data-panel-fill], .comic-idea-start';
     const fills = container.querySelectorAll(FILLS);
     expect(fills).toHaveLength(1);
     expect(fills[0]).toHaveAccessibleName('New comic');

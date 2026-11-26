@@ -72,7 +72,7 @@ import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
 import { renderingPageCount } from './studioReducer';
 import { useStudio, type ComicStudioController } from './useStudio';
-import type { BoardTab } from './types';
+import type { BoardTab, StudioTab } from './types';
 import { BUILTIN_HEADER_ORDER, registeredHeaderSlots, type HeaderSlotRegistration } from './features';
 import { headerVariantFor, isPhoneLayout, showsPaneSwitcher, type FormFactor, type HeaderVariant } from './mobile/formFactor';
 import { useFormFactor } from './mobile/useFormFactor';
@@ -86,7 +86,9 @@ import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
 import { SideSheet } from './mobile/sheets/SideSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
 import { phoneChromeVars } from './mobile/shell/phoneChrome';
-import { WorkspaceNavigation, WORKSPACE_NAVIGATION_ID, WORKSPACE_NAVIGATION_KEY, readNavigationExpanded } from './mobile/shell/WorkspaceNavigation';
+import { ComicSidePanel, PANEL_ID, PANEL_LABEL, type ComicPanelLinks } from './panel/ComicSidePanel';
+import { ComicSection } from './panel/ComicSection';
+import { usePanelOpen } from './panel/panelPreference';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -97,7 +99,7 @@ import { recentLabel } from './insights/copy';
 import { spendSummary } from './insights/insightsModel';
 import { SpendByKindList } from './insights/OverviewTab';
 import { StageStrip } from './stage/StageStrip';
-import type { StagePlace } from '../../shared/comic/stage';
+import { stageFacts, type StagePlace } from '../../shared/comic/stage';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -470,7 +472,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const lead = (
     <>
       {navigation ? (
-        <button ref={navigation.buttonRef} type="button" onClick={navigation.onToggle} aria-label={navigation.overlay ? 'Open project navigation' : navigation.expanded ? 'Collapse project navigation' : 'Expand project navigation'} title="Project navigation" aria-expanded={navigation.expanded} aria-controls={!navigation.overlay || navigation.expanded ? WORKSPACE_NAVIGATION_ID : undefined} aria-haspopup={navigation.overlay ? 'dialog' : undefined} className={`grid h-11 w-11 shrink-0 place-items-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}>
+        <button ref={navigation.buttonRef} type="button" onClick={navigation.onToggle} aria-label={navigation.overlay ? 'Open project navigation' : navigation.expanded ? 'Collapse project navigation' : 'Expand project navigation'} title="Project navigation" aria-expanded={navigation.expanded} aria-controls={!navigation.overlay || navigation.expanded ? PANEL_ID : undefined} aria-haspopup={navigation.overlay ? 'dialog' : undefined} className={`grid h-11 w-11 shrink-0 place-items-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}>
           <PanelLeft className="h-[18px] w-[18px]" aria-hidden />
         </button>
       ) : showBack && (
@@ -976,26 +978,26 @@ const KeyboardInsetMount: React.FC = () => {
 
 interface WorkspaceProps {
   onBack: () => void;
-  navigationFooter?: React.ReactNode;
+  /** App's destinations and the comic list for the side panel (without them it shows this comic's own sections). */
+  panel?: ComicPanelLinks;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
 }
 
-export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, panel, initialIdea, onInitialIdeaConsumed }) => {
   const ff = useFormFactor();
   useComicThemeScope(!isComicsHost());
   useThemeColor();
+  const { user } = useAuth();
   const phone = isPhoneLayout(ff.layout);
   const navigationOverlay = phone || ff.width < 1024 || ff.layout === 'dual-screen';
-  const [navigationExpanded, setNavigationExpanded] = useState(readNavigationExpanded);
+  // The side panel, docked from 1024 px: open by default on a wide desktop, the viewer's choice remembered (panelPreference.ts).
+  const [navigationExpanded, setNavigationExpanded] = usePanelOpen(user?.id, ff.width);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationButton = useRef<HTMLButtonElement | null>(null);
   const toggleNavigation = () => {
     if (navigationOverlay) setNavigationOpen((open) => !open);
-    else setNavigationExpanded((expanded) => {
-      try { window.localStorage.setItem(WORKSPACE_NAVIGATION_KEY, String(!expanded)); } catch { /* private storage */ }
-      return !expanded;
-    });
+    else setNavigationExpanded(!navigationExpanded);
   };
   useEffect(() => { setNavigationOpen(false); }, [navigationOverlay]);
   useEffect(() => {
@@ -1014,7 +1016,9 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const conversationApi = useRef<ConversationRevealHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
-  const { user } = useAuth();
+  const behind = studio.publication?.behind;
+  // Where the comic stands, for the panel's own section and its row in Your comics (the strip reads the same facts).
+  const facts = useMemo(() => (doc ? stageFacts(doc, { behind }) : null), [doc, behind]);
 
   // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
   useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
@@ -1177,7 +1181,53 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   };
   // From 768 px a row under the header; on a phone, the top of the board's panel (it scrolls away with the work and
   // adds no fixed chrome: the conversation keeps its room, and its activity line already reports drawing).
-  const stageStrip = <StageStrip doc={doc} behind={studio.publication?.behind} onGo={goToStage} />;
+  const stageStrip = <StageStrip doc={doc} behind={behind} onGo={goToStage} />;
+
+  // The one side panel (SH-C1): where you are, this comic's own section, your comics, and App's destinations. In the
+  // drawer every choice closes it first; docked, it stays.
+  const sidePanel = (compact: boolean, drawer: boolean) => {
+    const closing = <A extends unknown[]>(action: (...args: A) => void) => (...args: A) => {
+      if (drawer) setNavigationOpen(false);
+      action(...args);
+    };
+    const links: ComicPanelLinks | undefined = panel && {
+      ...panel,
+      onNewComic: closing(panel.onNewComic),
+      onImages: panel.onImages && closing(panel.onImages),
+      onChat: panel.onChat && closing(panel.onChat),
+      onAllComics: closing(panel.onAllComics),
+      onLibrary: closing(panel.onLibrary),
+      onReport: panel.onReport && closing(panel.onReport),
+      onOpenProject: closing(panel.onOpenProject),
+      onOpenStudioWork: panel.onOpenStudioWork && closing(panel.onOpenStudioWork)
+    };
+    return (
+      <ComicSidePanel
+        place="comic"
+        compact={compact}
+        links={links}
+        onMyComics={closing(onBack)}
+        comic={{ id: doc.id, title: doc.brief.title || '', facts }}
+        comicSection={
+          facts && (
+            <ComicSection
+              doc={doc}
+              caps={studio.caps}
+              tab={studio.tab}
+              facts={facts}
+              compact={compact}
+              onSelect={closing((tab: StudioTab) => {
+                setTab(tab);
+                showBoard();
+              })}
+              onConversation={closing(skipToComposer)}
+              onGo={closing(goToStage)}
+            />
+          )
+        }
+      />
+    );
+  };
 
   const pagesRendering = renderingPageCount(doc);
   const progress = pageProgress(doc);
@@ -1280,15 +1330,15 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
 
       <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>
-          <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} compact={!navigationExpanded} onBack={onBack} onConversation={skipToComposer} onSelect={(tab) => { setTab(tab); showBoard(); }} footer={navigationFooter} />
+          {sidePanel(!navigationExpanded, false)}
         </aside>}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
           <StudioLayout ff={ff} chat={chat} board={board} view={view} paneMode={paneMode} navItems={navItems} onBack={onBack} />
         </div>
       </main>
 
-      {navigationOverlay && <SideSheet open={navigationOpen} onClose={() => setNavigationOpen(false)} label="Project navigation" title="This comic" side="left" width={288} modal anchorRef={navigationButton}>
-        <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} onBack={onBack} onConversation={() => { setNavigationOpen(false); skipToComposer(); }} onSelect={(tab) => { setTab(tab); showBoard(); setNavigationOpen(false); }} footer={navigationFooter} />
+      {navigationOverlay && <SideSheet open={navigationOpen} onClose={() => setNavigationOpen(false)} label={PANEL_LABEL} title="Comic Studio" side="left" width={288} modal anchorRef={navigationButton}>
+        {sidePanel(false, true)}
       </SideSheet>}
 
       <AdaptiveSheet
@@ -1338,10 +1388,10 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   );
 };
 
-export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, panel, initialIdea, onInitialIdeaConsumed }) => {
   const studio = useStudio(projectId);
   // A new project starts with a fresh shell (chat view, closed sheets, empty composer).
-  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} navigationFooter={navigationFooter} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
+  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} panel={panel} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
 };
 
 export default ComicStudio;

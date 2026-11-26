@@ -26,6 +26,8 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       expect(header!.height).toBeLessThanOrEqual(phone ? 45 : 49);
       await rootFits();
 
+      // A wide desktop opens the side panel by default (SH-C1): start from its slim rail, as the phone starts closed.
+      if (!phone) await page.getByRole('button', { name: 'Collapse project navigation' }).click();
       const toggle = page.getByRole('button', { name: phone ? 'Open project navigation' : 'Expand project navigation' });
       const widthBefore = (await board.boundingBox())!.width;
       await toggle.click();
