@@ -89,8 +89,10 @@ import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import { ComicSidePanel, PANEL_ID, PANEL_LABEL, type ComicPanelLinks } from './panel/ComicSidePanel';
 import { ComicSection } from './panel/ComicSection';
 import { usePanelOpen } from './panel/panelPreference';
-import { revealPart, useBoardPart } from './board/boardPart';
-import { partTab, type BoardPart } from './panel/partsModel';
+import { revealBoardTop, revealPart, useBoardPart } from './board/boardPart';
+import { partLabelOf, partTab, type BoardPart } from './panel/partsModel';
+import { boardTabsFor } from './board/boardNavigation';
+import { StudioBreadcrumb, type StudioTrail } from './breadcrumb/StudioBreadcrumb';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -117,49 +119,6 @@ export { HEADER_QUALITY_CHIP_BELOW } from './qualityHome';
 export const READER_REFRESH_MS = 30_000;
 
 // ── Header pieces ────────────────────────────────────────────────────────────
-
-const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }> = ({ title, onCommit }) => {
-  const [draft, setDraft] = useState(title);
-  const editing = useRef(false);
-  useEffect(() => {
-    if (!editing.current) setDraft(title);
-  }, [title]);
-  const commit = () => {
-    editing.current = false;
-    const next = draft.trim().slice(0, 200);
-    if (!next) {
-      setDraft(title);
-      return;
-    }
-    if (next !== title) onCommit(next);
-  };
-  return (
-    <input
-      value={draft}
-      onFocus={() => (editing.current = true)}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-          e.preventDefault();
-          (e.target as HTMLInputElement).blur();
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          editing.current = false;
-          setDraft(title);
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      aria-label="Comic title"
-      title={draft}
-      maxLength={200}
-      spellCheck={false}
-      enterKeyHint="done"
-      // 16 px on touch so focusing the title never zooms the page (iOS); ellipsis when it doesn't fit.
-      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px] coarse:text-base`}
-    />
-  );
-};
 
 /** Spend kind names — one vocabulary for every Spending view (the board's, the breakdown card's, this sheet's). */
 export const SPEND_KIND_LABELS: Record<SpendKind, string> = SPEND_KIND_LABEL;
@@ -328,6 +287,8 @@ export interface StudioHeaderProps {
    */
   ask?: { busy: boolean; onAsk: () => void; onViewChat: () => void };
   navigation?: { expanded: boolean; overlay: boolean; onToggle: () => void; buttonRef: React.RefObject<HTMLButtonElement | null> };
+  /** The breadcrumb past the comic's name: the board's area and the part you are on (StudioBreadcrumb). */
+  trail?: StudioTrail;
 }
 
 /**
@@ -337,7 +298,7 @@ export interface StudioHeaderProps {
  *  - regular  1024+: compact desktop header with pane switcher, quality in the composer and ⋯
  * Read (icon-only below regular) shows only while the board is out of sight and a page is drawn.
  */
-export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask, navigation }) => {
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask, navigation, trail }) => {
   const [open, setOpen] = useState<HeaderSheet>(null);
   const variant: HeaderVariant = headerVariantFor(ff);
   const compact = variant !== 'regular';
@@ -483,7 +444,15 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
-      <TitleField title={doc.brief.title || 'Untitled comic'} onCommit={(title) => void studio.patch([{ op: 'brief', patch: { title } }])} />
+      {/* My comics › the comic (its name field) › the board's area › the part you are on. */}
+      <StudioBreadcrumb
+        title={doc.brief.title || 'Untitled comic'}
+        onRename={(title) => void studio.patch([{ op: 'brief', patch: { title } }])}
+        onMyComics={navigation ? onBack : undefined}
+        room={variant === 'regular' ? 'wide' : phone ? 'narrow' : 'medium'}
+        area={trail?.area}
+        item={trail?.item}
+      />
     </>
   );
   const switcher = showsPaneSwitcher(ff) ? <PaneSwitcher value={paneMode} onChange={onPaneMode} className="shrink-0" /> : null;
@@ -1264,6 +1233,27 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const tabBar = ff.layout === 'single';
   const boardHiddenFromChat = phone ? view !== 'board' : paneMode === 'chat';
 
+  // The breadcrumb past the comic's name (SH-C2): the board's area while the board is on screen, and the part you are on
+  // in it (the page in the editor, else the card you are on).
+  const areaLabel = boardHiddenFromChat ? undefined : boardTabsFor(doc, studio.caps, studio.tab).find((t) => t.id === studio.tab)?.label;
+  const crumbPart: BoardPart | null =
+    studio.focusedPageId && studio.tab === 'pages' ? { kind: 'page', id: studio.focusedPageId } : boardPart && partTab(boardPart) === studio.tab ? boardPart : null;
+  const crumbLabel = crumbPart ? partLabelOf(doc, crumbPart) : null;
+  const trail: StudioTrail = {
+    area: areaLabel
+      ? {
+          label: areaLabel,
+          // Back to the top of the area: the page editor closes, the board scrolls up and takes focus.
+          onGo: () => {
+            if (studio.focusedPageId) openPage(null);
+            showBoard();
+            revealBoardTop({ reducedMotion: ff.reducedMotion });
+          }
+        }
+      : null,
+    item: areaLabel && crumbPart && crumbLabel ? { label: crumbLabel, onGo: () => openPart(crumbPart) } : null
+  };
+
   const navItems: StudioNavItem[] = [
     {
       id: 'chat',
@@ -1352,6 +1342,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
         paneMode={paneMode}
         onPaneMode={setPaneMode}
         navigation={{ expanded: navigationOverlay ? navigationOpen : navigationExpanded, overlay: navigationOverlay, onToggle: toggleNavigation, buttonRef: navigationButton }}
+        trail={trail}
         ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
