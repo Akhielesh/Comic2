@@ -198,6 +198,15 @@ describe('keyboard, focus order and the phone drawer', () => {
     expect(onSelect).toHaveBeenCalledWith('story');
   });
 
+  it('the next step wraps rather than cutting its words in the panel’s width (its two lines are its label)', () => {
+    comicPanel();
+    const next = within(panel()).getByRole('button', { name: /Next: / });
+    const lines = Array.from(next.children).filter((el) => el.tagName === 'SPAN');
+    expect(lines).toHaveLength(2);
+    for (const el of next.querySelectorAll('span')) expect(el.className.split(' ')).not.toContain('truncate');
+    expect(next.querySelectorAll('[class*="overflow-wrap:anywhere"]').length).toBe(2);
+  });
+
   it('on a phone the panel is a drawer: it takes focus, Escape returns it to the toggle, and a choice closes it', () => {
     const navigation = links();
     frame(PHONE, navigation);

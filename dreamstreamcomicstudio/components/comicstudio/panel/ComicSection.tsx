@@ -13,7 +13,7 @@ import { stageView, type StageFacts, type StagePlace } from '../../../shared/com
 import type { StudioTab } from '../types';
 import { boardTabsFor } from '../board/boardNavigation';
 import { cn } from '../../../lib/utils';
-import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE, TRANSITION } from '../../chat/studioDesign';
+import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE, TRANSITION, WRAP_TEXT } from '../../chat/studioDesign';
 import { PLACE_HINT } from '../stage/stageMarks';
 import { StageMap } from '../stage/StageMap';
 import { StageMarks } from './StageMarks';
@@ -147,7 +147,8 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
         </button>
       </div>
       {/* Where it stands, then the next step, as one button: it only opens a place (a tab, the conversation, the
-          composer or the Share sheet), never a paid step. */}
+          composer or the Share sheet), never a paid step. Its two lines are its label, so they wrap rather than cut a
+          word in the panel's 14rem ("Next: tell the Director your idea"). */}
       <button
         type="button"
         onClick={() => onGo(view.next.place)}
@@ -159,12 +160,12 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
           FOCUS_RING
         )}
       >
-        <span className={cn('max-w-full tabular-nums', CLIP_TEXT)} title={view.summary}>
+        <span className={cn('max-w-full tabular-nums', WRAP_TEXT)}>
           <span className="font-medium text-[var(--ds-ink)]">{view.word}</span>
           <span className={MUTED}> · {view.progress}</span>
         </span>
         <span className="inline-flex max-w-full items-center gap-1 font-medium text-[var(--ds-ink)]">
-          <span className={CLIP_TEXT}>Next: {lowerFirst(view.next.label)}</span>
+          <span className={WRAP_TEXT}>Next: {lowerFirst(view.next.label)}</span>
           <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
         </span>
       </button>
