@@ -15,7 +15,7 @@ import { PageHeader } from '../../../components/ds';
 import { Button } from '../../../components/ds/Button';
 import { Segmented } from '../../../components/ds/Segmented';
 import { cn } from '../../../lib/utils';
-import { FOCUS_RING, HEADING, MUTED, OVERLINE, RADIUS_PANEL, SHADOW_SOFT } from '../../../components/chat/studioDesign';
+import { FOCUS_RING, HEADING, MUTED, OVERLINE, RADIUS_PANEL, SHADOW_SOFT, WRAP_TEXT } from '../../../components/chat/studioDesign';
 import type { QaAppScene } from '../index';
 
 const ART = '/assets/comic-sample';
@@ -61,7 +61,9 @@ function LiveStage() {
     <section aria-labelledby="qa-flip-live" className="flex min-w-0 flex-col gap-3">
       <h2 id="qa-flip-live" className={cn('m-0 text-[length:var(--ds-text-base)]', HEADING)}>Turn the page</h2>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Segmented<PageTurnStyle> label="Page turn style" size="sm" value={style} onChange={setStyle} options={STYLES} />
+        {/* Full width up to a set measure: the four styles share it evenly, so the longest name ("Paper") is never cut
+            (an auto-width track splits its labels' total equally, which clips the widest). */}
+        <Segmented<PageTurnStyle> label="Page turn style" size="sm" fullWidth className="max-w-[22rem]" value={style} onChange={setStyle} options={STYLES} />
         <Segmented<'ltr' | 'rtl'> label="Reading direction" size="sm" value={dir} onChange={setDir} options={[{ value: 'ltr', label: 'Left to right' }, { value: 'rtl', label: 'Right to left' }]} />
       </div>
       <div
@@ -93,11 +95,12 @@ function LiveStage() {
           <Sheet index={index} />
         </PaperTurnSurface>
       </div>
-      <div className="flex min-w-0 items-center justify-center gap-3">
+      {/* Wraps (the Button rule for a row that can hold a long or translated label): one line at every size today. */}
+      <div className="flex min-w-0 flex-wrap items-center justify-center gap-3">
         <Button variant="outline" onClick={() => turn.current?.turn(-1)} disabled={!canTurn(-1)}>
           {rtl ? <ChevronRight aria-hidden /> : <ChevronLeft aria-hidden />} Prev
         </Button>
-        <span role="status" className={cn('min-w-[6rem] text-center text-[length:var(--ds-text-sm)] tabular-nums', MUTED)}>
+        <span role="status" className={cn('text-center text-[length:var(--ds-text-sm)] tabular-nums', WRAP_TEXT, MUTED)}>
           Page {index + 1} of {PAGES.length}
         </span>
         <Button variant="outline" onClick={() => turn.current?.turn(1)} disabled={!canTurn(1)}>
