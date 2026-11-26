@@ -30,6 +30,8 @@ throws: the registry list and the constants on any failure).
   it through (anchor lines included). The server's `jobs.ts` `priceImageJobs` is exactly `estimateJobs` with its book.
 - Text steps: `planUsd(pages, byok, prices)`, `styleDirectionsQuoteUsd`, `recheckQuoteUsd` (one vision pass at the
   book's QC) and the translation factor — server gates and chips, the director's summary and the client buttons.
+- The director's summary prices pages, the cover and planning with the request's book when it is ready within 500 ms
+  (`DIRECTOR_PRICES_WAIT_MS`), else the dated price list as before, so a cold catalog never slows a reply.
 
 **The price sheet** — `GET /api/comic/models/prices` (owner bearer, text-limited, `private, no-store`) serves the
 caller's sources as `PriceSheet { v: 1, at, sources }`: prices and bases only, never a note (notes are words, and
@@ -103,6 +105,10 @@ the sheet is on its way (the registry list only if the read failed); an unpriced
 
 - A balance check before a standalone image (credit-safety.md covers comic steps).
 - The board's spent amounts keep their 3-decimal precision; only prices are unified.
+- Insights' cost analysis (what this comic's pages have cost, what the next one would on its model) and the outage
+  banner's switch options keep their own comic-level figures: they are analysis, not a quote for a step.
+- The platform-wide ledger read has no `created_at` index of its own; it runs once per 10 minutes per process. A
+  partial index is the next step only if the ledger grows large (no SQL is needed today).
 - Consistency-anchor lines: the client quotes them only where it already did (the breakdown's consistency view); the
   run draws anchors only when `COMIC_CONSISTENCY_ANCHORS` is on, which it is not today.
 
