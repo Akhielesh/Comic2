@@ -30,7 +30,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Images, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
-import { readerOf, type ComicDoc, type ReaderSettings } from '../../../shared/comic/doc';
+import { creatorTurnOf, readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
@@ -57,7 +57,7 @@ import { useShareCapabilities } from '../share/useShareCapabilities';
 import { FOCUS_ITEM, FOCUS_RING, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT, STATUS_SURFACE } from '../../chat/studioDesign';
 import { hasReadablePage } from '../reader/readerModel';
 import { CLEAR } from './boardModel';
-import { GhostButton, InlineField, PrimaryButton, Surface, SwitchRow, cx } from './ui';
+import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
 const LARGE_PNG_EDGE = 3840;
 
@@ -156,6 +156,23 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
       <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
         <p className={OVERLINE}>Reader look</p>
         <span className="text-[11px] text-[var(--ds-muted)]">Readers can still change it for themselves</span>
+      </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
+        <span className="text-[12px] text-[var(--ds-muted)]">Page turn</span>
+        {/* The creator's choice for every reader of this comic (a reader can still pick their own). A comic that never
+            chose flips; picking marks the choice, so it sticks (doc.ts creatorTurnOf). */}
+        <Segmented<PageTurnStyle>
+          label="Page turn"
+          size="xs"
+          value={creatorTurnOf(r)}
+          onChange={(turn) => set({ turn, turnChosen: true }, 'Change page turn')}
+          options={[
+            { value: 'flip', label: 'Flip', title: 'The new page swings in from the spine' },
+            { value: 'paper', label: 'Paper', title: 'Readers drag the page and it folds like paper' },
+            { value: 'slide', label: 'Slide', title: 'Pages slide across' },
+            { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
+          ]}
+        />
       </div>
       <div className="mt-1 grid gap-0.5 md:grid-cols-2">
         <SwitchRow label="Paper texture" description="A subtle paper grain under the art" checked={r.paperTexture} onChange={(on) => set({ paperTexture: on })} />

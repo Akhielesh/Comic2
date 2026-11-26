@@ -676,7 +676,11 @@ describe('ReaderTab', () => {
     render(<ReaderTab studio={studio} doc={studio.doc!} />);
     fireEvent.click(screen.getByRole('button', { name: 'Reader look' }));
     const panel = screen.getByRole('region', { name: 'Reader look' });
-    expect(within(panel).queryByRole('radio', { name: 'Fade' })).toBeNull();
+    // The creator's page turn: Flip first; a comic that never chose (its stored 'paper' is the old default) shows Flip.
+    expect(within(within(panel).getByRole('radiogroup', { name: 'Page turn' })).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Flip', 'Paper', 'Slide', 'Fade']);
+    expect(within(panel).getByRole('radio', { name: 'Flip' })).toBeChecked();
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Fade' }));
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { turn: 'fade', turnChosen: true } }], { label: 'Change page turn' });
     fireEvent.click(within(panel).getByRole('switch', { name: 'Paper texture' }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { paperTexture: false } }], { label: 'Change reader look' });
     edit(within(panel).getByLabelText('End card line'), 'By the Rao family');
