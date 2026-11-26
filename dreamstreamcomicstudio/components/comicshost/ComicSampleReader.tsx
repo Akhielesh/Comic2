@@ -98,10 +98,14 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
       case 'ArrowRight': handle.current?.turn(1); break;
       case 'ArrowLeft': handle.current?.turn(-1); break;
       case 'Home':
-      case 'End':
-        handle.current?.cancel();
-        goToPage(event.key === 'Home' ? 0 : sample.pages.length - 1);
+      case 'End': {
+        // Home and End flip as well: the first page swings in backwards, the last one forwards.
+        const target = event.key === 'Home' ? 0 : sample.pages.length - 1;
+        if (target === pageIndex) break;
+        if (handle.current) handle.current.jump(target > pageIndex ? 1 : -1, () => goToPage(target), renderArtwork(target, handle === dialogTurn));
+        else goToPage(target);
         break;
+      }
       default: return;
     }
     event.preventDefault();
@@ -122,6 +126,8 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
         {sample.pages.length === 1 ? current : (
           <PaperTurnSurface
             ref={fullSize ? dialogTurn : inlineTurn}
+            // The sample shows the house turn: the page flip (the OS reduced-motion setting changes pages at once).
+            turnStyle="flip"
             pageKey={`${story}/${look}/${pageIndex}`}
             enabled={fullSize || !reader?.open}
             canTurn={canTurn}

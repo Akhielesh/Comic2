@@ -172,7 +172,7 @@ describe('Comics landing', () => {
     expect(currentPage()).toHaveAttribute('src', expect.stringContaining('last-tram-page-1'));
   });
 
-  it('uses the paper surface for horizontal turns, leaves vertical gestures to scroll and mounts one resting illustration', () => {
+  it('flips the page on horizontal swipes, leaves vertical gestures to scroll and mounts one resting illustration', () => {
     renderLanding();
     const figure = screen.getByRole('figure', { name: 'The Last Tram' });
     const surface = figure.querySelector('[data-paper-turn-surface]')!;
@@ -184,6 +184,8 @@ describe('Comics landing', () => {
       fireEvent.touchEnd(surface, { touches: [], changedTouches: [touch(endX, endY)] });
     };
     expect(surface).toBeInTheDocument();
+    // The sample shows the house turn: the page flip.
+    expect(surface).toHaveAttribute('data-turn-style', 'flip');
     expect(surface.querySelectorAll('img')).toHaveLength(1);
     swipe(145, 180);
     expect(scene).toHaveTextContent('Page 1 of 2');

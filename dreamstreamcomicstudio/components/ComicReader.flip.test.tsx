@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project, TextLayout } from '../types';
 import { ComicReader } from './ComicReader';
@@ -107,6 +107,12 @@ const makeProject = (textLayout: TextLayout = 'chat_bubbles'): Project => ({
     panels: [1, 2].map((i) => ({ id: `p${i}`, sceneId: 1, description: '', dialogue: `Line ${i}`, imageUrl: `data:image/svg+xml,p${i}`, imageIdHistory: [] }))
   }
 });
+
+/** Unmount every reader (and its Back-stack layer) before the next one in the same test. */
+const cleanupReaders = () => {
+  cleanup();
+  resetBackStack();
+};
 
 const props = () => ({ onClose: vi.fn(), onUpdateProject: vi.fn(), onNavigate: vi.fn(), onOpenPrivacy: vi.fn(), onOpenTerms: vi.fn(), onOpenFaq: vi.fn() });
 
@@ -243,7 +249,7 @@ describe('historical Classic projects', () => {
     const p = mixed();
     render(<ComicReader project={p} {...props()} />);
     await act(async () => {});
-    expect(screen.getByRole('button', { name: 'Page turn' })).toHaveAttribute('aria-pressed','true');
+    expect(screen.getByRole('button', { name: 'Page flip' })).toHaveAttribute('aria-pressed','true');
     const sources = [p.state.coverImageUrl!, ...p.state.panels.map(panel => panel.imageUrl!), '/composed'];
     for (let i = 0; i < sources.length; i++) {
       expect(screen.getByRole('img')).toHaveAttribute('src',sources[i]);
@@ -274,8 +280,185 @@ describe('historical Classic projects', () => {
     expect(saveReaderState).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button',{name:'Next'}));
     await act(async () => resolve({projectId:p.id,mode:'scroll',scrollTop:200,pageIndex:3,updatedAt:0}));
-    expect(screen.getByRole('button',{name:'Page turn'})).toHaveAttribute('aria-pressed','true');
+    expect(screen.getByRole('button',{name:'Page flip'})).toHaveAttribute('aria-pressed','true');
     expect(screen.getByRole('img')).toHaveAttribute('src',p.state.panels[0].imageUrl);
     expect(saveReaderState).toHaveBeenLastCalledWith(expect.objectContaining({projectId:p.id,pageIndex:1,mode:'flip'}));
+  });
+});
+
+// ── The page flip, restored (fx-reader): the new page swings in from the spine, as it did before the paper turn ──
+describe('the page flip', () => {
+  const FLIP_NEXT = 'animate-page-flip-next';
+  const FLIP_PREV = 'animate-page-flip-prev';
+  let reduceOs = false;
+  let phone = false;
+  beforeEach(() => {
+    reduceOs = false;
+    phone = false;
+    window.localStorage.clear();
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('prefers-reduced-motion') ? reduceOs : phone && /pointer:\s*coarse|max-width/.test(query),
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false
+    })) as unknown as typeof window.matchMedia;
+    // jsdom lays nothing out: the stage gets a box (a swing is played only on a visible stage), pictures count as loaded.
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-paper-turn-surface')) return { x: 0, y: 0, left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, toJSON: () => ({}) } as DOMRect;
+      return rect.call(this);
+    });
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const many = (layoutType: Project['state']['layoutType'] = 'grid') => {
+    const p = makeProject('speech_bubbles');
+    p.state.layoutType = layoutType;
+    p.state.panels = [1, 2, 3, 4, 5].map((i) => ({ id: `p${i}`, sceneId: 1, description: '', dialogue: `Line ${i}`, imageUrl: `/panel-${i}`, imageIdHistory: [] }));
+    return p;
+  };
+  const open = async (p = many()) => {
+    vi.mocked(loadReaderState).mockResolvedValueOnce({ projectId: p.id, mode: 'flip', pageIndex: 1, updatedAt: 0 });
+    render(<ComicReader project={p} {...props()} />);
+    await act(async () => {});
+  };
+  /** The page element that swings: the sheet (desktop) or the art-over-dialogue column (phones). */
+  const sheet = () => screen.getByRole('img').closest<HTMLElement>(phone ? '[data-testid="flip-page"]' : '.relative.inline-flex')!;
+  const src = () => screen.getByRole('img').getAttribute('src');
+  const key = (k: string) => act(() => void fireEvent.keyDown(window, { key: k }));
+  const land = () => act(() => void vi.advanceTimersByTime(700));
+
+  it('Next and Prev swing the new page in from the spine; it lands and the class comes off', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await open();
+      expect(src()).toBe('/panel-2');
+      fireEvent.click(screen.getByRole('button', { name: /Next/ }));
+      expect(src()).toBe('/panel-3');
+      expect(sheet().classList.contains(FLIP_NEXT)).toBe(true);
+      land();
+      expect(sheet().classList.contains(FLIP_NEXT)).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: /Prev/ }));
+      expect(src()).toBe('/panel-2');
+      expect(sheet().classList.contains(FLIP_PREV)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the keys flip too: arrows, Space, PageDown / PageUp, and Home and End jump with the swing', async () => {
+    await open();
+    key('ArrowRight');
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-3', true]);
+    key(' ');
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-4', true]);
+    key('PageUp');
+    expect([src(), sheet().classList.contains(FLIP_PREV)]).toEqual(['/panel-3', true]);
+    key('ArrowLeft');
+    key('PageDown');
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-3', true]);
+    key('End');
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-5', true]);
+    key('Home');
+    expect([src(), sheet().classList.contains(FLIP_PREV)]).toEqual(['/panel-1', true]);
+  });
+
+  it('a swipe flips; a short or vertical one, or a pinch, never turns', async () => {
+    await open();
+    const stage = document.querySelector<HTMLElement>('[data-paper-turn-surface]')!;
+    const swipe = (from: number, to: number, y1 = 300) => {
+      fireEvent.touchStart(stage, { touches: [{ identifier: 0, clientX: from, clientY: 300 }] });
+      fireEvent.touchMove(stage, { touches: [{ identifier: 0, clientX: to, clientY: y1 }] });
+      fireEvent.touchEnd(stage, { touches: [], changedTouches: [{ identifier: 0, clientX: to, clientY: y1 }] });
+    };
+    swipe(500, 470);
+    swipe(500, 440, 520);
+    fireEvent.touchStart(stage, { touches: [{ identifier: 0, clientX: 500, clientY: 300 }, { identifier: 1, clientX: 300, clientY: 300 }] });
+    fireEvent.touchEnd(stage, { touches: [], changedTouches: [{ identifier: 0, clientX: 200, clientY: 300 }] });
+    expect(src()).toBe('/panel-2');
+    swipe(600, 300);
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-3', true]);
+    swipe(200, 500);
+    expect([src(), sheet().classList.contains(FLIP_PREV)]).toEqual(['/panel-2', true]);
+  });
+
+  it('right-to-left (manga) mirrors the swing and the keys', async () => {
+    await open(many('manga'));
+    key('ArrowLeft');
+    expect([src(), sheet().classList.contains(FLIP_PREV)]).toEqual(['/panel-3', true]);
+    key('ArrowRight');
+    expect([src(), sheet().classList.contains(FLIP_NEXT)]).toEqual(['/panel-2', true]);
+  });
+
+  it('phones: the art and the dialogue under it swing in together', async () => {
+    phone = true;
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: /Next/ }));
+    const column = screen.getByTestId('flip-page');
+    expect(column.classList.contains(FLIP_NEXT)).toBe(true);
+    expect(column).toContainElement(screen.getByTestId('flip-art'));
+    expect(column).toContainElement(screen.getByTestId('flip-dialogue'));
+    expect(within(screen.getByTestId('flip-dialogue')).getByTestId('panel-dialogue')).toHaveTextContent('Line 3');
+  });
+
+  it('reduced motion (the OS, or the reader’s own setting) turns at once with no swing', async () => {
+    reduceOs = true;
+    const { unmount } = render(<ComicReader project={many()} {...props()} />);
+    await act(async () => {});
+    key('ArrowRight');
+    expect(src()).toBe('/panel-2');
+    expect(document.querySelector(`.${FLIP_NEXT}, .${FLIP_PREV}`)).toBeNull();
+    unmount();
+    reduceOs = false;
+    window.localStorage.setItem('comicstudio.reader.prefs.v1', JSON.stringify({ reduceMotion: true }));
+    await open();
+    key('End');
+    expect(src()).toBe('/panel-5');
+    expect(document.querySelector(`.${FLIP_NEXT}, .${FLIP_PREV}`)).toBeNull();
+  });
+
+  it('plays the page-turn sound when it is on (and never when it is off)', async () => {
+    const made = vi.fn();
+    class FakeAudio {
+      sampleRate = 8000;
+      currentTime = 0;
+      destination = {};
+      constructor() { made(); }
+      createBuffer() { return { getChannelData: () => new Float32Array(8) }; }
+      createBufferSource() { return { connect: () => undefined, start: () => undefined, stop: () => undefined }; }
+      createBiquadFilter() { return { connect: () => undefined, frequency: {}, Q: {} }; }
+      createGain() { return { connect: () => undefined, gain: {} }; }
+      close() { return Promise.resolve(); }
+    }
+    vi.stubGlobal('AudioContext', FakeAudio);
+    await open();
+    key('ArrowRight');
+    expect(made).toHaveBeenCalledTimes(1);
+    window.localStorage.setItem('reader_sound', 'off');
+    cleanupReaders();
+    await open();
+    key('ArrowRight');
+    expect(made).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('the toolbar toggle and the phone menu read “Page flip” / “Scroll”', async () => {
+    await open();
+    expect(within(screen.getByRole('group', { name: 'Reading mode' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['Page flip', 'Scroll']);
+    cleanupReaders();
+    phone = true;
+    vi.mocked(loadReaderState).mockResolvedValueOnce({ projectId: 'flip-project', mode: 'scroll', updatedAt: 0 });
+    render(<ComicReader project={many()} {...props()} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Page flip/ }));
+    expect(screen.getByTestId('flip-page')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Scroll$/ })).toBeInTheDocument();
   });
 });
