@@ -89,6 +89,11 @@ export interface QaParams {
    * For pictures of the studio that strangers see (the comics landing); null: the fixture's own lines.
    */
   script: 'paper-boat' | null;
+  /**
+   * `byok=1`: the person draws on their own key (caps.byok), so money shows in dollars and the header's wallet is the
+   * wider "$0.42" chip (the breadcrumb's room on a phone, workspace.navigation.spec.ts). Default: platform usage.
+   */
+  byok: boolean;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
@@ -120,7 +125,8 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     live: q.get('share') === 'live' ? 'unlisted' : q.get('share') === 'live-public' ? 'public' : null,
     history: q.get('history') === '1',
     variants: q.get('variants') !== '0',
-    script: q.get('script') === 'paper-boat' ? 'paper-boat' : null
+    script: q.get('script') === 'paper-boat' ? 'paper-boat' : null,
+    byok: q.get('byok') === '1'
   };
 };
 
@@ -297,6 +303,7 @@ export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
   // "switched off" note). Absent both, the scene names no caps: DEFAULT_CAPS, as before.
   const caps: Partial<StudioCaps> = {
     ...(p.history ? { history: true } : {}),
+    ...(p.byok ? { byok: true } : {}),
     ...(p.state === 'conflict' ? { liveAgent: { ...(DEFAULT_CAPS.liveAgent ?? { queue: false, steer: false }), conflicts: true } } : {})
   };
   return {

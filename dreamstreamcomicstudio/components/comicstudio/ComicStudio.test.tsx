@@ -36,6 +36,8 @@ import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
 import { labelInName } from './mobile/testing/labelInName';
+import type { Project } from '../../types';
+import { resetPanelPreferenceForTests } from './panel/panelPreference';
 
 const mount = (studio: FakeStudio, onBack = vi.fn()) => {
   state.studio = studio;
@@ -66,9 +68,22 @@ const mountAt = (ff: FormFactor, studio: FakeStudio, onBack = vi.fn()) => {
 
 const pane = (id: 'chat' | 'board') => document.querySelector(`[data-pane="${id}"]`) as HTMLElement;
 
+/** App's side-panel links, as App passes them (one other comic in the list). */
+const panelLinks = () => ({
+  projects: [{ id: 'other', name: 'Recent comic', createdAt: 1, updatedAt: Date.now(), state: { studioVersion: 4 } } as unknown as Project],
+  onNewComic: vi.fn(),
+  onImages: vi.fn(),
+  onChat: vi.fn(),
+  onAllComics: vi.fn(),
+  onLibrary: vi.fn(),
+  onOpenProject: vi.fn(),
+  onOpenStudioWork: vi.fn()
+});
+
 beforeEach(() => {
   state.wide = true;
   window.localStorage.clear();
+  resetPanelPreferenceForTests();
   resetBackStack();
 });
 
@@ -77,33 +92,60 @@ beforeEach(() => showDollarPrices());
 afterEach(() => resetUsageStatus());
 
 describe('ComicStudio shell', () => {
-  it('expanding navigation preserves the conversation draft and exposes the supplied project links', () => {
+  it('the side panel is open by default on a wide desktop; collapsing to the rail keeps the draft and the choice, and Open chat is there', () => {
     const studio = makeFakeStudio();
-    render(<FormFactorProvider value={DESK}><ComicStudioShell studio={studio} onBack={vi.fn()} navigationFooter={<button type="button">Recent comic</button>} /></FormFactorProvider>);
+    const links = panelLinks();
+    render(<FormFactorProvider value={DESK}><ComicStudioShell studio={studio} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
     const composer = screen.getByRole('textbox', { name: 'Message the Comic Director' });
     fireEvent.change(composer, { target: { value: 'Keep this draft' } });
-    expect(screen.queryByRole('button', { name: 'Recent comic' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Expand project navigation' }));
-    expect(screen.getByRole('button', { name: 'Recent comic' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    expect(nav).toHaveAttribute('data-comic-panel', 'open');
+    // App's destinations are in the studio too, Chat among them (App passes onChat).
+    fireEvent.click(within(nav).getByRole('button', { name: 'Chat' }));
+    expect(links.onChat).toHaveBeenCalledTimes(1);
+    expect(within(nav).getByRole('link', { name: /^Recent comic/ })).toBeInTheDocument();
+    fireEvent.click(within(nav).getByRole('treeitem', { name: 'Story' }));
     expect(studio.setTab).toHaveBeenCalledWith('story');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse project navigation' }));
+    expect(screen.getByRole('navigation', { name: 'Project navigation' })).toHaveAttribute('data-comic-panel', 'rail');
+    expect(screen.queryByRole('link', { name: /^Recent comic/ })).not.toBeInTheDocument();
     expect(composer).toHaveValue('Keep this draft');
-    expect(window.localStorage.getItem('cs.workspace.navigation.expanded')).toBe('false');
+    expect(window.localStorage.getItem('dreamstream.comic-panel')).toBe('closed');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand project navigation' }));
+    expect(window.localStorage.getItem('dreamstream.comic-panel')).toBe('open');
+  });
+
+  it('below a wide desktop the panel starts as the slim rail, with the board tabs and Ask the Director', () => {
+    render(<FormFactorProvider value={LAPTOP}><ComicStudioShell studio={makeFakeStudio()} onBack={vi.fn()} panel={panelLinks()} /></FormFactorProvider>);
+    const rail = screen.getByRole('navigation', { name: 'Project navigation' });
+    expect(rail).toHaveAttribute('data-comic-panel', 'rail');
+    expect(within(rail).getByRole('tab', { name: 'Pages' })).toHaveAttribute('title', 'Pages');
+    expect(within(rail).getByRole('button', { name: 'Ask the Director' })).toBeInTheDocument();
+    expect(within(rail).getByRole('button', { name: 'Back to My comics' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand project navigation' })).toHaveAttribute('aria-controls', rail.id);
   });
 
   it('phone navigation includes project links and closes after choosing a stage', async () => {
     const studio = makeFakeStudio();
-    render(<FormFactorProvider value={PHONE}><ComicStudioShell studio={studio} onBack={vi.fn()} navigationFooter={<button type="button">Recent comic</button>} /></FormFactorProvider>);
+    render(<FormFactorProvider value={PHONE}><ComicStudioShell studio={studio} onBack={vi.fn()} panel={panelLinks()} /></FormFactorProvider>);
     const toggle = screen.getByRole('button', { name: 'Open project navigation' });
     fireEvent.click(toggle);
     const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
-    expect(within(drawer).getByRole('button', { name: 'Recent comic' })).toBeInTheDocument();
-    fireEvent.click(within(drawer).getByRole('tab', { name: 'Story' }));
+    expect(within(drawer).getByRole('link', { name: /^Recent comic/ })).toBeInTheDocument();
+    fireEvent.click(within(drawer).getByRole('treeitem', { name: 'Story' }));
     expect(studio.setTab).toHaveBeenCalledWith('story');
     expect(pane('board')).not.toHaveAttribute('inert');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Project navigation' })).not.toBeInTheDocument());
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('the phone drawer closes before it leaves for another comic or destination', async () => {
+    const links = panelLinks();
+    render(<FormFactorProvider value={PHONE}><ComicStudioShell studio={makeFakeStudio()} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open project navigation' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Project navigation' })).getByRole('button', { name: 'New comic' }));
+    expect(links.onNewComic).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Project navigation' })).not.toBeInTheDocument());
   });
 
   it('passes the project-scoped initial idea to the real composer without sending', async () => {

@@ -46,6 +46,7 @@ import { useCostFormat, type CostFormat } from './costFormat';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { keepRefusedInComposer } from '../conversation/composerBus';
 import { proEditorV2On } from '../../../shared/comic/capabilities';
+import { COVER_CARD_ID, pageCardId } from './cardIds';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -246,6 +247,7 @@ export const PageCard: React.FC<{
   return (
     <Surface
       as="article"
+      id={pageCardId(page.id)}
       aria-label={`Page ${page.n}`}
       data-testid="page-card"
       data-status={status}
@@ -418,6 +420,7 @@ export const CoverCard: React.FC<{
   return (
     <Surface
       as="article"
+      id={COVER_CARD_ID}
       aria-label="Cover"
       data-testid="cover-card"
       data-status={status}

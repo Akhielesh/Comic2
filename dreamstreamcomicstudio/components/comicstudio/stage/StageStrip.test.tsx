@@ -1,8 +1,9 @@
 // The studio's stage strip (SH-A): five ink-only steps that navigate, one status line with the next step, keyboard use,
-// screen-reader names, and phone widths (360 and 320: one 44 px row, 16 px gutters, 44 px touch targets). Synthetic docs only.
+// screen-reader names, and phone widths (360 and 320: one 44 px row, 16 px gutters, 44 px touch targets, the marks the one
+// way into the stage map). Synthetic docs only.
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createEmptyDoc, type AssetRef, type ComicDoc, type Page, type RenderState } from '../../../shared/comic/doc';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import type { FormFactor } from '../mobile/formFactor';
@@ -142,7 +143,9 @@ describe('StageStrip', () => {
   it('keyboard: every step and the next step are native buttons in reading order; arrows, Home and End move along the steps', () => {
     mount(drawing(6));
     const buttons = within(strip()).getAllByRole('button');
-    expect(buttons.map((b) => b.tagName)).toEqual(Array(6).fill('BUTTON'));
+    // The five steps, the next step, and the stage map (SH-C2) last.
+    expect(buttons.map((b) => b.tagName)).toEqual(Array(7).fill('BUTTON'));
+    expect(buttons[6]).toHaveAccessibleName('Stage map');
     for (const b of buttons) {
       expect(b).toHaveAttribute('type', 'button');
       expect(b.tabIndex).toBe(0);
@@ -182,6 +185,7 @@ describe('StageStrip', () => {
     mount(doc, PHONE);
     fireEvent.click(screen.getByRole('button', { name: /^Stages:/ }));
     expect(strip().outerHTML).not.toMatch(ink);
+    expect(screen.getByRole('list', { name: 'Stage map' }).outerHTML).not.toMatch(ink);
   });
 
   it('desktop: one row, 12 px side padding to match the header', () => {
@@ -211,35 +215,40 @@ describe('StageStrip', () => {
     expect(onGo).toHaveBeenLastCalledWith('pages');
   });
 
-  it('phone 360: the stage button opens the five named stages; choosing one goes there and closes them', () => {
+  it('phone 360: the marks are the one way into the stage map; choosing a stage goes there and closes it', async () => {
     const { onGo } = mount(drawing(6), PHONE);
+    // One control for the stages: no second map button beside the marks, no row of named stages.
+    expect(within(strip()).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Stages: Draw, 3 of 5 done',
+      'Drawing · 6 of 12 pages drawn · Next: draw the rest'
+    ]);
     const toggle = screen.getByRole('button', { name: /^Stages:/ });
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const list = within(strip()).getByRole('list');
-    expect(toggle).toHaveAttribute('aria-controls', list.id);
-    expect(list.className).toContain('w-full');
-    for (const b of steps()) {
-      expect(b.className).toContain('coarse:h-11');
-      expect(b.className).toContain('min-w-11');
-    }
-    expect(steps().map((b) => b.textContent)).toEqual(['Story, done', 'Style, done', 'Plan, done', 'Draw', 'Publish']);
-    fireEvent.click(screen.getByRole('button', { name: 'Style, done' }));
-    expect(onGo).toHaveBeenLastCalledWith('style');
-    expect(within(strip()).queryByRole('list')).toBeNull();
-    expect(toggle).toHaveFocus();
-    // Escape closes the list too, back on the stage button.
-    fireEvent.click(toggle);
-    fireEvent.keyDown(steps()[0], { key: 'Escape' });
-    expect(within(strip()).queryByRole('list')).toBeNull();
-    expect(toggle).toHaveFocus();
-    // …and with focus still on the stage button that opened it.
+    expect(toggle).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(toggle).toHaveAttribute('title', 'Stage map');
     toggle.focus();
     fireEvent.click(toggle);
-    expect(within(strip()).getByRole('list')).toBeTruthy();
-    fireEvent.keyDown(toggle, { key: 'Escape' });
-    expect(within(strip()).queryByRole('list')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const sheet = screen.getByRole('dialog', { name: 'Stage map' });
+    // Every stage by name, what is left in it, and a way there; it opens on the next step.
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.querySelector('p')?.textContent)).toEqual([
+      'Story · Done',
+      'Style · Done',
+      'Plan · Done',
+      'Draw · Now',
+      'Publish · Next'
+    ]);
+    await waitFor(() => expect(within(sheet).getByRole('button', { name: 'Draw the rest' })).toHaveFocus());
+    for (const b of within(sheet).getAllByRole('button', { name: /^(Open|Draw)/ })) expect(b.className).toContain('coarse:h-11');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Open Style' }));
+    expect(onGo).toHaveBeenLastCalledWith('style');
+    expect(screen.queryByRole('dialog', { name: 'Stage map' })).toBeNull();
+    expect(toggle).toHaveFocus();
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // Escape closes it too, back on the marks.
+    fireEvent.click(toggle);
+    await waitFor(() => expect(within(screen.getByRole('dialog', { name: 'Stage map' })).getByRole('button', { name: 'Draw the rest' })).toHaveFocus());
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Stage map' })).toBeNull();
     expect(toggle).toHaveFocus();
     expect(onGo).toHaveBeenCalledTimes(1);
   });
@@ -255,16 +264,13 @@ describe('StageStrip', () => {
     for (const mark of marks) expect(mark.innerHTML).not.toMatch(/bg-\[/);
   });
 
-  it('phone 320: a done stage shows only its check, and keeps its name for screen readers and as a tooltip', () => {
+  it('phone 320: the map names every stage, done ones included, with the current one as the step', () => {
     mount(drawing(12), SMALL_PHONE);
     fireEvent.click(screen.getByRole('button', { name: 'Stages: Publish, 4 of 5 done' }));
-    const [story, , , draw, publish] = steps();
-    expect(story).toHaveAccessibleName('Story, done');
-    expect(story).toHaveAttribute('title', 'Story');
-    expect(within(story).getByText('Story').className).toBe('sr-only');
-    expect(draw).toHaveAccessibleName('Draw, done');
-    expect(within(publish).getByText('Publish').className).not.toBe('sr-only');
-    expect(publish).toHaveAttribute('aria-current', 'step');
+    const rows = within(screen.getByRole('list', { name: 'Stage map' })).getAllByRole('listitem');
+    expect(rows.map((r) => r.querySelector('p')?.textContent)).toEqual(['Story · Done', 'Style · Done', 'Plan · Done', 'Draw · Done', 'Publish · Now']);
+    expect(rows[4]).toHaveAttribute('aria-current', 'step');
+    for (const row of rows) expect(row.querySelector('.sr-only')).toBeNull();
   });
 
   it('a book-posture foldable keeps the strip on the first screen', () => {

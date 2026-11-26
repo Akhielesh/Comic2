@@ -28,7 +28,7 @@ import { Skeleton } from '../../ds/Skeleton';
 import { CHIP, CLIP_TEXT, LIFT, MUTED, WRAP_TEXT } from '../../chat/studioDesign';
 import { COMIC_STAGES, type StageView } from '../../../shared/comic/stage';
 import { EmptyArt } from '../library/procedural/EmptyArt';
-import { StageMark } from '../stage/StageStrip';
+import { StageMark } from '../stage/stageMarks';
 import { coverCandidates, PROJECT_NAME_MAX, type MyComicCardModel, type MyComicNext } from './homeModel';
 import type { TaskDestination } from './workspaceTaskTarget';
 

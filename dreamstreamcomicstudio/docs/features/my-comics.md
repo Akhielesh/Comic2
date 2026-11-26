@@ -15,16 +15,16 @@ spends.
   `comic_docs` select of `project_id,listing` (`STAGE_SELECT`), the owner's rows, newest first, paged 200 at a time
   until they run out. `listing` (`server/sql/comic_docs_listing.sql`) is a small copy, kept in step with `doc` by a
   trigger on every write, of the saved summary `doc->workspaceActivity` and the gate, plan, draft and last-card scalars
-  the AI activity feed reads for comics saved before summaries existed. **The read never touches `doc`**: any path into a
+  the side panel's Your comics reads for comics saved before summaries existed. **The read never touches `doc`**: any path into a
   stored doc (up to several MB) makes Postgres fetch and decompress the whole doc, once per path, and this read covers
   every comic of the account. Until the SQL file is applied the select fails with `42703` and the read falls back to the
   same values as scalar paths into `doc` (`STAGE_DOC_SELECT`); any other failure is just a failed read. Rows go through
-  the feed's own `comicActivityRow`, so a card's "Needs you" is the feed's, and a stage is kept only when
+  the side panel's own `comicActivityRow`, so a card's "Needs you" is the panel's, and a stage is kept only when
   `readStageFacts` validates it (`docs/features/comic-stages.md` §4).
 - **When it runs** (`components/comicstudio/home/useComicStages.ts`): when the view opens, again each time the list
   reloads (back from the studio, a new comic), and after a run in this tab settles (studioStreams'
-  `WORK_CHANGED_EVENT`, for this account, 700 ms after the last one, the moment the AI activity feed beside the grid
-  reads again; a run that settles while the tab is hidden is read when it shows again). Never on a timer, never per
+  `WORK_CHANGED_EVENT`, for this account, 700 ms after the last one, the moment the side panel's Your comics beside the
+  grid reads again; a run that settles while the tab is hidden is read when it shows again). Never on a timer, never per
   card. The last answer stays while a new one runs, and the tab remembers it per account: coming back from a comic
   paints the cards at once, in their known order, and reads again behind them (a comic with no row yet shows the
   placeholder stage line until the read lands). A read that has not answered in 12 s is aborted, and a failed read
@@ -40,7 +40,7 @@ Each card has the cover, the title, the stage, one status line, the next step, R
 
 | Comic | Stage row | Status line | Next step | Read |
 | --- | --- | --- | --- | --- |
-| Studio, stage saved | five ink marks (StageStrip's `StageMark`) + the stage word ("Drawing", "Ready to publish", "Publishing paused", "Published") | the stage's progress · edited … ("6 of 12 pages drawn · edited 2 hours ago") | `Next: <step>` (the strip's words), opening where it is worked | when a page is drawn (`drawn > 0`: a withheld picture never counts) |
+| Studio, stage saved | five ink marks (`StageMark`, `stage/stageMarks.tsx`) + the stage word ("Drawing", "Ready to publish", "Publishing paused", "Published") | the stage's progress · edited … ("6 of 12 pages drawn · edited 2 hours ago") | `Next: <step>` (the strip's words), opening where it is worked | when a page is drawn (`drawn > 0`: a withheld picture never counts) |
 | Studio, a question waiting, or a page whose drawing failed | as above | as above | `Next: answer the Director` (the conversation) or `Next: review the drawing problem` (the Pages tab), unless the stage itself is waiting (an approval, the Director planning, a draft to resume) or already says it ("Review 2 failed pages"). A failed page is read from the stage's counts, in Draw or Publish only: a page with no picture whose drawing failed, or a standing picture that is neither current nor out of date while nothing draws (its redraw failed). The summary's `render_failed` alone says only that *some* render failed (a look, the cover, a cast sheet: a failed look stays failed after another is picked), so with no failed page the stage's own step stays (a published comic keeps Read; a new one keeps "Tell the Director your idea"), and the card still says Needs you | as above |
 | Studio, every stage done | marks + "Published" | as above | none: Read is the next step (outline, the only button) | yes |
 | Studio, saved before stages or unreadable | "Open to see" | the row's counts ("3 of 10 pages drawn", "All 4 pages drawn", "No pages planned yet", "Published") | what waits, if the activity data says ("Next: review the estimate"); a render that failed keeps its words but opens the comic as it was left (nothing says where it failed); else `Open` | the row's `studioRendered > 0` |

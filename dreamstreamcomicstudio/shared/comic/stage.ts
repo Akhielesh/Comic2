@@ -139,6 +139,33 @@ const pagePicture = (render: RenderState | undefined): PagePicture => {
 const plannedPage = (page: Page | undefined): boolean => list(page?.panels).length > 0 || !!page?.render?.asset;
 
 /**
+ * Where one picture stands, as the stage counts it: `current` is the board's "ready" (the "6" of "6 of 12 pages drawn");
+ * `out_of_date`, `redrawing` (a redraw in flight) and `redraw_failed` keep an earlier picture the owner can be served, so
+ * they count as drawn but not current; `drawing`, `withheld` and `failed` have no picture to show; `planned` and `empty`
+ * were never drawn. The side panel's parts tree reads it per page, so its drawn pages are exactly the strip's count.
+ */
+export type PictureStanding = 'current' | 'out_of_date' | 'redrawing' | 'redraw_failed' | 'drawing' | 'withheld' | 'failed' | 'planned' | 'empty';
+
+/** A picture's standing. `outOfDate`: its script changed since it was drawn (pages: isPageStale); `planned`: it has a plan. */
+export const pictureStanding = (render: RenderState | undefined, outOfDate = false, planned = false): PictureStanding => {
+  const picture = pagePicture(render);
+  if (picture === 'drawn') {
+    const status = render?.status;
+    if (status === 'stale' || (status === 'ready' && outOfDate)) return 'out_of_date';
+    if (status === 'ready') return 'current';
+    return status === 'failed' ? 'redraw_failed' : 'redrawing';
+  }
+  if (picture !== 'none') return picture;
+  return planned ? 'planned' : 'empty';
+};
+
+/** One page's standing (older pages without panels or a render read as far as their fields go). */
+export const pageStanding = (doc: ComicDoc, page: Page): PictureStanding => {
+  const ready = page?.render?.status === 'ready';
+  return pictureStanding(page?.render, ready && isPageStale(doc, page), plannedPage(page));
+};
+
+/**
  * The live publication is behind the studio: a page or the cover was drawn after the last publish. One rule for the
  * strip's "Publish your changes" and the Director's "Update the published version" chip (server/src/comic/jobs.ts).
  */
@@ -170,16 +197,15 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
   let failed = 0;
   for (const page of pages) {
     if (plannedPage(page)) planned += 1;
-    const picture = pagePicture(page?.render);
-    if (picture === 'drawn') {
+    // The board's "ready" (boardModel pageVisualStatus) is current: ready and matching its script; stale is out of date.
+    const standing = pageStanding(doc, page);
+    if (standing === 'current' || standing === 'out_of_date' || standing === 'redrawing' || standing === 'redraw_failed') {
       drawn += 1;
-      // The board's "ready" (boardModel pageVisualStatus): ready and matching its script; stale is out of date.
-      const status = page.render.status;
-      if (status === 'stale' || (status === 'ready' && isPageStale(doc, page))) outOfDate += 1;
-      else if (status === 'ready') current += 1;
-    } else if (picture === 'drawing') drawing += 1;
-    else if (picture === 'withheld') withheld += 1;
-    else if (picture === 'failed') failed += 1;
+      if (standing === 'current') current += 1;
+      else if (standing === 'out_of_date') outOfDate += 1;
+    } else if (standing === 'drawing') drawing += 1;
+    else if (standing === 'withheld') withheld += 1;
+    else if (standing === 'failed') failed += 1;
   }
   const looks = list(doc?.style?.options).filter((o) => progressState(o?.render) === 'drawn').length;
   const attempted = drawn + drawing + withheld + failed > 0;

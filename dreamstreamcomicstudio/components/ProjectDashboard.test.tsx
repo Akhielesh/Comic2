@@ -202,12 +202,12 @@ describe('Comic Studio idea workspace', () => {
     const script = 'A long scene. '.repeat(12000);
     fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: script } });
     expect(storageWrite).not.toHaveBeenCalledWith(expect.stringContaining('comicstudio.new-idea.'), expect.anything());
-    fireEvent.click(screen.getByRole('button', { name: 'Spice Market' }));
+    fireEvent.click(screen.getByRole('link', { name: /^Spice Market/ }));
     expect(first.props.onOpenProject).toHaveBeenCalledWith('studio-1');
     first.unmount();
     const second = renderDashboard([studioProject()], options);
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
-    fireEvent.click(screen.getByRole('button', { name: 'All comics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My comics' }));
     fireEvent.click(screen.getByRole('button', { name: 'New comic' }));
     expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
     fireEvent(window, new Event('pagehide'));
@@ -246,9 +246,9 @@ describe('Comic Studio idea workspace', () => {
     const props = { projects: [], ...options, onCreateProject: vi.fn(), onOpenProject: vi.fn(), onDeleteProject: vi.fn(), onDuplicateProject: vi.fn(), onReadProject: vi.fn(), onUpdateProject: vi.fn() };
     render(<FormFactorProvider value={formFactorFor({ w: 320, h: 568, coarse: true })}><ProjectDashboard {...props} /></FormFactorProvider>);
     expect(screen.getByLabelText('Your comic idea or script')).not.toHaveFocus();
-    const opener = screen.getByRole('button', { name: 'Open comic navigation' });
+    const opener = screen.getByRole('button', { name: 'Open project navigation' });
     opener.focus(); fireEvent.click(opener);
-    expect(screen.getByRole('dialog', { name: 'Comic navigation' })).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Project navigation' })).toBeVisible();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(opener).toHaveFocus();

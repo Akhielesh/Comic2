@@ -82,13 +82,15 @@ describe('the studio stage strip', () => {
     const studio = makeFakeStudio();
     mountAt(PHONE, studio);
     toBoard();
+    // The marks open the stage map (a bottom sheet); each stage there has a way to its place.
     const stages = within(strip()).getByRole('button', { name: /^Stages:/ });
     fireEvent.click(stages);
-    fireEvent.click(within(strip()).getByRole('button', { name: /^Style/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stage map' })).getByRole('button', { name: 'Open Style' }));
     expect(studio.setTab).toHaveBeenLastCalledWith('style');
+    expect(screen.queryByRole('dialog', { name: 'Stage map' })).toBeNull();
     expect(pane('board')).not.toHaveAttribute('inert');
     fireEvent.click(within(strip()).getByRole('button', { name: /^Stages:/ }));
-    fireEvent.click(within(strip()).getByRole('button', { name: /^Publish/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stage map' })).getByRole('button', { name: 'Open Read' }));
     expect(studio.setTab).toHaveBeenLastCalledWith('read');
     expect(studio.act).not.toHaveBeenCalled();
     expect(studio.send).not.toHaveBeenCalled();
@@ -158,12 +160,55 @@ describe('the studio stage strip', () => {
     expect(studio.send).not.toHaveBeenCalled();
   });
 
-  it('the navigation’s list is labelled as the board it is, not as stages', () => {
-    mountAt(DESK, makeFakeStudio());
-    fireEvent.click(screen.getByRole('button', { name: 'Expand project navigation' }));
+  it('the side panel’s own section says the same as the strip, and its next step only opens the place', () => {
+    const studio = makeFakeStudio({ doc: awaitingApproval() });
+    mountAt(DESK, studio);
     const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    const section = within(nav).getByRole('group', { name: 'This comic' });
+    const card = within(pane('chat')).getByRole('region', { name: 'Spend approval' });
+    card.scrollIntoView = vi.fn();
+    const next = within(section).getByRole('button', { name: 'Style · Not chosen yet · Next: review the estimate' });
+    expect(next).toHaveAccessibleDescription('Shows the approval in the conversation');
+    fireEvent.click(next);
+    expect(card).toHaveFocus();
+    expect(studio.act).not.toHaveBeenCalled();
+    expect(studio.send).not.toHaveBeenCalled();
+    // Where you are: My comics, then this comic, which looks current; the header's breadcrumb (SH-C2) is the document's
+    // one current page, so a screen reader hears it once.
+    const here = within(nav).getByRole('list', { name: 'Where you are' });
+    expect(within(here).getByRole('button', { name: 'Back to My comics' })).toBeInTheDocument();
+    expect(within(here).getByText('Night ferry').closest('li')).not.toHaveAttribute('aria-current');
+    expect(document.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('button', { name: 'Story' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('in Your comics the open comic follows its live doc: under Needs you while the estimate waits, In progress once it draws', () => {
+    const links = { projects: [], onNewComic: vi.fn(), onAllComics: vi.fn(), onLibrary: vi.fn(), onOpenProject: vi.fn(), onOpenStudioWork: vi.fn() };
+    const doc = awaitingApproval();
+    const view = render(<FormFactorProvider value={DESK}><ComicStudioShell studio={makeFakeStudio({ doc })} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
+    const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    const row = within(within(nav).getByRole('list', { name: 'Needs you' })).getByRole('link', { name: /^Night ferry · Review drawing estimate/ });
+    // The header's breadcrumb is the document's one current-page mark; the comic's own row only looks current.
+    expect(row).not.toHaveAttribute('aria-current');
+    expect(row).toHaveAttribute('data-panel-current', 'true');
+    expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' }).querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    // Approved: the looks are drawing. No refetch has run, and the row moves with the doc.
+    const drawing: ComicDoc = { ...doc, gate: { ...doc.gate!, status: 'approved' }, style: { ...doc.style, options: [{ id: 'o1', name: 'Ink', spec: 'ink', render: { status: 'rendering', history: [] } }] } };
+    view.rerender(<FormFactorProvider value={DESK}><ComicStudioShell studio={makeFakeStudio({ doc: drawing })} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
+    expect(within(nav).queryByRole('list', { name: 'Needs you' })).toBeNull();
+    expect(within(within(nav).getByRole('list', { name: 'In progress' })).getByRole('link', { name: /^Night ferry/ })).toBeInTheDocument();
+  });
+
+  it('the navigation’s list is labelled as the board it is, not as stages', () => {
+    // A wide desktop opens the side panel by default (SH-C1); the comic's own section holds the board.
+    mountAt(DESK, makeFakeStudio());
+    const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    expect(nav).toHaveAttribute('data-comic-panel', 'open');
     expect(within(nav).queryByText('Project stages')).toBeNull();
     expect(within(nav).getByText('Board')).toBeInTheDocument();
-    expect(within(nav).getByRole('tablist', { name: 'Board' })).toBeInTheDocument();
+    // The board's tabs grew into the comic's parts (SH-C2): the tree keeps the board's name.
+    expect(within(nav).getByRole('tree', { name: 'Board' })).toBeInTheDocument();
   });
 });

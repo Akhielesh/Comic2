@@ -72,7 +72,7 @@ import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
 import { renderingPageCount } from './studioReducer';
 import { useStudio, type ComicStudioController } from './useStudio';
-import type { BoardTab } from './types';
+import type { BoardTab, StudioTab } from './types';
 import { BUILTIN_HEADER_ORDER, registeredHeaderSlots, type HeaderSlotRegistration } from './features';
 import { headerVariantFor, isPhoneLayout, showsPaneSwitcher, type FormFactor, type HeaderVariant } from './mobile/formFactor';
 import { useFormFactor } from './mobile/useFormFactor';
@@ -86,7 +86,14 @@ import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
 import { SideSheet } from './mobile/sheets/SideSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
 import { phoneChromeVars } from './mobile/shell/phoneChrome';
-import { WorkspaceNavigation, WORKSPACE_NAVIGATION_ID, WORKSPACE_NAVIGATION_KEY, readNavigationExpanded } from './mobile/shell/WorkspaceNavigation';
+import { ComicSidePanel, PANEL_ID, PANEL_LABEL, type ComicPanelLinks } from './panel/ComicSidePanel';
+import { ComicSection } from './panel/ComicSection';
+import { usePanelOpen } from './panel/panelPreference';
+import { revealBoardTop, revealPart, useBoardPartTracker } from './board/boardPart';
+import { partLabelOf, partTab, type BoardPart } from './panel/partsModel';
+import { boardTabsFor } from './board/boardNavigation';
+import { LiveStudioBreadcrumb, type StudioTrail, type StudioTrailSource } from './breadcrumb/StudioBreadcrumb';
+import { BREADCRUMB_TRAIL_MIN_WIDTH } from './breadcrumb/breadcrumbModel';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -97,7 +104,8 @@ import { recentLabel } from './insights/copy';
 import { spendSummary } from './insights/insightsModel';
 import { SpendByKindList } from './insights/OverviewTab';
 import { StageStrip } from './stage/StageStrip';
-import type { StagePlace } from '../../shared/comic/stage';
+import { stageFacts, type StagePlace } from '../../shared/comic/stage';
+import { summarizeComicWork } from '../../shared/comic/workspaceActivity';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -112,49 +120,6 @@ export { HEADER_QUALITY_CHIP_BELOW } from './qualityHome';
 export const READER_REFRESH_MS = 30_000;
 
 // ── Header pieces ────────────────────────────────────────────────────────────
-
-const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }> = ({ title, onCommit }) => {
-  const [draft, setDraft] = useState(title);
-  const editing = useRef(false);
-  useEffect(() => {
-    if (!editing.current) setDraft(title);
-  }, [title]);
-  const commit = () => {
-    editing.current = false;
-    const next = draft.trim().slice(0, 200);
-    if (!next) {
-      setDraft(title);
-      return;
-    }
-    if (next !== title) onCommit(next);
-  };
-  return (
-    <input
-      value={draft}
-      onFocus={() => (editing.current = true)}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-          e.preventDefault();
-          (e.target as HTMLInputElement).blur();
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          editing.current = false;
-          setDraft(title);
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      aria-label="Comic title"
-      title={draft}
-      maxLength={200}
-      spellCheck={false}
-      enterKeyHint="done"
-      // 16 px on touch so focusing the title never zooms the page (iOS); ellipsis when it doesn't fit.
-      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px] coarse:text-base`}
-    />
-  );
-};
 
 /** Spend kind names — one vocabulary for every Spending view (the board's, the breakdown card's, this sheet's). */
 export const SPEND_KIND_LABELS: Record<SpendKind, string> = SPEND_KIND_LABEL;
@@ -323,6 +288,8 @@ export interface StudioHeaderProps {
    */
   ask?: { busy: boolean; onAsk: () => void; onViewChat: () => void };
   navigation?: { expanded: boolean; overlay: boolean; onToggle: () => void; buttonRef: React.RefObject<HTMLButtonElement | null> };
+  /** The breadcrumb past the comic's name: the board's area and the part you are on (StudioBreadcrumb). */
+  trail?: StudioTrailSource;
 }
 
 /**
@@ -332,7 +299,7 @@ export interface StudioHeaderProps {
  *  - regular  1024+: compact desktop header with pane switcher, quality in the composer and ⋯
  * Read (icon-only below regular) shows only while the board is out of sight and a page is drawn.
  */
-export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask, navigation }) => {
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask, navigation, trail }) => {
   const [open, setOpen] = useState<HeaderSheet>(null);
   const variant: HeaderVariant = headerVariantFor(ff);
   const compact = variant !== 'regular';
@@ -470,7 +437,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const lead = (
     <>
       {navigation ? (
-        <button ref={navigation.buttonRef} type="button" onClick={navigation.onToggle} aria-label={navigation.overlay ? 'Open project navigation' : navigation.expanded ? 'Collapse project navigation' : 'Expand project navigation'} title="Project navigation" aria-expanded={navigation.expanded} aria-controls={!navigation.overlay || navigation.expanded ? WORKSPACE_NAVIGATION_ID : undefined} aria-haspopup={navigation.overlay ? 'dialog' : undefined} className={`grid h-11 w-11 shrink-0 place-items-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}>
+        <button ref={navigation.buttonRef} type="button" onClick={navigation.onToggle} aria-label={navigation.overlay ? 'Open project navigation' : navigation.expanded ? 'Collapse project navigation' : 'Expand project navigation'} title="Project navigation" aria-expanded={navigation.expanded} aria-controls={!navigation.overlay || navigation.expanded ? PANEL_ID : undefined} aria-haspopup={navigation.overlay ? 'dialog' : undefined} className={`grid h-11 w-11 shrink-0 place-items-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}>
           <PanelLeft className="h-[18px] w-[18px]" aria-hidden />
         </button>
       ) : showBack && (
@@ -478,7 +445,15 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
-      <TitleField title={doc.brief.title || 'Untitled comic'} onCommit={(title) => void studio.patch([{ op: 'brief', patch: { title } }])} />
+      {/* My comics › the comic (its name field) › the board's area › the part you are on. */}
+      <LiveStudioBreadcrumb
+        title={doc.brief.title || 'Untitled comic'}
+        onRename={(title) => void studio.patch([{ op: 'brief', patch: { title } }])}
+        onMyComics={navigation ? onBack : undefined}
+        // A phone held upright has room for the name only; held sideways, the name and the trail.
+        room={variant === 'regular' ? 'wide' : phone && ff.width < BREADCRUMB_TRAIL_MIN_WIDTH ? 'narrow' : 'medium'}
+        trail={trail}
+      />
     </>
   );
   const switcher = showsPaneSwitcher(ff) ? <PaneSwitcher value={paneMode} onChange={onPaneMode} className="shrink-0" /> : null;
@@ -976,26 +951,26 @@ const KeyboardInsetMount: React.FC = () => {
 
 interface WorkspaceProps {
   onBack: () => void;
-  navigationFooter?: React.ReactNode;
+  /** App's destinations and the comic list for the side panel (without them it shows this comic's own sections). */
+  panel?: ComicPanelLinks;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
 }
 
-export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, panel, initialIdea, onInitialIdeaConsumed }) => {
   const ff = useFormFactor();
   useComicThemeScope(!isComicsHost());
   useThemeColor();
+  const { user } = useAuth();
   const phone = isPhoneLayout(ff.layout);
   const navigationOverlay = phone || ff.width < 1024 || ff.layout === 'dual-screen';
-  const [navigationExpanded, setNavigationExpanded] = useState(readNavigationExpanded);
+  // The side panel, docked from 1024 px: open by default on a wide desktop, the viewer's choice remembered (panelPreference.ts).
+  const [navigationExpanded, setNavigationExpanded] = usePanelOpen(user?.id, ff.width);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationButton = useRef<HTMLButtonElement | null>(null);
   const toggleNavigation = () => {
     if (navigationOverlay) setNavigationOpen((open) => !open);
-    else setNavigationExpanded((expanded) => {
-      try { window.localStorage.setItem(WORKSPACE_NAVIGATION_KEY, String(!expanded)); } catch { /* private storage */ }
-      return !expanded;
-    });
+    else setNavigationExpanded(!navigationExpanded);
   };
   useEffect(() => { setNavigationOpen(false); }, [navigationOverlay]);
   useEffect(() => {
@@ -1014,7 +989,16 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const conversationApi = useRef<ConversationRevealHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
-  const { user } = useAuth();
+  // The card the person is on in the board (a character, a page, the cover): the parts tree's current row and the
+  // breadcrumb's last crumb. Kept in a store the shell never reads, so moving between cards re-renders only those two.
+  const partStore = useBoardPartTracker();
+  const behind = studio.publication?.behind;
+  // Where the comic stands, for the panel's own section and its row in Your comics (the strip reads the same facts).
+  const facts = useMemo(() => (doc ? stageFacts(doc, { behind }) : null), [doc, behind]);
+  // Whether this comic needs the person or is working, from the live doc (what the server saves), for its row in Your
+  // comics: the saved rows lag a whole drawing run. Only while the list shows (the panel open, or its drawer).
+  const listShown = !!panel && (navigationOverlay ? navigationOpen : navigationExpanded);
+  const summary = useMemo(() => (listShown && doc ? summarizeComicWork(doc) : null), [listShown, doc]);
 
   // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
   useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
@@ -1179,13 +1163,117 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   };
   // From 768 px a row under the header; on a phone, the top of the board's panel (it scrolls away with the work and
   // adds no fixed chrome: the conversation keeps its room, and its activity line already reports drawing).
-  const stageStrip = <StageStrip doc={doc} behind={studio.publication?.behind} onGo={goToStage} />;
+  const stageStrip = <StageStrip doc={doc} behind={behind} onGo={goToStage} />;
+
+  // A part of the comic (the parts tree, the breadcrumb): a page opens in the page editor; a character's card or the
+  // cover's comes into view in its tab, with focus on it. Only navigates.
+  const openPart = (target: BoardPart) => {
+    if (target.kind === 'page') {
+      openPage(target.id);
+      showBoard();
+      return;
+    }
+    if (studio.focusedPageId) openPage(null);
+    setTab(partTab(target));
+    showBoard();
+    revealPart(target, { reducedMotion: ff.reducedMotion });
+  };
+  const openArea = (tab: StudioTab) => {
+    if (studio.focusedPageId) openPage(null);
+    setTab(tab);
+    showBoard();
+  };
+
+  // The one side panel (SH-C1): where you are, this comic's own section, your comics, and App's destinations. In the
+  // drawer every choice closes it first; docked, it stays.
+  const sidePanel = (compact: boolean, drawer: boolean) => {
+    const closing = <A extends unknown[]>(action: (...args: A) => void) => (...args: A) => {
+      if (drawer) setNavigationOpen(false);
+      action(...args);
+    };
+    const links: ComicPanelLinks | undefined = panel && {
+      ...panel,
+      onNewComic: closing(panel.onNewComic),
+      onImages: panel.onImages && closing(panel.onImages),
+      onChat: panel.onChat && closing(panel.onChat),
+      onAllComics: closing(panel.onAllComics),
+      onLibrary: closing(panel.onLibrary),
+      onReport: panel.onReport && closing(panel.onReport),
+      onOpenProject: closing(panel.onOpenProject),
+      onOpenStudioWork: panel.onOpenStudioWork && closing(panel.onOpenStudioWork)
+    };
+    return (
+      <ComicSidePanel
+        place="comic"
+        compact={compact}
+        // The header's breadcrumb is the document's one current page.
+        hereInBreadcrumb
+        links={links}
+        onMyComics={closing(onBack)}
+        comic={{ id: doc.id, title: doc.brief.title || '', facts, summary }}
+        comicSection={
+          facts && (
+            <ComicSection
+              doc={doc}
+              caps={studio.caps}
+              tab={studio.tab}
+              facts={facts}
+              compact={compact}
+              onSelect={closing(openArea)}
+              onConversation={closing(skipToComposer)}
+              onGo={closing(goToStage)}
+              focusedPageId={studio.focusedPageId}
+              partStore={partStore}
+              onOpenPart={closing(openPart)}
+            />
+          )
+        }
+      />
+    );
+  };
 
   const pagesRendering = renderingPageCount(doc);
   const progress = pageProgress(doc);
   const gateOpen = doc.gate?.status === 'open';
   const tabBar = ff.layout === 'single';
   const boardHiddenFromChat = phone ? view !== 'board' : paneMode === 'chat';
+
+  // The breadcrumb past the comic's name (SH-C2): the board's area while the board is on screen, and the part you are on
+  // in it (the page in the editor, else the card you are on, which the breadcrumb reads from the store itself).
+  const areaLabel = boardHiddenFromChat ? undefined : boardTabsFor(doc, studio.caps, studio.tab).find((t) => t.id === studio.tab)?.label;
+  const editorPage = studio.focusedPageId && studio.tab === 'pages' ? studio.focusedPageId : null;
+  const buildTrail = (boardPart: BoardPart | null): StudioTrail => {
+    const crumbPart: BoardPart | null = editorPage ? { kind: 'page', id: editorPage } : boardPart && partTab(boardPart) === studio.tab ? boardPart : null;
+    const crumbLabel = crumbPart ? partLabelOf(doc, crumbPart) : null;
+    return {
+      area: areaLabel
+        ? {
+            label: areaLabel,
+            // Back to the top of the area: the page editor closes, the board scrolls up and takes focus.
+            onGo: () => {
+              if (studio.focusedPageId) openPage(null);
+              showBoard();
+              revealBoardTop({ reducedMotion: ff.reducedMotion });
+            }
+          }
+        : null,
+      item:
+        areaLabel && crumbPart && crumbLabel
+          ? {
+              label: crumbLabel,
+              // The page in the editor is opened again; a card you were on comes back into view with focus on it (a page's
+              // card stays a card: its crumb never opens the page editor over the board).
+              onGo: editorPage
+                ? () => openPart(crumbPart)
+                : () => {
+                    showBoard();
+                    revealPart(crumbPart, { reducedMotion: ff.reducedMotion });
+                  }
+            }
+          : null
+    };
+  };
+  const trail: StudioTrailSource = { partStore, build: buildTrail };
 
   const navItems: StudioNavItem[] = [
     {
@@ -1275,6 +1363,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
         paneMode={paneMode}
         onPaneMode={setPaneMode}
         navigation={{ expanded: navigationOverlay ? navigationOpen : navigationExpanded, overlay: navigationOverlay, onToggle: toggleNavigation, buttonRef: navigationButton }}
+        trail={trail}
         ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
@@ -1282,15 +1371,15 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
 
       <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>
-          <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} compact={!navigationExpanded} onBack={onBack} onConversation={skipToComposer} onSelect={(tab) => { setTab(tab); showBoard(); }} footer={navigationFooter} />
+          {sidePanel(!navigationExpanded, false)}
         </aside>}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
           <StudioLayout ff={ff} chat={chat} board={board} view={view} paneMode={paneMode} navItems={navItems} onBack={onBack} />
         </div>
       </main>
 
-      {navigationOverlay && <SideSheet open={navigationOpen} onClose={() => setNavigationOpen(false)} label="Project navigation" title="This comic" side="left" width={288} modal anchorRef={navigationButton}>
-        <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} onBack={onBack} onConversation={() => { setNavigationOpen(false); skipToComposer(); }} onSelect={(tab) => { setTab(tab); showBoard(); setNavigationOpen(false); }} footer={navigationFooter} />
+      {navigationOverlay && <SideSheet open={navigationOpen} onClose={() => setNavigationOpen(false)} label={PANEL_LABEL} title="Comic Studio" side="left" width={288} modal anchorRef={navigationButton}>
+        {sidePanel(false, true)}
       </SideSheet>}
 
       <AdaptiveSheet
@@ -1340,10 +1429,10 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   );
 };
 
-export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, panel, initialIdea, onInitialIdeaConsumed }) => {
   const studio = useStudio(projectId);
   // A new project starts with a fresh shell (chat view, closed sheets, empty composer).
-  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} navigationFooter={navigationFooter} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
+  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} panel={panel} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
 };
 
 export default ComicStudio;

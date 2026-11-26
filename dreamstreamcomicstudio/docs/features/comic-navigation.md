@@ -1,0 +1,262 @@
+# The side panel (Comic Studio navigation)
+
+**Status:** shipped (SH-C1; inside a comic, SH-C2). One panel, the same everywhere in Comic Studio: My comics (All
+comics), New comic, Images (on the comics host) and inside a comic. It replaced two navigations that showed stacked in
+the studio: the creator list (`ComicProjectNavigation`, with its AI activity feed) and the studio's own rail
+(`WorkspaceNavigation`). Inside a comic its own section holds the comic's parts as a tree, and the studio header carries
+a breadcrumb (§6).
+
+## 1. What it shows, from the top
+
+1. **Where you are.** "My comics", then the place itself in heavier ink as the current page: the comic's title, "New
+   comic" or "Images". On My comics, "My comics" is itself the current page. From anywhere else it is the way back
+   ("Back to My comics"). This is the panel's one `aria-current="page"`: the same place in Go to, and the open comic's
+   row in Your comics, only look current (`data-panel-current`), so a screen reader hears "current page" once. Inside a
+   comic the header's breadcrumb (§6b) is the page's current page, so there the comic's title here only looks current
+   too (`hereInBreadcrumb`): one current page in the whole document. The slim rail, which has no "Where you are", marks
+   its current destination instead.
+2. **This comic** (inside a comic only, `panel/ComicSection.tsx`). The comic's stage (SH-A, `comic-stages.md`): the five
+   marks beside "This comic", which open the stage map in place (`comic-stages.md` §5a), and one two-line button,
+   "Drawing · 6 of 12 pages drawn" / "Next: draw the rest", which only opens the place (a board tab, the approval or the
+   draft in the conversation, the composer, the Share sheet; its description says which). Its two lines are its label,
+   so they wrap in the panel's width rather than cut a word. Then Ask the Director, then
+   the board as the comic's parts tree (§6: Story, Cast with each character, Style, Pages with each page, the Cover,
+   Read and the registry tabs), with "Find a page" on a book over 10 pages. The slim rail keeps the board's tabs as
+   icons.
+3. **Your comics** (`panel/PanelComics.tsx`, `panel/panelModel.ts`). Every comic once, in the group that needs the
+   person most: **Needs you** (an approval, a question, a plan to review, a look to choose, an interrupted draft, a
+   drawing issue), **In progress**, **Finished**, **Recent**. Each row: the title, the stage's five marks, and one status
+   line. The old AI activity feed's groups live here now, not beside the list.
+4. **Go to.** New comic, Images, Chat, Library, the studio guide, Report a problem.
+
+Ink only: no hue, no ultramarine, no wash, no spark, no price (`tests/config/sparkGuard.test.ts` and
+`colourUseGuard.test.ts` hold `components/comicstudio/panel/**` to the ink-only navigation rule). One fill per view:
+New comic is the ink fill on My comics, an outline on its own view (where the idea form's Start is the fill), and a plain
+row on Images and inside a comic.
+
+## 2. Your comics: groups, words and order
+
+| Group | When | Status line | Opens at | Order |
+| --- | --- | --- | --- | --- |
+| Needs you | the saved summary has `attention` (the open comic: its live doc) | "Review drawing estimate", "Answer the Director", "Review page plan", "Choose a look", "Resume interrupted draft", "Review drawing issue" | the conversation, or Pages for a drawing issue | last update |
+| In progress | `working` (a render or the Director's draft running) | the stage ("Drawing · 6 of 12 pages drawn"); "Last reported in progress" without a readable stage; "Check stalled progress" after 15 minutes silent (a saved row only) | the conversation | last update |
+| Finished | a fresh finished work (below) | the latest one: "2 pages drawn", "Cover drawn", "Page plan ready", "Comic published", … | where it is (Pages, Read, Style, Cast, Languages, the conversation) | finish time |
+| Recent | everything else | the stage; "Open to see" for a Studio comic without a readable stage; "Classic editor" or "Page Studio" for a comic without stages (where it opens) | the comic | last edit; 5 shown |
+
+- **Which comics, and their names.** Once App's project list has loaded (`projectsLoaded`; a reload in flight, as on
+  leaving a comic, keeps the list it had) it is the list: every one of its comics once, by its name there, and an
+  activity row whose comic is not in it is left out. So a comic deleted on My comics leaves the panel at once, and a
+  rename there shows at once, although the activity rows are cached and refetched only now and then. Before the list
+  has loaded the rows stand in for it, with the doc's title. The comic you are in is always listed.
+- **Fresh** means: a finished work with a real time (`at > 0`), from the last 7 days, not cleared by this viewer. The
+  activity fallback for a comic saved before the summary records its page count with `at: 0`
+  (`services/comicWorkspaceActivity.ts`); that is a count, not a completion, so such a comic is never "Finished". A
+  Director reply is a message, not finished work: the conversation shows it, and "Answer the Director" (Needs you) is
+  the news when the Director asks something. So a comic you only chatted with stays Recent.
+- **Clear finished** marks this viewer's finished work seen (`dreamstream.comic-work.<owner>.<comic>.<kind>` =
+  `at:count`, the keys the old feed wrote, so earlier clears still hold); newer work of the same kind brings it back.
+  The Finished group (and the button) goes, so focus moves to Refresh (or, offline, to Your comics) and the status line
+  says "Finished cleared" to screen readers. Three finished comics show, then "Show all N finished".
+- **The comic you are in** is always listed, looks current, and reads its live stage and its news from the open doc
+  (`summarizeComicWork(doc)` in `ComicStudioShell`, the summary the server saves, worked out only while the list
+  shows): approve an estimate and its row moves from Needs you to In progress as the drawing starts, without a
+  refetch. It is never "Finished": you are looking at it.
+- Five Recent comics show; "All comics · N more" opens the full list when some are left out.
+- Rows are links (`/?view=studio&id=…&task=…`), so a modified click opens a new tab; a plain click sets the task target
+  (`home/workspaceTaskTarget.ts`) and opens the comic. A classic comic opens through App's classic routing.
+- A row's accessible name is its title, status, and stage when the status is something else: "Salt Road · Review
+  drawing estimate · Drawing · 6 of 12 pages drawn". The marks are decorative.
+
+## 3. When it fetches (the backend and the database stay idle)
+
+`panel/usePanelActivity.ts` reads the owner's own `comic_docs` through the existing scalar projection
+(`WORK_SELECT`, the 25 most recently changed, account-checked); it never loads a full comic. Every comic is listed from
+App's project list; these rows add the news of the comics that changed lately, which is where news is (finished work
+moves a comic to the top). There is no "Check older comics": it paged through comics the list already shows, so it
+almost never changed what the panel showed. It fetches:
+
+- when the list mounts (the panel opens; not while it is the rail);
+- when the tab comes back into view or gets focus, at most every 30 s;
+- 700 ms after a run settles in this tab (`WORK_CHANGED_EVENT`, from `live/studioStreams.ts`);
+- on reconnecting, and on Refresh.
+
+A load nobody asked for over rows already shown (after a run settles, on coming back, on reconnecting) is quiet: the
+Refresh icon turns and its tooltip says "Checking your comics…", but the status line neither announces it nor appears,
+so the list does not jump after every Director reply. The first load and Refresh say "Checking your comics…".
+
+Never on a timer: the old feed's 15/60 s poll while expanded is gone, and a test fails on any interval in the panel. The
+last rows are remembered per account for the tab, shown at once when the panel opens again, and not refetched while
+under 20 s old. A failed refresh keeps the last rows ("Couldn’t refresh · Last checked 10:42"); offline says so; a
+response for a previous account is dropped. Without an account (previews, QA scenes) the list is App's project list.
+
+## 4. Where it docks
+
+| Where | Width | Panel |
+| --- | --- | --- |
+| Inside a comic (`ComicStudioShell`) | from 1024 px, not a foldable split | docked: open (14rem) or the slim rail (3.5rem); the header's panel button toggles |
+| Inside a comic | below 1024 px, phones, dual-screen | the left `SideSheet` (modal), opened from the header; any choice closes it |
+| My comics, New comic, Images (`ComicWorkspaceFrame`) | from 900 px | docked: open (14rem, the brand on top) or the slim rail under the header; the header's menu button toggles |
+| My comics, New comic, Images | below 900 px | the frame's modal drawer; any choice closes it |
+
+- **Open or rail is one choice for the whole studio**, remembered per viewer (`dreamstream.comic-panel.<accountId>`,
+  `open` | `closed`; `panel/panelPreference.ts`). Every read and write is in try/catch; when storage fails the choice is
+  kept for the session in memory, so the frame and the studio still agree. With no choice yet the studio opens it on a
+  wide desktop (from 1280 px) and shows the rail below that, so the conversation and the board keep their room; the frame
+  opens it wherever it docks, as before. The default follows the current width (only a choice is stored), so an iPad
+  turned to landscape, or a window widened past 1280 px, opens it.
+- **The rail**: My comics, then (inside a comic) Ask the Director and the board tabs, then New comic, Images, Chat and
+  Library, each a 44 px icon with its name as label and tooltip.
+- **Go to** stays at the foot on a window 720 px tall or more (the rest scrolls); on a shorter one the whole panel
+  scrolls, so nothing is squeezed. Its rows are 36 px under a mouse and 44 px for touch.
+- **Names**: one name everywhere: the panel is the navigation "Project navigation"; its toggle is "Open project
+  navigation" (drawer), "Expand project navigation" / "Collapse project navigation" (docked); the drawer is the dialog
+  "Project navigation".
+- **Keyboard and screen readers**: the reading order is the visual order (where you are, this comic, your comics, Go
+  to). The board is one tab stop: in the rail its tabs (Arrow keys, Home and End move along them; Enter or Space opens
+  one), open and in the drawer its parts tree (§6). Moving never opens anything, so the drawer stays open while you
+  explore. Drawers take focus, trap it, and Escape returns it to the toggle. No headings in the panel (the page's
+  outline starts at its own h1); groups are labelled lists.
+- **Phones**: 44 px targets, titles clip with an ellipsis (their full words are the tooltip and the name), no sideways
+  scroll at 360 px. The frame's drawer pads its foot by the safe area (`--sa-bottom-eff`), so Go to's last row stays
+  above the home indicator, as in the studio's `SideSheet`.
+
+## 5. App wiring
+
+- `App.tsx` keeps one set of links (projects and whether they have loaded, account, New comic, Images, **Chat**, Library,
+  open a comic) and gives it to the studio (`panel`, with My comics = leave the studio): Chat was missing from the
+  studio before (`App.accountNav.test.tsx` opens Chat from a comic). On the comics host it
+  gives the same links to Images (`ImageWorkspace panel`), which then sits in `ComicWorkspaceFrame` (title "Images",
+  loaded lazily from the image chunk, so the first load does not carry it) and drops its own Back and main landmark.
+- `ComicWorkspaceFrame` lost its unused `onAccount` prop (the header's account menu opens Settings).
+- `ProjectDashboard` passes the same links for My comics and New comic.
+- `tsconfig.json` leaves out `dist-qa/` (the QA harness build, gitignored): with `allowJs`, a QA build in the checkout
+  made the client typecheck run out of memory.
+
+## 6. Inside a comic: its parts and the breadcrumb (SH-C2)
+
+### 6a. The parts tree (`panel/PartsTree.tsx`, model `panel/partsModel.ts`)
+
+The board's tabs grew into the comic's parts. Open (and in the phone drawer) the "Board" is an ARIA tree, drawn flat:
+each visible row is one `treeitem` with its level, position and set size, so a closed group renders nothing.
+
+| Row | Shows | Goes to |
+| --- | --- | --- |
+| Story, Style, Read, the registry tabs (Assets, Languages, History) | the tab's icon and name | that tab |
+| Cast | the cast size; each character under it, leads first, then support, then extras (the Cast tab's order) | the Cast tab; a character: its card, brought into view with focus on it |
+| Pages | drawn/total (the Pages badge); the pages under it | the Pages tab; a page: the page editor (`openPage`, the board's own page focus) |
+| Cover (after Pages: it leads the Pages grid; only once there is a page, as the grid and its cover card) | its picture's state | the Pages tab, with focus on the cover's card |
+| A chapter or a block of pages | its name and drawn/total | nothing: it opens and closes |
+
+- **A page's state** is the stage's own reading (`pageStanding`, `shared/comic/stage.ts`, which `stageFacts` counts
+  with): a check when drawn and current, else one word: Out of date, Redrawing, Redraw failed, Drawing, Withheld,
+  Failed, Planned, Empty (the page card's words). So the pages with a check are exactly the strip's "6 of 12 pages
+  drawn" and the Pages badge. The tooltip adds the page's gist (StoryMap's: its summary, else its first action).
+- **Long books.** Up to 24 pages list flat. Chapters (`page.chapterTitle`, StoryMap's rule; the pages before the first
+  one are a group named by their numbers, never an invented title) group the pages; without chapters a longer book goes
+  in blocks of 20 ("Pages 21–40"), and a chapter over 24 pages splits into blocks inside it. A 200-page book is about ten
+  rows until one opens, and an opened group never lists more than 24 pages.
+- **Find a page** (books over 10 pages, as the breakdown card's "Find a page in this story"): the ds `SearchField` above
+  the tree (its Clear button on touch, the match count as its description) that reads the same index
+  (`breakdown/storyMapIndex.ts`: chapter, place, cast, script, dialogue, continuity). It is built only while it has
+  words. The matches replace the tree (the first 50, then "Add a word to narrow it"); one opens its page. The count is a
+  status line that is always there (empty while there are no words), so the first result is announced too. Escape
+  clears it, in the phone drawer as well: the sheets leave Escape to a field marked `data-escape-clears` while it has
+  words (`useSheetBehaviour`), so the first Escape clears the search and the next closes the drawer.
+- **Current.** The page in the editor; else the card you are on in the open tab (a character, page or cover card that
+  has focus or was last pressed, `board/boardPart.ts`); else the open tab. It is the one `aria-selected` row, never an
+  `aria-current="page"` (the header's breadcrumb has the page's one). The rows above it are in heavier ink. If you close
+  its group by hand, that group row takes the tab stop and is described "Holds Page 8, where you are", so a screen
+  reader hears it too.
+- **What opens by itself**: the open tab's parts and the path to where you are: the page in the editor, and the card
+  you are on in the board (a card is only reached from the board, so its group opens while you are not in the tree,
+  never under you). Going somewhere opens its path again, whatever was closed by hand. A chevron opens or closes a row
+  by pointer without going there.
+- **Into view**: a deliberate move (another tab, a page opened from the book timeline or the breakdown card) and the
+  panel opening bring the current row into view in the panel's scrolling list (`scrollIntoView`, nearest, no smooth
+  scroll). A card you move to in the board marks its row without scrolling the panel.
+- **Cheap moves between cards**: the card you are on lives in a small store (`board/boardPartStore.ts`), not in the
+  shell's state. The shell only tracks it; the tree (`LivePartsTree`) and the breadcrumb (`LiveStudioBreadcrumb`)
+  subscribe, so moving between cards re-renders those two, never the shell, the header, the strip or the board's page
+  cards (a 200-page book's every card).
+- **Keyboard** (APG tree): one tab stop, the current row (coming back into the tree lands there again); Up and Down,
+  Home and End move; Right opens a row or steps into it, Left closes it or steps out; Enter or Space goes there (a
+  group opens or closes). The tree does not wrap.
+- **Rows**: the top level 44 px, the rows under it 36 px under a mouse and 44 px for touch; labels clip with an ellipsis,
+  every word in the tooltip and the name. Ink only (`components/comicstudio/panel/**` stays under the ink-only rule).
+- **Bringing a card into view** (`board/boardPart.ts` `revealPart`): once its tab has rendered (a few frames at most; a
+  card that never appears, a character just removed, is left alone), the card scrolls to the top of the board (no smooth
+  scroll under reduced motion) and takes focus for that visit only (its `tabindex` goes again when focus leaves). In the
+  drawer it runs after the drawer has closed and handed focus back. Cards carry ids for it: a character's
+  (`characterCardId`), a page's and the cover's in the Pages grid (`board/cardIds.ts`).
+
+### 6b. The breadcrumb (`breadcrumb/StudioBreadcrumb.tsx`, model `breadcrumb/breadcrumbModel.ts`)
+
+`My comics › Salt Road › Cast › Maya`, in the studio header where the title was (StudioHeader gains one prop, `trail`:
+the shell's way to build the trail from the card you are on, which `LiveStudioBreadcrumb` reads from the store).
+
+- **My comics** leaves the studio (the shell's Back).
+- **The comic** is its name field: click to rename, Enter or leaving it saves, Escape puts it back, as before. It sizes
+  to its words: a hidden copy sets its width and the field lies over it (absolutely placed, so the field's own
+  intrinsic width, which a browser sizes for its widest glyph, never widens it), so the crumbs after it sit right
+  beside the name.
+- **The area**: the board tab, only while the board is on screen (not in Chat only, not in a phone's chat view). It
+  goes back to the top of that area: the page editor closes, the board scrolls up and takes focus.
+- **The part**: the page in the editor (the crumb opens it again), else the card you are on in that area (§6a), which
+  the crumb brings back into view with focus on it. A page's card stays a card: its crumb never opens the page editor.
+- The last crumb is `aria-current="page"`, the document's only one (§1); the separators are decoration.
+- **Folding**: from 1024 px every crumb; below, My comics is left to the panel's drawer (whose first row it is). A phone
+  held upright (below 600 px, `BREADCRUMB_TRAIL_MIN_WIDTH`) has 40 to 110 px beside the panel toggle, Share, the wallet,
+  Ask and ⋯: the name alone, taking all of it, and the trail folds into the drawer, whose tree marks where you are. A
+  phone held sideways has the room for the name, the area and the part.
+- **Truncation**: the name shrinks first, to a readable 5rem; then the area and the part, each ending in an ellipsis
+  and never below a 44 px target (the tooltip has every word). The breadcrumb never pushes the header's controls and
+  clips sideways only as a last resort, so nothing scrolls sideways at 320 px. 44 px targets on touch.
+  `tests/e2e/workspace.navigation.spec.ts` measures it on the board at 360×740, 852×393 and 1440×900, for a person on
+  DreamStream's usage and on their own key (the wider wallet chip; the QA harness's `byok=1`): every crumb whole inside
+  the breadcrumb and at least 44 px wide, the name readable and as wide as its words, no sideways scroll.
+
+## 7. Key files and tests
+
+- `components/comicstudio/panel/ComicSidePanel.tsx` (+ test: open and rail, remembered per viewer, the default
+  following the width, storage that throws, where you are marked once, the one fill, focus order, board keyboard, the
+  phone drawer, 44 px rows and clipped titles), `ComicSection.tsx`, `PanelComics.tsx` (+ test: task targets, Clear
+  finished across a reload with focus kept and announced, an older comic never freshly finished, stages on rows,
+  failure, offline and reconnect, a previous owner's late response, when it fetches, quiet background loads, no
+  interval, the remembered rows), `panelModel.ts` (+ test: grouping, ordering, recent limit, App's list as the list
+  (deleted and renamed comics), the open comic's live news and no Finished, replies not finished work, fresh rules,
+  older, classic and Page Studio comics, row names), `usePanelActivity.ts`, `panelPreference.ts`, `panelStyles.ts`,
+  `StageMarks.tsx`.
+- `components/comicstudio/ComicCreationWorkspace.tsx` and `comicCreationWorkspace.css` (the frame, the rail column);
+  `tests/config/creationWorkspaceTokens.test.ts`.
+- `components/comicstudio/ComicStudio.tsx` (the aside and the drawer), `ComicStudio.test.tsx` (open by default on a
+  wide desktop, the rail below, Chat, the phone drawer), `ComicStudio.stage.test.tsx` (the panel's next step only
+  navigates; the open comic's row follows the live doc from Needs you to In progress).
+- `App.accountNav.test.tsx` (App gives the studio its Chat).
+- `tests/e2e/workspace.navigation.spec.ts` (the studio's panel at three sizes, its parts tree's keys and 44 px rows;
+  the breadcrumb's crumbs whole and 44 px wide, the name readable, at three sizes, on usage and on an own key).
+- SH-C2: `panel/partsModel.ts` (+ test: board order and registry tabs, the Cover after Pages, the cast's order, page
+  states equal to the stage's counts and the Pages badge, an empty comic and empty pages, older docs without a cast,
+  cover, panels, numbers or renders, flat / chapters / blocks / a long chapter, 200 pages, the current part and its
+  path), `panel/PartsTree.tsx` (+ test: what opens by itself and what does not, one tab stop and the APG keys, focus
+  coming back to the current row, targets, the chevron, 200 pages, 44 px rows, ink only, the card you are on opening
+  its group, a group closed by hand describing where you are, a deliberate move scrolling its row into view and a card
+  move not, Find a page), `board/boardPart.ts`, `board/boardPartStore.ts`, `board/cardIds.ts`,
+  `breakdown/storyMapIndex.ts` (StoryMap reads it), `breadcrumb/` (+ test: which crumbs, folding, every crumb past the
+  name navigates, the name still renames and sizes to its words, truncation, the name alone on a phone, ink only),
+  `ComicStudio.parts.test.tsx` (the breadcrumb follows the card you are on, area and part crumbs, a page card's crumb
+  bringing the card back without the editor, the page in the editor, Chat only, the document's one current page, a phone
+  upright and sideways; a move between cards re-rendering neither the shell nor the board; the tree's character, page
+  and cover in the docked panel and the phone drawer; Find a page's Escape in the drawer; nothing spends).
+
+## 8. Left out on purpose
+
+- No SQL and no server change: the list reads the summary the server already saves.
+- The two old open/closed keys (`cs.workspace.navigation.expanded`, `comicstudio.creation.navigation`) are not migrated:
+  they were per browser, not per viewer, and meant different things (the studio's defaulted to collapsed and was
+  written on every toggle; the frame's defaulted to open), so merging them into one choice would guess, and the new
+  default is the point. One click sets the new choice.
+- No "Needs you" count on the rail: the list says it when open.
+- The breadcrumb's comic crumb does not navigate: it stays the comic's name field (people rename there), and there is
+  no level above the board's areas to go to; the panel toggle beside it opens the comic's parts.
+- No parts tree in the slim rail (it keeps the board's tabs), no type-ahead in the tree (Find a page covers long books),
+  no reordering there (the book timeline does it), and open or closed rows are not remembered across reloads.

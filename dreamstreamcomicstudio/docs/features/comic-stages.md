@@ -1,7 +1,8 @@
 # Comic stages (Comic Studio)
 
-**Status:** shipped. The studio shows it as a stage strip; the AI activity feed's "In progress" rows and My comics'
-cards (`docs/features/my-comics.md`) read it from the saved summary.
+**Status:** shipped. The studio shows it as a stage strip, as a stage map (from the strip and the side panel, SH-C2) and
+in the side panel's own section; the side panel's Your comics (`comic-navigation.md`) and My comics' cards and Continue
+card (`my-comics.md`) read it from the saved summary.
 
 **What it is for.** Every comic says where it stands, in one of five stages, how far along that stage is, and the one
 next step: "Drawing · 6 of 12 pages drawn · Next: draw the rest". The studio shows it as a stage strip (under the
@@ -93,11 +94,13 @@ prices, models or paths. It stays private: `sanitizePublicDoc` strips `workspace
   (`STAGE_UNKNOWN`) for a comic saved before stages or with an unreadable stage. Lists never guess a stage.
 - `stageView(readStageFacts(saved))` equals `comicStage(doc)` for the doc it was saved from (tested), so a list and the
   studio always say the same words.
-- `services/comicWorkspaceActivity.ts` keeps a stored stage only when it validates. The AI activity feed's "In progress"
-  rows show it ("Drawing · 6 of 12 pages drawn"); a comic saved before stages keeps "Last reported in progress".
+- `services/comicWorkspaceActivity.ts` keeps a stored stage only when it validates. The side panel's Your comics (which
+  took in the old AI activity feed, SH-C1) shows it on every row: the five marks, and the words on "In progress" and
+  Recent rows ("Drawing · 6 of 12 pages drawn"); a comic saved before stages keeps "Last reported in progress" in
+  progress and "Open to see" elsewhere.
 
-No SQL for the summary itself: it lives in the existing `comic_docs.doc` jsonb, which the AI activity feed reads with
-the existing `activity:doc->workspaceActivity` selector. My comics, which reads every comic of the account at once, reads
+No SQL for the summary itself: it lives in the existing `comic_docs.doc` jsonb, which the side panel's Your comics reads
+with the existing `activity:doc->workspaceActivity` selector. My comics, which reads every comic of the account at once, reads
 the same summary from `comic_docs.listing` instead, a small copy a trigger keeps in step with `doc`
 (`server/sql/comic_docs_listing.sql`, `docs/features/my-comics.md` §1), so its read never opens a doc.
 
@@ -119,20 +122,50 @@ the same summary from `comic_docs.listing` instead, a small copy a trigger keeps
 - Keyboard: native buttons in reading order; ArrowLeft, ArrowRight, Home and End move along the steps. A screen
   reader hears a polite note when the stage changes, never on each page drawn (the run's own card covers those).
 - Layout, one row high:
-  - from 768 px: the five named stages, then the status and the "Next: …" button;
+  - from 768 px: the five named stages, then the status and the "Next: …" button, then the Stage map button (§5a);
   - below 768 px (a narrow split, the first screen of a book-posture foldable, and the phone's board): one 44 px row
     with 16 px gutters. A stage button shows the five stages as marks (a check when done, a filled ink dot for the
-    current one, a ring for the rest; named "Stages: Draw, 3 of 5 done") and opens the five named stages in a row
-    below; choosing one, or Escape (from the stage button or the list), closes them and returns focus to the stage
-    button. Next to it, the status is one button: its first line is "Drawing · 6 of 12 pages drawn", its second "Next:
-    draw the rest". Below 360 px a done stage in the opened row shows only its check, keeping its name for screen
-    readers and as a tooltip.
+    current one, a ring for the rest; named "Stages: Draw, 3 of 5 done", tooltip "Stage map") and is the row's one way
+    into the stages: it opens the stage map (§5a; a bottom sheet on phones), where every stage has its name, what is
+    left in it and a way there. Choosing one, or Escape, closes it and returns focus to the marks. Next to it, the
+    status is one button: its first line is "Drawing · 6 of 12 pages drawn", its second "Next: draw the rest". (The
+    row of five named stages that the marks used to open, and the separate map button beside them, are gone: two
+    controls showing the same five stages in one 44 px row was one too many.)
   - The marks are SVG drawn in the text colour (`currentColor`), never a background fill, so the current stage keeps
     its dot in forced colours (Windows high contrast).
   - Coarse pointers get 44 px targets. It hides while the on-screen keyboard is up (`html.kb-open`), like the tab bar.
     On phones the board's tabs live in a drawer, so the strip is also a quick way between Story, Style, Pages and Read.
-- The workspace navigation's list (`mobile/shell/WorkspaceNavigation.tsx`) is labelled "Board" (it was "Project
-  stages"): those are the board's tabs, not the comic's stages.
+- The side panel's own section for the comic (`panel/ComicSection.tsx`, SH-C1; `comic-navigation.md`) says the same
+  words as one button ("Drawing · 6 of 12 pages drawn" / "Next: draw the rest", the five marks beside "This comic",
+  which open the stage map), and its board is labelled "Board" (it was "Project stages"): the board's tabs, grown into
+  the comic's parts tree (SH-C2), not the comic's stages.
+- The stage map (§5a) is one control away in both layouts: a **Stage map** button ends the one-row strip (44 px on
+  touch); in the compact row the marks open it.
+
+## 5a. The stage map (`stage/StageMap.tsx`, words in `stage/stageMapModel.ts`, SH-C2)
+
+The five stages on one small map, from the same facts as the strip, so it never says something the strip does not.
+
+| Part of a row | What it says |
+| --- | --- |
+| The mark | a check when done, a filled dot for the current stage, a ring for the rest, joined by one hairline (SVG in the text colour, so forced colours keep it) |
+| The name and state | "Draw · Now": Done, Now, Next (the first stage after the current one that is not done), Later; a published comic's last stage reads "Published" |
+| What is left | Story "No story yet"; Style "No look chosen yet", "3 looks to compare"; Plan "No pages planned yet", "4 pages to plan", "The plan is ready to review"; Draw "5 pages to draw · 2 drawing now · 1 withheld · 1 failed · 1 out of date", "Nothing to draw yet", and when done "1 page out of date"; Publish "Publish once the pages are drawn", "Ready to publish", "Paused for review", "Changes not published yet", "Live · new pages not published yet"; otherwise "Nothing left" |
+| The target | the current stage's next step (the label and place of "Next: …"; so is a published comic's last one: "Read your comic", "Publish your changes"); any other stage opens its tab ("Open Pages") |
+
+- Ink weights only: the current stage semibold, done stages ink, the rest muted. No hue, no spark, no wash, no price,
+  and every target only navigates (the strip's `onGo`): nothing on the map can start a paid step.
+- **From the strip**: the "Stage map" button (from 768 px) or the five marks (below) open it as a popover anchored to
+  the button, a bottom sheet titled "Stage map" on phones. Focus lands on the target of the row that leads, the comic's
+  next step: the current stage's, or on a published comic (every row done) Publish's "Read your comic" / "Publish your
+  changes", never Story's "Open Story". A target closes the map and goes there; Escape or a click outside closes it and
+  returns focus to the button.
+- **From the side panel**: the five marks beside "This comic" are a disclosure ("Stage map", `aria-expanded`) that shows
+  the map in place under the next step; in the phone drawer a target closes the drawer first.
+- **Keyboard and screen readers**: an ordered list labelled "Stage map"; the current stage's row is `aria-current="step"`.
+  The targets are native buttons in reading order; Arrow Up and Down (or Left and Right), Home and End move between
+  them; Enter opens one. Each target is described by its row and its place ("Draw, now. 6 pages to draw. Opens the
+  Pages tab.").
 
 ## 6. Key files and tests
 
@@ -144,16 +177,23 @@ the same summary from `comic_docs.listing` instead, a small copy a trigger keeps
   `conversation/DirectorDraftControl.tsx` (+ test), `conversation/ConversationPane.tsx` (`revealApiRef`),
   `conversation/cards/GateCard.tsx` (the open card is marked and focusable), `board/BoardPane.tsx` (`lead`, + test).
 - `shared/comic/workspaceActivity.ts`, `server/src/comic/store.test.ts`: the saved summary.
-- `services/comicWorkspaceActivity.ts` (+ test), `components/comicstudio/home/ComicTaskActivity.tsx` (+ test).
+- `services/comicWorkspaceActivity.ts` (+ test); the side panel's Your comics reads it (`components/comicstudio/panel/`,
+  `comic-navigation.md`).
 - `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, the 360 px row
-  and its opened stages, Escape from the stage button, forced-colour marks, 320 px, foldable, the server's "behind", one
-  count with the Board badge), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
+  and its marks as the one way into the map (a target goes there and closes it, Escape back on the marks),
+  forced-colour marks, 320 px, foldable, the server's "behind", one count with the Board badge, the Stage map button
+  last in one row), `stage/stageMarks.tsx` (the shared mark and place words),
+  `stage/stageMapModel.ts` (+ test: a new comic, drawing with every kind of page, a comic planned before its look,
+  partial and full plans, an open approval, ready and paused, published with and without changes, live with a new page,
+  the strip's own next step), `stage/StageMap.tsx` (+ test: states and descriptions, keyboard, ink only, the popover's
+  focus and Escape, a published comic opening on its next step, a target closes it, the phone sheet from the marks, the
+  panel's disclosure), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
   board placement, the approval and the draft focused on a desktop split, the Share sheet for a paused publication).
 
 ## 7. Left out on purpose
 
-- The side panel's recent comics do not show the stage. My comics' cards and its Continue card do (SH-B,
-  `docs/features/my-comics.md`): they read this summary in one list read and say the same words as the strip.
 - Counting a cast as a story (the Director's suggestions treat a cast as an idea): the brief defines Story by the story
   or premise, so a cast alone keeps Story current, with the words "No story yet".
 - A "question waiting" next step: see §3.
+- The stage map is not in the slim rail (open the panel), and it has no actions of its own: it shows the way, the
+  places themselves do the work.

@@ -204,7 +204,10 @@ const DESTINATION_HINT: Readonly<Record<TaskDestination, string>> = {
   read: 'Opens the comic’s Read tab'
 };
 
-/** What waits on the person, as a next step, when a comic has no saved stage (the AI activity feed's own reasons). */
+/**
+ * What waits on the person, as a next step, when a comic has no saved stage (the side panel's own reasons,
+ * services/comicWorkspaceActivity.ts).
+ */
 const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
   approval: 'Review the estimate',
   question: 'Answer the Director',

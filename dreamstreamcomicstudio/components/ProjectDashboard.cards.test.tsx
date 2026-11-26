@@ -239,7 +239,7 @@ describe('My comics: when the stage read runs', () => {
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
-  it('after a run settles in this tab, the cards read again (once, after the burst), so they agree with the AI activity feed', async () => {
+  it('after a run settles in this tab, the cards read again (once, after the burst), so they agree with the side panel', async () => {
     vi.useFakeTimers();
     let rows: ReadonlyMap<string, ComicStageRow> = new Map([['a', { id: 'a', stage: draw(12, 6, 'follow_planning'), attention: null, working: true }]]);
     const loader = vi.fn<ComicStagesLoader>(async () => rows);

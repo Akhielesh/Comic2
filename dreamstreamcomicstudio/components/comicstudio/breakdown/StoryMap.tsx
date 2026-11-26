@@ -1,38 +1,16 @@
 import React, { useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { sceneIndex } from '../../../shared/comic/continuity';
 import { FOCUS_RING, WRAP_TEXT } from '../../chat/studioDesign';
-
-const searchable = (text: string) => text.normalize('NFKC').toLocaleLowerCase();
+import { matchStoryPages, storyPageIndex } from './storyMapIndex';
 
 /** Index the author's own script, artwork directions and dialogue. Opening a page uses the existing plan selection. */
 export function StoryMap({ doc, onPage }: { doc: ComicDoc; onPage: (id: string) => void }) {
   const disclosure = useRef<HTMLDetailsElement>(null);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const pages = useMemo(() => {
-    if (!open) return [];
-    const scenes = sceneIndex(doc, { derive: true });
-    const cast = new Map(doc.cast.map(c => [c.id, c.name]));
-    let chapter = '';
-    return [...doc.pages].sort((a,b) => a.n - b.n).map(page => {
-      if (page.chapterTitle?.trim()) chapter = page.chapterTitle.trim();
-      const scene = scenes.scenes.find(s => s.id === scenes.byPage[page.id]);
-      const place = scene?.placeId ? doc.places.find(p => p.id === scene.placeId)?.name || scene.name : scene?.name;
-      const label = [chapter, place].filter(Boolean).join(' · ');
-      const names = [...new Set(page.panels.flatMap(p => p.castIds).map(id => cast.get(id)).filter(Boolean))].join(', ');
-      const summary = page.summary || page.panels.find(p => p.action)?.action || page.turnHook;
-      const dialogue = page.panels.flatMap(p => [p.action, ...p.lines.map(line => line.text)]).join(' ');
-      const changes = page.continuity;
-      const visuals = changes ? [
-        ...Object.entries(changes.props || {}).flatMap(([name,state]) => [name, state]),
-        ...Object.entries(changes.cast || {}).flatMap(([id,state]) => [cast.get(id), state?.outfit, ...(state?.holding || []), ...(state?.marks || [])])
-      ].join(' ') : '';
-      return { id:page.id, n:page.n, label, summary, text:searchable([page.n, label, names, summary, page.turnHook, dialogue, visuals].join(' ')) };
-    });
-  }, [doc, open]);
-  const words = searchable(query).trim().split(/\s+/).filter(Boolean);
-  const visible = pages.filter(page => words.every(word => page.text.includes(word)));
+  // Built only while the map is open: it reads the scenes of every page.
+  const pages = useMemo(() => (open ? storyPageIndex(doc) : []), [doc, open]);
+  const visible = matchStoryPages(pages, query);
   const choose = (id: string) => {
     if (disclosure.current) disclosure.current.open = false;
     setQuery('');

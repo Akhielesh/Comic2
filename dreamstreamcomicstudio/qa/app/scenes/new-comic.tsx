@@ -4,10 +4,10 @@
 // fill per view. Three frames, one page, one <main> (the frame's own):
 //   (default)     New comic: the idea form; Start is the view's one fill, New comic an outline;
 //   &view=all     All comics: the frame around a stand-in listing; New comic is the view's one fill;
-//   &drawer=1     below 900 px, the navigation drawer opened on load (the scrim and sheet rungs, the overlay shadow);
+//   &drawer=1     below 900 px, the side panel's drawer opened on load (the scrim and sheet rungs, the overlay shadow);
 //   &state=error  the idea form with its create error;
 //   &material=paper  Paper's materials on the frame (the drawer is portalled, so it keeps the page's).
-// The frame's own New comic / All comics buttons switch the view in place. Invented comic names; nothing navigates,
+// The side panel's New comic and My comics switch the view in place. Invented comic names; nothing navigates,
 // reaches the network or spends.
 
 import React, { useEffect, useState } from 'react';
@@ -87,7 +87,7 @@ function NewComicScene() {
 
   useEffect(() => {
     if (param('drawer') !== '1') return;
-    document.querySelector<HTMLButtonElement>('button[aria-label="Open comic navigation"]')?.click();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Open project navigation"]')?.click();
   }, []);
 
   const navigation: ComicProjectNavigationProps = {

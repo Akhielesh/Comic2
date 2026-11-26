@@ -1,7 +1,7 @@
 // My comics' stage read (SH-B): one request for every card's stage and "Needs you" (services/comicWorkspaceActivity.ts
 // loadComicStages), made when the view opens, again when a list reload starts (back from the studio, a new comic), and
-// after a run in this tab settles (studioStreams' WORK_CHANGED_EVENT, the moment the AI activity feed beside it reads
-// again). Never on a timer, never one request per card. The last answer stays while a new one runs, so cards never
+// after a run in this tab settles (studioStreams' WORK_CHANGED_EVENT, the moment the side panel's Your comics beside it
+// reads again). Never on a timer, never one request per card. The last answer stays while a new one runs, so cards never
 // flicker, and this tab remembers it: coming back to the view paints the cards at once and reads again behind them.
 
 import React, { useContext, useEffect, useRef, useState } from 'react';
@@ -24,7 +24,7 @@ export interface ComicStages {
 const EMPTY: ReadonlyMap<string, ComicStageRow> = new Map();
 /** A read that has not answered by then (a network that accepts and goes quiet) is given up: the cards use their rows. */
 export const STAGE_READ_TIMEOUT_MS = 12_000;
-/** A settled run reads again once its burst of events is over (the AI activity feed's own wait). */
+/** A settled run reads again once its burst of events is over (the side panel's own wait, usePanelActivity). */
 export const STAGE_REFRESH_DELAY_MS = 700;
 
 /** The last rows each source answered, for one account, in this tab only. */
