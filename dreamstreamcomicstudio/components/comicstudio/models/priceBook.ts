@@ -1,14 +1,15 @@
 // The client PriceBook (shared/comic/modelLock.ts contract) built from the catalog rows the picker already holds
 // (GET /api/comic/models/catalog — live OpenRouter prices merged with the registry, plus THIS user's observed
-// medians). It follows models.md §2.3 exactly as the server's priceBookFromSources does, so a redraw quoted here
-// is the quote the server recomputes for change_image_model (it re-quotes when they drift > 15% + $0.01):
+// medians). Its numbers ARE the shared book's (shared/comic/priceBook.ts priceBookFromSources over the same rows), so
+// a redraw quoted here is the quote the server recomputes for change_image_model (it re-quotes when they drift > 15%
+// + $0.01); this module only adds the picker's dollar-free labels. The rule, models.md §2.3:
 //   1. list price: the row's price at that resolution, else the registry's dated price, else none;
 //   2. reference cost (perRefUsd × refs) is added to the LIST basis only;
 //   3. observed median (n ≥ 3, the user's own before the platform's) of page/sheet/cover calls;
 //   4. unit = max(list + refs, observed) — never under-quotes; null = no basis at all ("can't price yet").
-// QC per page: the figure the server's own PriceBook uses (its observed QC median at n ≥ 5, else QC_USD_PER_PAGE)
-// when the catalog serves it on its rows (`qcUsd`, see ServedCatalogRow), else QC_USD_PER_PAGE — so a quote the
-// user agrees to equals the server's recomputation instead of sitting a fraction of a cent per page under it.
+// QC per page: the figure the server's own PriceBook uses (its observed QC median at n ≥ 5, never under
+// QC_USD_PER_PAGE) when the catalog serves it on its rows (`qcUsd`, see ServedCatalogRow), else QC_USD_PER_PAGE — so a
+// quote the user agrees to equals the server's recomputation instead of sitting a fraction of a cent per page under it.
 //
 // `basis` labels never name a dollar amount, so they are safe to show to a governed user as they are
 // ("Prices: OpenRouter, 5 min ago"); the dollar detail (observed range, list figure) is worded by the caller
@@ -18,6 +19,7 @@ import type { Resolution } from '../../../shared/comic/doc';
 import type { CatalogPrice, ModelCatalogRow, ObservedEntry } from '../../../shared/comic/modelCatalog';
 import type { PriceBook } from '../../../shared/comic/modelLock';
 import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type AnyImageJobKind, type ImageModelSpec } from '../../../shared/comic/models';
+import { QC_OBSERVED_MIN_N, priceBookFromSources, type PriceBookSources } from '../../../shared/comic/priceBook';
 import { ago, asOfCouldntRefresh, fromPriceList } from './copy';
 
 /** Observed medians are used from this many calls (models.md §2.3 step 2). */
@@ -91,9 +93,20 @@ const liveLabel = (row: ModelCatalogRow, now: number): string => {
 
 export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefined, opts: { now?: number; qcUsd?: number } = {}): ClientPriceBook => {
   const now = opts.now ?? Date.now();
-  // QC per page: an explicit figure, else the server's (served on the rows), else the default.
-  const qcUsd = isNum(opts.qcUsd) && opts.qcUsd >= 0 ? opts.qcUsd : servedQcUsd(rows) ?? QC_USD_PER_PAGE;
+  // QC per page: an explicit figure, else the server's (served on the rows), else the default — never under it.
+  const qcUsd = Math.max(QC_USD_PER_PAGE, isNum(opts.qcUsd) && opts.qcUsd >= 0 ? opts.qcUsd : servedQcUsd(rows) ?? QC_USD_PER_PAGE);
   const byId = new Map((rows ?? []).map((r) => [r.id, r] as const));
+  // The shared book over the same rows: every number below is its number (one quote path).
+  const sources: PriceBookSources = {
+    rows: (rows ?? []).map((r) => ({ id: r.id, price: r.price ?? {}, perRefUsd: isNum(r.perRefUsd) ? r.perRefUsd : null, ...(r.fetchedAt?.catalog ? { fetchedAt: { catalog: r.fetchedAt.catalog } } : {}) })),
+    observed: (rows ?? []).flatMap((r) =>
+      (r.observed ?? [])
+        .filter((o) => isNum(o.medianUsd) && isNum(o.n))
+        .map((o) => ({ modelId: r.id, kind: o.kind, res: o.res, n: o.n, medianUsd: o.medianUsd, minUsd: isNum(o.minUsd) ? o.minUsd : o.medianUsd, maxUsd: isNum(o.maxUsd) ? o.maxUsd : o.medianUsd, scope: o.scope }))
+    ),
+    qc: { medianUsd: qcUsd, n: QC_OBSERVED_MIN_N }
+  };
+  const shared = priceBookFromSources(sources);
   const rowFor = (modelId: string) => byId.get(getImageModel(modelId)?.id ?? modelId) ?? byId.get(modelId);
 
   const quote = (modelId: string, res: Resolution, kind: AnyImageJobKind, refs = 0): ClientQuote => {
@@ -136,11 +149,12 @@ export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefi
     const matches = (row?.observed ?? []).filter((o) => o.kind === want && o.res === res && o.n >= OBSERVED_MIN_N && isNum(o.medianUsd));
     const obs = matches.find((o) => o.scope === 'you') ?? matches.find((o) => o.scope === 'platform');
 
-    // 4. Never under-quote.
+    // 4. Never under-quote. The figure is the shared book's (the label is this module's).
+    const truth = shared.quote(modelId, res, kind, refs).usd;
     if (obs && (listTotal === null || obs.medianUsd >= listTotal)) {
       const who = obs.scope === 'platform' ? "DreamStream creators' last" : 'your last';
       return {
-        usd: round4(obs.medianUsd),
+        usd: truth,
         source: 'observed',
         label: `${who} ${obs.n} ${kindNoun(want, obs.n)}`,
         ...(listTotal !== null ? { listUsd: listTotal } : {}),
@@ -149,8 +163,8 @@ export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefi
       };
     }
     return {
-      usd: listTotal,
-      source: listTotal === null ? 'none' : source,
+      usd: truth,
+      source: truth === null ? 'none' : source,
       label,
       ...(listTotal !== null ? { listUsd: listTotal } : {}),
       ...(obs ? { observed: obs } : {}),

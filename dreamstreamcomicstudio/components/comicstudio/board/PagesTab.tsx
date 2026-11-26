@@ -561,9 +561,10 @@ const PlanHeader: React.FC<{
 }> = ({ studio, doc, byok, cost, selected, clearSelection, density, onDensity }) => {
   const { busyKey, fire } = useClickGuard(3000);
   const [includeCover, setIncludeCover] = useState(false);
-  // Quoted exactly as the server's gate quotes render_pages: same targets, same estimate, the same PriceBook.
+  // Quoted exactly as the server's gate quotes this "Render all": the same targets (overfull pages held back, as its
+  // plan check holds them back), the same estimate, the same PriceBook.
   const prices = useStudioPrices(studio);
-  const quote = quoteRenderPages(doc, { includeCover, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, ...(prices ? { prices } : {}) });
+  const quote = quoteRenderPages(doc, { includeCover, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, holdBack: {}, ...(prices ? { prices } : {}) });
   const chosen = estimateDraw(doc, pagesForIds(doc, selected), byok, prices);
   const drawing = doc.pages.filter((p) => isBusy(p.render)).length;
   const drawn = doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length;

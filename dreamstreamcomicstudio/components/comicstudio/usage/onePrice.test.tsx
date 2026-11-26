@@ -81,6 +81,10 @@ describe('every surface uses the same quote path', () => {
     });
   }
 
+  it('the model picker and the model-change redraw take their figures from the shared book', () => {
+    expect(readFileSync(resolve(ROOT, 'comicstudio/models/priceBook.ts'), 'utf8')).toMatch(/\bshared\.quote\(/);
+  });
+
   it('the standalone image is the book\'s own job quote', () => {
     expect(readFileSync(resolve(ROOT, 'images/ImagePrice.tsx'), 'utf8')).toMatch(/\bbook\.jobQuote\(/);
   });
