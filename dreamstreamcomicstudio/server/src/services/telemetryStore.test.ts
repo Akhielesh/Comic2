@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Persistence on, inserts captured; the logger captured (no console noise, no network).
-const { inserts } = vi.hoisted(() => ({ inserts: [] as { table: string; rows: unknown }[] }));
+const { inserts, deletes, deleteError } = vi.hoisted(() => ({
+  inserts: [] as { table: string; rows: unknown }[],
+  deletes: [] as { table: string; where: [string, unknown][] }[],
+  deleteError: { current: null as { message: string } | null }
+}));
 vi.mock('./supabase.js', () => ({
   getSupabaseCapabilityStatus: () => ({ storagePersistenceEnabled: true }),
   getSupabaseAdmin: () => ({
@@ -9,6 +13,18 @@ vi.mock('./supabase.js', () => ({
       insert: async (rows: unknown) => {
         inserts.push({ table, rows });
         return { error: null };
+      },
+      delete: () => {
+        const entry = { table, where: [] as [string, unknown][] };
+        deletes.push(entry);
+        const chain = {
+          eq: (column: string, value: unknown) => {
+            entry.where.push([column, value]);
+            return chain;
+          },
+          then: (resolve: (v: { error: { message: string } | null }) => unknown) => resolve({ error: deleteError.current })
+        };
+        return chain;
       }
     })
   })
@@ -18,13 +34,43 @@ vi.mock('../lib/logger.js', () => ({
 }));
 
 import { logger } from '../lib/logger.js';
-import { recordFeedback, recordServerError, recordTelemetryEvents } from './telemetryStore.js';
+import { recordFeedback, recordServerError, recordTelemetryEvents, withdrawFeedback } from './telemetryStore.js';
 
 const SLUG = 'Ab3dEf6hIj9kLm2nP';
 
 beforeEach(() => {
   inserts.length = 0;
+  deletes.length = 0;
+  deleteError.current = null;
   vi.clearAllMocks();
+});
+
+describe("a reply rating's Undo (withdrawFeedback)", () => {
+  it('removes only the signed-in person’s own rows for that one reply', async () => {
+    expect(await withdrawFeedback({ targetType: 'comic_reply', targetId: 'msg_42' }, { userId: 'user-1' })).toEqual({ withdrawn: true });
+    expect(deletes).toEqual([{ table: 'user_feedback', where: [['user_id', 'user-1'], ['target_type', 'comic_reply'], ['target_id', 'msg_42']] }]);
+  });
+
+  it('never touches general feedback, reports or another kind, and never runs without a person or an id', async () => {
+    for (const targetType of ['platform', 'chat_response', 'bug', 'feedback', 'studio', '', undefined]) {
+      expect(await withdrawFeedback({ targetType, targetId: 'msg_42' }, { userId: 'user-1' }), String(targetType)).toEqual({ withdrawn: false });
+    }
+    expect(await withdrawFeedback({ targetType: 'comic_reply', targetId: 'msg_42' }, { userId: null })).toEqual({ withdrawn: false });
+    expect(await withdrawFeedback({ targetType: 'comic_reply', targetId: '   ' }, { userId: 'user-1' })).toEqual({ withdrawn: false });
+    expect(await withdrawFeedback(null, { userId: 'user-1' })).toEqual({ withdrawn: false });
+    expect(deletes).toEqual([]);
+  });
+
+  it('says so when the delete fails (the rating stays, the button can try again)', async () => {
+    deleteError.current = { message: 'permission denied' };
+    expect(await withdrawFeedback({ targetType: 'comic_reply', targetId: 'msg_42' }, { userId: 'user-1' })).toEqual({ withdrawn: false });
+    expect(logger.warn).toHaveBeenCalledWith('feedback_withdraw_failed', expect.objectContaining({ message: 'permission denied' }));
+  });
+
+  it('a reply rating is stored like any other vote, with its target kept', async () => {
+    await recordFeedback({ targetType: 'comic_reply', targetId: 'msg_42', vote: 'dislike', source: 'comic_studio', sessionId: 'proj_1', metadata: { cards: ['plan'] } }, { userId: 'user-1' });
+    expect(inserts[0]).toMatchObject({ table: 'user_feedback', rows: { target_type: 'comic_reply', target_id: 'msg_42', vote: 'dislike', source: 'comic_studio', session_id: 'proj_1', user_id: 'user-1', comment: null } });
+  });
 });
 
 describe('telemetry surfaces never store a read capability (S19)', () => {

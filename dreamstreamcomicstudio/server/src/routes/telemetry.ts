@@ -1,8 +1,8 @@
 import { ReportError, saveFeedbackReport } from '../services/feedbackReports.js';
 import { createRateLimit } from '../middleware/rateLimit.js';
 import { Router, type Request } from 'express';
-import type { FeedbackResponse, TelemetryIngestResponse } from '../../../apiTypes.js';
-import { recordFeedback, recordTelemetryEvents, type TelemetryContext } from '../services/telemetryStore.js';
+import type { FeedbackResponse, FeedbackWithdrawResponse, TelemetryIngestResponse } from '../../../apiTypes.js';
+import { recordFeedback, recordTelemetryEvents, withdrawFeedback, type TelemetryContext } from '../services/telemetryStore.js';
 
 // Public capture endpoints. Mounted with optionalAuth BEFORE the global requireAuth
 // so failures that happen while logged-out (or while auth itself is failing) are
@@ -36,6 +36,22 @@ telemetryRouter.post('/feedback', async (req, res, next) => {
     const result = await recordFeedback(req.body ?? {}, contextFromReq(req));
     const payload: FeedbackResponse = { ok: true, persisted: result.persisted };
     res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A rating's Undo (Comic Studio's reply rating): a signed-in person takes back their own rating of one reply. The
+// store removes only that person's rows of a withdrawable kind; anything else is refused or left alone.
+telemetryRouter.post('/feedback/withdraw', createRateLimit({
+  scope: 'feedback-withdraw', windowMs: 60_000, maxRequests: 30
+}), async (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in again to change your rating.' } });
+  try {
+    const result = await withdrawFeedback(req.body ?? {}, contextFromReq(req));
+    const payload: FeedbackWithdrawResponse = { ok: true, withdrawn: result.withdrawn };
+    return res.json(payload);
   } catch (err) {
     next(err);
   }

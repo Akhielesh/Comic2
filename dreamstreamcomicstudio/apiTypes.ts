@@ -2718,6 +2718,8 @@ export type FeedbackSentiment = 'positive' | 'neutral' | 'negative' | 'frustrate
 export type FeedbackTargetType =
   | 'chat_response'
   | 'universal_assistant'
+  /** A Comic Studio Director reply (targetId = the message id; sessionId = the comic's id). */
+  | 'comic_reply'
   | 'error'
   | 'app_crash'
   | 'studio'
@@ -2743,6 +2745,22 @@ export interface FeedbackInput {
 export interface FeedbackResponse {
   ok: boolean;
   persisted: boolean;
+}
+
+/** Rating kinds a signed-in person may take back (Undo): their own ratings of a reply, nothing else. */
+export const WITHDRAWABLE_FEEDBACK_TARGETS = ['comic_reply'] as const;
+export type WithdrawableFeedbackTarget = (typeof WITHDRAWABLE_FEEDBACK_TARGETS)[number];
+
+/** POST /api/telemetry/feedback/withdraw: take back the person's own rating of one reply (the rating's Undo). */
+export interface FeedbackWithdrawInput {
+  targetType: WithdrawableFeedbackTarget;
+  targetId: string;
+}
+
+export interface FeedbackWithdrawResponse {
+  ok: boolean;
+  /** The rating is gone (or was never stored): false only when it could not be removed. */
+  withdrawn: boolean;
 }
 
 /** General-feedback categories surfaced in the feedback widget. */

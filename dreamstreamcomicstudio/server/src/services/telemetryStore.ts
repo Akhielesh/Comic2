@@ -10,7 +10,7 @@
 // - Enrich server-side. The client supplies the payload; the server stamps the
 //   request id, ip, user agent and the authoritative server receive time.
 
-import type { FeedbackInput, TelemetryEventInput, TelemetrySeverity } from '../../../apiTypes.js';
+import { WITHDRAWABLE_FEEDBACK_TARGETS, type FeedbackInput, type TelemetryEventInput, type TelemetrySeverity } from '../../../apiTypes.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import { logger } from '../lib/logger.js';
 import { loggablePath, maskCapabilityUrls } from '../../../shared/capabilityPath.js';
@@ -195,6 +195,39 @@ export const recordFeedback = async (raw: unknown, ctx: TelemetryContext): Promi
   } catch (error) {
     logger.warn('feedback_persist_threw', { message: (error as Error)?.message || String(error) });
     return { persisted: false };
+  }
+};
+
+export interface WithdrawResult {
+  /** The person's rating of that reply is gone (none was stored is the same). False when the delete failed. */
+  withdrawn: boolean;
+}
+
+const WITHDRAWABLE: ReadonlySet<string> = new Set(WITHDRAWABLE_FEEDBACK_TARGETS);
+
+/**
+ * A rating's Undo: removes the signed-in person's OWN rows for one rated reply, and nothing else. Only the kinds in
+ * WITHDRAWABLE_FEEDBACK_TARGETS (a Comic Studio reply rating) can be taken back: general feedback and receipt-bearing
+ * reports are never touched. Anonymous callers are refused by the route; here no user means nothing to remove.
+ */
+export const withdrawFeedback = async (raw: unknown, ctx: TelemetryContext): Promise<WithdrawResult> => {
+  const f = (raw && typeof raw === 'object' ? raw : {}) as { targetType?: unknown; targetId?: unknown };
+  const targetType = str(f.targetType, 40);
+  const targetId = str(f.targetId, 200);
+  if (!ctx.userId || !targetType || !WITHDRAWABLE.has(targetType) || !targetId) return { withdrawn: false };
+  logger.info('user_feedback_withdrawn', { target: targetType, targetId, userId: ctx.userId, requestId: ctx.requestId });
+  // Nothing was stored without persistence: there is nothing left to take back.
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return { withdrawn: true };
+  try {
+    const { error } = await getSupabaseAdmin().from('user_feedback').delete().eq('user_id', ctx.userId).eq('target_type', targetType).eq('target_id', targetId);
+    if (error) {
+      logger.warn('feedback_withdraw_failed', { code: (error as { code?: string }).code, message: error.message });
+      return { withdrawn: false };
+    }
+    return { withdrawn: true };
+  } catch (error) {
+    logger.warn('feedback_withdraw_threw', { message: (error as Error)?.message || String(error) });
+    return { withdrawn: false };
   }
 };
 
