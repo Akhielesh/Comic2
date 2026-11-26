@@ -4,9 +4,18 @@
 
 import React from 'react';
 import { Download, Keyboard, Share2, X } from 'lucide-react';
+import type { PageTurnStyle } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
-import type { ReaderPrefs, RoomLight } from './readerPrefs';
+import { turnStyleFor, type ReaderPrefs, type RoomLight } from './readerPrefs';
 import { HudButton } from './ReaderHud';
+
+/** The page-turn styles as the reader picks them: the flip first. */
+export const TURN_STYLE_OPTIONS: { value: PageTurnStyle; label: string; title: string }[] = [
+  { value: 'flip', label: 'Flip', title: 'The new page swings in from the spine' },
+  { value: 'paper', label: 'Paper', title: 'Drag the page and it folds like paper' },
+  { value: 'slide', label: 'Slide', title: 'Pages slide across' },
+  { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
+];
 
 export interface ReaderSettingsSheetProps {
   open: boolean;
@@ -15,6 +24,8 @@ export interface ReaderSettingsSheetProps {
   onPrefs(patch: Partial<ReaderPrefs>): void;
   layout: { pref: LayoutPref; canTurnPages: boolean };
   onLayout(pref: LayoutPref): void;
+  /** The creator's page-turn style (creatorTurnOf): marked in the picker, and picking it follows the creator again. */
+  creatorTurn: PageTurnStyle;
   lowPower: boolean;
   osReducedMotion: boolean;
   onShortcuts(): void;
@@ -72,7 +83,8 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
   if (!p.open) return null;
   const { prefs } = p;
   const reduced = prefs.reduceMotion || p.osReducedMotion;
-  let modeHint = 'Drag a page edge or use the arrows to turn the page.';
+  const turn = turnStyleFor({ turn: p.creatorTurn, turnChosen: true }, prefs.turn);
+  let modeHint = turn === 'paper' ? 'Drag a page edge or use the arrows to turn the page.' : 'Swipe, tap a page edge or use the arrows to turn the page.';
   if (p.layout.pref === 'scroll') modeHint = 'Read down the comic.';
   else if (reduced) modeHint = 'Use the arrows or swipe. Reduced motion is on.';
   else if (p.lowPower) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
@@ -103,13 +115,24 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             label="Reading mode"
             value={p.layout.pref === 'scroll' ? 'scroll' : 'turn'}
             onChange={(mode) => {
-              if (mode === 'turn') p.onPrefs({ turn: 'paper', fancyTurns: 'auto' });
+              // Back to turning pages: the turn style the reader picked (or the creator's) stays as it is.
+              if (mode === 'turn') p.onPrefs({ fancyTurns: 'auto' });
               p.onLayout(mode === 'scroll' ? 'scroll' : 'auto');
             }}
             options={[{ value: 'turn', label: 'Page turn' }, { value: 'scroll', label: 'Scroll' }]}
             hint={modeHint}
           />
         ) : <p className="text-[13px]">Scroll down to read this continuous page.</p>}
+        {p.layout.canTurnPages && p.layout.pref !== 'scroll' && (
+          <Choice<PageTurnStyle>
+            label="Page turn style"
+            value={turn}
+            // Picking the creator's own style follows the creator again ('auto'), so a later change of theirs reaches you.
+            onChange={(next) => p.onPrefs({ turn: next === p.creatorTurn ? 'auto' : next })}
+            options={TURN_STYLE_OPTIONS.map((o) => (o.value === p.creatorTurn ? { ...o, title: `${o.title} (the creator’s choice)` } : o))}
+            hint={reduced ? 'Reduced motion is on: pages change at once.' : undefined}
+          />
+        )}
         {p.onCopyPageLink && !!p.pageNumber && p.pageNumber > 0 && (
           <button type="button" onClick={() => p.onCopyPageLink?.(p.pageNumber!)} className="press min-h-11 w-full rounded-xl bg-[var(--ds-reader-hud-hover)] text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
             Copy link to page {p.pageNumber}

@@ -95,3 +95,22 @@ describe('roles and mount window', () => {
     expect(mountWindow(views, 3, [6])).toEqual([2, 3, 4, 6]);
   });
 });
+
+describe('the page flip (a comic that never chose a style, or a reader’s pick)', () => {
+  it('a flip brings the new view in over the desk and hides the old one, in spreads, single pages and RTL', () => {
+    const p = plan('spread', 2, 3, false, 'flip');
+    expect(p).toMatchObject({ kind: 'flip', dir: 1, mirrored: false, incomingKeys: ['i4', 'i5'], outgoingKeys: ['i2', 'i3'] });
+    expect(['i4', 'i5'].map((k) => roleOf(k, ['i2', 'i3'], p))).toEqual(['incoming', 'incoming']);
+    expect(['i2', 'i3'].map((k) => roleOf(k, ['i2', 'i3'], p))).toEqual(['hidden', 'hidden']);
+    expect(LAYER_Z.incoming).toBeGreaterThan(LAYER_Z.static);
+    expect(plan('single', 3, 2, true, 'flip')).toMatchObject({ kind: 'flip', dir: -1, mirrored: true, incomingKeys: ['i2'] });
+  });
+
+  it('the cover, a jump and a low-power device all flip (it is compositor-only); never a board, riffle or fold', () => {
+    expect(plan('spread', 0, 1, false, 'flip').kind).toBe('flip');
+    expect(plan('spread', 1, 4, false, 'flip', false, 3).kind).toBe('flip');
+    expect(plan('single', 2, 3, false, 'flip', true).kind).toBe('flip');
+    expect(plan('strip', 2, 3, false, 'flip').kind).toBe('flip');
+    expect(plan('single', 0, 1, false, 'flip').backExtra).toBeUndefined();
+  });
+});

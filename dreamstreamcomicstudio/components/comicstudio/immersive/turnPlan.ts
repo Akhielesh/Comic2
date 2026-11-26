@@ -6,14 +6,15 @@
 //   front   — the turning leaf's visible face (clipped to its static part each frame)
 //   back    — the face that lands on the other side (transformed + clipped each frame); in single-page
 //             layouts the back is paper (or the inside cover for the board), drawn as an extra layer
-//   incoming / outgoing — slide and fade transitions
+//   incoming / outgoing — slide, fade and flip transitions (a flip hides the outgoing page: the new one swings in
+//             from the spine over the desk, exactly as the Classic reader's Page Flip did)
 // Nothing remounts when a turn starts or ends, so lettering never re-measures mid-flip.
 
 import type { ReaderItem } from '../reader/readerModel';
 import type { BookGeometry, BookView, ReaderLayout, SlotContent, SlotSide } from './readerLayout';
 
-export type TurnKind = 'paper' | 'board' | 'riffle' | 'slide' | 'fade';
-export type TurnStyle = 'paper' | 'slide' | 'fade';
+export type TurnKind = 'flip' | 'paper' | 'board' | 'riffle' | 'slide' | 'fade';
+export type TurnStyle = 'flip' | 'paper' | 'slide' | 'fade';
 export type LayerRole = 'static' | 'hidden' | 'front' | 'back' | 'under' | 'incoming' | 'outgoing';
 
 export const contentKey = (c: SlotContent): string => (c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind);
@@ -67,7 +68,8 @@ export const planTurn = (p: PlanInput): TurnPlan => {
   const base = { dir, from: p.from, to: p.to, staticKeys: [] as string[], underKeys: [] as string[], incomingKeys: [] as string[], outgoingKeys: [] as string[] };
   const simple = p.style !== 'paper' || p.lowPower || p.layout === 'strip' || p.geomFrom.gap > 2;
   if (simple) {
-    const kind: TurnKind = p.style === 'fade' && !p.lowPower ? 'fade' : 'slide';
+    // The flip is transform and opacity on the compositor (index.css), so it stays on low-power devices and hinges.
+    const kind: TurnKind = p.style === 'flip' ? 'flip' : p.style === 'fade' && !p.lowPower ? 'fade' : 'slide';
     return {
       ...base,
       kind,
@@ -130,6 +132,7 @@ export const LAYER_Z: Record<LayerRole, number> = { hidden: 0, static: 1, under:
 /** Role of a mounted layer key for the current motion (null plan = idle: the current view is static). */
 export const roleOf = (key: string, currentKeys: string[], plan: TurnPlan | null): LayerRole => {
   if (!plan) return currentKeys.includes(key) ? 'static' : 'hidden';
+  if (plan.kind === 'flip') return plan.incomingKeys.includes(key) ? 'incoming' : 'hidden';
   if (plan.kind === 'slide' || plan.kind === 'fade') {
     // Going back with a slide, the current page slides away on top of the previous one.
     if (plan.incomingKeys.includes(key)) return plan.dir < 0 && plan.kind === 'slide' ? 'under' : 'incoming';

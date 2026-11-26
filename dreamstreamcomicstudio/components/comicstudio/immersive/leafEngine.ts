@@ -1,5 +1,7 @@
 // The "Leaf" turn engine: one rAF loop that animates a planned turn by writing styles straight to the
-// page elements (reader.md §3.3: no React render per frame). It knows four motions:
+// page elements (reader.md §3.3: no React render per frame). It knows five motions:
+//   flip    the new page swings in from the spine: index.css's page-flip classes on the incoming pages
+//           (reader/pageFlip.ts), no rAF at all; a spread swings as a pair around its spine
 //   paper   the fold (clip-path + reflection matrix), cast shadow, curl highlight, flap shadow;
 //           riffles run several staggered paper leaves
 //   board   the cover as a rigid hardcover (rotateY around the spine, preserve-3d)
@@ -39,6 +41,7 @@ import {
 } from './flipGeometry';
 import type { TurnKind, TurnPlan } from './turnPlan';
 import { READER_TOKEN_DEFAULTS, type ReaderMotionTokens } from './readerTokens';
+import { FLIP_MS, flipClass, playFlip } from '../reader/pageFlip';
 
 export interface LeafPart {
   root: HTMLElement | null;
@@ -73,6 +76,8 @@ export interface EngineConfig {
   frontOffset?: Vec;
   /** Book x of each incoming/outgoing element (slide origin math). */
   slotX?: Map<HTMLElement, number>;
+  /** Flip in a spread: the spine's book x, so the incoming pair swings around it as one sheet. */
+  flipSpineX?: number;
   durationMs: number;
   grabY?: number;
   /** The reader's motion tokens (riffle timing, paper curve), read once per mount; defaults when absent. */
@@ -143,6 +148,8 @@ export class TurnEngine {
   private tracker = new VelocityTracker();
   private outcome: Outcome = 'commit';
   private touched = false;
+  /** Flip: stops for the running swings (one per incoming page). */
+  private flips: (() => void)[] = [];
 
   /** Riffle timing and the paper curve (reader tokens, else the TS defaults). */
   private riffleLeaf: number;
@@ -181,6 +188,10 @@ export class TurnEngine {
 
   /** Tap / key turn along the auto path. */
   startAuto(): void {
+    if (this.cfg.plan.kind === 'flip') {
+      this.startFlip();
+      return;
+    }
     this.phase = 'auto';
     this.t0 = now();
     this.prime();
@@ -188,6 +199,35 @@ export class TurnEngine {
     this.advance(this.t0, 0);
     this.apply();
     this.loop();
+  }
+
+  /**
+   * The flip: each incoming page gets the swing class (a spread's pages share one origin, the spine, so the pair swings
+   * as one sheet); the turn is done when the first one lands. Nothing runs per frame.
+   */
+  private startFlip(): void {
+    const { plan, flipSpineX } = this.cfg;
+    this.phase = 'auto';
+    this.outcome = 'commit';
+    const cls = flipClass(plan.dir, plan.mirrored);
+    let landed = false;
+    const done = () => {
+      if (landed || this.phase === 'done') return;
+      landed = true;
+      this.phase = 'done';
+      this.stopFlips();
+      this.hooks.onDone('commit');
+    };
+    for (const p of this.els.incoming) {
+      if (!p.root) continue;
+      const origin = flipSpineX !== undefined ? `${flipSpineX - (this.cfg.slotX?.get(p.root) ?? 0)}px 50%` : undefined;
+      this.flips.push(playFlip(p.root, cls, { origin, done }));
+    }
+    if (!this.flips.length) done();
+  }
+
+  private stopFlips() {
+    for (const stop of this.flips.splice(0)) stop();
   }
 
   /** Begin following a finger (leaf-space point where it went down). */
@@ -248,6 +288,16 @@ export class TurnEngine {
 
   /** An auto turn reversed mid-way (opposite key): spring back to where it started. */
   springBack(): void {
+    if (this.cfg.plan.kind === 'flip') {
+      // A swing has no way back: the page it was bringing in goes, and the page you were on stays.
+      if (this.phase === 'done') return;
+      this.phase = 'done';
+      this.stopFlips();
+      this.outcome = 'cancel';
+      const hooks = this.hooks;
+      queueMicrotask(() => hooks.onDone('cancel'));
+      return;
+    }
     this.springTo('cancel', 0);
   }
 
@@ -264,6 +314,7 @@ export class TurnEngine {
     if (this.rafId !== null) caf(this.rafId);
     this.rafId = null;
     this.phase = 'done';
+    this.stopFlips();
     this.resetAll();
   }
 
@@ -271,6 +322,12 @@ export class TurnEngine {
 
   private springTo(outcome: Outcome, vPointer: number) {
     const { W, plan } = this.cfg;
+    if (plan.kind === 'flip') {
+      // No drag ever follows a flip: a release just lands where it was going.
+      if (outcome === 'commit') this.startFlip();
+      else this.springBack();
+      return;
+    }
     this.outcome = outcome;
     const commitX = plan.mode === 'forward' ? -W : W;
     const startX = plan.mode === 'forward' ? W : -W;
@@ -290,7 +347,7 @@ export class TurnEngine {
   }
 
   private prime() {
-    if (this.touched) return;
+    if (this.touched || this.cfg.plan.kind === 'flip') return;
     this.touched = true;
     const parts = this.parts();
     const folding = this.cfg.plan.kind === 'paper' || this.cfg.plan.kind === 'riffle';
@@ -395,6 +452,9 @@ export class TurnEngine {
   /** Write the current state to the DOM. */
   private apply() {
     switch (this.cfg.plan.kind) {
+      case 'flip':
+        // The swing is CSS (startFlip): nothing to write per frame.
+        break;
       case 'paper':
         this.applyPaper(this.els.front, this.els.back, this.pointer, true);
         break;
@@ -573,6 +633,8 @@ export const durationFor = (
   chained: boolean,
   tokens: Pick<ReaderMotionTokens, 'turn' | 'turnSpread' | 'turnBoard' | 'turnSlide' | 'turnFade' | 'chain'> = READER_TOKEN_DEFAULTS
 ): number => {
+  // The flip's length is the CSS animation's (index.css, FLIP_MS); a chained flip swings at the same pace.
+  if (kind === 'flip') return FLIP_MS;
   const base = kind === 'board' ? tokens.turnBoard : kind === 'slide' ? tokens.turnSlide : kind === 'fade' ? tokens.turnFade : spread ? tokens.turnSpread : tokens.turn;
   return chained ? Math.round(base * tokens.chain) : base;
 };

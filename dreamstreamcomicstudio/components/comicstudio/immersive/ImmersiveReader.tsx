@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { bookOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
+import { bookOf, creatorTurnOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
 import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
@@ -861,7 +861,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               endCard={endCardNode}
               hinge={hinge}
               sound={prefs.sound}
-              peel={ff.hover && !ff.coarse && !reduced}
+              // The corner peel is the paper's teaser: only the paper turn folds.
+              peel={ff.hover && !ff.coarse && !reduced && eff.turn === 'paper'}
               onCommand={onCommand}
               onFrames={(deltas) => low.reportFrames(deltas)}
               onImageError={props.onImageError}
@@ -951,6 +952,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
         prefs={prefs}
         onPrefs={onPrefs}
         layout={{ pref: layoutPref, canTurnPages }}
+        creatorTurn={creatorTurnOf(creator)}
         onLayout={onLayout}
         lowPower={low.lowPower}
         osReducedMotion={osReduced}
