@@ -22,6 +22,8 @@ import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
 import type { PriceBook } from '../../../shared/comic/modelLock.js';
+import type { TextOpTag } from './models/textRates.js';
+import type { ProviderBalanceReport } from '../../../shared/providerBalances.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -116,6 +118,11 @@ export interface LlmRequest {
   signal?: AbortSignal;
   /** Streaming text callback (director narration). */
   onDelta?: (text: string) => void;
+  /**
+   * A repair round of a strict-JSON completion (writer.ts completeStructured): the model's reply sent back once with
+   * its problems. Billing marks the call so the observed text rates leave repairs out of a pass's cost.
+   */
+  repair?: boolean;
 }
 
 export interface LlmResult {
@@ -158,6 +165,11 @@ export interface ImageRequest {
    * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
    */
   preferRoute?: ImageRoute;
+  /**
+   * Routes this request must never call: a run marks a route here once its key was refused for credit
+   * (imageClient creditRefusalOf), so neither the first try nor the same-payer fallback spends on it again.
+   */
+  excludeRoutes?: ImageRoute[];
   /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
   maxUsd?: number;
 }
@@ -282,7 +294,8 @@ export interface DocStore {
 // ── Billing ──────────────────────────────────────────────────────────────────
 
 export interface BillingReservation {
-  settle(args: { costUsd?: number; imageUnits?: number; promptTokens?: number; completionTokens?: number }): Promise<{ billableUsd?: number }>;
+  /** `estimated`: costUsd is our own guess (a cancelled or timed-out call), not the provider's figure. */
+  settle(args: { costUsd?: number; imageUnits?: number; promptTokens?: number; completionTokens?: number; estimated?: boolean }): Promise<{ billableUsd?: number }>;
   release(reason: string): Promise<void>;
 }
 
@@ -302,6 +315,9 @@ export interface BillingHooks {
     outputTokens?: number;
     /** Text calls: every model the call may be served by (the route's fallback chain, primary first). The hold covers the dearest. */
     models?: string[];
+    /** Text calls of one priced operation (a page plan, a style proposal, one language): rides on the ledger rows so
+     *  the observed text rates can be derived from what was really paid (models/textRates.ts). */
+    textOp?: TextOpTag;
   }): Promise<BillingReserveResult>;
 }
 
@@ -351,4 +367,19 @@ export interface StudioContext {
    * costs; never throws). Absent ⇒ jobs.ts priceBookFor builds one itself.
    */
   prices?: () => Promise<PriceBook>;
+  /**
+   * The balance check before spending (creditCheck.ts): reads the owner's own key balance. Absent ⇒ every own-key
+   * balance is unknown and paid steps start as before (the allowance check needs only `caps.usage`).
+   */
+  credit?: CreditPort;
+}
+
+/** How a paid step learns what the owner's OWN key has left (never anyone else's, never a platform key). */
+export interface CreditPort {
+  /**
+   * The newest provider reading for exactly this owner and key, refreshed on the server when it is older than
+   * `maxAgeMs` (default 15 minutes: a stricter age reads the provider again, as a check about to refuse a step does);
+   * null when unknown or unsupported. Never throws.
+   */
+  ownKeyBalance(input: { ownerId: string; provider: 'openrouter'; key: string; maxAgeMs?: number }): Promise<ProviderBalanceReport | null>;
 }

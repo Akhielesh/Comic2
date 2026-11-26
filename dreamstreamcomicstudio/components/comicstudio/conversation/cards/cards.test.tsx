@@ -387,6 +387,35 @@ describe('PlanCard', () => {
       expect(studio.setTab).toHaveBeenCalledWith('pages');
     });
 
+    it('a page whose words do not fit is held back as the server holds it back: out of the count and the price, said in words', async () => {
+      const doc = makeSampleDoc({ planStatus: 'approved' });
+      const said = Array.from({ length: 120 }, (_, i) => ['listen', 'the', 'carrier', 'behind', 'those', 'stalls'][i % 6]).join(' ');
+      const held = doc.pages.find((p) => p.id === 'pg_2')!;
+      held.layout = 'Row 1: two equal panels.';
+      held.panels = held.panels.map((pn, i) => ({ ...pn, size: 'small', lines: [{ id: `ln_over_${i}`, kind: 'speech', speakerId: 'c_maya', text: said }] }));
+      const q = quoteRenderPages(doc, { byok: false, tier: 'standard', holdBack: {} });
+      expect(q.heldBackIds).toEqual(['pg_2']);
+      expect(estimatePlanRender(doc, false).estimate.usd).toBe(q.usd);
+      expect(estimatePlanRender(doc, false).heldBack.map((p) => p.id)).toEqual(['pg_2']);
+      const studio = makeFakeStudio({ doc });
+      render(<PlanList card={card as Extract<Card, { type: 'plan' }>} studio={studio} />);
+      fireEvent.click(screen.getByRole('button', { name: `Draw 1 page (≈ ${formatUsd(q.usd)})` }));
+      expect(screen.getByText(/Page 2 is held back — too much text for its panels\./)).toBeInTheDocument();
+      await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', quotedUsd: q.usd }));
+    });
+
+    it('in a draft, the approval counts what it draws instead of saying "all" when a page is held back', () => {
+      const doc = makeSampleDoc();
+      const said = Array.from({ length: 120 }, (_, i) => ['listen', 'the', 'carrier', 'behind', 'those', 'stalls'][i % 6]).join(' ');
+      const held = doc.pages.find((p) => p.id === 'pg_2')!;
+      held.layout = 'Row 1: two equal panels.';
+      held.panels = held.panels.map((pn, i) => ({ ...pn, size: 'small', lines: [{ id: `ln_over_${i}`, kind: 'speech', speakerId: 'c_maya', text: said }] }));
+      const q = quoteRenderPages(doc, { byok: false, tier: 'standard', holdBack: {} });
+      render(<PlanList card={card as Extract<Card, { type: 'plan' }>} studio={makeFakeStudio({ doc })} />);
+      expect(screen.getByRole('button', { name: `Approve & render 1 page (≈ ${formatUsd(q.usd)})` })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Approve & render all/ })).toBeNull();
+    });
+
     it('a cleared plan offers to plan again', () => {
       const studio = makeFakeStudio({ doc: makeSampleDoc({ pages: [], planStatus: 'none' }) });
       render(<PlanList card={card as Extract<Card, { type: 'plan' }>} studio={studio} />);

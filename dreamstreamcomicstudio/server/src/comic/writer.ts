@@ -189,7 +189,8 @@ export async function completeStructured<T>(args: {
         jsonSchema: { name: args.schemaName, schema: args.schema, strict: true },
         temperature: args.temperature,
         maxTokens: args.maxTokens,
-        signal: args.signal
+        signal: args.signal,
+        ...(attempt > 1 ? { repair: true } : {})
       });
     } catch (err) {
       // A failed repair call still leaves the first (usable) answer.

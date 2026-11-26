@@ -10,6 +10,7 @@ import { Lock, Palette, RefreshCw, RotateCcw } from 'lucide-react';
 import type { Card, ComicDoc, StyleOption } from '../../../../shared/comic/doc';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { CardShell, GhostButton, plural } from '../ui';
 import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
 import { RenderThumb, tileModel, tileSources, unsignableOf } from './renderTile';
@@ -36,16 +37,17 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
   const guard = useStudioSequenceGuard(studio);
   const { run, isPending } = useAction(studio.act, { guard });
   const cost = useCostFormat(studio);
+  const prices = useStudioPrices(studio);
   if (!doc) return null;
   const options = doc.style.options;
   const locked = lockedOptionId(doc);
   const drawing = options.filter(isBusy).length;
   const picking = options.some((o) => isPending(`pick:${o.id}`));
-  const moreUsd = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, studio.byok);
+  const moreUsd = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, studio.byok, false, prices);
   const failed = options
     .filter((o) => o.render.status === 'failed')
     .map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }));
-  const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
+  const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok, prices) : null;
   const drawnBy = tileModel(doc, 'style_option');
   const isUnsignable = unsignableOf(studio);
 
@@ -85,7 +87,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                   void run(`retry:${o.id}`, {
                     type: 'render_style_options',
                     directions: [{ name: o.name, spec: o.spec }],
-                    quotedUsd: quoteStyleOptions(doc, 1, studio.byok, true)
+                    quotedUsd: quoteStyleOptions(doc, 1, studio.byok, true, prices)
                   })
                 }
                 // The server draws one batch of options at a time: retries wait for the current one.

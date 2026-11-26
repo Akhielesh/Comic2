@@ -13,6 +13,7 @@ import type { Card, Character } from '../../../../shared/comic/doc';
 import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { FOCUS_RING, TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, cx, plural } from '../ui';
 import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
@@ -64,6 +65,8 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
   const doc = studio.doc;
   const { run, isPending } = useAction(studio.act);
   const cost = useCostFormat(studio);
+  // The person's PriceBook: the label and the quotedUsd are the figure the approval and the run use.
+  const prices = useStudioPrices(studio);
   const [inspecting, setInspecting] = useState<string | null>(null);
   if (!doc) return null;
   const ids = Array.isArray(card.characterIds) && card.characterIds.length ? card.characterIds : doc.cast.map((c) => c.id);
@@ -74,7 +77,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
   // Only worth saying while a companion still needs its sheet.
   const companions = cast.filter((c) => castRoleLabel(c) === 'Companion' && needsSheet(c)).length;
   // On the comic's locked model when it has one (the server draws and gates the sheets there).
-  const estimate = estimateDocJobs(doc, [{ kind: 'sheet', count: missing.length, label: 'character sheets' }], { byok: studio.byok });
+  const estimate = estimateDocJobs(doc, [{ kind: 'sheet', count: missing.length, label: 'character sheets' }], { byok: studio.byok, ...(prices ? { prices } : {}) });
 
   return (
     <CardShell

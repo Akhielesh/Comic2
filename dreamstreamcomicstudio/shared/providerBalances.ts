@@ -28,6 +28,29 @@ export interface ProviderBalanceReport {
   planQuotas?: Array<{ label: string; remainingPercent: number }>;
 }
 
+/** A reading older than this is stale: the studio and Settings read again when a view opens, and a paid step re-reads
+ *  it on the server before it compares (the dashboard's own background revalidation uses the same 15 minutes). */
+export const BALANCE_FRESH_MS = 15 * 60_000;
+
+export const balanceIsFresh = (report: Pick<ProviderBalanceReport, 'checkedAt'>, now: number = Date.now()): boolean =>
+  Number.isFinite(report.checkedAt) && now - report.checkedAt < BALANCE_FRESH_MS;
+
+/**
+ * What this key can still spend, in USD: the smaller of the key's own remaining limit and the account's USD credits,
+ * from whichever of the two the provider reported (an account below a key's limit caps the key, and the other way
+ * round). null when neither was reported (a key with no limit on an account whose credits this key may not read).
+ */
+export function spendableUsd(report: ProviderBalanceReport | null | undefined): number | null {
+  if (!report || report.status !== 'reported') return null;
+  const amounts: number[] = [];
+  const key = report.keyQuotaUsd?.remaining;
+  if (typeof key === 'number' && Number.isFinite(key)) amounts.push(key);
+  for (const entry of report.accountBalances ?? []) {
+    if (entry.currency === 'USD' && Number.isFinite(entry.remaining)) amounts.push(entry.remaining);
+  }
+  return amounts.length ? Math.max(0, Math.min(...amounts)) : null;
+}
+
 const record = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const finite = (v: unknown): number | null =>

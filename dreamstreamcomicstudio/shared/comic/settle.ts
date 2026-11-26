@@ -293,7 +293,8 @@ export const CARD_SETTLE_RULES: Readonly<Record<Card['type'], CardSettleRule>> =
   share: { kind: 'view', settles: 'a newer share card, or moved past' },
   research: { kind: 'status', settles: 'moved past' },
   notice: { kind: 'status', settles: 'moved past; a taken fix retires its alternatives (NoticeCard)' },
-  model_outage: { kind: 'status', settles: 'moved past', staysLive: 'while its “wait and retry” is waiting in this tab' }
+  model_outage: { kind: 'status', settles: 'moved past', staysLive: 'while its “wait and retry” is waiting in this tab' },
+  credit: { kind: 'status', settles: 'moved past (a new message, or the run its “Draw” button starts)' }
 };
 
 // ── Matching an answer to a card's choices (moved from director.ts normalizeAnswer / pickedChoices) ─────────────
@@ -520,6 +521,7 @@ function settleWith(ctx: SettleContext, msgIndex: number, cardIndex: number, car
       return view();
     case 'notice':
     case 'research':
+    case 'credit':
       return passed ? settled('passed') : LIVE;
     default: {
       // Every card type the doc can store has a rule above: a new one does not compile until it gets one here (and in
@@ -1010,6 +1012,22 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
     }
     case 'research':
       return { text: `Research · ${clip(str(card.query), 120)}`, tone: 'plain' };
+    case 'credit': {
+      // Words only, never an amount: the line is the same for every viewer.
+      const names = (card.keys?.length ? card.keys.map((k) => k.provider) : [card.provider]).map((p) => (p === 'gemini' ? 'Gemini' : 'OpenRouter'));
+      const key = `${names.join(' and ')} key${names.length > 1 ? 's' : ''}`;
+      if (card.reason === 'short') return { text: `Not enough credit · nothing started`, tone: 'quiet' };
+      const n = typeof card.notStarted === 'number' && card.notStarted > 0 ? card.notStarted : 0;
+      const head =
+        card.payer !== 'own_key'
+          ? 'Drawing paused'
+          : names.length > 1
+            ? `Stopped: ${key} can’t draw`
+            : card.noQuota
+              ? `Stopped: ${key} has no image quota`
+              : `Stopped: ${key} out of credit`;
+      return { text: n ? `${head} · ${plural(n, 'picture')} not started` : head, tone: 'quiet' };
+    }
     case 'publish': {
       // Honest per mode: a declined unpublish leaves the comic published, a declined update keeps the old version.
       const words = PUBLISH_WORDS[card.mode] ?? PUBLISH_WORDS.publish;

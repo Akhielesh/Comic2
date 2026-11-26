@@ -548,7 +548,11 @@ acting entry is about 30–40 tokens):
   pages it draws (`bindSpendAction`: held-back pages left out, no `drawOverfull`, no chip quote), and the breakdown
   posted with it is scoped to those pages, so the user sees exactly what they approve; the held-back notice beside it
   is where "Draw page N anyway (with the rest)" lives. The breakdown card shows held-back pages in red with the same
-  free fixes and, outside a gate, "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
+  free fixes and, outside a gate, "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes). The Pages header
+  and the plan card quote Render all the same way (`holdBack: {}`), count what it draws ("Render 4 pages") and say which
+  pages wait and why; when every page left is held back the header has no draw button or price, only that line, the
+  free layout fix when one exists (`shared/comic/layoutFit.ts`, shared with the breakdown card) and "Open page N"
+  (`board/HeldBackNote.tsx`; pricing.md § 2).
 - **Plan fit in the UI** (Ship 1 A5). Every wireframe panel carries a fit dot: green fits, amber tight, red too
   full, in the readable status tones (`--ds-success-text`, `--ds-warning-text`, `--ds-danger-text`, `FIT_DOT_COLOR`)
   and in different shapes (a filled dot, a ring, a diamond), and the tile and its detail row say it in words

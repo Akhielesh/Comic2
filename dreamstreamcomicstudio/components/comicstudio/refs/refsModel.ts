@@ -4,6 +4,7 @@
 
 import type { Character, ComicDoc, RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { resolveImageJob } from '../../../shared/comic/models';
+import type { PriceBook } from '../../../shared/comic/modelLock';
 import { quoteLockOf, unitPrice } from '../../../shared/comic/plan';
 import { REF_LABELS_FOR, REF_LABEL_TEXT, REF_LIMITS, capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged } from '../../../shared/comic/refRanking';
@@ -144,20 +145,22 @@ export interface SheetHint {
 
 /**
  * "New photos since this sheet — redraw ≈ $0.07" / "Make the model sheet from these photos ≈ $0.07".
- * `price` formats the quote for the viewer — pass conversation/cost useCostFormat(studio).approx.
+ * `price` formats the quote for the viewer — pass conversation/cost useCostFormat(studio).approx. `prices` is the
+ * person's PriceBook (usage/useStudioPrices), so the figure is the one the sheet's run charges; absent = the registry.
  */
 export function sheetHint(
   doc: ComicDoc | null | undefined,
   owner: RefOwner,
   byok = false,
-  price?: (usd: number) => string
+  price?: (usd: number) => string,
+  prices?: PriceBook
 ): SheetHint | null {
   if (!doc || owner.kind !== 'character') return null;
   const c = doc.cast.find((x) => x.id === owner.id);
   if (!c || c.tier === 'extra' || !c.refs.length) return null;
   let usd = 0;
   try {
-    usd = unitPrice(doc, 'sheet', { byok }).usd;
+    usd = unitPrice(doc, 'sheet', { byok, ...(prices ? { prices } : {}) }).usd;
   } catch {
     usd = 0;
   }

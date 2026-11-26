@@ -3,7 +3,8 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { StudioEvent } from '../../../shared/comic/events.js';
+import { MAX_CONFIRMED_AGO_MS, type StudioEvent } from '../../../shared/comic/events.js';
+import { needsYouOf } from '../../../shared/comic/attention.js';
 import { createEmptyDoc, DIRECTOR_DRAFT_IDEA_LIMIT, emptyRender, type Card, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
@@ -456,6 +457,38 @@ describe('POST /projects/:id/stream', () => {
     const done = events[events.length - 1] as Extract<StudioEvent, { type: 'done' }>;
     expect(done.spentUsd).toBeGreaterThan(0);
     expect(store.docs.get('proj-1')!.doc.cover.render.status).toBe('ready');
+  });
+
+  it('a re-sent "wait and retry" posts as confirmed when the person armed it: a question asked since stays open', async () => {
+    const doc = seed();
+    doc.settings.confirm = 'always';
+    // The person armed the retry 3 minutes ago; the Director asked something 2 minutes ago.
+    const asked = Date.now() - 120_000;
+    doc.conversation.push(
+      { id: 'u1', role: 'user', text: 'Wait for the model and draw the cover.', at: asked - 120_000 },
+      { id: 'a1', role: 'assistant', text: 'Which mood for the cover?', at: asked, cards: [{ type: 'options', id: 'c1', question: 'Mood?', choices: [{ id: 'calm', label: 'Calm' }, { id: 'storm', label: 'Storm' }] }] }
+    );
+    const before = Date.now();
+    await stream('proj-1', { kind: 'action', action: { type: 'render_cover' }, confirmedAgoMs: 180_000 });
+    const after = Date.now();
+    expect(images.calls).toHaveLength(1);
+    const saved = store.docs.get('proj-1')!.doc;
+    const posted = saved.conversation.slice(saved.conversation.findIndex((m) => m.id === 'a1') + 1);
+    expect(posted.length).toBeGreaterThan(0);
+    for (const m of posted) {
+      expect(m.runAt).toBeGreaterThanOrEqual(before - 180_000);
+      expect(m.runAt).toBeLessThanOrEqual(after - 180_000);
+    }
+    expect(needsYouOf(saved)).toEqual({ why: 'question', key: 'card:a1:c1' });
+  });
+
+  it('the same click sent at once is a fresh turn: it moves the chat past the question', async () => {
+    const doc = seed();
+    doc.settings.confirm = 'always';
+    const asked = Date.now() - 120_000;
+    doc.conversation.push({ id: 'a1', role: 'assistant', text: 'Which mood for the cover?', at: asked, cards: [{ type: 'options', id: 'c1', question: 'Mood?', choices: [{ id: 'calm', label: 'Calm' }, { id: 'storm', label: 'Storm' }] }] });
+    await stream('proj-1', { kind: 'action', action: { type: 'render_cover' } });
+    expect(needsYouOf(store.docs.get('proj-1')!.doc)).toBeNull();
   });
 
   it('patch actions apply instantly; invalid ones become an error event', async () => {
@@ -1003,6 +1036,16 @@ describe('parseStreamRequest', () => {
     for (const raw of [undefined, 'card_1', { id: '<x>', choiceIds: ['a'] }, { id: 'card_1' }, { id: 'card_1', choiceIds: [], custom: '   ' }]) expect(parseOptionAnswer(raw)).toBeUndefined();
     // The shared request shape is untouched: the reference rides beside it.
     expect(parseStreamRequest({ kind: 'message', text: 'Yes', card: { id: 'card_1', choiceIds: ['opt_1'] } })).toEqual({ kind: 'message', text: 'Yes' });
+  });
+
+  it('keeps a re-sent action’s confirmedAgoMs when it is a sane wait, and drops anything else (never a 400)', () => {
+    const action = { type: 'render_cover' };
+    expect(parseStreamRequest({ kind: 'action', action, confirmedAgoMs: 90_000.7 })).toEqual({ kind: 'action', action, confirmedAgoMs: 90_000 });
+    for (const confirmedAgoMs of [0, -5, Number.NaN, '90000', null, MAX_CONFIRMED_AGO_MS + 1, Infinity]) {
+      expect(parseStreamRequest({ kind: 'action', action, confirmedAgoMs }), String(confirmedAgoMs)).toEqual({ kind: 'action', action });
+    }
+    // A message never carries one.
+    expect(parseStreamRequest({ kind: 'message', text: 'hi', confirmedAgoMs: 5_000 })).toEqual({ kind: 'message', text: 'hi' });
   });
 
   it('passes focus through, keeping only valid parts', () => {

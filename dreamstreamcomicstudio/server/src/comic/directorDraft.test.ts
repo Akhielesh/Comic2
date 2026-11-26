@@ -122,6 +122,23 @@ describe('the explicitly requested director draft', () => {
     expect(vi.mocked(writePagePlan).mock.calls[0][0].instructions).toContain('SAFETY NOTE: adapt the scene to the account rating.');
   });
 
+  it('an own key with no credit: no writer call, one "Not enough credit" card, and the draft stops with the idea kept', async () => {
+    const { session } = setup();
+    const ctx = Object.assign(testContext(session, { keys: { openrouter: { key: 'sk-or-synthetic-owner', byok: true } } }), {
+      credit: {
+        ownKeyBalance: async () => ({ provider: 'openrouter' as const, status: 'reported' as const, checkedAt: Date.now(), accountBalances: null, keyQuotaUsd: { limit: 5, remaining: 0, usage: 5 } })
+      }
+    });
+    await expect(runDirectorDraft(ctx, idea)).resolves.toEqual({});
+    expect(writePagePlan).not.toHaveBeenCalled();
+    expect(session.doc.pages).toHaveLength(0);
+    expect(session.doc.gate).toBeFalsy();
+    expect(session.doc.directorDraft).toMatchObject({ status: 'interrupted', idea });
+    const cards = session.doc.conversation.flatMap((m) => m.cards || []).filter((c) => c.type === 'credit');
+    expect(cards).toEqual([expect.objectContaining({ reason: 'short', payer: 'own_key', what: 'the page plan' })]);
+    expect(session.doc.spend.totalUsd).toBe(0);
+  });
+
   it('rejects insufficient positive headroom before a writer call', async () => {
     const { ctx, session } = setup();
     session.commit([{ op: 'settings', patch: { budgetUsd: 0.001 } }]);

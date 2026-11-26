@@ -15,12 +15,12 @@ import { STEER_LIMITS, type StudioFocus } from '../../../shared/comic/events.js'
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
 import { unitPrice } from '../../../shared/comic/plan.js';
-import { deriveLock } from '../../../shared/comic/modelLock.js';
+import { deriveLock, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { costFormatter, costFormatterFor, governCard, governDollars, type CostFormatter } from './costText.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
-import { billedLlm, newTextSpendTracker, noticeCard, planPagesQuoteText, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
+import { billedLlm, newTextSpendTracker, noticeCard, planPagesQuoteText, priceBookWithin, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
 import { isProviderRefusal, looksLikeRefusal } from './llm.js';
 import { carriedImages, refIntentHint, unassignedImages, whoIsInTheseCard } from './refs/index.js';
 import {
@@ -197,6 +197,9 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
   return parts.length ? `Focus: the user is looking at ${parts.join('; ')}` : '';
 };
 
+/** How long a director turn waits for real prices for its summary (else the registry list, as before). */
+export const DIRECTOR_PRICES_WAIT_MS = 500;
+
 /**
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
@@ -215,7 +218,7 @@ export function summarizeDocForDirector(
   doc: ComicDoc,
   byok = false,
   extraLines: readonly string[] = [],
-  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter; contradictions?: boolean } = {}
+  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter; contradictions?: boolean; prices?: PriceBook } = {}
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
@@ -230,14 +233,16 @@ export function summarizeDocForDirector(
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride, lock);
   // The prices come from the same source as every other quote (unitPrice: the lock, else the model override, else
   // the tier preset), so an unlocked comic with a model override is quoted on that model, as named above.
-  const pageUsd = unitPrice(doc, 'page', { byok }).usd;
-  const coverUsd = unitPrice(doc, 'cover', { byok }).usd;
+  // With the request's PriceBook (when it is ready in time) these are the figures the chips and the gate show.
+  const priced = opts.prices ? { prices: opts.prices } : {};
+  const pageUsd = unitPrice(doc, 'page', { byok, ...priced }).usd;
+  const coverUsd = unitPrice(doc, 'cover', { byok, ...priced }).usd;
   tail.push(
     `Settings: ${set.quality} quality (${spec.nickname}${lock ? ' (locked)' : ''} ${resolution}, ${c.approx(pageUsd)}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
   );
   // Before a plan exists, the director quotes planning honestly: one writer pass, and the bound when the plan
   // check sends it back for its one repair round (plan §7) — the same figure the "Plan the pages" chip carries.
-  if (doc.planStatus === 'none') tail.push(`Planning the pages: ${planPagesQuoteText(doc, c, byok)}`);
+  if (doc.planStatus === 'none') tail.push(`Planning the pages: ${planPagesQuoteText(doc, c, byok, opts.prices)}`);
   tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
   if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
   if (opts.contradictions) {
@@ -350,6 +355,17 @@ const cardText = (card: Card, cardDoc?: ComicDoc, outcome?: string): string => {
       return `[${card.tone}: ${clip(card.text, 200)}]`;
     case 'model_outage':
       return outageCardText(card);
+    case 'credit': {
+      // Money stopped a paid step (credit-safety.md). Never an amount: the model must not repeat one to a governed user.
+      const names = (card.keys?.length ? card.keys.map((k) => k.provider) : [card.provider]).map((p) => (p === 'gemini' ? 'Gemini' : 'OpenRouter'));
+      const key = card.payer === 'own_key' ? `the creator's ${names.join(' and ')} key${names.length > 1 ? 's' : ''}` : 'the included usage';
+      if (card.reason === 'short') {
+        return `[not started: not enough credit on ${key} for ${clip(card.what || 'that step', 80)}; nothing was charged${card.fits ? `; it offers to draw the first ${card.fits.pages} pages that fit` : ''}]`;
+      }
+      const left = typeof card.notStarted === 'number' && card.notStarted > 0 ? `; ${card.notStarted} not started and not charged` : '';
+      const why = card.keys?.length ? 'were all refused (out of credit or no image quota)' : card.noQuota ? 'has no image quota' : 'ran out of credit';
+      return `[drawing stopped: ${key} ${why}${left}; the card offers a top-up or a key switch]`;
+    }
     case 'conflict': {
       const text = conflictCardText(card);
       return tail && text.endsWith(']') ? `${text.slice(0, -1)}${tail}]` : text;
@@ -730,10 +746,14 @@ async function directorTurnBody(
   const prompt = rules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${rules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
+  // The request's PriceBook when it is ready in time (it is memoised: a spend this turn starts reuses it), so the
+  // summary's page and planning prices are the chips' and the gate's. A cold catalog never holds a turn long.
+  const pricesSoon = priceBookWithin(ctx, DIRECTOR_PRICES_WAIT_MS);
   const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
+  const prices = await pricesSoon;
   const system = [
     prompt,
-    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost, contradictions }),
+    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost, contradictions, ...(prices ? { prices } : {}) }),
     memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
   ]
     .filter(Boolean)

@@ -29,6 +29,7 @@ import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpSe
 import type { McpServerConfig } from '../apiTypes';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { PersonalProviderBalance, ProviderActivityPanel, useProviderActivity } from './usage/ProviderActivity';
+import { KeyBalancePanel } from './usage/KeyBalancePanel';
 import type { ProviderBalanceReport } from '../shared/providerBalances';
 import { useAuth } from '../contexts/AuthContext';
 import { reconcileProviderMirror } from '../services/byokSync';
@@ -784,6 +785,7 @@ const AccountApiConfiguration: React.FC<{ ownerId?: string }> = ({ ownerId }) =>
       </div>
 
       <DreamStreamAllowancePanel />
+      {ownerId && <KeyBalancePanel ownerId={ownerId} />}
       {ownerId && <ProviderActivityPanel {...activity} />}
 
       <div className={SECTION_LABEL}>Providers</div>

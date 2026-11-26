@@ -19,6 +19,7 @@ import { deriveLock } from '../../../shared/comic/modelLock';
 import { TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import type { StudioController } from '../types';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { cx } from '../conversation/ui';
 import { armRetry } from './retryIntents';
 import { OptionButton, type OptionHandlers } from './OptionButtons';
@@ -86,6 +87,8 @@ export const ModelStatusBanner: React.FC<{ studio: StudioController; compact: bo
   const status = useModelStatus(watched);
   const worst = status.worst;
   const card = worst ? latestOutageCard(doc, worst.modelId) : undefined;
+  // The person's price book, read only while the banner prices its own switch options (trouble and no server card).
+  const prices = useStudioPrices(worst && !card ? studio : null);
   // Switch candidates' health, read once (never polled) and only while there is trouble and no server-built card.
   const candidateIds = useMemo(() => (worst ? pickableImageModels().map((m) => m.id).filter((id) => id !== worst.modelId) : []), [worst?.modelId]);
   const candidates = useModelStatus(candidateIds, { enabled: !!worst && !card, poll: false });
@@ -116,7 +119,7 @@ export const ModelStatusBanner: React.FC<{ studio: StudioController; compact: bo
     const reason = troubleReason(worst);
     const since = clockTime(status.since[id], now);
     const down = worst.state === 'down';
-    const { options } = bannerOptions({ doc, modelId: id, caps: studio.caps, health: { ...candidates.byId } });
+    const { options } = bannerOptions({ doc, modelId: id, caps: studio.caps, health: { ...candidates.byId }, ...(prices ? { prices } : {}) });
     const action = card?.blockedAction;
     const handlers: OptionHandlers = {
       blockedAction: action,

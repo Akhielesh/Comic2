@@ -8,7 +8,9 @@
 //  1. approval: an open spend gate (doc.gate.status === 'open');
 //  2. question: in any assistant message since the person's last message, newest first, while the card is still live
 //     by the settle rule (a later agent turn settles it; a message from work already running does not), an open options card with
-//     choices, an unresolved conflict card, a pending publish confirm, or a live model-outage choice;
+//     choices, an unresolved conflict card, a pending publish confirm, or a live model-outage choice; in the same place,
+//     credit: a live `credit` card (a run that stopped on an empty key, a step that did not fit), which waits on a
+//     top-up or a key switch, not on an answer;
 //  3. plan: the page plan waits for its OK (planStatus 'draft', at least one page, a live plan card or a breakdown card
 //     that is not a gate's own, and nothing drawing);
 //  4. style: looks waiting to be picked (a live style_presets card with nothing picked, or a live style_choice card while
@@ -17,7 +19,7 @@
 import type { Card, ComicDoc, Msg, RenderState } from './doc.js';
 import { buildSettleIndex, settleKey, type SettleIndex } from './settle.js';
 
-export type NeedsWhy = 'approval' | 'question' | 'plan' | 'style';
+export type NeedsWhy = 'approval' | 'question' | 'credit' | 'plan' | 'style';
 
 export interface NeedsYou {
   why: NeedsWhy;
@@ -82,6 +84,12 @@ const isQuestion = (index: SettleIndex, m: Msg, c: Card & { id: string }): boole
   }
 };
 
+/**
+ * credit-safety.md: a run that stopped on an empty key, or a step that did not fit, waits on a top-up or a key switch
+ * (the card stays live until the chat moves past it), so it is not "Pages are ready", and not a question either.
+ */
+const isCreditStop = (index: SettleIndex, m: Msg, c: Card & { id: string }): boolean => c.type === 'credit' && stateOf(index, m, c) === 'live';
+
 /** What waits on the person in this comic, most pressing first, or null. */
 export function needsYouOf(doc: ComicDoc | null | undefined): NeedsYou | null {
   if (!doc) return null;
@@ -96,7 +104,11 @@ export function needsYouOf(doc: ComicDoc | null | undefined): NeedsYou | null {
     const index = buildSettleIndex(doc);
 
     for (const m of sinceLastUser(conv)) {
-      for (const c of cardsOf(m)) if (hasId(c) && isQuestion(index, m, c)) return { why: 'question', key: `card:${m.id}:${c.id}` };
+      for (const c of cardsOf(m)) {
+        if (!hasId(c)) continue;
+        if (isQuestion(index, m, c)) return { why: 'question', key: `card:${m.id}:${c.id}` };
+        if (isCreditStop(index, m, c)) return { why: 'credit', key: `card:${m.id}:${c.id}` };
+      }
     }
 
     const assistant = assistantNewestFirst(conv);

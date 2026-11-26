@@ -15,6 +15,7 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { RefsDrawer } from './RefsDrawer';
 import { ownerLabel, sheetHint } from './refsModel';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 
 type RefsCardType = Extract<Card, { type: 'refs' }>;
 
@@ -22,6 +23,8 @@ export const RefsCard: React.FC<CardProps<RefsCardType>> = ({ card, studio }) =>
   const [open, setOpen] = useState(false);
   // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
   const cost = useCostFormat(studio);
+  // The person's PriceBook: the sheet's price here is the one its run charges.
+  const prices = useStudioPrices(studio);
   const doc = studio.doc;
   const list = doc ? refsOf(doc, card.owner) : undefined;
   const name = ownerLabel(doc, card.owner);
@@ -36,7 +39,7 @@ export const RefsCard: React.FC<CardProps<RefsCardType>> = ({ card, studio }) =>
   const wanted = new Set(card.paths || []);
   const here = list.filter((r) => wanted.has(r.path));
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
-  const hint = sheetHint(doc, card.owner, byokFromDoc(doc), cost.approx);
+  const hint = sheetHint(doc, card.owner, byokFromDoc(doc), cost.approx, prices);
   const character = card.owner.kind === 'character' ? doc.cast.find((c) => c.id === (card.owner as { id: string }).id) : undefined;
   const target = card.owner.kind === 'style' ? 'the style' : name;
   const title = here.length ? `${plural(here.length, 'photo')} on ${target}` : `Photos for ${target}`;

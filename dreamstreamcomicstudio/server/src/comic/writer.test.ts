@@ -292,6 +292,9 @@ describe('writePagePlan', () => {
     expect(calls[1].messages).toHaveLength(4);
     expect(calls[1].messages[2]).toMatchObject({ role: 'assistant', content: 'Sure! Here is your plan: {pages: oops' });
     expect(String(calls[1].messages[3].content)).toContain('not valid JSON');
+    // The repair round says so on its request (billing marks it; the observed planning rate leaves it out).
+    expect(calls[0].repair).toBeUndefined();
+    expect(calls[1].repair).toBe(true);
     expect(out.costUsd).toBeCloseTo(0.03);
     expect(out.pages).toHaveLength(1);
   });

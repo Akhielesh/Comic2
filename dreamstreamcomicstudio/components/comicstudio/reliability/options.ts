@@ -2,10 +2,11 @@
 //
 // The server's preflight builds the authoritative list (it knows the user's keys and the live PriceBook) and
 // stores it on the `model_outage` card. When the banner sees trouble BEFORE any run was refused (no card yet),
-// it builds the same kind of list here from the registry: real list prices from `shared/comic/models.ts`
-// (× platform markup unless BYOK), the real number of drawn pages + cover a switch would make inconsistent,
-// same-family models first, models that are down or don't fit the comic left out. Never a guessed number: a
-// candidate without a price is not offered.
+// it builds the same kind of list here from the person's price book (useStudioPrices: the one book the picker and
+// the change_image_model approval quote from; the registry list only until the sheet arrives), × platform markup
+// unless BYOK, the real number of drawn pages + cover a switch would make inconsistent, same-family models first,
+// models that are down or don't fit the comic left out. Never a guessed number: a candidate without a price is not
+// offered.
 
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
@@ -65,7 +66,7 @@ export const registrySwitchOptions = (input: {
   caps: StudioCaps;
   /** Latest health per candidate id (a known-down candidate is never offered). */
   health?: Record<string, ModelHealth | undefined>;
-  /** Price book (default: registry list prices; tests inject one). */
+  /** The person's price book (default: registry list prices, before their price sheet arrives). */
   prices?: PriceBook;
 }): SwitchOption[] => {
   const blocked = getImageModel(input.blockedModelId);
@@ -129,9 +130,13 @@ export const bannerOptions = (input: {
   modelId: string;
   caps: StudioCaps;
   health?: Record<string, ModelHealth | undefined>;
+  /** The person's price book (useStudioPrices), so "Try X instead" names the figure the picker and the approval will. */
+  prices?: PriceBook;
 }): { options: OutageOption[]; card?: OutageCardData } => {
   const card = latestOutageCard(input.doc, input.modelId);
-  const base = card ? cleanOptions(card.options) : registrySwitchOptions({ doc: input.doc, blockedModelId: input.modelId, caps: input.caps, health: input.health });
+  const base = card
+    ? cleanOptions(card.options)
+    : registrySwitchOptions({ doc: input.doc, blockedModelId: input.modelId, caps: input.caps, health: input.health, ...(input.prices ? { prices: input.prices } : {}) });
   const usable = base.filter((o) => (o.kind === 'wait_and_retry' || o.kind === 'other_route' ? !!card?.blockedAction : true));
   return { options: usable.slice(0, MAX_BANNER_OPTIONS), ...(card ? { card } : {}) };
 };

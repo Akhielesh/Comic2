@@ -4,6 +4,7 @@
 import type { AssetRef, ComicDoc, ImageModelLock, RedrawScope, RenderState, Resolution } from './doc.js';
 import type { StudioCaps } from './capabilities.js';
 import { PLATFORM_MARKUP, getImageModel, resolveImageJob, type AnyImageJobKind, type ImageJobKind, type ImageModelSpec } from './models.js';
+import type { TextRates } from './priceBook.js';
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
@@ -102,8 +103,10 @@ export const drawnModels = (doc: ComicDoc): { modelId: string; images: number }[
  */
 export interface PriceBook {
   unit(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): { usd: number | null; basis: string };
-  /** QC per page (observed median when n ≥ 5, else QC_USD_PER_PAGE). */
+  /** QC per page (the observed median when n ≥ 5 and above QC_USD_PER_PAGE, else QC_USD_PER_PAGE). */
   qcUsd: number;
+  /** What planning, style directions and translation really cost (priceBook.ts textRatesOf; absent = the constants). */
+  text?: TextRates;
 }
 
 export interface RedrawQuote {

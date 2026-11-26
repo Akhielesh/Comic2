@@ -6,6 +6,9 @@ import type { ComicDoc, Gate } from '../../../shared/comic/doc';
 import { ACCENT_FILL } from '../../chat/studioDesign';
 import { formatUsd } from '../../../shared/comic/models';
 import { quoteRenderPages } from '../../../shared/comic/plan';
+import { layoutFitFix } from '../../../shared/comic/layoutFit';
+import { splitHeldBack } from '../../../shared/comic/pagePlanCheck';
+import type { Page } from '../../../shared/comic/doc';
 import { PagesTab, DENSITY_KEY } from './PagesTab';
 import { byokFromDoc, estimateDraw, estimateOne, pagesForIds, pagesToDraw } from './boardModel';
 import { SAMPLE_NOW, asset, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
@@ -182,6 +185,100 @@ describe('PagesTab', () => {
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages' });
     fireEvent.click(screen.getByRole('button', { name: 'Approve plan only' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'approve_plan' });
+  });
+
+  describe('pages whose words do not fit their panels (the plan check holds them back from Render all)', () => {
+    const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning'.split(' ');
+    const said = (n: number) => Array.from({ length: n }, (_, i) => WORDS[i % WORDS.length]).join(' ');
+    /** Overfull: three small panels, each with far more words than it holds. */
+    const overfill = (doc: ComicDoc, id: string) => {
+      const page = doc.pages.find((p) => p.id === id)!;
+      page.layout = 'Row 1: three small panels.';
+      page.panels = page.panels.map((pn, i) => ({ ...pn, size: 'small', lines: [{ id: `ln_over_${id}_${i}`, kind: 'speech', speakerId: 'ch_maya', text: said(60) }] }));
+    };
+    const allQuote = (doc: ComicDoc) => quoteRenderPages(doc, { byok: true, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, holdBack: {} });
+
+    it('the button names what it draws, the price leaves the held-back page out, and the note says which and why', () => {
+      const doc = makeSampleDoc((d) => {
+        overfill(d, 'pg_2');
+        d.planStatus = 'approved';
+      });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      const quote = allQuote(doc);
+      expect(quote.heldBackIds).toEqual(['pg_2']);
+      expect(quote.pageIds).toEqual(['pg_5', 'pg_6']);
+      const button = within(header()).getByRole('button', { name: 'Render 2 pages' });
+      const note = document.getElementById(button.getAttribute('aria-describedby')!)!;
+      expect(note).toHaveTextContent(`≈ ${formatUsd(quote.usd)}`);
+      expect(note).toHaveTextContent('page 2 is held back — too much text for its panels');
+      expect(within(header()).queryByRole('button', { name: /remaining/ })).toBeNull();
+      // The run is the server's Render all (it holds the same page back and offers the free fixes).
+      fireEvent.click(button);
+      expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages' });
+    });
+
+    it('in a draft the approval counts the pages too', () => {
+      const doc = makeSampleDoc((d) => overfill(d, 'pg_2'));
+      render(<PagesTab studio={dollarStudio(doc)} doc={doc} />);
+      expect(within(header()).getByRole('button', { name: 'Approve & render 2 pages' })).toBeInTheDocument();
+    });
+
+    it('every page left is held back: no draw button and no price, a plain line and the way on', () => {
+      const doc = makeSampleDoc((d) => {
+        for (const id of ['pg_2', 'pg_5', 'pg_6']) overfill(d, id);
+        d.planStatus = 'approved';
+      });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      expect(allQuote(doc)).toMatchObject({ pageIds: [], nothing: true, heldBackIds: ['pg_2', 'pg_5', 'pg_6'] });
+      expect(within(header()).queryByRole('button', { name: DRAW_ALL })).toBeNull();
+      expect(within(header()).queryByRole('button', { name: /^Render/ })).toBeNull();
+      expect(document.getElementById('pages-draw-all-price')).toBeNull();
+      expect(header()).toHaveTextContent('Pages 2, 5 and 6 are held back — too much text for their panels. Fit the words, or draw them anyway from the page.');
+      expect(header().textContent).not.toContain('$');
+      fireEvent.click(within(header()).getByRole('button', { name: 'Open page 2' }));
+      expect(studio.openPage).toHaveBeenCalledWith('pg_2');
+      expect(studio.act).not.toHaveBeenCalled();
+    });
+
+    it('every page left is held back and a layout fits: the free fix is offered first, and it only patches', async () => {
+      const say = (n: number, seed = 0) => Array.from({ length: n }, (_, i) => WORDS[(seed + i) % WORDS.length]).join(' ');
+      const sp = (id: string, n: number, seed = 0) => ({ id, kind: 'speech' as const, speakerId: 'ch_maya', text: say(n, seed) });
+      const pn = (n: number, over: Partial<Page['panels'][number]>): Page['panels'][number] => ({ id: `pg_2_p${n}`, n, size: 'medium', shot: 'medium', action: `Beat ${n}.`, castIds: ['ch_maya'], lines: [], ...over });
+      const doc = makeSampleDoc((d) => {
+        const p2 = d.pages.find((p) => p.id === 'pg_2')!;
+        // Two equal / one wide / three small: panels 5 and 6 are too full for their small cells, and a blueprint fits.
+        p2.layout = 'Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.';
+        p2.panels = [
+          pn(1, { shot: 'wide', lines: [sp('l1', 10)] }),
+          pn(2, { lines: [{ id: 'l2', kind: 'sfx', text: 'BZZT' }] }),
+          pn(3, { size: 'wide', shot: 'wide' }),
+          pn(4, { size: 'small', shot: 'insert', castIds: [], lines: [{ id: 'l4', kind: 'sfx', text: 'CLICK' }] }),
+          pn(5, { size: 'small', shot: 'close_up', lines: [sp('l5', 17, 3)] }),
+          pn(6, { size: 'small', lines: [sp('l6a', 15, 5), sp('l6b', 14, 9)] })
+        ];
+        d.pages = d.pages.filter((p) => p.id === 'pg_1' || p.id === 'pg_2');
+        d.planStatus = 'approved';
+      });
+      const layout = splitHeldBack(doc, ['pg_2']).heldBack[0]?.layoutFix;
+      const ops = layoutFitFix(doc, doc.pages.find((p) => p.id === 'pg_2')!, layout);
+      expect(ops).not.toBeNull();
+      expect(allQuote(doc)).toMatchObject({ pageIds: [], heldBackIds: ['pg_2'] });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      fireEvent.click(within(header()).getByRole('button', { name: /^Use the layout that fits page 2/ }));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(studio.patch).toHaveBeenCalledWith(ops, { label: 'Use the layout that fits' });
+      expect(studio.act).not.toHaveBeenCalled();
+    });
+
+    it('governed: the held-back words beside a share of the usage, never dollars', () => {
+      const doc = makeSampleDoc((d) => overfill(d, 'pg_2'));
+      const { container } = render(<PagesTab studio={governedStudio(doc)} doc={doc} />);
+      expect(document.getElementById('pages-draw-all-price')).toHaveTextContent(/% of your usage.*page 2 is held back/);
+      expect(container.textContent).not.toContain('$');
+    });
   });
 
   it('"Include the cover" adds the cover to the draw-all, quoted like the server gate', () => {

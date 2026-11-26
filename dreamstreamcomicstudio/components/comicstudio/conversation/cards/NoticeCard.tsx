@@ -33,6 +33,8 @@ import { pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
 import { TONE_SURFACE, TONE_TEXT } from '../../../chat/studioDesign';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { useCostFormat, type CostFormat } from '../cost';
+import type { PriceBook } from '../../../../shared/comic/modelLock';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { ChipBadge, ChipButton, cx } from '../ui';
 import { chipLabel } from './NextStepChips';
 import { stopsSequence, useAction } from './useAction';
@@ -135,7 +137,7 @@ type RenderPagesAction = Extract<StudioAction, { type: 'render_pages' }>;
  * What a render_pages chip would draw NOW, quoted exactly as the server will (shared plan.ts, the comic's lock, this
  * user's key): a "Render all" holds overfull pages back as the server's gate does, except its drawOverfull.
  */
-const liveRenderQuote = (doc: ComicDoc, action: RenderPagesAction, byok: boolean) => {
+const liveRenderQuote = (doc: ComicDoc, action: RenderPagesAction, byok: boolean, prices?: PriceBook) => {
   const pageIds = Array.isArray(action.pageIds) && action.pageIds.length ? action.pageIds : undefined;
   const renderAll = !pageIds && !action.force;
   const anyway = Array.isArray(action.drawOverfull) ? action.drawOverfull.filter((id): id is string => typeof id === 'string') : [];
@@ -147,7 +149,9 @@ const liveRenderQuote = (doc: ComicDoc, action: RenderPagesAction, byok: boolean
     tier: doc.settings.quality,
     modelOverride: doc.settings.imageModelOverride,
     // "Render all" holds overfull pages back, as the server's gate does.
-    ...(renderAll ? { holdBack: { drawOverfull: anyway } } : {})
+    ...(renderAll ? { holdBack: { drawOverfull: anyway } } : {}),
+    // The person's PriceBook (the studio's price sheet): the chip sends the price the server will recompute.
+    ...(prices ? { prices } : {})
   });
   return { quote, renderAll, anyway };
 };
@@ -158,9 +162,9 @@ const liveRenderQuote = (doc: ComicDoc, action: RenderPagesAction, byok: boolean
  * alone, at a fraction of the posted price). "(with the rest)" is dropped once nothing else is drawn with it. The
  * server still re-checks: a higher fresh price is gated again. Other chips (and no doc, older hosts) are as posted.
  */
-export const liveNoticeChip = (doc: ComicDoc | null | undefined, chip: NoticeChip, byok = false): NoticeChip => {
+export const liveNoticeChip = (doc: ComicDoc | null | undefined, chip: NoticeChip, byok = false, prices?: PriceBook): NoticeChip => {
   if (!doc || !chip.paid || chip.action.type !== 'render_pages') return chip;
-  const { quote, anyway } = liveRenderQuote(doc, chip.action, byok);
+  const { quote, anyway } = liveRenderQuote(doc, chip.action, byok, prices);
   if (quote.nothing || !(quote.usd > 0)) return chip;
   const usd = Math.round(quote.usd * 10000) / 10000;
   const alone = anyway.length > 0 && !quote.cover && quote.pageIds.every((id) => anyway.includes(id));
@@ -206,6 +210,7 @@ export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeCh
   if (present.some(isBusyPage)) return 'started';
   if (typeof postedAt === 'number' && postedAt > 0 && present.some((p) => (p.render.qc?.checkedAt ?? 0) > postedAt)) return 'hidden';
   if (action.type === 'render_pages') {
+    // Targets only (is there anything left to draw?), never a price: liveNoticeChip prices the chip.
     const { quote, renderAll, anyway } = liveRenderQuote(doc, action, byok);
     // "Draw page 2 anyway (with the rest)": once page 2 itself needs no drawing, the chip has nothing left to do.
     if (renderAll && anyway.length && !pageTargets(doc, { pageIds: anyway }).length) return 'hidden';
@@ -231,6 +236,7 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
   const byok = !!(studio.byok || studio.caps?.byok);
   const cost = useCostFormat({ byok, caps: studio.caps ?? null });
   const doc = studio.doc;
+  const prices = useStudioPrices(studio);
   // What each run resolved to (by action object), so a paid chip reads "Started" only when it really went through
   // (not refused, cancelled or turned into an approval card).
   const results = React.useRef(new Map<StudioAction, unknown>());
@@ -263,7 +269,7 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
   }, [ran, doc]);
   const states = React.useMemo(() => chips.map((c) => noticeChipState(doc, c, byok, postedAt)), [chips, doc, byok, postedAt]);
   // Paid draw chips show and send what they would draw now (liveNoticeChip), not the price when posted.
-  const live = React.useMemo(() => chips.map((c) => liveNoticeChip(doc, c, byok)), [chips, doc, byok]);
+  const live = React.useMemo(() => chips.map((c) => liveNoticeChip(doc, c, byok, prices)), [chips, doc, byok, prices]);
   const all = live
     .map((c, i) => {
       const key = `${cardId}:${i}`;

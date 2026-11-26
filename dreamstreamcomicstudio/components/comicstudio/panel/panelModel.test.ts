@@ -55,6 +55,16 @@ describe('panelComics: grouping', () => {
     expect([recent.status, recent.task]).toEqual(['Planning · 4 of 6 pages planned', undefined]);
   });
 
+  it('a comic whose key ran out needs the person and says what to do (top up or switch key), not "Answer the Director"', () => {
+    const rows = [row('ferry', { attention: 'credit' }), row('older', { attention: 'question', updatedAt: NOW - 2 * HOUR })];
+    const result = panelComics({ projects: [], rows, now: NOW });
+    expect(groupsOf(result)).toEqual({ needs: ['ferry', 'older'] });
+    const [ferry, older] = result.groups[0].comics;
+    expect([ferry.status, ferry.task]).toEqual(['Top up or switch key', 'conversation']);
+    // A summary saved before credit had its own reason still reads as it did.
+    expect(older.status).toBe('Answer the Director');
+  });
+
   it('lists a comic once when it is both in the project list and the activity, by App’s name (a rename on My comics shows at once)', () => {
     // Renamed on My comics: App's list has the new name; the cached row still has the old title.
     const result = panelComics({ projects: [studioProject('a', 'Night ferry', NOW - 3 * HOUR)], projectsLoaded: true, rows: [row('a', { title: 'Old name', stage: planning })], now: NOW });

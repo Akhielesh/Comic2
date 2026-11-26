@@ -15,6 +15,7 @@
 // with `pickable: false`.
 
 import type { AspectRatio, ImageModelLock, LetteringMode, QualityTier, Resolution } from './doc.js';
+import type { PriceBook } from './modelLock.js';
 
 export type ImageRoute = 'openrouter' | 'gemini';
 export type Quality4 = 'none' | 'basic' | 'good' | 'excellent';
@@ -560,10 +561,35 @@ export interface SpendEstimate {
   lines: { label: string; count: number; usd: number }[];
 }
 
+/**
+ * One image's provider price: the book's unit (live list or observed median, never under the list; shared/comic/
+ * priceBook.ts) when a book is given and has a number, else the registry's dated list.
+ */
+export const jobUnitUsd = (spec: ImageModelSpec, resolution: Resolution, kind: AnyImageJobKind, prices?: PriceBook): number => {
+  if (prices) {
+    let unit: number | null = null;
+    try {
+      unit = prices.unit(spec.id, resolution, kind).usd;
+    } catch {
+      unit = null;
+    }
+    if (typeof unit === 'number' && Number.isFinite(unit) && unit >= 0) return unit;
+  }
+  return imagePriceUsd(spec, resolution);
+};
+
+/** QC per checked image: the book's figure when given, else the constant. */
+export const jobQcUsd = (prices?: Pick<PriceBook, 'qcUsd'>): number => (prices && Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE);
+
+/**
+ * The one image quote (docs/features/pricing.md): Σ (unit + one QC for page, edit and panel jobs) × count ×
+ * PLATFORM_MARKUP unless BYOK, on the comic's lock / tier / override. `prices` is the user's PriceBook (the server's
+ * per request, the client's from the price sheet): without it, the registry's dated list — byte for byte the old quote.
+ */
 export const estimateJobs = (
   jobs: { kind: AnyImageJobKind; count: number; label?: string }[],
   tier: QualityTier,
-  opts: { override?: string; byok?: boolean; lock?: ImageModelLock } = {}
+  opts: { override?: string; byok?: boolean; lock?: ImageModelLock; prices?: PriceBook } = {}
 ): SpendEstimate => {
   const markup = opts.byok ? 1 : PLATFORM_MARKUP;
   const lines = jobs
@@ -571,7 +597,7 @@ export const estimateJobs = (
     .map((j) => {
       const { spec, resolution } = resolveImageJob(j.kind, tier, opts.override, opts.lock);
       // Page, edit and (Ship 2) panel jobs carry one QC run each.
-      const per = imagePriceUsd(spec, resolution) + (j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? QC_USD_PER_PAGE : 0);
+      const per = jobUnitUsd(spec, resolution, j.kind, opts.prices) + (j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? jobQcUsd(opts.prices) : 0);
       return {
         label: j.label || j.kind,
         count: j.count,

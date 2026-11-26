@@ -17,7 +17,7 @@ import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import { formatUsd } from '../../../../shared/comic/models.js';
 import { editionTextEntry, editionTextSource, linesInOrder } from '../../../../shared/comic/translationPlan.js';
 import type { ActionHandler } from '../extensions.js';
-import { estimateTranslation, languageLabel, quoteTranslation, runTranslation } from '../i18n/index.js';
+import { estimateTranslation, languageLabel, quoteTranslation, runTranslation, translateRatesFor } from '../i18n/index.js';
 import { costViewFor, governCard, governDollars } from '../costText.js';
 import { prefilterText } from '../safety/index.js';
 import type { RunActionOptions, StartedAction } from '../jobs.js';
@@ -156,14 +156,14 @@ async function swapSource(ctx: StudioContext, action: Swap, opts: RunActionOptio
   const lang = spec.code;
   if (sameLanguage(lang, doc.format.language)) return finished({ status: 'done', message: `${languageLabel(lang)} is already the comic's language.` });
   if (!i18nOf(doc).editions[lang]) {
-    const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }).estimate.usd;
+    const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }, await translateRatesFor(ctx)).estimate.usd;
     return refuse(ctx, opts, `There is no ${spec.english} translation yet. Translate it first (≈ ${formatUsd(usd)}), then it can become the source.`, 'NOT_READY', [
       { label: `Translate into ${spec.english}`, action: { type: 'translate', languages: [lang], quotedUsd: usd }, usd }
     ]);
   }
   const p = editionProgress(doc, lang);
   if (p.missing || p.stale || p.staleEdited) {
-    const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }).estimate.usd;
+    const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }, await translateRatesFor(ctx)).estimate.usd;
     const gaps = [p.missing ? `${plural(p.missing, 'line')} missing` : '', p.stale + p.staleEdited ? `${plural(p.stale + p.staleEdited, 'line')} out of date` : ''].filter(Boolean).join(' and ');
     return refuse(ctx, opts, `The ${spec.english} translation has ${gaps}, so it can't become the source yet. Finish it first (≈ ${formatUsd(usd)}).`, 'NOT_READY', [
       { label: 'Translate missing lines', action: { type: 'translate', languages: [lang], quotedUsd: usd }, usd }

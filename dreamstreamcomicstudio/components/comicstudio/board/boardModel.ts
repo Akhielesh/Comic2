@@ -28,6 +28,7 @@ import {
   type ImageModelSpec,
   type SpendEstimate
 } from '../../../shared/comic/models';
+import type { PriceBook } from '../../../shared/comic/modelLock';
 import { estimateDocJobs, missingSheetsFor, pageTargets, quoteLockOf } from '../../../shared/comic/plan';
 import type { StylePreset } from '../../../shared/comic/stylePresets';
 
@@ -103,23 +104,27 @@ export interface DrawPlan {
   estimate: SpendEstimate;
 }
 
-export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean): DrawPlan => {
+/**
+ * What drawing these pages costs (and the sheets they need first). Lock-aware (plan.ts estimateDocJobs): a locked comic
+ * prices on its locked model, as the server draws it; `prices` is the person's PriceBook (the studio's price sheet), so
+ * the button names the price its approval will.
+ */
+export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean, prices?: PriceBook): DrawPlan => {
   const sheets = sheetsNeededFor(doc, pages);
-  // Lock-aware (plan.ts estimateDocJobs): a locked comic prices on its locked model, as the server draws it.
   const estimate = estimateDocJobs(
     doc,
     [
       { kind: 'page', count: pages.length, label: 'pages' },
       { kind: 'sheet', count: sheets.length, label: 'character sheets' }
     ],
-    { byok }
+    { byok, ...(prices ? { prices } : {}) }
   );
   return { pages, sheets, estimate };
 };
 
 /** Estimate for one image job of a kind (edit, cover, a sheet, style options), on the comic's locked model if any. */
-export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1): SpendEstimate =>
-  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok });
+export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1, prices?: PriceBook): SpendEstimate =>
+  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok, ...(prices ? { prices } : {}) });
 
 // ── Models ───────────────────────────────────────────────────────────────────
 
@@ -205,6 +210,28 @@ export const nameHue = (name: string): number => {
 };
 
 export const plural = (n: number, word: string, pluralWord = `${word}s`) => `${n} ${n === 1 ? word : pluralWord}`;
+
+/** "Page 3" · "Pages 2–4" · "Pages 1, 3 and 5" · "6 pages" (the server's wording for page sets). */
+export const pagesPhrase = (ns: readonly number[]): string => {
+  const sorted = [...new Set(ns)].sort((a, b) => a - b);
+  if (sorted.length === 1) return `Page ${sorted[0]}`;
+  const consecutive = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
+  if (consecutive) return `Pages ${sorted[0]}–${sorted[sorted.length - 1]}`;
+  if (sorted.length <= 4) return `Pages ${sorted.slice(0, -1).join(', ')} and ${sorted[sorted.length - 1]}`;
+  return `${sorted.length} pages`;
+};
+
+/**
+ * The pages a "Render all" leaves out because their words do not fit their panels (the server's plan check, PD-1;
+ * a quote's `heldBackIds`), in page order — and the plain sentence that says so ('' when none).
+ */
+export const heldBackPages = (doc: ComicDoc, ids: readonly string[] | undefined): { pages: Page[]; sentence: string } => {
+  const wanted = new Set(ids ?? []);
+  const pages = doc.pages.filter((p) => wanted.has(p.id)).sort((a, b) => a.n - b.n);
+  if (!pages.length) return { pages, sentence: '' };
+  const one = pages.length === 1;
+  return { pages, sentence: `${pagesPhrase(pages.map((p) => p.n))} ${one ? 'is' : 'are'} held back — too much text for ${one ? 'its' : 'their'} panels` };
+};
 
 /** "12s" / "1m 05s". */
 export const formatElapsed = (ms: number): string => {

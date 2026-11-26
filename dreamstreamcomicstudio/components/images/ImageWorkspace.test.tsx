@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
 vi.mock('../../services/standaloneImages', () => api);
 vi.mock('../account/AccountMenu', () => ({ AccountMenu: () => null }));
 import { ImageWorkspace } from './ImageWorkspace';
+import { priceSheetOf } from '../../shared/comic/priceBook';
+import { __resetPriceSheetForTests, __seedPriceSheetForTests } from '../../services/priceSheet';
 
 const result = { imageId: 'a', imageUrl: 'https://test.invalid/rendered', createdAt: '2026-11-20T12:00:00.000Z' };
 beforeEach(() => {
@@ -286,6 +288,22 @@ it.each(['ambiguous','different payer','second rejection'] as const)('never auto
   await screen.findByRole('alert');
   expect(api.renderStandalone).toHaveBeenCalledTimes(kind === 'second rejection' ? 2 : 1);
   expect(screen.getByLabelText(/Describe your image/)).toHaveValue('My station');
+});
+
+it('Generate is described by its price only while the price line is there (never a dangling reference)', async () => {
+  __resetPriceSheetForTests();
+  __seedPriceSheetForTests('first', priceSheetOf({ rows: [], observed: [], qc: null }, Date.now()));
+  let answer!: (route: unknown) => void;
+  api.loadStandaloneRoute.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+  render(<ImageWorkspace userId="first" onBack={() => {}} />);
+  const generate = screen.getByRole('button', { name: 'Generate image' });
+  // The route is not known yet: no price line, so nothing to point at.
+  expect(document.getElementById('image-price')).toBeNull();
+  expect(generate).not.toHaveAttribute('aria-describedby');
+  await act(async () => answer({ provider: 'openrouter', payer: 'personal', model: 'google/gemini-2.5-flash-image' }));
+  await waitFor(() => expect(generate).toHaveAttribute('aria-describedby', 'image-price'));
+  expect(document.getElementById('image-price')).toHaveTextContent(/an image on your OpenRouter key/);
+  __resetPriceSheetForTests();
 });
 
 it('on the comics host it sits in the frame and side panel of My comics: one main, no second Back, Images marked current', async () => {

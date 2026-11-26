@@ -31,6 +31,7 @@ import { RefStrip } from '../refs/RefStrip';
 import { EmptyIllustration, ImageFrame, VIEW_MAX_W, VersionsButton, frameSources } from './ImageFrame';
 import { byokFromDoc, estimateOne, hasImage, isBusy, jobModel, presetOps, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { Chip, ConfirmStrip, EmptyHint, GhostButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Surface, cx, useClickGuard } from './ui';
 
 export const STYLE_DIRECTIONS = 3;
@@ -157,6 +158,7 @@ const OptionCard: React.FC<{ studio: StudioController; doc: ComicDoc; option: St
   rating
 }) => {
   const { busyKey, fire } = useClickGuard(3000);
+  const prices = useStudioPrices(studio);
   const status = sheetVisualStatus(option.render);
   const src = frameSources(studio.urlFor, option.render.asset, { sizes: '(max-width: 640px) 45vw, 200px' });
   const ready = option.render.status === 'ready' && hasImage(option.render);
@@ -179,7 +181,7 @@ const OptionCard: React.FC<{ studio: StudioController; doc: ComicDoc; option: St
       model={jobModel(doc, 'style_option').nickname}
       error={option.render.error}
       onRetry={retry}
-      retryLabel={`Retry · ${cost.quote(estimateOne(doc, 'style_option', byok).usd)}`}
+      retryLabel={`Retry · ${cost.quote(estimateOne(doc, 'style_option', byok, 1, prices).usd)}`}
       compact
     />
   );
@@ -235,13 +237,14 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
   const customBoardsRef = useRef<HTMLElement>(null);
   const byok = byokFromDoc(doc);
   const cost = useCostFormat(studio.caps);
+  const prices = useStudioPrices(studio);
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const { busyKey, fire } = useClickGuard(4000);
   const [section, setSection] = useState(style.status === 'empty' ? 'looks' : 'current');
   const [confirming, setConfirming] = useState<StylePreset | null>(null);
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => isBusy(o.render));
-  const explorePrice = estimateOne(doc, 'style_option', byok, STYLE_DIRECTIONS).usd;
+  const explorePrice = estimateOne(doc, 'style_option', byok, STYLE_DIRECTIONS, prices).usd;
   const preset = getStylePreset(style.presetId);
   const board = frameSources(studio.urlFor, style.board, { maxW: VIEW_MAX_W, sizes: '(max-width: 768px) 90vw, 420px' });
   const styleRefs = style.refs?.length ?? 0;

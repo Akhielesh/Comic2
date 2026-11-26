@@ -15,7 +15,8 @@ import type { StudioMode } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { Balloon, LineKind, Page } from '../../../shared/comic/doc';
 import { PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
-import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
+import type { PriceBook } from '../../../shared/comic/modelLock';
+import { recheckQuoteUsd as sharedRecheckQuoteUsd } from '../../../shared/comic/priceBook';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
 import { balloonOp, drawnSpotPatch, fixSafeAreaOps, KIND_ROW, kindOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
@@ -175,8 +176,11 @@ export const roomiestPanel = (props: Pick<LetteringPanelProps, 'doc' | 'page' | 
   return candidates[0]?.panel;
 };
 
-/** The paid page re-check's quote (models.ts RELAYOUT_VISION_USD × markup; on the user's own key, the provider price). */
-export const recheckQuoteUsd = (byok: boolean): number => Math.round(RELAYOUT_VISION_USD * (byok ? 1 : PLATFORM_MARKUP) * 10000) / 10000;
+/**
+ * The paid page re-check's quote: one vision pass at the book's QC figure (what page checks really cost, never under
+ * the constant; shared/comic/priceBook.ts), × markup unless the user's own key — the figure the server gate uses.
+ */
+export const recheckQuoteUsd = (byok: boolean, prices?: Pick<PriceBook, 'qcUsd'>): number => sharedRecheckQuoteUsd(byok, prices);
 
 const CHIP_WARN = `tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`;
 const CHIP_PLAIN = `tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;

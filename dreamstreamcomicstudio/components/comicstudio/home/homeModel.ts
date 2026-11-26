@@ -211,6 +211,7 @@ const DESTINATION_HINT: Readonly<Record<TaskDestination, string>> = {
 const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
   approval: 'Review the estimate',
   question: 'Answer the Director',
+  credit: 'Top up or switch key',
   plan: 'Review the plan',
   style: 'Choose a look',
   interrupted: 'Resume the draft',
@@ -221,7 +222,7 @@ const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
  * The stage's own waits: what waits on the person never replaces them (they are what the conversation shows first). The
  * stage names every wait needsYouOf finds (stage.ts), so the card, the strip and the panel's row give one step.
  */
-const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'answer_director', 'follow_planning', 'resume_draft']);
+const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'answer_director', 'top_up', 'follow_planning', 'resume_draft']);
 
 /**
  * A page whose drawing failed, by the stage's own counts. The summary's "render_failed" means ANY render failed: a page,

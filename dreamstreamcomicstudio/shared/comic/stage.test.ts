@@ -508,6 +508,19 @@ describe('what waits on the person is the next step, whatever the stage', () => 
     expect(comicStage(doc).next.key).toBe('plan_pages');
   });
 
+  it('a run stopped on a key that ran out: "Top up or switch key", at the credit card above the message box', () => {
+    const stopped: Card = { type: 'credit', id: 'cr', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 2, notStarted: 4 };
+    const doc = withLook((d) => (d.conversation = [msg('u1', 'user'), msg('a1', 'assistant', [stopped])]));
+    const view = comicStage(doc);
+    // The strip, the card and the side panel's row all name the same step (the panel says "Top up or switch key").
+    expect(view.next).toMatchObject({ key: 'top_up', label: 'Top up or switch key', place: 'composer' });
+    expect(view.line).toBe('Planning · No pages planned yet · Next: top up or switch key');
+    expect(roundTrip(stageFacts(doc))).toEqual(stageFacts(doc));
+    // Moved past (a later message of theirs): the stage's own step again.
+    doc.conversation.push(msg('u2', 'user'));
+    expect(comicStage(doc).next.key).toBe('plan_pages');
+  });
+
   it('the page plan waiting for its OK leads in any stage', () => {
     const doc = withLook((d) => {
       d.style = { status: 'empty', refs: [], options: [] }; // planned before a look: the stage is Style

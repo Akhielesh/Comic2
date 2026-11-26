@@ -43,6 +43,8 @@ export function alertCopy(draft: AlertDraft): AlertCopy {
       return { title: 'The Director replied', message: name };
     case 'question':
       return { title: 'The Director has a question', message: name };
+    case 'credit':
+      return { title: 'Waiting for a top-up or another key', message: name };
     case 'plan':
       return { title: 'Your page plan is ready for your OK', message: name };
     case 'approval': {
@@ -88,6 +90,8 @@ export function alertShort(draft: AlertDraft): string {
     case 'question':
     case 'chat_question':
       return 'has a question';
+    case 'credit':
+      return 'waiting for a top-up or another key';
     case 'plan':
       return 'plan ready for your OK';
     case 'approval':

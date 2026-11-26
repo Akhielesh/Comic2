@@ -48,6 +48,16 @@ export interface StudioActOutcome extends StreamOutcome {
   beforeVersionId?: string;
 }
 
+/** How `act` sends an action (its optional second argument). */
+export interface ActOptions {
+  /**
+   * When the person confirmed this action (Date.now() then), for an action sent later than that: a "wait and retry"
+   * re-sent once the model is back. The request says how long ago (StreamRequest.confirmedAgoMs), and what the action
+   * posts never closes a question the Director asked since.
+   */
+  confirmedAt?: number;
+}
+
 export interface ActivityItem {
   id: string;
   label: string;
@@ -203,7 +213,7 @@ export interface StudioController {
    * action's StudioActOutcome (`ok`, `aborted`, `gated`, …) so card sequences can stop on a refusal or an
    * open gate; `void` stays allowed for test fakes and older controllers (read it with `actOutcomeOf`).
    */
-  act(action: StudioAction): Promise<StudioActOutcome | void>;
+  act(action: StudioAction, opts?: ActOptions): Promise<StudioActOutcome | void>;
   /** Instant local+server content edit (dialogue text, names, settings). Undo defaults to true for user edits. */
   patch(ops: DocOp[], opts?: PatchOptions): Promise<void>;
   cancel(): Promise<void>;

@@ -87,7 +87,24 @@ export type StreamRequest =
       /** The sender's IANA time zone (history: "this morning", "yesterday"); validated with Intl (normalizeTimeZone). */
       tz?: string;
     }
-  | { kind: 'action'; action: StudioAction; tz?: string };
+  | {
+      kind: 'action';
+      action: StudioAction;
+      tz?: string;
+      /**
+       * How long ago (ms) the person confirmed this action, when it is sent later than that: a "wait and retry" the
+       * client re-sends once the model is back. A duration, so a device clock that is off changes nothing. The server
+       * stamps the action's messages with that moment (Msg.runAt), so they never close a question asked since.
+       */
+      confirmedAgoMs?: number;
+    };
+
+/** The longest wait a re-sent action may say it was confirmed before (longer is ignored: the action is a fresh turn). */
+export const MAX_CONFIRMED_AGO_MS = 24 * 60 * 60 * 1000;
+
+/** A valid `confirmedAgoMs` (a whole positive number of ms up to MAX_CONFIRMED_AGO_MS), else undefined. */
+export const confirmedAgoOf = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_CONFIRMED_AGO_MS ? Math.floor(v) : undefined;
 
 /**
  * Known `error` event codes (contract §7). FORBIDDEN (P2-AMEND, from P1-ROUTES) = a restricted account was refused

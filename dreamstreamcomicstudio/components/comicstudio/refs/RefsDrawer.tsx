@@ -24,6 +24,7 @@ import { LIKENESS_OPTIONS, moveTargets, ownerLabel, ownerTitle, refUsage, sheetH
 import { UploadQueue } from './UploadQueue';
 import { overCapCopy, useRefUpload, type UploadTransport } from './useRefUpload';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 
 export interface RefsDrawerProps {
   studio: StudioController;
@@ -115,7 +116,9 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
   const usage = useMemo(() => refUsage(doc, owner), [doc, owner]);
   const targets = useMemo(() => moveTargets(doc, owner), [doc, owner]);
   const byok = doc ? byokFromDoc(doc) : false;
-  const hint = sheetHint(doc, owner, byok, cost.approx);
+  // The person's PriceBook: "Make the sheet" / "Redraw sheet" name what the sheet's run charges.
+  const prices = useStudioPrices(studio);
+  const hint = sheetHint(doc, owner, byok, cost.approx, prices);
   const character = owner.kind === 'character' ? doc?.cast.find((c) => c.id === owner.id) : undefined;
 
   const patch = useCallback(

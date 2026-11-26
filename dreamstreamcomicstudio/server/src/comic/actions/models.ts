@@ -12,6 +12,8 @@
 //   7. the server's own redrawQuote within 15% + $0.01 of the confirmed quotedUsd, else a requote → nothing changes
 //   8. budget: the redraw, priced on the post-switch pin, would go over budgetUsd (not approved) → nothing
 //      changes; the answer says by how much and offers Raise the budget / switch without redrawing
+//   9. credit (credit-safety.md §2): the payer of the redraw is known to be short of it → nothing changes; one
+//      "Not enough credit" card, and Switch without redrawing
 // On success, one batch: the new lock (origin 'user_change', a changes[] entry) + the §3.6 F notice. A redraw runs
 // as the normal render action(s) for the drawn targets with `force` and the confirmed quote (re-gated as usual).
 // 'all' draws the character sheets first and starts the pages + cover only once every sheet is ready on the new
@@ -26,6 +28,7 @@ import { IMAGE_MODELS, type ImageModelSpec } from '../../../../shared/comic/mode
 import type { SpendAction, StudioAction } from '../../../../shared/comic/ops.js';
 import { BILLING_ENABLED } from '../../config.js';
 import { logger } from '../../lib/logger.js';
+import { UNKNOWN_BUDGET, creditBudgetFor, fitsBudget, shortCreditCard, shortCreditText, type CreditBudget } from '../creditCheck.js';
 import { costFormatterFor } from '../costText.js';
 import type { ActionHandler } from '../extensions.js';
 import {
@@ -35,6 +38,7 @@ import {
   estimateSpendAction,
   gateDecision,
   hasActiveRun,
+  heldUsdFor,
   imageRouteFor,
   lockOf,
   lockedSpecId,
@@ -104,8 +108,10 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
   if (!REDRAW_SCOPES.includes(action.redraw)) throw bad('Choose what should happen to the drawn images.');
   if (typeof action.quotedUsd !== 'number' || !Number.isFinite(action.quotedUsd) || action.quotedUsd < 0) throw bad('That switch has no price on it. Open the model picker again.');
 
-  // The PriceBook first (async): everything after reads the doc synchronously, up to the commit.
+  // The PriceBook and the redraw payer's balance first (async): everything after reads the doc synchronously, up to the
+  // commit.
   const prices = await priceBookFor(ctx);
+  const credit = await switchCreditBudget(ctx, action);
   const doc = ctx.session.doc;
   const prior = lockOf(doc);
   const priorId = prior ? lockedSpecId(prior.modelId) : undefined;
@@ -186,6 +192,8 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
     if (gateDecision(doc, estimate, true, { budgetApproved: opts.budgetApproved, pendingUsd: pendingUsdOf(ctx.session) }) === 'budget') {
       return overBudget(ctx, opts, doc, spec, action.redraw, usd);
     }
+    // 9. Credit, for the same reason: a redraw the key can't pay for would stop part-way and leave the book mixed.
+    if (credit.known && !fitsBudget(credit, usd)) return notEnoughCredit(ctx, opts, doc, spec, action.redraw, usd, credit);
   }
 
   // Success: the new lock and its history, with the notice, in one batch.
@@ -209,10 +217,13 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
   logger.info('comic_model_changed', { projectId: ctx.projectId, from: priorId, to: spec.id, redraw: action.redraw, quotedUsd: action.quotedUsd });
 
   if (!actions.length) return finished({ status: 'done', message: text, nextSteps: steps });
-  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render.
-  const redrawOpts: RunActionOptions = { ...opts, confirmed: true };
-  const first = await startAction(ctx, actions[0], redrawOpts);
-  if (actions.length === 1) return first;
+  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render. It was confirmed
+  // with the switch, so everything it posts says so (runAt): the pages run that starts once the sheets are ready never
+  // closes a question the Director asked while they drew.
+  const redrawOpts: RunActionOptions = { ...opts, confirmed: true, runAt: at };
+  if (actions.length === 1) return startAction(ctx, actions[0], redrawOpts);
+  // The sheets run is chained: this action starts the pages after it, so that run never offers them itself.
+  const first = await startAction(ctx, actions[0], { ...redrawOpts, chained: true });
   return chainAfterSheets(ctx, opts, redrawOpts, spec, actions, first, prices, route.byok);
 }
 
@@ -241,6 +252,8 @@ function chainAfterSheets(
     return { label: `Redraw ${what} · ${cost.approx(usd)}`, action: { ...(fresh as SpendAction), quotedUsd: usd }, usd };
   };
   if (first.outcome.status !== 'started') {
+    // Not enough credit for the sheets: its "Not enough credit" card is the one story (credit-safety.md §1).
+    if (first.outcome.status === 'blocked' && first.outcome.code === 'BILLING_DENIED') return first;
     // Gated (its gate stays the open one), blocked (an outage card says why) or nothing to draw: the rest waits.
     const text = `Redrawing ${what} waits for the new character sheets, so it hasn't started and nothing was charged for it. Start it once the sheets are drawn.`;
     commitWithMessage(ctx, opts, [], text, [noticeCard('info', text)], [restChip()]);
@@ -251,6 +264,10 @@ function chainAfterSheets(
   const ids = sheets.type === 'render_sheets' ? sheets.characterIds ?? [] : [];
   const done = first.done
     .then(async () => {
+      // The sheets run stopped on a key with no credit: its one credit card says what to do, and no other message or
+      // paid chip joins it. Once its "Draw the rest" has drawn the sheets left, that run offers these pages and the
+      // cover (switchRedrawLeftStep in jobs.ts), so a top-up never loses them.
+      if (first.stoppedOnCredit?.()) return;
       const missing = ids.filter((id) => !sheetReadyOn(ctx.session.doc, id, spec.id));
       if (missing.length) {
         const n = missing.length;
@@ -272,6 +289,47 @@ function chainAfterSheets(
       }
     });
   return { outcome: first.outcome, done };
+}
+
+/**
+ * What the payer of a switch's redraw has left (credit-safety.md §2), read before the synchronous checks: the key the new
+ * model draws on (or the allowance), after what this comic is drawing right now. The confirmed quote decides whether an
+ * older own-key reading is read again first; step 9 compares the server's own estimate. Unknown when nothing is redrawn.
+ */
+const switchCreditBudget = async (ctx: StudioContext, action: ChangeImageModel): Promise<CreditBudget> => {
+  if (action.redraw === 'none' || !(action.quotedUsd > 0)) return UNKNOWN_BUDGET;
+  const spec = IMAGE_MODELS.find((m) => m.id === action.modelId);
+  let route: ReturnType<typeof imageRouteFor> = null;
+  try {
+    route = spec ? imageRouteFor(spec, ctx.keys) : null;
+  } catch {
+    return UNKNOWN_BUDGET; // step 4 refuses it with the reason
+  }
+  if (!route) return UNKNOWN_BUDGET;
+  const payer = { route: route.route, byok: !!route.byok };
+  return creditBudgetFor(ctx, payer, { needUsd: action.quotedUsd, heldUsd: heldUsdFor(ctx.session, payer) });
+};
+
+/**
+ * Step 9: the payer can't cover the switch-and-redraw. Nothing is switched (no lock, no changes[] entry), so the book
+ * is never left half on each model; one "Not enough credit" card says what it needs and what is left, and the free
+ * way forward is to switch without redrawing.
+ */
+function notEnoughCredit(
+  ctx: StudioContext,
+  opts: RunActionOptions,
+  doc: ComicDoc,
+  spec: ImageModelSpec,
+  scope: RedrawScope,
+  usd: number,
+  budget: Extract<CreditBudget, { known: true }>
+): StartedAction {
+  const step = { what: `switching to ${spec.nickname} and redrawing ${drawnPhrase(doc, scope).text}`, usd };
+  const words = shortCreditText(budget, step, costFormatterFor(ctx));
+  const steps: NextStep[] = [{ label: 'Switch without redrawing', client: { type: 'open_model_picker', suggest: spec.id } }];
+  commitWithMessage(ctx, opts, [], words.text, [shortCreditCard(budget, step)], steps);
+  logger.info('comic_credit_short', { projectId: ctx.projectId, action: 'change_image_model', payer: budget.payer, fits: 0 });
+  return finished({ status: 'blocked', code: 'BILLING_DENIED', message: words.outcome });
 }
 
 /**

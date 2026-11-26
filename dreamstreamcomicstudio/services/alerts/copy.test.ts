@@ -29,6 +29,7 @@ describe('alertCopy', () => {
   it('uses the fixed phrases of the table', () => {
     expect(alertCopy(comic('reply'))).toEqual({ title: 'The Director replied', message: 'Spice Market' });
     expect(alertCopy(comic('question'))).toEqual({ title: 'The Director has a question', message: 'Spice Market' });
+    expect(alertCopy(comic('credit'))).toEqual({ title: 'Waiting for a top-up or another key', message: 'Spice Market' });
     expect(alertCopy(comic('plan'))).toEqual({ title: 'Your page plan is ready for your OK', message: 'Spice Market' });
     expect(alertCopy(comic('approval', { imageCount: 6 }))).toEqual({
       title: 'Waiting for your OK',

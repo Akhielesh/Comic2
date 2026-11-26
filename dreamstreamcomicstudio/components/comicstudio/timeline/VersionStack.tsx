@@ -27,6 +27,7 @@ import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { amountInSentence } from '../../../services/costDisplay';
 import { PageHistoryLink } from '../history/EntryLinks';
 
@@ -51,6 +52,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   const edit = useTimelineEdit(studio);
   // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
   const cost = useCostFormat(studio);
+  const prices = useStudioPrices(studio);
 
   // A selection that vanished (archive eviction, page deleted) falls back to the current version.
   const selected = list.find((v) => v.path === selectedPath) ?? current ?? list[list.length - 1];
@@ -185,7 +187,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       <p>
         Using v{confirm.v.n} of {label} marks {[confirm.pages.length ? pagesPhrase(confirm.pages) : '', confirm.cover ? 'the cover' : ''].filter(Boolean).join(' and ')} out of date — they were drawn
         from the current version. Their art stays as it is; redrawing them later would cost{' '}
-        {amountInSentence(cost.approx(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0)))}.
+        {amountInSentence(cost.approx(redrawPrice(doc, 'page', byok, prices) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok, prices) : 0)))}.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" onClick={() => commitUse(confirm.v)} className={cx('tap-target h-8 rounded-xl bg-[var(--ds-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]', FOCUS_RING)}>
@@ -301,7 +303,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       {selected.current && selected.stale && staleKind && (
         <p className={`rounded-xl border px-3 py-2 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
           This version was drawn before the latest script or style changes, so it shows as out of date. Pick another version (free) or redraw it (
-          {cost.approx(redrawPrice(doc, staleKind, byok))}) from the page menu.
+          {cost.approx(redrawPrice(doc, staleKind, byok, prices))}) from the page menu.
         </p>
       )}
       {/* "Use this version" is an instant render_use patch, so the version UI says what the old

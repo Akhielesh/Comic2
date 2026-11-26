@@ -25,11 +25,11 @@ import { graphemes } from '../../../../shared/comic/textLayout.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { glossaryRenameOps, linesInOrder, planIsFree, translationBudget } from '../../../../shared/comic/translationPlan.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
-import { languageLabel, overlayFix, quoteTranslation, resolveLanguage, resolveLanguages, runTranslation, supportedLanguagesText, textlessCoverQuote } from '../i18n/index.js';
+import { languageLabel, overlayFix, quoteTranslation, resolveLanguage, resolveLanguages, runTranslation, supportedLanguagesText, textlessCoverQuote, translateRatesFor } from '../i18n/index.js';
 import { scriptShare } from '../i18n/translate.js';
 import { swapSourceOps } from '../actions/i18n.js';
 import { prefilterText } from '../safety/index.js';
-import { startAction, type RunActionOptions } from '../jobs.js';
+import { priceBookWithin, startAction, type RunActionOptions } from '../jobs.js';
 import { costFormatterFor, governDollars } from '../costText.js';
 import { pushNextSteps, type DirectorTurn } from '../tools.js';
 import { LANG_WORDS } from './languageAsk.js';
@@ -131,7 +131,7 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, asked: Tra
 
 async function quoteAndStartTranslate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<string> {
   const doc = ctx.session.doc;
-  const quote = quoteTranslation(doc, ctx.keys, action);
+  const quote = quoteTranslation(doc, ctx.keys, action, await translateRatesFor(ctx));
   // caps and origin are explicit on every action this tool starts (RunActionOptions may require them).
   const opts: Omit<RunActionOptions, 'confirmed'> = {
     collectCard: (card) => {
@@ -175,13 +175,15 @@ async function quoteAndStartTranslate(ctx: StudioContext, turn: DirectorTurn, ac
         : outcome.message;
   }
   const notes: string[] = [];
-  const fix = overlayFix(ctx.session.doc, quote.byok);
+  // The image steps it mentions are priced at the user's book (the Languages tab's buttons name the same figures).
+  const prices = await priceBookWithin(ctx);
+  const fix = overlayFix(ctx.session.doc, quote.byok, prices);
   if (fix?.pages.length) {
     notes.push(
       `Note: the pages have the lettering painted into the art, so translated editions need overlay lettering (owner rule): redrawing ${plural(fix.pages.length, 'page')} without text costs ${cost.approx(fix.usd)} (ask before doing it; the Languages tab has the button).`
     );
   }
-  const cover = textlessCoverQuote(ctx.session.doc, quote.byok);
+  const cover = textlessCoverQuote(ctx.session.doc, quote.byok, prices);
   if (cover !== null) notes.push(`The cover title is painted; a textless cover with an editable per-language title is a one-time ${cost.approx(cover)} (render_cover textless, ask first).`);
   // The run's own message ("Translating 12 lines into Telugu (≈ $0.02)…", "Nothing to translate ($0)") is
   // worded in i18n/index.ts: the same view applies to it, so the director never reads two currencies.
@@ -355,7 +357,7 @@ function readTranslationTool(ctx: StudioContext): DirectorTool {
       const lang = langArg(doc, args.language);
       const edition = i18nOf(doc).editions[lang];
       if (!edition) {
-        const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }).estimate.usd;
+        const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }, await translateRatesFor(ctx)).estimate.usd;
         return `There is no ${englishName(lang)} translation yet. translate_comic would cost ${costFormatterFor(ctx).approx(usd)}.`;
       }
       const pages = pagesArg(doc, args.pages);

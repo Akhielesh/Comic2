@@ -17,7 +17,9 @@ import type { ComicDoc, TranslationRegister } from '../../../shared/comic/doc';
 import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { LANGUAGES, dirOf, languageSpec, sameLanguage, scriptOf, type LanguageSpec } from '../../../shared/comic/languages';
 import { estimateDocJobs } from '../../../shared/comic/plan';
+import type { PriceBook } from '../../../shared/comic/modelLock';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { amountInSentence } from '../../../services/costDisplay';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
 import { FOCUS_RING, OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
@@ -42,8 +44,9 @@ export function inArtPages(doc: ComicDoc) {
 
 const paintedCover = (doc: ComicDoc) => (doc.cover.lettering ?? 'in_art') === 'in_art' && !!doc.cover.render.asset;
 
-/** Redraw price on the comic's locked model (else its tier/override), as the server quotes it. */
-const priceOf = (doc: ComicDoc, kind: 'page' | 'cover', count: number, byok: boolean) => estimateDocJobs(doc, [{ kind, count }], { byok }).usd;
+/** Redraw price on the comic's locked model (else its tier/override), at the person's PriceBook, as the server quotes it. */
+const priceOf = (doc: ComicDoc, kind: 'page' | 'cover', count: number, byok: boolean, prices?: PriceBook) =>
+  estimateDocJobs(doc, [{ kind, count }], { byok, ...(prices ? { prices } : {}) }).usd;
 
 function useQuote(projectId: string | undefined, langs: string[], key: string) {
   const [state, setState] = useState<{ quote: TranslationQuote | null; loading: boolean; error: string | null }>({ quote: null, loading: false, error: null });
@@ -218,6 +221,8 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
   const byok = !!studio.caps?.byok;
   // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
   const cost = useCostFormat(studio);
+  // The person's PriceBook: the redraw figures (and their quotedUsd) are the ones the approval and the run use.
+  const prices = useStudioPrices(studio);
   const pages = inArtPages(doc);
   const editions = Object.keys(i18nOf(doc).editions).length > 0;
   const notices: React.ReactNode[] = [];
@@ -232,7 +237,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
         </div>
       );
     } else {
-      const usd = priceOf(doc, 'page', pages.length, byok);
+      const usd = priceOf(doc, 'page', pages.length, byok, prices);
       notices.push(
         <div key="pages" className="space-y-2">
           <p>
@@ -265,7 +270,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
     }
   }
   if (editions && paintedCover(doc)) {
-    const usd = priceOf(doc, 'cover', 1, byok);
+    const usd = priceOf(doc, 'cover', 1, byok, prices);
     notices.push(
       <div key="cover" className="space-y-2">
         <p>

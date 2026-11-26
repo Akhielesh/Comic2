@@ -22,6 +22,15 @@ measurement limits, privacy and release verification, and
   verdict; late validation responses cannot validate the replacement.
 - Source governance and local limits apply to selection and routing. Platform
   availability does not bypass a rejected explicit key or a disabled source.
+- **Your OpenRouter balance** (`components/usage/KeyBalancePanel.tsx`) sits first,
+  under "DreamStream usage left", whenever you have your own OpenRouter key: what the
+  key can still spend (the smaller of its limit left and the account's credits, as
+  OpenRouter reports them), when it was read, the key's limit and usage, Check now and
+  Add funds. Opening Settings reads it when the last reading is missing or older than
+  15 minutes; nothing polls. The Comic Studio header shows the same reading (on phones
+  narrower than 560 px, in the studio's Spending sheet), and Comic Studio checks it
+  before a paid step starts and stops a drawing run when a key runs out (see
+  [Credit safety](credit-safety.md)).
 
 ## Model Library (`components/ModelLibrary.tsx`)
 
@@ -91,6 +100,13 @@ after 15 minutes, coalescing concurrent reads and backing off for two minutes
 after a failure. An allowed-sources header can disable these background checks.
 A dashboard visit reads saved results first. Timestamps identify the actual
 observation. Unsupported providers use their own dashboard for balance checks.
+The same saved observation is what a Comic Studio paid step compares with
+(`latestOwnKeyBalance`): it is used while under 15 minutes old, else OpenRouter is
+read again through the `POST /api/keys/balance` code path (one read in flight per
+key, a bounded wait, two minutes of backoff after a failed or slow read), and an
+unknown or stale balance never blocks a step. A reading that would refuse a step and
+is more than 30 seconds old is read again first, past the 60-second provider cache,
+so a top-up counts at once ([Credit safety](credit-safety.md)).
 
 The operator Cost Centre uses `GET /api/admin/provider-balances` and
 `POST /api/admin/provider-balances/:provider`. Both require the admin role.

@@ -38,6 +38,7 @@ import {
 } from '../../../shared/comic/doc.js';
 import {
   STEER_LIMITS,
+  confirmedAgoOf,
   encodeStudioEvent,
   normalizeTimeZone,
   type AttachmentTarget,
@@ -591,7 +592,9 @@ export function parseStreamRequest(body: unknown): StreamRequest {
       return { kind: 'action', action: { type: action.type, idea: draftIdea(action.idea), expectedRev: action.expectedRev } };
     }
     const tz = normalizeTimeZone(body.tz);
-    return { kind: 'action', action: action as unknown as StudioAction, ...(tz ? { tz } : {}) };
+    // A re-sent action's confirm moment: a hint, kept when valid, else dropped (never a 400).
+    const confirmedAgoMs = confirmedAgoOf(body.confirmedAgoMs);
+    return { kind: 'action', action: action as unknown as StudioAction, ...(tz ? { tz } : {}), ...(confirmedAgoMs ? { confirmedAgoMs } : {}) };
   }
   throw bad('Send a message or an action.');
 }
@@ -1404,6 +1407,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
   async function streamRequest(req: Request, res: Response, turn: { release: () => void }) {
     const userId = requireUser(req);
     const request = parseStreamRequest(req.body);
+    // A re-sent action ("wait and retry") was confirmed earlier: its messages say when (Msg.runAt), on this clock.
+    const confirmedAt = request.kind === 'action' && request.confirmedAgoMs ? Date.now() - request.confirmedAgoMs : undefined;
     const session = await sessionFor(req);
     const shape: Pick<RefusalLog, 'kind' | 'action'> =
       request.kind === 'message' ? { kind: 'message' } : { kind: 'action', action: request.action.type };
@@ -1532,7 +1537,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     const startEntries = new Set(session.doc.spend.entries.map((e) => e.id));
     // The closing allowance notice says when this request started (Msg.runAt): it lands after the reply and never moves
     // the chat past a question that reply asked.
-    const requestAt = Date.now();
+    const requestAt = confirmedAt ?? Date.now();
     try {
       if (refusal || !ctx) {
         logRefusal(req, 'stream', { code: refusal?.code || 'INTERNAL', ...shape });
@@ -1602,7 +1607,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
                 confirmed: isSpendAction(runnable) || runnable.type === 'approve_gate',
                 ...(turnCtx.caps ? { caps: turnCtx.caps } : {}),
                 // A UI click: its edits undo as the user's own (contract §7 ops origin).
-                origin: 'user'
+                origin: 'user',
+                ...(confirmedAt !== undefined ? { runAt: confirmedAt } : {})
               });
             if (runnable.type === 'plan_pages') await session.runExclusive(run);
             else await run();

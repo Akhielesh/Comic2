@@ -28,6 +28,7 @@ import { pageContextHash } from './continuity.js';
 import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, FX_LIMITS, MOTION_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
 import { normalizeComicResearch, type ComicResearchResults } from './research.js';
+import { normalizeCreditCard, type CreditCard } from './credit.js';
 // --- history (versions plan §3.3; H0): type-only, so doc.ts stays the dependency root ---
 import type { HistoryCard } from './history/types.js';
 // --- Pro Edit (master plan §2.3; PE-0): the dependency-free shape modules (no registry, no catalogue, no generator code
@@ -1202,7 +1203,9 @@ export type Card =
   // --- history (versions plan §3.3): ids only; renders by fetching from the owner API ---
   | HistoryCard
   // --- live agent (agent-editor plan §3 A3; K3) ---
-  | ConflictCard;
+  | ConflictCard
+  // --- money safety (credit-safety.md): a run stopped on an empty key, or a paid step that would not fit ---
+  | CreditCard;
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -2426,7 +2429,7 @@ export const normalizeConflictCard = (value: unknown): ConflictCard | undefined 
 };
 
 /** Cards of a message: `model_outage` cards are validated (dropped when malformed), notice fix chips are validated and
- *  conflict and research cards are validated; every other card is kept
+ *  conflict, credit and research cards are validated; every other card is kept
  *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
 const normalizeCards = (cards: unknown): Card[] | undefined => {
   if (!Array.isArray(cards)) return undefined;
@@ -2449,6 +2452,14 @@ const normalizeCards = (cards: unknown): Card[] | undefined => {
       const next = normalizeConflictCard(card);
       if ((next as unknown) !== card) changed = true;
       if (next) out.push(next);
+    } else if (isObject(card) && (card as { type?: unknown }).type === 'credit') {
+      const next = normalizeCreditCard(card);
+      if (!next) {
+        changed = true;
+        continue;
+      }
+      if (stableStringify(next) !== stableStringify(card)) changed = true;
+      out.push(next);
     } else if (isObject(card) && card.type === 'research') {
       const results = normalizeComicResearch(card.results);
       if (typeof card.id !== 'string' || !card.id || typeof card.query !== 'string' || !card.query.trim() || !results) {

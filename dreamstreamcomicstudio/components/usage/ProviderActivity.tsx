@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
 import type { AccountProviderUsageReport } from '../../shared/accountProviderUsage';
 import { getProviderDef } from '../../shared/providers';
 import { PROVIDER_BALANCE_CAPABILITIES, type ProviderBalanceReport } from '../../shared/providerBalances';
 import { fetchAccountProviderUsage, checkPersonalProviderBalance } from '../../services/accountProviderUsage';
+import { keyBalanceFor, seedKeyBalance, subscribeKeyBalance, useOwnKeyScope } from '../../services/keyBalance';
 import { ALL_PROVIDERS, PROVIDER_META, type ApiKeyProvider } from '../../services/apiKeys';
 import { Button } from '../ds';
 import { FOCUS_RING, INK, MUTED, RADIUS_CONTROL, SECTION_CARD } from '../chat/studioDesign';
@@ -115,7 +116,16 @@ export function PersonalProviderBalance({ ownerId, provider, hasKey, enabled, sc
   }, [scope]);
   const capability = PROVIDER_BALANCE_CAPABILITIES[provider];
   const dashboardOnly = capability === 'dashboard';
-  const current = reading && (!saved || reading.checkedAt >= saved.checkedAt) ? reading : saved;
+  // OpenRouter: the one reading the balance panel above and the studio header share (services/keyBalance.ts), so a
+  // "Check now" there shows here too instead of an older saved figure beside a newer one.
+  const ownScope = useOwnKeyScope();
+  const sharedScope = provider === 'openrouter' && hasKey && enabled ? ownScope : '';
+  const shared = useSyncExternalStore(subscribeKeyBalance, () => keyBalanceFor(sharedScope), () => keyBalanceFor('')).report;
+  const latest = [reading, shared?.status === 'reported' ? shared : undefined].reduce<ProviderBalanceReport | undefined>(
+    (best, r) => (r && (!best || r.checkedAt > best.checkedAt) ? r : best),
+    undefined
+  );
+  const current = latest && (!saved || latest.checkedAt >= saved.checkedAt) ? latest : saved;
   const check = async () => {
     if (request.current || !hasKey || !enabled || dashboardOnly) return;
     const controller = new AbortController();
@@ -126,6 +136,8 @@ export function PersonalProviderBalance({ ownerId, provider, hasKey, enabled, sc
       const { report, saved: persisted } = await checkPersonalProviderBalance(ownerId, provider, controller.signal);
       if (controller.signal.aborted) return;
       if (report.status === 'reported') {
+        // The studio header and the balance panel show the same reading.
+        seedKeyBalance(report);
         setResult({ scope, reading: report, notice: persisted ? undefined : 'The provider responded. This reading could not be saved to your account.' });
         if (persisted) onSaved();
       } else {

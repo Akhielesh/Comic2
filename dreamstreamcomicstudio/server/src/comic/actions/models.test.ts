@@ -1,6 +1,8 @@
 // change_image_model (models.md §3.4 item 7, §3.6 F; §5.1 M1-LOCK-SERVER tests). Fakes only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ComicDoc, ImageModelLock } from '../../../../shared/comic/doc.js';
+import type { ComicDoc, ImageModelLock, Msg } from '../../../../shared/comic/doc.js';
+import { needsYouOf } from '../../../../shared/comic/attention.js';
+import { cardSettle } from '../../../../shared/comic/settle.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { getImageModel } from '../../../../shared/comic/models.js';
 import { redrawQuote, type PriceBook } from '../../../../shared/comic/modelLock.js';
@@ -8,6 +10,7 @@ import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.j
 import { JOB_TIMINGS, estimateSpendAction, startAction, type RunActionOptions } from '../jobs.js';
 import { registryPriceBook } from '../models/index.js';
 import { fakeImages, newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
+import { classifyImageError } from '../imageClient.js';
 import { checkRenderSafety, onRenderVerdict } from '../safety/index.js';
 import { StudioError, type StudioKeys } from '../types.js';
 import { analyzePageRender } from '../vision.js';
@@ -243,6 +246,73 @@ describe("change_image_model 'all': sheets first, pages only on new-model sheets
     expect(notice.nextSteps?.[0]).toMatchObject({ label: expect.stringMatching(/^Redraw 5 pages and the cover · /), action: { type: 'render_pages', force: true, includeCover: true, quotedUsd: expect.any(Number) } });
   });
 
+  it('a question the Director asks while the sheets draw stays open after the pages and cover are redrawn', async () => {
+    // The run that starts once the sheets are ready was confirmed with the switch: it settles nothing asked since.
+    let clock = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let release!: () => void;
+    const sheetsDone = new Promise<void>((resolve) => (release = resolve));
+    let holding = true;
+    const images = fakeImages(async () => {
+      if (holding) await sheetsDone;
+      return undefined;
+    });
+    const { session, ctx } = setup(lake(), { images });
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    expect(started.outcome.status).toBe('started');
+    const switchedAt = (session.doc.imageModel as ImageModelLock).lockedAt;
+    for (let i = 0; i < 200 && !ctx.imagesFake.calls.length; i += 1) await new Promise((r) => setTimeout(r, 1));
+    expect(ctx.imagesFake.calls.length).toBeGreaterThan(0);
+    // A minute later, while the sheets draw, the Director asks something.
+    clock += 60_000;
+    const question: Msg = {
+      id: 'msg_q',
+      role: 'assistant',
+      text: 'Should the lake freeze over in the last scene?',
+      at: clock,
+      cards: [{ type: 'options', id: 'card_q', question: 'Freeze the lake?', choices: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] }]
+    };
+    session.commit([{ op: 'message', msg: question }]);
+    // Another minute on, the sheets land and the pages + cover start.
+    clock += 60_000;
+    holding = false;
+    release();
+    await started.done;
+    expect(pageRuns(ctx)).toHaveLength(1);
+    const conversation = session.doc.conversation;
+    const at = conversation.findIndex((m) => m.id === 'msg_q');
+    expect(cardSettle(session.doc, at, conversation[at].cards![0]).state).toBe('open');
+    expect(needsYouOf(session.doc)).toEqual({ why: 'question', key: 'card:msg_q:card_q' });
+    // Everything the redraw posted after the question says when the switch was confirmed.
+    const after = conversation.slice(at + 1);
+    expect(after.length).toBeGreaterThan(0);
+    for (const m of after) expect(m.runAt).toBe(switchedAt);
+  });
+
+  it('the chain’s own notices carry the switch time, so a question asked meanwhile stays open', async () => {
+    let clock = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let release!: () => void;
+    const sheetsFail = new Promise<void>((resolve) => (release = resolve));
+    const images = fakeImages(async () => {
+      await sheetsFail;
+      return new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 400, retryable: false });
+    });
+    const { session, ctx } = setup(lake(), { images });
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quoteFor(session.doc, 'nano-banana-pro', 'all')), UI);
+    const switchedAt = (session.doc.imageModel as ImageModelLock).lockedAt;
+    for (let i = 0; i < 200 && !ctx.imagesFake.calls.length; i += 1) await new Promise((r) => setTimeout(r, 1));
+    clock += 60_000;
+    session.commit([{ op: 'message', msg: { id: 'msg_q', role: 'assistant', text: 'Which ending?', at: clock, cards: [{ type: 'options', id: 'card_q', question: 'Which ending?', choices: [{ id: 'a', label: 'Happy' }, { id: 'b', label: 'Sad' }] }] } }]);
+    clock += 60_000;
+    release();
+    await started.done;
+    const notice = session.doc.conversation.find((m) => /so I didn't start 5 pages and the cover/.test(m.text));
+    expect(notice?.runAt).toBe(switchedAt);
+    expect(needsYouOf(session.doc)).toEqual({ why: 'question', key: 'card:msg_q:card_q' });
+  });
+
   it('a sheet that fails upstream → the pages do not start; one honest notice offers them as a priced chip', async () => {
     const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 400, retryable: false }));
     const { session, ctx } = setup(lake(), { images });
@@ -261,3 +331,85 @@ describe("change_image_model 'all': sheets first, pages only on new-model sheets
   });
 });
 
+
+describe("change_image_model with a key that can't pay (credit-safety.md)", () => {
+  const OWN: StudioKeys = { openrouter: { key: 'sk-or-synthetic-owner', byok: true } };
+  // Drawing on their own key: prices in dollars.
+  const OWN_CAPS: StudioCaps = { ...PAID, byok: true };
+  const OWN_UI: RunActionOptions = { ...UI, caps: OWN_CAPS };
+  const reading = (remaining: number) => ({
+    provider: 'openrouter' as const,
+    status: 'reported' as const,
+    checkedAt: Date.now(),
+    accountBalances: null,
+    keyQuotaUsd: { limit: 20, remaining, usage: 20 - remaining }
+  });
+  const creditCards = (doc: ComicDoc) => doc.conversation.flatMap((m) => m.cards || []).filter((c) => c.type === 'credit');
+  const outOfCredit = () => Object.assign(classifyImageError({ status: 402, message: 'Insufficient credits' }, { route: 'openrouter', byok: true }), { imageFailure: { route: 'openrouter', status: 402 } });
+
+  it('a redraw the own key is known to be short of switches NOTHING: one "Not enough credit" card and Switch without redrawing', async () => {
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS });
+    Object.assign(ctx, { credit: { ownKeyBalance: async () => reading(0.05) } });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'BILLING_DENIED' });
+    // The book stays whole on its model: no lock change, no image, no hold.
+    expect(session.doc.imageModel).toBeUndefined();
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+    const cards = creditCards(session.doc);
+    expect(cards).toEqual([expect.objectContaining({ reason: 'short', payer: 'own_key', leftUsd: 0.05, what: 'switching to Nano Banana Pro and redrawing 5 pages, the cover and 4 character sheets' })]);
+    const msg = session.doc.conversation.at(-1)!;
+    expect(msg.text).toMatch(/^Not enough credit, so I haven't started switching to Nano Banana Pro and redrawing .+: it needs ≈ \$\d+\.\d\d and your OpenRouter key has \$0\.05 left\. Nothing was charged\.$/);
+    expect(msg.nextSteps?.map((s) => s.label)).toEqual(['Switch without redrawing']);
+  });
+
+  it('with room on the key the same switch redraws as before', async () => {
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS });
+    Object.assign(ctx, { credit: { ownKeyBalance: async () => reading(19) } });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(session.doc.imageModel?.modelId).toBe('nano-banana-pro');
+    expect(creditCards(session.doc)).toEqual([]);
+  });
+
+  it('the sheets run stops on an empty key: its credit card is the one story, and Draw the rest then offers the pages and cover', async () => {
+    let refuse = true;
+    const images = fakeImages((_req, i) => (refuse && i > 0 ? outOfCredit() : { route: 'openrouter', byok: true, model: 'google/gemini-3-pro-image-preview' }));
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS, images });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    // The pages never started, and nothing but the stop card follows: no "weren't redrawn" notice, no paid chip.
+    expect(session.doc.pages.every((p) => p.render.asset?.model === 'nano-banana-2.1')).toBe(true);
+    expect(session.doc.conversation.some((m) => /weren't redrawn|waits for the new character sheets/.test(m.text))).toBe(false);
+    const cards = creditCards(session.doc);
+    expect(cards).toHaveLength(1);
+    const [card] = cards as Extract<(typeof cards)[number], { type: 'credit' }>[];
+    expect(card).toMatchObject({ reason: 'stopped', rest: { action: { type: 'render_sheets' } } });
+    const last = session.doc.conversation.at(-1)!;
+    expect((last.nextSteps || []).some((s) => !!s.action)).toBe(false);
+    // After a top-up, Draw the rest finishes the sheets on the new model and offers what the switch still owes.
+    refuse = false;
+    const rest = await startAction(ctx, card.rest!.action, OWN_UI);
+    expect(rest.outcome.status).toBe('started');
+    await rest.done;
+    expect(session.doc.cast.every((c) => c.sheet.asset?.model === 'nano-banana-pro')).toBe(true);
+    const offer = session.doc.conversation.at(-1)!.nextSteps?.find((s) => /^Redraw 5 pages and the cover · /.test(s.label));
+    expect(offer).toMatchObject({ action: { type: 'render_pages', force: true, includeCover: true, pageIds: session.doc.pages.map((p) => p.id), quotedUsd: expect.any(Number) } });
+  });
+
+  it('a switch whose chain finished on the new model offers nothing more after a later sheet', async () => {
+    const { session, ctx } = setup(lake());
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    await started.done;
+    expect(session.doc.pages.every((p) => p.render.asset?.model === 'nano-banana-pro')).toBe(true);
+    const again = await startAction(ctx, { type: 'render_sheets', characterIds: [session.doc.cast[0].id], force: true }, UI);
+    await again.done;
+    expect((session.doc.conversation.at(-1)!.nextSteps || []).some((s) => /^Redraw \d+ pages?/.test(s.label))).toBe(false);
+  });
+});

@@ -231,6 +231,20 @@ describe('useAutoRetry (wait and retry automatically)', () => {
     expect(act1.mock.calls.length + act2.mock.calls.length).toBe(1);
   });
 
+  it('re-sends as confirmed when the person armed it (its messages never close a question asked meanwhile)', async () => {
+    states = { [NB21]: 'down' };
+    const send = vi.fn(async (_a: StudioAction, _o?: { confirmedAt?: number }) => undefined);
+    renderHook(() => useAutoRetry({ act: send }));
+    await flush();
+    act(() => void armRetry('card_7', NB21, action));
+    const armedAt = getRetry('card_7')!.armedAt;
+    await flush(STATUS_POLL_MS);
+    states = { [NB21]: 'ok' };
+    await flush(STATUS_POLL_MS);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]).toEqual([action, { confirmedAt: armedAt }]);
+  });
+
   it('never fires while the tab is hidden; fires on return once the model is back', async () => {
     states = { [NB21]: 'down' };
     const send = vi.fn(async () => undefined);
@@ -249,7 +263,8 @@ describe('useAutoRetry (wait and retry automatically)', () => {
     act(() => setVisibility('visible'));
     await flush();
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith(action);
+    // Confirmed when it was armed, however long the tab was hidden.
+    expect(send).toHaveBeenCalledWith(action, { confirmedAt: getRetry('card_2')!.armedAt });
   });
 
   it('an answer older than the click never fires it (the model must be seen back after arming)', async () => {

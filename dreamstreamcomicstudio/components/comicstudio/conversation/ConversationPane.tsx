@@ -32,6 +32,7 @@ import { QueuedMessages } from './QueuedMessages';
 import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
 import { AssistantMessageRow, DirectorMark, assistantRowEmpty, PendingMessageRow, UserMessageRow, seedEntrances, useRowStudio } from './MessageItem';
+import { rateableReplyIds } from './replyRating';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
 import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
@@ -157,6 +158,12 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   const docEntries = entries.filter((e) => committed.has(e.msg.id));
   const orphanDrafts = entries.filter((e) => !committed.has(e.msg.id));
   const isEmpty = !!doc && !doc.conversation.length && !pendingMessage && !orphanDrafts.length;
+
+  // Rate a reply: the Director's answers to what the person sent carry the thumbs (the newest always shows them).
+  const rateable = useMemo(() => {
+    const ids = rateableReplyIds(doc?.conversation);
+    return { ids: new Set(ids), latest: ids[ids.length - 1] };
+  }, [doc?.conversation]);
 
   const lastEntry = entries[entries.length - 1];
   const lastAssistantId = [...entries].reverse().find((e) => e.msg.role === 'assistant')?.msg.id;
@@ -303,15 +310,16 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                         studio={rowStudio}
                         settles={settles}
                         docKey={docKey}
+                        rating={rateable.ids.has(msg.id) ? (msg.id === rateable.latest ? 'latest' : 'older') : undefined}
                       />
                     );
-                  // Older messages skip rendering while offscreen (cheap on long conversations).
-                  return i < docEntries.length - CV_KEEP_LIVE ? (
-                    <div key={msg.id} className="cv-auto min-w-0">
+                  // Older messages skip rendering while offscreen (cheap on long conversations). One wrapper for every row,
+                  // only its class changing, so a row that grows older is never mounted again (its rating, a note being
+                  // written and any other state inside it stay).
+                  return (
+                    <div key={msg.id} className={i < docEntries.length - CV_KEEP_LIVE ? 'cv-auto min-w-0' : 'min-w-0'}>
                       {item}
                     </div>
-                  ) : (
-                    <React.Fragment key={msg.id}>{item}</React.Fragment>
                   );
                 })}
                 {pendingMessage && (

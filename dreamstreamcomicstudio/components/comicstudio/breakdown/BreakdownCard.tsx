@@ -72,8 +72,8 @@ import {
   type PanelSummary,
   type PageSummary
 } from '../../../shared/comic/plan';
-import { applyOps, layoutFixOps, type DocOp, type StudioAction } from '../../../shared/comic/ops';
-import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
+import type { DocOp, StudioAction } from '../../../shared/comic/ops';
+import { layoutFitFix } from '../../../shared/comic/layoutFit';
 import { needMeter } from '../../../shared/comic/density';
 import { letteringAspect } from '../../../shared/comic/lettering/layout';
 import { panelWords, textUnitFor, unitCount, type TextUnit } from '../../../shared/comic/panelRules';
@@ -94,6 +94,8 @@ import { CardShell, ChipBadge, ChipButton, GhostButton, PrimaryButton, Segmented
 import { useAction } from '../conversation/cards/useAction';
 import { noticePrice } from '../conversation/cards/NoticeCard';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
+import type { PriceBook } from '../../../shared/comic/modelLock';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
 import { FIT_DOT_COLOR, PageWireframe, fitDotOf, wireframeFramesOf, type FitDot } from './PageWireframe';
@@ -223,21 +225,8 @@ export const fitWords = (dot: FitDot, words: number, budget: number, unit: Pick<
   return `Fits (${words} of ${unitCount(budget, u)})`;
 };
 
-/**
- * The free "Use the layout that fits" fix for a held-back page (K1 contract, the server's heldBackLayoutFixOps):
- * the shared `layoutFixOps` — the blueprint PLUS panel sizes that agree with it; a bare `page.layout` patch would
- * leave a 'wide' panel in a shared row and the prompt would draw the old, overfull layout. Null (no chip) when it
- * gives no ops, or when the page is still overfull once they are applied.
- */
-export const layoutFitFix = (doc: ComicDoc, page: Page, layout: string | undefined): DocOp[] | null => {
-  if (!layout) return null;
-  const ops = layoutFixOps(doc, page, layout);
-  if (!ops.length) return null;
-  const fitted = applyOps(doc, ops);
-  const after = fitted.pages.find((p) => p.id === page.id);
-  if (!after) return null;
-  return checkPagePlan(fitted, after, { fixLayout: false }).state === 'overfull' ? null : ops;
-};
+/** The free "Use the layout that fits" fix for a held-back page (shared/comic/layoutFit.ts: the Pages header offers it too). */
+export { layoutFitFix };
 
 /**
  * Pages a gate's run draws whatever their fit: every page it names (the server stores a gate bound to the pages it
@@ -437,6 +426,9 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   const { run, isPending, anyPending } = useAction(studio.act);
   // Prices in the viewer's terms (governed users never see dollars, even before their status loads).
   const cost = useCostFormat({ byok, caps: studio.caps });
+  // The person's PriceBook (the studio's price sheet): every price on this card is the one its approval names.
+  const prices = useStudioPrices(studio);
+  const priced = useMemo(() => (prices ? { prices } : {}), [prices]);
 
   const [wholeBook, setWholeBook] = useState(false);
   const pageKey = doc ? doc.pages.map((p) => `${p.id}:${p.n}`).join(',') : '';
@@ -464,8 +456,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
 
   const rating = doc ? effectiveRating(doc).rating : 'PG-13';
   const book = useMemo(
-    () => (doc ? summarizeBook(doc, { pageIds: scope.ids, byok, rating, drawOverfull: drawAnyway }) : null),
-    [doc, scope.ids, byok, rating, drawAnyway]
+    () => (doc ? summarizeBook(doc, { pageIds: scope.ids, byok, rating, drawOverfull: drawAnyway, ...priced }) : null),
+    [doc, scope.ids, byok, rating, drawAnyway, priced]
   );
   const tier = doc?.settings.quality ?? 'standard';
   const override = doc?.settings.imageModelOverride;
@@ -475,8 +467,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   // The quote leaves held-back pages out, exactly like the server's "Render all" gate (and, for a subset, the
   // explicit page list the primary action sends is this quote's pageIds — held-back pages are not in it).
   const quote = useMemo(
-    () => (doc ? quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: drawAnyway, meter } }) : null),
-    [doc, scope.ids, byok, tier, override, drawAnyway, meter]
+    () => (doc ? quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: drawAnyway, meter }, ...priced }) : null),
+    [doc, scope.ids, byok, tier, override, drawAnyway, meter, priced]
   );
 
   const anyDrawn = !!doc?.pages.some((p) => p.render.status === 'ready' && !!p.render.asset);
@@ -562,7 +554,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     const out: PageFitCalc = { pageId: page.id, heldBack, anyway, layoutFix: heldBack ? layoutFitFix(doc, page, s.planFit?.layoutFix) : null };
     if (!inGate && heldBack) {
       // What the run costs more with this page in it (the same hold-back quote the primary action uses).
-      const withIt = quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: [...drawAnyway, page.id], meter } });
+      const withIt = quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: [...drawAnyway, page.id], meter }, ...priced });
       out.anywayUsd = Math.max(0, Math.round((withIt.usd - quote.usd) * 10000) / 10000);
     }
     return out;
@@ -828,6 +820,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         pro={pro}
         onToggle={() => setDetailsOpen((v) => !v)}
         cost={cost}
+        prices={prices}
         busy={coverBusy}
         pending={isPending('cover-one')}
         disabled={anyPending}
@@ -845,6 +838,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         rating={rating}
         urlFor={studio.urlFor}
         cost={cost}
+        prices={prices}
         unit={textUnitFor(doc.format.language)}
         fit={planFitFor(selected.page)}
         onToggle={() => setDetailsOpen((v) => !v)}
@@ -1054,7 +1048,8 @@ const PageDetail: React.FC<{
   onDraw(force: boolean, usd: number): void;
   onEdit(): void;
   onBoard(): void;
-}> = ({ doc, page, s, byok, inGate, open, pro, rating, urlFor, cost, unit, fit, onToggle, pending, disabled, onDraw, onEdit, onBoard }) => {
+  prices?: PriceBook;
+}> = ({ doc, page, s, byok, inGate, open, pro, rating, urlFor, cost, unit, fit, onToggle, pending, disabled, onDraw, onEdit, onBoard, prices }) => {
   const id = `bd-${useId().replace(/:/g, '')}`;
   const tier = doc.settings.quality;
   const override = doc.settings.imageModelOverride;
@@ -1062,10 +1057,10 @@ const PageDetail: React.FC<{
   // The gate's own quotes (shared/comic/plan.ts): "draw" only when the server would draw it, and a
   // forced new take only for a drawn, current page. Both include any missing lead/support sheet.
   // A held-back page offers its free fixes and "Draw anyway" instead (the held-back panel below).
-  const drawQ = quoteRenderPages(doc, { pageIds: [page.id], byok, tier, modelOverride: override });
+  const drawQ = quoteRenderPages(doc, { pageIds: [page.id], byok, tier, modelOverride: override, ...(prices ? { prices } : {}) });
   const q = drawQ.nothing || fit.heldBack ? null : drawQ;
   const redo = !q && !fit.heldBack && !busy && page.render.status === 'ready' && page.panels.length > 0
-    ? quoteRenderPages(doc, { pageIds: [page.id], force: true, byok, tier, modelOverride: override })
+    ? quoteRenderPages(doc, { pageIds: [page.id], force: true, byok, tier, modelOverride: override, ...(prices ? { prices } : {}) })
     : null;
   const redrawUsd = redo && !redo.nothing ? redo.usd : undefined;
   const sheetQ = q ?? redo;
@@ -1392,10 +1387,11 @@ const CoverDetail: React.FC<{
   cost: CostFormat;
   onToggle(): void;
   onDraw(usd: number): void;
-}> = ({ doc, book, byok, inGate, open, pro, busy, pending, disabled, cost, onToggle, onDraw }) => {
+  prices?: PriceBook;
+}> = ({ doc, book, byok, inGate, open, pro, busy, pending, disabled, cost, onToggle, onDraw, prices }) => {
   const id = `bd-${useId().replace(/:/g, '')}`;
   const c = book.cover;
-  const usd = c.quoteUsd ?? unitPrice(doc, 'cover', { byok }).usd;
+  const usd = c.quoteUsd ?? unitPrice(doc, 'cover', { byok, ...(prices ? { prices } : {}) }).usd;
   const drawn = isDrawnStatus(c.status);
   return (
     <section aria-label="Cover details" className="mt-2 min-w-0 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)] p-3">

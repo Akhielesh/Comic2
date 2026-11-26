@@ -41,6 +41,7 @@ export const FINISHED_SHOWN = 3;
 export const ATTENTION_LABEL: Readonly<Record<WorkAttention, string>> = {
   approval: 'Review drawing estimate',
   question: 'Answer the Director',
+  credit: 'Top up or switch key',
   plan: 'Review page plan',
   style: 'Choose a look',
   interrupted: 'Resume interrupted draft',

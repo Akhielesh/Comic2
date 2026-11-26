@@ -298,6 +298,40 @@ const rateLimitMessage = (
   return 'The image model is busy right now (rate limited). Wait a minute and try again.';
 };
 
+/**
+ * A confirmed refusal of the KEY itself, not of one request: `credit` = out of credits or over its spending limit
+ * (402, or a 403 that says so and is not a moderation refusal); `no_quota` = a Google project with no image quota at
+ * all (429 RESOURCE_EXHAUSTED "limit: 0"). Every later call on that key would be refused the same way, so a run stops
+ * (or moves to a same-payer route) instead of sending them. A plain 429 is a transient rate limit and never counts.
+ */
+export type CreditRefusal = 'credit' | 'no_quota';
+
+/** The confirmed key refusal on an error classifyImageError made, or undefined (rate limits, outages, everything else). */
+export const creditRefusalOf = (err: unknown): CreditRefusal | undefined => {
+  const kind = (err as { creditRefusal?: unknown } | null)?.creditRefusal;
+  return kind === 'credit' || kind === 'no_quota' ? kind : undefined;
+};
+
+const keyRefused = (error: StudioError, kind: CreditRefusal): StudioError => Object.assign(error, { creditRefusal: kind });
+
+/**
+ * The same payer's other route, tried as the fallback after the first route was only busy (a rate limit or an outage),
+ * refused its key for credit. The error reported stays the first route's, so the run retries there, and this tells the
+ * run never to call the refused key again (excludeRoutes on the next attempt).
+ */
+export interface FallbackRefusal {
+  route: ImageRoute;
+  refusal: CreditRefusal;
+}
+
+/** The fallback route's credit refusal carried on an error the image generator threw, or undefined. */
+export const fallbackRefusalOf = (err: unknown): FallbackRefusal | undefined => {
+  const info = (err as { fallbackRefusal?: unknown } | null)?.fallbackRefusal as Partial<FallbackRefusal> | undefined;
+  if (!info || typeof info !== 'object') return undefined;
+  const refusal = creditRefusalOf({ creditRefusal: info.refusal });
+  return refusal && (info.route === 'openrouter' || info.route === 'gemini') ? { route: info.route, refusal } : undefined;
+};
+
 /** Map an HTTP / SDK / network failure to a StudioError. */
 export const classifyImageError = (
   err: unknown,
@@ -312,12 +346,15 @@ export const classifyImageError = (
   if (e.name === 'AbortError') return cancelled();
 
   if (isCapacityError(status, message)) {
-    return new StudioError(
-      'PROVIDER_ERROR',
-      ctx.byok
-        ? `Your ${provider} key is out of credits or over its spending limit. Top it up (or raise the limit), then try again.`
-        : 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.',
-      { status: 503, retryable: false, cause: err }
+    return keyRefused(
+      new StudioError(
+        'PROVIDER_ERROR',
+        ctx.byok
+          ? `Your ${provider} key is out of credits or over its spending limit. Top it up (or raise the limit), then try again.`
+          : 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.',
+        { status: 503, retryable: false, cause: err }
+      ),
+      'credit'
     );
   }
   // Gemini image models have no free tier: an unbilled project gets 429 RESOURCE_EXHAUSTED
@@ -327,14 +364,17 @@ export const classifyImageError = (
   // The same "limit: 0" can come back through OpenRouter when the account routes Google
   // models through its own Google key (OpenRouter BYOK integration) on an unbilled project.
   if ((status === 429 || /resource.?exhausted/i.test(message)) && /\blimit:\s*0\b/i.test(message)) {
-    return new StudioError(
-      'PROVIDER_ERROR',
-      !ctx.byok
-        ? 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.'
-        : ctx.route === 'gemini'
-          ? 'Your Gemini key has no image-generation quota (its Google Cloud project has no billing). Enable billing for that project in Google AI Studio, or add an OpenRouter key in Settings → API keys.'
-          : 'OpenRouter is sending this model through a Google key with no image quota (its Google Cloud project has no billing). Enable billing for that project, or remove that Google key from your OpenRouter integrations.',
-      { status: 503, retryable: false, cause: err }
+    return keyRefused(
+      new StudioError(
+        'PROVIDER_ERROR',
+        !ctx.byok
+          ? 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.'
+          : ctx.route === 'gemini'
+            ? 'Your Gemini key has no image-generation quota (its Google Cloud project has no billing). Enable billing for that project in Google AI Studio, or add an OpenRouter key in Settings → API keys.'
+            : 'OpenRouter is sending this model through a Google key with no image quota (its Google Cloud project has no billing). Enable billing for that project, or remove that Google key from your OpenRouter integrations.',
+        { status: 503, retryable: false, cause: err }
+      ),
+      'no_quota'
     );
   }
   if (status === 429 || /resource.?exhausted|rate.?limit|too many requests/i.test(message)) {
@@ -1199,6 +1239,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
   };
 
   return async (req: ImageRequest): Promise<ImageResult> => {
+    const excluded = new Set(req.excludeRoutes ?? []);
     const primary = pickImageRoute(req.spec, keys);
     const prepared = prepareImageRequest(req);
     // The SAME model on the other route, only with a key of the same payer (never another model, never another payer).
@@ -1208,8 +1249,19 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       !!sibling &&
       (req.preferRoute === sibling.route ||
         (health().routeState(primary.route, primary.model).state === 'down' && health().routeState(sibling.route, sibling.model).state !== 'down'));
-    const picked = startOnSibling ? sibling! : primary;
-    const fallback = startOnSibling ? primary : sibling;
+    let picked = startOnSibling ? sibling! : primary;
+    let fallback = startOnSibling ? primary : sibling;
+    // A key this run saw refused for credit is never called again, as the first route or as the fallback.
+    if (excluded.has(picked.route)) {
+      if (!fallback || excluded.has(fallback.route)) {
+        throw Object.assign(new StudioError('PROVIDER_ERROR', `${req.spec.nickname} has no key left to draw on in this run.`, { status: 503, retryable: false }), {
+          imageFailure: { route: picked.route } as ImageFailureInfo,
+          spentUsd: 0
+        });
+      }
+      picked = fallback;
+      fallback = null;
+    } else if (fallback && excluded.has(fallback.route)) fallback = null;
     if (prepared.droppedReferences) {
       logger.warn('comic_image_references_capped', {
         model: picked.model,
@@ -1250,6 +1302,10 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         // The first route was only paused (no call was made): the answer the user needs is the one the other route gave.
         const reported = isRoutePausedError(err) && altErr instanceof StudioError ? (altErr as StudioError & { spentUsd?: number }) : error;
         if (total > 0) reported.spentUsd = total;
+        // The first route was only busy but the other key was refused for credit: keep that refusal, so the run never
+        // falls back onto that key again (credit-safety.md §1) while it retries the first route.
+        const altRefusal = reported === altErr ? undefined : creditRefusalOf(altErr);
+        if (altRefusal) Object.assign(reported, { fallbackRefusal: { route: alt.route, refusal: altRefusal } satisfies FallbackRefusal });
         throw reported;
       }
     }

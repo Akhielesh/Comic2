@@ -20,7 +20,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BookImage, BookOpen, ChevronDown, ChevronUp, Crop, Image as ImageIcon, MoreHorizontal, RotateCcw, ScrollText, Sparkles } from 'lucide-react';
 import { bookOf, newId, totalPanels, type BookSettings, type ComicDoc, type Page, type RenderTarget } from '../../../shared/comic/doc';
 import { aspectMismatch } from '../../../shared/comic/book';
-import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
+import { planUsd } from '../../../shared/comic/priceBook';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { coverNeedsDraw, quoteRenderPages } from '../../../shared/comic/plan';
 import { canServeToOwner, effectiveRating, type ContentRating } from '../../../shared/comic/safety';
@@ -41,8 +41,10 @@ import { EmptyIllustration, FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton,
 import { PageScript } from './PageScript';
 import { ContinuityReview } from '../consistency/ContinuityReview';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
-import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
+import { byokFromDoc, estimateDraw, estimateOne, hasImage, heldBackPages, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
+import { HeldBackNote } from './HeldBackNote';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { keepRefusedInComposer } from '../conversation/composerBus';
 import { proEditorV2On } from '../../../shared/comic/capabilities';
@@ -138,6 +140,7 @@ const pageGateTargets = (doc: ComicDoc): { pageIds: ReadonlySet<string>; cover: 
   const gate = doc.gate;
   if (gate?.status !== 'open' || gate.action.type !== 'render_pages') return null;
   const a = gate.action;
+  // Targets only (which pages and the cover), never a price: the approval's own banner prices this spend.
   const q = quoteRenderPages(doc, { pageIds: a.pageIds, force: a.force, includeCover: a.includeCover, byok: byokFromDoc(doc), tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
   return { pageIds: new Set(q.pageIds), cover: q.cover };
 };
@@ -185,6 +188,8 @@ export const PageCard: React.FC<{
   const DrawButton = drawButtonFor(doc);
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
+  // The person's PriceBook: this card's prices are the ones the approval and the run use.
+  const prices = useStudioPrices(studio);
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const status = pageVisualStatus(doc, page);
   const [showScript, setShowScript] = useState(false);
@@ -198,9 +203,9 @@ export const PageCard: React.FC<{
   const drawn = hasImage(page.render);
   const busy = isBusy(page.render);
   const spec = jobModel(doc, 'page');
-  const price = estimateDraw(doc, pagesForIds(doc, [page.id]), byok).estimate.usd;
+  const price = estimateDraw(doc, pagesForIds(doc, [page.id]), byok, prices).estimate.usd;
   // "Redraw safer" is one forced page render, priced for THIS user (governed users read usage, never dollars).
-  const saferPrice = cost.quote(redrawPrice(doc, 'page', byok));
+  const saferPrice = cost.quote(redrawPrice(doc, 'page', byok, prices));
   const target: RenderTarget = { kind: 'page', id: page.id };
   const render = (safe = false) => fire('render', () => studio.act({ type: 'render_pages', pageIds: [page.id], force: true, ...(safe ? { safe: true } : {}) }));
   const open = () => studio.openPage(page.id);
@@ -398,6 +403,7 @@ export const CoverCard: React.FC<{
   const waiting = waitingProp ?? !!pageGateTargets(doc)?.cover;
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
+  const prices = useStudioPrices(studio);
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const render = doc.cover.render;
   const status = render.status === 'none' ? 'planned' : sheetVisualStatus(render);
@@ -408,7 +414,7 @@ export const CoverCard: React.FC<{
   const a = render.asset;
   const src = frameSources(studio.urlFor, a, { sizes: '(max-width: 640px) 50vw, 260px' });
   const aspect = a?.w && a?.h ? a.w / a.h : aspectNumber(doc.format.pageAspect);
-  const price = estimateOne(doc, 'cover', byok).usd;
+  const price = estimateOne(doc, 'cover', byok, 1, prices).usd;
   const spec = jobModel(doc, 'cover');
   const design = (safe = false) => fire('cover', () => studio.act({ type: 'render_cover', ...(safe ? { safe: true } : {}) }));
   const drawn = hasImage(render);
@@ -450,7 +456,7 @@ export const CoverCard: React.FC<{
         safety={{
           rating,
           onRedrawSafer: () => design(true),
-          redrawPrice: cost.quote(redrawPrice(doc, 'cover', byok)),
+          redrawPrice: cost.quote(redrawPrice(doc, 'cover', byok, prices)),
           onCheckAgain: () => void studio.act({ type: 'safety_recheck', target: { kind: 'cover' } }),
           onChangeRating: () => studio.setTab('story')
         }}
@@ -559,9 +565,11 @@ const PlanHeader: React.FC<{
 }> = ({ studio, doc, byok, cost, selected, clearSelection, density, onDensity }) => {
   const { busyKey, fire } = useClickGuard(3000);
   const [includeCover, setIncludeCover] = useState(false);
-  // Quoted exactly as the server's gate quotes render_pages (same targets, same registry estimate).
-  const quote = quoteRenderPages(doc, { includeCover, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
-  const chosen = estimateDraw(doc, pagesForIds(doc, selected), byok);
+  // Quoted exactly as the server's gate quotes this "Render all": the same targets (overfull pages held back, as its
+  // plan check holds them back), the same estimate, the same PriceBook.
+  const prices = useStudioPrices(studio);
+  const quote = quoteRenderPages(doc, { includeCover, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, holdBack: {}, ...(prices ? { prices } : {}) });
+  const chosen = estimateDraw(doc, pagesForIds(doc, selected), byok, prices);
   const drawing = doc.pages.filter((p) => isBusy(p.render)).length;
   const drawn = doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length;
   const panels = totalPanels(doc);
@@ -576,6 +584,14 @@ const PlanHeader: React.FC<{
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
+  // Pages the plan check leaves out of this Render all: said in words beside the price (which leaves them out too),
+  // and the label counts what it draws instead of "all" / "remaining".
+  const held = heldBackPages(doc, quote.heldBackIds);
+  const drawLabel = held.pages.length
+    ? `${draft ? 'Approve & render' : 'Render'} ${plural(toDraw, 'page')}`
+    : draft
+      ? 'Approve & render all'
+      : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`;
 
   return (
     <div className="space-y-2" data-pages-header>
@@ -605,7 +621,7 @@ const PlanHeader: React.FC<{
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {waitingForOk ? (
           <WaitingNote header />
-        ) : toDraw > 0 && (
+        ) : toDraw > 0 ? (
           <>
             <DrawButton
               size="sm"
@@ -614,13 +630,21 @@ const PlanHeader: React.FC<{
               title={what}
               aria-describedby="pages-draw-all-price"
             >
-              {draft ? 'Approve & render all' : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`}
+              {drawLabel}
             </DrawButton>
             <PriceNote id="pages-draw-all-price">
               {cost.quote(quote.usd)} · {what}
+              {held.sentence ? ` · ${held.sentence.charAt(0).toLowerCase()}${held.sentence.slice(1)}` : ''}
             </PriceNote>
           </>
-        )}
+        ) : held.pages.length ? (
+          <HeldBackNote
+            doc={doc}
+            ids={quote.heldBackIds}
+            onOpenPage={(id) => studio.openPage(id)}
+            onFix={(ops, label) => fire('fit', () => studio.patch(ops, { label }))}
+          />
+        ) : null}
         {draft && (
           <GhostButton size="sm" busy={busyKey === 'approve'} onClick={() => fire('approve', () => studio.act({ type: 'approve_plan' }))}>
             Approve plan only
@@ -636,7 +660,7 @@ const PlanHeader: React.FC<{
         <label className="flex min-h-[36px] w-fit max-w-full cursor-pointer items-center gap-2 rounded-xl px-1 text-[12.5px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[44px]">
           <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[var(--ds-accent)] coarse:h-5 coarse:w-5" />
           <span className="min-w-0">
-            Include the cover <span className="text-[var(--ds-muted)]">({cost.quote(estimateOne(doc, 'cover', byok).usd)})</span>
+            Include the cover <span className="text-[var(--ds-muted)]">({cost.quote(estimateOne(doc, 'cover', byok, 1, prices).usd)})</span>
           </span>
         </label>
       )}
@@ -764,6 +788,7 @@ type VersionsDialog = { target: RenderTarget; title: string; compare: boolean };
 export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
   const byok = byokFromDoc(doc);
   const cost = useCostFormat(studio.caps);
+  const prices = useStudioPrices(studio);
   const ff = useFormFactor();
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const pages = useMemo(() => sortedPages(doc), [doc]);
@@ -816,10 +841,10 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
   const menuItems = (clip: ClipVM | null): ClipMenuItem[] => {
     if (!clip) return [];
     const idx = pageIndex(clip.key);
-    const redrawUsd = redrawPrice(doc, 'page', byok);
-    const coverUsd = redrawPrice(doc, 'cover', byok);
-    const planUsd = PLAN_USD_PER_PAGE * (byok ? 1 : PLATFORM_MARKUP);
-    // The registry prices, printed for THIS user (governed users never see dollars).
+    const redrawUsd = redrawPrice(doc, 'page', byok, prices);
+    const coverUsd = redrawPrice(doc, 'cover', byok, prices);
+    const writeUsd = planUsd(1, byok, prices);
+    // The person's prices (their PriceBook), printed for THIS user (governed users never see dollars).
     return clipMenuItems(clip, { redrawUsd, coverUsd, canMoveLeft: idx > 0, canMoveRight: idx >= 0 && idx < pages.length - 1, canAddPage: canAddPage(doc, maxPages), pageCount: pages.length }).map(
       (it) =>
         it.action === 'redraw'
@@ -827,7 +852,7 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
           : it.action === 'cover_redesign'
             ? { ...it, meta: cost.quote(coverUsd) }
             : it.action === 'write'
-              ? { ...it, meta: cost.quote(planUsd) }
+              ? { ...it, meta: cost.quote(writeUsd) }
               : it
     );
   };
@@ -904,7 +929,7 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
           }
         >
           When the story is ready, the director writes a script for every page — panels, shots and dialogue — and they appear here for you to
-          review. Planning costs a little writing ({cost.quote(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP))}); nothing is
+          review. Planning costs a little writing ({cost.quote(planUsd(doc.format.pageCount || 1, byok, prices))}); nothing is
           drawn until you approve.
         </EmptyHint>
       </div>

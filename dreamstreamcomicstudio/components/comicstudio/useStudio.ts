@@ -59,7 +59,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../services/supabase';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
-import { STEER_LIMITS, type AttachmentTarget, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
+import { STEER_LIMITS, confirmedAgoOf, type AttachmentTarget, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
 import {
   mapAssetRefs,
   variantFor,
@@ -81,6 +81,7 @@ import type {
   RefUploadOptions,
   RefUploadResult,
   SendOptions,
+  ActOptions,
   SendOutcome,
   StreamOutcome,
   StudioActOutcome,
@@ -1238,7 +1239,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   }, [abortStreams, guarded, refresh]);
 
   const act = useCallback(
-    async (action: StudioAction): Promise<StudioActOutcome> => {
+    async (action: StudioAction, actOpts?: ActOptions): Promise<StudioActOutcome> => {
       if (!action || typeof action !== 'object') return skippedOutcome();
       if (action.type === 'patch') {
         await patch(action.ops);
@@ -1264,9 +1265,11 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       let gated = false;
       let beforeVersionId: string | undefined;
       try {
+        // A re-sent "wait and retry": the server stamps its messages with the moment the person confirmed it.
+        const confirmedAgoMs = typeof actOpts?.confirmedAt === 'number' ? confirmedAgoOf(Date.now() - actOpts.confirmedAt) : undefined;
         const outcome = await runStream(
           'action',
-          { kind: 'action', action },
+          { kind: 'action', action, ...(confirmedAgoMs ? { confirmedAgoMs } : {}) },
           {
             actionType: action.type,
             onEvent: (event) => {

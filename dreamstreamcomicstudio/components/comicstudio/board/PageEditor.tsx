@@ -133,6 +133,7 @@ import { versionCount } from '../timeline/bookModel';
 import { EditorToolbar, type EditorMode } from '../mobile/editor/EditorToolbar';
 import { EditorToolsSheet } from '../mobile/editor/EditorToolsSheet';
 import { useEditorCost } from '../mobile/editor/useEditorCost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { keepRefusedInComposer } from '../conversation/composerBus';
 import {
   COACH_KEY,
@@ -820,6 +821,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const { busyKey, fire } = useClickGuard(2500);
   const byok = studio.caps ? !!studio.caps.byok : byokFromDoc(doc);
   const cost = useEditorCost(byok);
+  const prices = useStudioPrices(studio);
   const status = pageVisualStatus(doc, sourcePage);
   const busy = isBusy(sourcePage.render);
   const drawn = hasImage(sourcePage.render);
@@ -832,8 +834,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const boxes = useMemo(() => panelBoxesFor(doc, sourcePage), [doc, sourcePage]);
   const [loadedAspect, setLoadedAspect] = useState(0);
   const aspect = loadedAspect || pageAspectOf(doc, sourcePage);
-  const editPrice = estimateOne(doc, 'edit', byok).usd;
-  const renderPrice = estimateDraw(doc, pagesForIds(doc, [sourcePage.id]), byok).estimate.usd;
+  const editPrice = estimateOne(doc, 'edit', byok, 1, prices).usd;
+  const renderPrice = estimateDraw(doc, pagesForIds(doc, [sourcePage.id]), byok, prices).estimate.usd;
   const spec = jobModel(doc, 'page');
   const versions = useMemo(() => versionCount(doc, target), [doc, target]);
   const mismatch = aspectMismatch(doc, sourcePage.render.asset);
@@ -1415,7 +1417,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </span>
   );
 
-  const recheckUsd = recheckQuoteUsd(byok);
+  const recheckUsd = recheckQuoteUsd(byok, prices);
   const placeAroundArt = () =>
     fire('placement', async () => {
       const cells = await loadBusyGrid(studio.urlFor(sourcePage.render.asset, { width: BUSY_GRID_SIDE * 2 }));

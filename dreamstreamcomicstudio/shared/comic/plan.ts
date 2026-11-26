@@ -35,7 +35,7 @@ import {
   aspectMatches,
   estimateJobs,
   getImageModel,
-  imagePriceUsd,
+  jobUnitUsd,
   nearestResolution,
   resolveImageJob,
   type ImageJobKind,
@@ -58,7 +58,7 @@ import {
 } from './anchors.js';
 import { lintContinuity, resolveContinuity, type ContinuityIssueKind } from './continuity.js';
 import { lintDirections, type DirectionIssueKind } from './directions.js';
-import { lockOf } from './modelLock.js';
+import { lockOf, type PriceBook } from './modelLock.js';
 import { checkPagePlan, fitBoxesFor, heldBackOf, renderAllDraws, splitHeldBack } from './pagePlanCheck.js';
 import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
@@ -115,7 +115,8 @@ const lockFor = (doc: ComicDoc, lock: ImageModelLock | null | undefined): ImageM
   lock === null ? undefined : (lock ?? quoteLockOf(doc));
 
 /**
- * Registry estimate for image jobs on THIS comic's model: with a lock every kind (style swatches included) prices
+ * The estimate for image jobs on THIS comic's model (the user's PriceBook when given, else the registry list): with a
+ * lock every kind (style swatches included) prices
  * on the locked model and the tier only picks the resolution — exactly what the server draws (jobs.ts
  * resolveJobFor). Tier and override default to the doc's settings. The one lock-aware entry point for quotes that
  * are not a render_pages action (cover, sheet, style-option and retry chips).
@@ -123,13 +124,14 @@ const lockFor = (doc: ComicDoc, lock: ImageModelLock | null | undefined): ImageM
 export function estimateDocJobs(
   doc: ComicDoc,
   jobs: { kind: ImageJobKind; count: number; label?: string }[],
-  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null }
+  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null; prices?: PriceBook }
 ): SpendEstimate {
   const lock = lockFor(doc, opts.lock);
   return estimateJobs(jobs, opts.tier ?? doc.settings.quality, {
     override: opts.modelOverride ?? doc.settings.imageModelOverride,
     byok: opts.byok,
-    ...(lock ? { lock } : {})
+    ...(lock ? { lock } : {}),
+    ...(opts.prices ? { prices: opts.prices } : {})
   });
 }
 
@@ -177,8 +179,8 @@ export interface RenderQuoteAnchors {
 }
 
 /**
- * Quote a render_pages action exactly as the server's gate would (same targets, same registry
- * estimate, same line labels). `includeCover` adds the cover only when it needs drawing (or when
+ * Quote a render_pages action exactly as the server's gate would (same targets, same estimate — the
+ * same PriceBook when given — same line labels). `includeCover` adds the cover only when it needs drawing (or when
  * forced and not busy). `nothing` ⇒ $0: every requested page is already drawn and current.
  */
 export function quoteRenderPages(
@@ -199,6 +201,8 @@ export function quoteRenderPages(
     /** Ship 2 (B4): mode 'auto' adds the missing anchors as line items and the reference allowance. Absent or 'none'
      *  = today's quote, byte for byte. */
     anchors?: AnchorRunOptions;
+    /** The user's PriceBook (the server's per request; the client's from the price sheet). Absent = the registry list. */
+    prices?: PriceBook;
   }
 ): RenderQuote {
   let pages = pageTargets(doc, opts);
@@ -221,7 +225,7 @@ export function quoteRenderPages(
       { kind: 'cover', count: cover ? 1 : 0, label: 'cover' }
     ],
     opts.tier,
-    { override: opts.modelOverride, byok: opts.byok, ...(lock ? { lock } : {}) }
+    { override: opts.modelOverride, byok: opts.byok, ...(lock ? { lock } : {}), ...(opts.prices ? { prices: opts.prices } : {}) }
   );
   const base: RenderQuote = {
     ...est,
@@ -405,13 +409,13 @@ const withAnchorLines = (
   base: RenderQuote,
   pages: Page[],
   sheets: Character[],
-  o: { byok: boolean; tier: QualityTier; modelOverride?: string; lock?: ImageModelLock; anchors: AnchorRunOptions }
+  o: { byok: boolean; tier: QualityTier; modelOverride?: string; lock?: ImageModelLock; anchors: AnchorRunOptions; prices?: PriceBook }
 ): RenderQuote => {
   const pageSpec = resolveImageJob('page', o.tier, o.modelOverride, o.lock).spec;
   const run = anchorRunOf(doc, pages, sheets, o.anchors, { spec: pageSpec, lock: o.lock });
   const count = (k: MissingAnchor['kind']) => run.drawn.filter((m) => m.kind === k).length;
   const markup = o.byok ? 1 : PLATFORM_MARKUP;
-  const lockOpt = o.lock ? { lock: o.lock } : {};
+  const lockOpt = { ...(o.lock ? { lock: o.lock } : {}), ...(o.prices ? { prices: o.prices } : {}) };
   // Recurring extras get the same character sheet job as leads; places and props draw at ANCHOR_SHEET_RES.
   const charLines: AnchorQuoteLine[] = estimateJobs([{ kind: 'sheet', count: count('character'), label: 'recurring character sheets' }], o.tier, {
     override: o.modelOverride,
@@ -419,7 +423,7 @@ const withAnchorLines = (
     ...lockOpt
   }).lines.map((l) => ({ ...l, kind: 'sheet' }));
   const sheetSpec = resolveImageJob('place', o.tier, o.modelOverride, o.lock).spec;
-  const sheetUnit = imagePriceUsd(sheetSpec, nearestResolution(sheetSpec, ANCHOR_SHEET_RES));
+  const sheetUnit = jobUnitUsd(sheetSpec, nearestResolution(sheetSpec, ANCHOR_SHEET_RES), 'place', o.prices);
   const at1k = (label: string, kind: 'place' | 'prop', n: number): AnchorQuoteLine[] => (n > 0 ? [{ label, count: n, usd: round4(sheetUnit * n * markup), kind }] : []);
   const perPage = extraRefsByPage(doc, pages, run, { spec: pageSpec, lock: o.lock, layoutGuide: o.anchors.layoutGuide });
   const extraRefs = [...perPage.values()].reduce((n, v) => n + v, 0);
@@ -445,18 +449,18 @@ const withAnchorLines = (
 };
 
 /**
- * Registry price of ONE image of a kind for this doc right now (QC included for pages/edits): on the comic's locked
+ * The price of ONE image of a kind for this doc right now (QC included for pages/edits; the PriceBook when given): on the comic's locked
  * model when it has one (the tier picks the resolution), else the tier preset or the model override.
  */
 export function unitPrice(
   doc: ComicDoc,
   kind: 'page' | 'cover' | 'sheet' | 'edit',
-  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null }
+  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null; prices?: PriceBook }
 ): { usd: number; model: string } {
   const tier = opts.tier ?? doc.settings.quality;
   const override = opts.modelOverride ?? doc.settings.imageModelOverride;
   const lock = lockFor(doc, opts.lock);
-  const est = estimateJobs([{ kind, count: 1, label: kind }], tier, { override, byok: opts.byok, ...(lock ? { lock } : {}) });
+  const est = estimateJobs([{ kind, count: 1, label: kind }], tier, { override, byok: opts.byok, ...(lock ? { lock } : {}), ...(opts.prices ? { prices: opts.prices } : {}) });
   return { usd: est.usd, model: resolveImageJob(kind, tier, override, lock).spec.nickname };
 }
 
@@ -671,12 +675,15 @@ export function summarizeBook(
     /** Ship 2 (B4): per-page anchors, text-only cast, detail and lint, and anchors in the quotes. Absent = today's
      *  summary, byte for byte. */
     consistency?: ConsistencyViewOptions;
+    /** The user's PriceBook for every quote in the summary (absent = the registry list). */
+    prices?: PriceBook;
   }
 ): BookSummary {
   const tier = opts.tier ?? doc.settings.quality;
   const override = doc.settings.imageModelOverride;
-  const page1 = unitPrice(doc, 'page', { byok: opts.byok, tier, modelOverride: override });
-  const cover1 = unitPrice(doc, 'cover', { byok: opts.byok, tier, modelOverride: override });
+  const priced = opts.prices ? { prices: opts.prices } : {};
+  const page1 = unitPrice(doc, 'page', { byok: opts.byok, tier, modelOverride: override, ...priced });
+  const cover1 = unitPrice(doc, 'cover', { byok: opts.byok, tier, modelOverride: override, ...priced });
   const ids = Array.isArray(opts.pageIds) && opts.pageIds.length ? new Set(opts.pageIds) : null;
   const drawable = new Set(pageTargets(doc).map((p) => p.id));
   const ledger = spendByTarget(doc);
@@ -686,7 +693,7 @@ export function summarizeBook(
   // The view ranks photos with its own rating, else summarizeBook's (one rating for the safety badges and the anchors).
   const viewRating = opts.consistency?.rating ?? opts.rating;
   const view = opts.consistency
-    ? consistencyView(doc, { ...opts.consistency, ...(viewRating ? { rating: viewRating } : {}) }, { byok: opts.byok, tier, modelOverride: override })
+    ? consistencyView(doc, { ...opts.consistency, ...(viewRating ? { rating: viewRating } : {}) }, { byok: opts.byok, tier, modelOverride: override, ...priced })
     : undefined;
   const runAnchors = view?.run ? { anchors: view.run } : {};
   const pages: PageSummary[] = [...doc.pages]
@@ -753,7 +760,7 @@ export function summarizeBook(
       if (drawable.has(p.id)) summary.quoteUsd = view ? round4(page1.usd + view.extraUsd(p.id)) : page1.usd;
       else if (p.render.status === 'ready' && p.panels.length) {
         // The gate's own forced quote: a new take also draws any missing lead/support sheet first.
-        summary.redrawUsd = quoteRenderPages(doc, { pageIds: [p.id], force: true, byok: opts.byok, tier, modelOverride: override, ...runAnchors }).usd;
+        summary.redrawUsd = quoteRenderPages(doc, { pageIds: [p.id], force: true, byok: opts.byok, tier, modelOverride: override, ...runAnchors, ...priced }).usd;
       }
       if (view) Object.assign(summary, view.page(p));
       return summary;
@@ -783,7 +790,7 @@ export function summarizeBook(
       stale: all.filter((p) => isPageStale(doc, p)).length,
       spentUsd: doc.spend.totalUsd,
       savedUsd: doc.spend.savedUsd ?? 0,
-      ...renderAllTotals(doc, { byok: opts.byok, tier, modelOverride: override, drawOverfull: [...anyway], meter, ...runAnchors })
+      ...renderAllTotals(doc, { byok: opts.byok, tier, modelOverride: override, drawOverfull: [...anyway], meter, ...runAnchors, ...priced })
     },
     pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override || !!quoteLockOf(doc) },
     moments: momentsLine(doc, page1.usd),
@@ -796,7 +803,7 @@ export function summarizeBook(
  * summarizeBook's Ship 2 view (B4): one anchor plan per page on the model the next drawing uses, the run's missing
  * anchors and reference allowance (mode 'auto'), staleness parts, and the continuity and direction lint by page.
  */
-const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: boolean; tier: QualityTier; modelOverride?: string }) => {
+const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: boolean; tier: QualityTier; modelOverride?: string; prices?: PriceBook }) => {
   const lock = quoteLockOf(doc);
   const spec = resolveImageJob('page', q.tier, q.modelOverride, lock).spec;
   const targets = pageTargets(doc);
@@ -835,8 +842,9 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
       };
     },
     book: (anyway: Set<string>, meter: NeedMeter): NonNullable<BookSummary['anchors']> => {
-      const all = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter }, ...(o.mode === 'auto' ? { anchors: runOpts } : {}) });
-      const plain = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter } });
+      const priced = q.prices ? { prices: q.prices } : {};
+      const all = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter }, ...(o.mode === 'auto' ? { anchors: runOpts } : {}), ...priced });
+      const plain = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter }, ...priced });
       return {
         mode: o.mode,
         kinds: run.kinds,
@@ -852,14 +860,15 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
 /** "Render all" for the totals: held-back pages excluded (and counted) unless the user chose to draw them anyway. */
 const renderAllTotals = (
   doc: ComicDoc,
-  o: { byok: boolean; tier: QualityTier; modelOverride?: string; drawOverfull: string[]; meter: NeedMeter; anchors?: AnchorRunOptions }
+  o: { byok: boolean; tier: QualityTier; modelOverride?: string; drawOverfull: string[]; meter: NeedMeter; anchors?: AnchorRunOptions; prices?: PriceBook }
 ): { toDrawUsd: number; heldBack?: number } => {
   const q = quoteRenderPages(doc, {
     byok: o.byok,
     tier: o.tier,
     modelOverride: o.modelOverride,
     holdBack: { drawOverfull: o.drawOverfull, meter: o.meter },
-    ...(o.anchors ? { anchors: o.anchors } : {})
+    ...(o.anchors ? { anchors: o.anchors } : {}),
+    ...(o.prices ? { prices: o.prices } : {})
   });
   return { toDrawUsd: q.usd, ...(q.heldBackIds?.length ? { heldBack: q.heldBackIds.length } : {}) };
 };

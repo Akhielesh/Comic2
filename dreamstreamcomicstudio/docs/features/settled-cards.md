@@ -408,6 +408,19 @@ The full inventory of cards and chip rows, with where each settled before and af
   turn, or one already running, never closes the question the director asked meanwhile, nor its suggested looks, a
   conflict, a pending publish or an outage card; the progress and the result of a tap made after the card still do.
   Messages without `runAt` (older docs, a tap's direct answer) move on as before.
+- **Work the person confirmed earlier carries the confirm time** (`RunActionOptions.runAt`). Two runs start later than
+  the moment they were confirmed, and used to post as if they were new: the redraw a model switch chains after its
+  sheets (`actions/models.ts` `chainAfterSheets`: the pages and cover start once every sheet is ready on the new model),
+  and a "wait and retry automatically" that the client re-sends once the model is back. Now every message they post
+  carries the confirm time as `runAt`: the switch's lock time for the chained redraw (both runs and the chain's own
+  "the sheets weren't redrawn" / "couldn't start" notices), and the moment the person armed the retry for the re-send
+  (`useAutoRetry` passes `act(action, { confirmedAt: armedAt })`; the stream request says how long ago,
+  `confirmedAgoMs`, a duration so a device clock that is off changes nothing; the server keeps a value up to 24 hours
+  and stamps `runAt = arrival − ago` through `deliver`, `commitWithMessage` and `RenderRun.message`). So a question
+  the Director asked while the sheets drew, or while the retry waited, stays open after the redraw lands. A tap made
+  now ("Try again now") is still a fresh turn. Tests: `actions/models.test.ts` (a question asked while the sheets draw
+  stays open; the chain's notice carries the switch time), `routes/comic.routes.test.ts` (a re-sent retry vs the same
+  click sent at once; `confirmedAgoMs` parsing), `useStudio.seams.test.tsx`, `reliability/useModelStatus.test.tsx`.
 - **The server's answer rule is unchanged** (`isPassed`, user messages only): a typed answer that matches a choice of
   the newest unanswered question since the creator's last message still records on it, and the card then reads
   "You picked …". The director's history reads outcomes by that same rule (`cardSettle(..., { passedBy: 'user' })`):

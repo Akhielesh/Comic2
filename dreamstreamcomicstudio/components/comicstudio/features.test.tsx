@@ -118,18 +118,20 @@ import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
 describe('features registry', () => {
   it('folds feature modules: built-ins win, first registration wins, sorted by order', () => {
     // breakdown (mock) wins over timeline's duplicate; refs is the real P1-REFS card.
-    // model_outage is the real W-M reliability card; history is Comic History's (registered last, lowest precedence).
-    expect(registeredCardTypes()).toEqual(['breakdown', 'refs', 'model_outage', 'history']);
+    // credit is the real usage feature's money card (credit-safety.md); model_outage is the real W-M reliability card;
+    // history is Comic History's (registered last, lowest precedence).
+    expect(registeredCardTypes()).toEqual(['breakdown', 'refs', 'credit', 'model_outage', 'history']);
     expect(registeredCard('notice')).toBeUndefined();
     expect(BUILTIN_CARD_TYPES.has('recap')).toBe(true);
     // history (real, 510) sits right after the mocked media tab (500).
     expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media', 'history']);
-    // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250); Comic
-    // History's button (240) right after it. …then M1-RELIABILITY's model-status banner (1000) and M1-PICKER-UI's picker
-    // host (1010) after every header control.
-    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'history', 'share', 'model-status', 'model-picker']);
+    // usage (real, P1-LIMITS) sits at 220 and the own key's balance (real, credit-safety.md) right after it at 221:
+    // after the mocked mode/broken slots, before the mocked share (250); Comic History's button (240) right after them.
+    // …then M1-RELIABILITY's model-status banner (1000) and M1-PICKER-UI's picker host (1010) after every header control.
+    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'key-balance', 'history', 'share', 'model-status', 'model-picker']);
     expect(registeredHeaderSlots().find((s) => s.id === 'history')?.order).toBe(240);
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
+    expect(registeredHeaderSlots().find((s) => s.id === 'key-balance')?.order).toBe(221);
     // Admin sections keep feature order: safety (real) before library (mock).
     expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
   });

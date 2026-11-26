@@ -8,7 +8,10 @@ import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
 import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
-import { STYLE_DIRECTIONS_USD, styleDirectionsUsd } from '../../../../shared/comic/models';
+import { STYLE_DIRECTIONS_USD } from '../../../../shared/comic/models';
+import type { PriceBook } from '../../../../shared/comic/modelLock';
+import { styleDirectionsQuoteUsd } from '../../../../shared/comic/priceBook';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
@@ -45,11 +48,12 @@ export const STYLE_DIRECTIONS_TEXT_USD = STYLE_DIRECTIONS_USD;
 /**
  * The same quote the server gate makes for `render_style_options` (jobs.ts estimateSpendAction):
  * the style boards on the comic's locked model (else its tier/override), plus the writer call that proposes
- * directions when none are passed. Shown on the buttons and sent as quotedUsd.
+ * directions when none are passed — both at the person's PriceBook when given (the studio's price sheet).
+ * Shown on the buttons and sent as quotedUsd.
  */
-export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, withDirections = false): number => {
-  const est = estimateDocJobs(doc, [{ kind: 'style_option', count, label: 'style options' }], { byok });
-  const text = withDirections ? 0 : styleDirectionsUsd(byok);
+export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, withDirections = false, prices?: PriceBook): number => {
+  const est = estimateDocJobs(doc, [{ kind: 'style_option', count, label: 'style options' }], { byok, ...(prices ? { prices } : {}) });
+  const text = withDirections ? 0 : styleDirectionsQuoteUsd(byok, prices);
   return Math.round((est.usd + text) * 10000) / 10000;
 };
 
@@ -70,10 +74,11 @@ export interface StylePanelProps {
 export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescribeOwn, onDone, byok = false, caps }) => {
   const [confirming, setConfirming] = useState<StylePreset | null>(null);
   const cost = useCostFormat({ byok, caps });
+  const prices = useStudioPrices({ doc });
   const style = doc.style;
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => o.render.status === 'queued' || o.render.status === 'rendering');
-  const quote = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, byok);
+  const quote = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, byok, false, prices);
   const custom = style.status !== 'empty' && !style.presetId && (style.name || style.spec);
 
   const choose = (preset: StylePreset) => {

@@ -232,7 +232,7 @@ describe('OutageCard', () => {
     state = 'ok';
     await flush(STATUS_POLL_MS);
     expect(studio.act).toHaveBeenCalledTimes(1);
-    expect(studio.act).toHaveBeenCalledWith(blocked);
+    expect(studio.act).toHaveBeenCalledWith(blocked, { confirmedAt: getRetry('card_out_1')!.armedAt });
     expect(screen.getByText(/Nano Banana 2.1 answered again at \d\d:\d\d, so the style tests were started once\./)).toBeInTheDocument();
     await flush(5 * STATUS_POLL_MS);
     expect(studio.act).toHaveBeenCalledTimes(1);

@@ -36,7 +36,10 @@ import {
 } from '../../../../shared/comic/translationPlan.js';
 import { graphemes } from '../../../../shared/comic/textLayout.js';
 import { logger } from '../../lib/logger.js';
-import { billedLlm, newTextSpendTracker, recordTextSpend, spendIsByok, type RunActionOptions, type StartedAction, type TextSpendTracker } from '../jobs.js';
+import { billedLlm, newTextSpendTracker, priceBookFor, priceBookWithin, recordTextSpend, spendIsByok, textRatesWithin, type RunActionOptions, type StartedAction, type TextSpendTracker } from '../jobs.js';
+import { textRatesOf, type TextRates } from '../../../../shared/comic/priceBook.js';
+import type { PriceBook } from '../../../../shared/comic/modelLock.js';
+import { textOpTag } from '../models/textRates.js';
 import { costFormatter, costViewFor, DOLLAR_VIEW, governCard, governDollars, type CostView } from '../costText.js';
 import { estimateTextCostUsd, resolveTextRoute, TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { StudioError, type StudioContext, type StudioKeys } from '../types.js';
@@ -118,6 +121,18 @@ const UNKNOWN_PRICE = { input: 1, output: 5 };
 const calibration = new Map<string, number>();
 export const resetTranslationCalibration = () => calibration.clear();
 const calibrated = (lang: string) => calibration.get(lang) ?? 1;
+/**
+ * The factor a language's token estimate is quoted at: the higher of what translations have really cost against
+ * their estimate (the book's text rates, from the usage ledger: models/textRates.ts), this process's calibration of
+ * the language, and 1 — the token estimate is the floor (an observation only ever raises a quote).
+ */
+const quoteFactor = (lang: string, text?: Pick<TextRates, 'translateFactor'>) => Math.max(1, calibrated(lang), textRatesOf(text ? { text: text as TextRates } : null).translateFactor);
+/**
+ * The translate text rate for a request: read from the text rates' own in-memory source (jobs.ts textRatesWithin, the
+ * call the translation quote route makes), never behind the image catalog's price wait — so the Approve card names the
+ * rate the Translate button showed.
+ */
+export const translateRatesFor = (ctx: StudioContext): Promise<TextRates> => textRatesWithin(ctx);
 const calibrate = (lang: string, estimated: number, actual: number) => {
   if (!(estimated > 0) || !(actual > 0)) return;
   const ratio = Math.min(2, Math.max(0.5, actual / estimated));
@@ -132,9 +147,12 @@ const modelPriceUsd = (model: string, input: number, output: number): number =>
 /** Whether a text role runs on the user's own key: the key of its own route (text routes are OpenRouter-first). */
 const textRoleIsByok = (role: 'translator' | 'linguist', keys: StudioKeys): boolean => resolveTextRoute(role, keys)?.key.byok ?? spendIsByok(keys);
 
-/** The uncalibrated price of one language plan (translator + review) in the user's terms: markup unless that role runs on the user's key. */
-const planUsd = (plan: TranslationPlan, keys: StudioKeys): number => {
-  const markup = (role: 'translator' | 'linguist') => (textRoleIsByok(role, keys) ? 1 : PLATFORM_MARKUP);
+/**
+ * The uncalibrated price of one language plan (translator + review) in the user's terms: markup unless that role runs
+ * on the user's key. `provider`: the provider cost alone (no markup), the base the ledger compares a bill with.
+ */
+const planUsd = (plan: TranslationPlan, keys: StudioKeys, provider = false): number => {
+  const markup = (role: 'translator' | 'linguist') => (provider || textRoleIsByok(role, keys) ? 1 : PLATFORM_MARKUP);
   const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
   const lnModel = resolveTextRoute('linguist', keys)?.model ?? TEXT_ROLE_DEFAULTS.linguist.models[0];
   return (
@@ -173,7 +191,13 @@ export interface TranslationQuote {
 }
 
 /** Pure quote for languages that are already resolved codes (no ctx: the quote route uses it too). */
-export function quoteTranslation(doc: ComicDoc, keys: StudioKeys, action: Pick<TranslateAction, 'languages' | 'pageIds' | 'force' | 'overwriteEdits'>): TranslationQuote {
+export function quoteTranslation(
+  doc: ComicDoc,
+  keys: StudioKeys,
+  action: Pick<TranslateAction, 'languages' | 'pageIds' | 'force' | 'overwriteEdits'>,
+  /** The user's text rates (the request's PriceBook): what translations really cost against their estimate. */
+  text?: Pick<TextRates, 'translateFactor'>
+): TranslationQuote {
   // Priced for the key the translator will run on (not the images' key).
   const byok = textRoleIsByok('translator', keys);
   const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
@@ -184,7 +208,7 @@ export function quoteTranslation(doc: ComicDoc, keys: StudioKeys, action: Pick<T
     const plan = planTranslation(doc, lang, { pageIds: action.pageIds, force: action.force, overwriteEdits: action.overwriteEdits });
     plans.push(plan);
     const out = plan.tokens.output;
-    const usd = round4(planUsd(plan, keys) * calibrated(lang));
+    const usd = round4(planUsd(plan, keys) * quoteFactor(lang, text));
     const translated = planLineCount(plan);
     const free = plan.freeLines.length + (plan.deferred?.length || 0);
     const chunks = chunkTranslation(plan.toTranslate).length || (plan.calls ? 1 : 0);
@@ -207,7 +231,7 @@ export async function estimateTranslation(ctx: StudioContext, action: TranslateA
   const doc = ctx.session.doc;
   const { codes } = resolveLanguages(doc, action.languages);
   if (!codes.length) throw new StudioError('BAD_REQUEST', supportedLanguagesText(doc), { status: 400 });
-  const q = quoteTranslation(doc, ctx.keys, { ...action, languages: codes });
+  const q = quoteTranslation(doc, ctx.keys, { ...action, languages: codes }, await translateRatesFor(ctx));
   return { ...q.estimate, plans: q.plans };
 }
 
@@ -405,11 +429,14 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   // An approved translation outlives its HTTP stream. Queue admission and billing
   // use this run's Stop signal. A chunk already dispatched still finishes and settles.
   const runContext = { ...ctx, signal };
-  const llmT = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.translator', tracker });
-  const llmL = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.linguist', tracker });
   const rating = ratingOf(ctx);
   const opts = { pageIds: action.pageIds, force: action.force, overwriteEdits: action.overwriteEdits };
   const plan = planTranslation(ctx.session.doc, lang, opts);
+  // This language's translator and review calls are one priced operation, compared with the plan's own token
+  // estimate (provider cost, never the calibrated quote) when the next translation is quoted (models/textRates.ts).
+  const op = textOpTag('translate', 1, planUsd(plan, ctx.keys, true));
+  const llmT = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.translator', tracker, ...(op ? { textOp: op } : {}) });
+  const llmL = billedLlm(runContext, { stage: 'translate', operation: 'comic.text.linguist', tracker, ...(op ? { textOp: op } : {}) });
   const chunks = chunkTranslation(plan.toTranslate);
   const extras = extrasFor(ctx.session.doc, plan.coverTexts);
   if (!chunks.length && extras.length) chunks.push([]);
@@ -536,26 +563,40 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   return res;
 }
 
-/** In-art lettering: translated editions need overlay lettering (owner rule) — the quoted fix, on the comic's locked model. */
-export function overlayFix(doc: ComicDoc, byok: boolean): { pages: string[]; usd: number } | null {
+/**
+ * In-art lettering: translated editions need overlay lettering (owner rule) — the quoted fix, on the comic's locked
+ * model, at the user's PriceBook (the Languages tab's "Redraw N pages" names the same figure).
+ */
+export function overlayFix(doc: ComicDoc, byok: boolean, prices?: PriceBook): { pages: string[]; usd: number } | null {
   if (doc.format.lettering !== 'in_art') return null;
   const pages = doc.pages.filter((p) => p.panels.some((panel) => panel.lines.some((l) => l.text.trim() && !l.noTranslate)) && (p.render.asset || p.render.history.length));
-  const usd = pages.length ? estimateDocJobs(doc, [{ kind: 'page', count: pages.length }], { byok }).usd : 0;
+  const usd = pages.length ? estimateDocJobs(doc, [{ kind: 'page', count: pages.length }], { byok, ...(prices ? { prices } : {}) }).usd : 0;
   return { pages: pages.map((p) => p.id), usd };
 }
 
-/** Painted cover title: the one-time textless cover + editable overlay title (decisions-final #2), on the locked model. */
-export function textlessCoverQuote(doc: ComicDoc, byok: boolean): number | null {
+/**
+ * Painted cover title: the one-time textless cover + editable overlay title (decisions-final #2), on the locked model,
+ * at the user's PriceBook (the chip's quotedUsd is the figure its approval names).
+ */
+export function textlessCoverQuote(doc: ComicDoc, byok: boolean, prices?: PriceBook): number | null {
   const painted = (doc.cover.lettering ?? 'in_art') === 'in_art' && !!doc.cover.render.asset;
   if (!painted) return null;
-  return estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok }).usd;
+  return estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok, ...(prices ? { prices } : {}) }).usd;
 }
 
 /**
  * The appended completion message (honest per-language summary + the next steps). `view` words every
  * price for the user (costViewFor(caps)): a governed user reads "≈1% of your usage", never dollars.
  */
-export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys: StudioKeys, view: CostView = DOLLAR_VIEW): { text: string; nextSteps: NextStep[] } {
+export function completionMessage(
+  doc: ComicDoc,
+  results: LanguageResult[],
+  keys: StudioKeys,
+  view: CostView = DOLLAR_VIEW,
+  text?: Pick<TextRates, 'translateFactor'>,
+  /** The user's PriceBook for the image steps it offers (overlay redraw, textless cover). Absent = the registry list. */
+  prices?: PriceBook
+): { text: string; nextSteps: NextStep[] } {
   // The image quotes below (overlay redraw, textless cover) stay keys-level; the translation's own
   // cost line names the translator's key.
   const byok = spendIsByok(keys);
@@ -608,14 +649,14 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
     const stopped = who ? ` ${who} stopped there; the lines already written are kept.` : '';
     lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'}${stopped} Translate again to retry — only the missing lines are charged.`);
   }
-  const fix = overlayFix(doc, byok);
+  const fix = overlayFix(doc, byok, prices);
   if (fix && fix.pages.length) {
     lines.push(`Your pages have the lettering painted into the art, so readers would still see the original words. Translated editions need overlay lettering: redrawing ${plural(fix.pages.length, 'page')} without text ${fmt.governed ? `uses ${fmt.approx(fix.usd)}` : `costs ≈ ${formatUsd(fix.usd)}`}, and after that every language is free.`);
     steps.push({ label: 'Set up lettering for translations', client: { type: 'open_tab', tab: 'languages' } });
   } else if (ready.length) {
     lines.push(`Ready to publish in ${joinList(ready)} — readers pick their language in the reader.`);
   }
-  const cover = textlessCoverQuote(doc, byok);
+  const cover = textlessCoverQuote(doc, byok, prices);
   if (cover !== null && results.length) {
     lines.push(`The cover title is painted in ${englishName(doc.format.language)}. A textless cover with an editable title is a one-time ${fmt.approx(cover)}; every language's title is free after that.`);
     steps.push({ label: 'Textless cover', action: { type: 'render_cover', textless: true, quotedUsd: cover }, usd: cover });
@@ -624,7 +665,7 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
   if (ready.length && !fix?.pages.length) steps.push({ label: 'Publish', client: { type: 'open_share' } });
   missingLangs = missingLangs.filter((l) => !results.find((r) => r.lang === l)?.unsafe);
   if (missingLangs.length && !anyCancelled) {
-    const again = quoteTranslation(doc, keys, { languages: missingLangs }).estimate.usd;
+    const again = quoteTranslation(doc, keys, { languages: missingLangs }, text).estimate.usd;
     steps.push({ label: 'Translate missing lines', action: { type: 'translate', languages: missingLangs, quotedUsd: again }, usd: again });
   }
   // The net under the template: an error text or a later line that still carries a dollar figure.
@@ -694,7 +735,10 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     const text = tell(ctx, opts, `A comic can have up to ${DOC_LIMITS.editions} translations; remove one in Languages first.`, 'warn');
     return finished({ status: 'blocked', message: text, code: 'LIMIT' });
   }
-  const quote = quoteTranslation(doc, ctx.keys, { ...action, languages: codes });
+  const rates = await translateRatesFor(ctx);
+  // The image steps the completion message offers are priced at the user's book: fetched while the run works.
+  void priceBookFor(ctx);
+  const quote = quoteTranslation(doc, ctx.keys, { ...action, languages: codes }, rates);
   const paid = quote.plans.some((p) => !planIsFree(p));
   if (paid && !resolveTextRoute('translator', ctx.keys)) {
     const text = tell(ctx, opts, 'Translation needs an AI key: connect a Gemini or OpenRouter key in Settings → API keys.', 'warn');
@@ -784,7 +828,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     }
     const done = ctx.session.doc;
     const { text, nextSteps } = results.length
-      ? completionMessage(done, results, ctx.keys, view)
+      ? completionMessage(done, results, ctx.keys, view, rates, await priceBookWithin(ctx))
       : { text: "The translation couldn't run. Nothing was charged for unfinished lines — try again in a moment.", nextSteps: [] as NextStep[] };
     const last = done.conversation[done.conversation.length - 1];
     if (startMsgId && last?.id === startMsgId) {

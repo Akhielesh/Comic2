@@ -122,10 +122,8 @@ import { comicImageCapacity, comicTextCapacity } from './generationCapacity.js';
 import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../shared/comic/sendable.js';
 import {
   IMAGE_MODELS,
-  PLAN_USD_PER_PAGE,
   PLATFORM_MARKUP,
   QC_USD_PER_PAGE,
-  RELAYOUT_VISION_USD,
   TIER_PRESETS,
   aspectFromSize,
   aspectMatches,
@@ -133,10 +131,10 @@ import {
   formatUsd,
   getImageModel,
   imagePriceUsd,
+  jobUnitUsd,
   nearestAspect,
   nearestResolution,
   resolveImageJob,
-  styleDirectionsUsd,
   type AnyImageJobKind,
   type ImageJobKind,
   type ImageModelSpec,
@@ -144,6 +142,8 @@ import {
   type SpendEstimate
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
+import { FLOOR_TEXT_RATES, planUsd, recheckQuoteUsd, styleDirectionsQuoteUsd, textRatesOf, type TextRates } from '../../../shared/comic/priceBook.js';
+import { textOpTag, textRateSource, type TextOpTag } from './models/textRates.js';
 import { STYLE_PRESETS, briefWantsSpotColour, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -157,8 +157,22 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import { notAvailableAction, type ActionHandler, type SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute } from './imageClient.js';
-import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
+import { creditRefusalOf, fallbackRefusalOf, imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickAlternateRoute, pickImageRoute } from './imageClient.js';
+import {
+  continuedText,
+  creditBudgetFor,
+  fitsBudget,
+  shortCreditCard,
+  shortCreditText,
+  stoppedCreditCard,
+  stoppedReason,
+  textPayerOf,
+  UNKNOWN_BUDGET,
+  type CreditBudget,
+  type RefusedKey,
+  type SpendPayer
+} from './creditCheck.js';
+import { TEXT_RATES_WAIT_MS, createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
 import { recordImageCall } from './billing.js';
 import { planCheckGate, sanitizeDrawOverfull, type HeldBackPage, type PlanGateResult } from './planCheckGate.js';
@@ -551,13 +565,29 @@ const CHIP_PRICES_WAIT_MS = 800;
  * The request's PriceBook if it is ready within `ms` (else undefined: the chips quote the registry list, and a tap
  * whose real price outgrew that quote gets a fresh real-price gate). Free actions never stall on a cold catalog.
  */
-const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
+export const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
   const timer = delay(ms);
   try {
     const won = await Promise.race([priceBookFor(ctx), timer.promise]);
     return won === 'timeout' ? undefined : won;
   } finally {
     timer.cancel();
+  }
+};
+
+/**
+ * The request's text rates (planning, style directions, translation) without waiting on the image catalog: they have
+ * their own in-memory source (models/textRates.ts, bounded at TEXT_RATES_WAIT_MS) — the very call the price sheet and
+ * the translation quote route make — so a gate or a budget check on a cold catalog quotes the rate the button showed,
+ * never the floor in its place. A request handed its own book (ctx.prices) reads that book's rates. Never throws.
+ */
+export const textRatesWithin = async (ctx: StudioContext): Promise<TextRates> => {
+  try {
+    if (ctx.prices) return textRatesOf(await priceBookFor(ctx));
+    return await textRateSource().forUser(ctx.userId, { maxWaitMs: TEXT_RATES_WAIT_MS });
+  } catch (err) {
+    logger.warn('comic_text_rates_fallback', { message: (err as Error)?.message });
+    return FLOOR_TEXT_RATES;
   }
 };
 
@@ -650,6 +680,19 @@ const pendingSpend = new WeakMap<StudioSessionApi, number>();
 export const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
 const addPending = (s: StudioSessionApi, delta: number) => pendingSpend.set(s, Math.max(0, round4(pendingUsdOf(s) + delta)));
 
+// The part of pendingSpend whose billing hold is already made: images on the wire (RenderRun.holdOnWire). The usage
+// status a governed request reads already counts those holds (usage_budget_status inflight_usd), so the allowance
+// balance check must not set them aside a second time. An own key's reading never includes calls still in flight.
+const onWireSpend = new WeakMap<StudioSessionApi, number>();
+const addOnWire = (s: StudioSessionApi, delta: number) => onWireSpend.set(s, Math.max(0, round4((onWireSpend.get(s) || 0) + delta)));
+
+/**
+ * What the balance check sets aside for what this comic is drawing right now (credit-safety.md §2): the whole held
+ * quote for an own key; for DreamStream's allowance, only the part that has no billing hold yet.
+ */
+export const heldUsdFor = (s: StudioSessionApi, payer: { byok: boolean }): number =>
+  payer.byok ? pendingUsdOf(s) : Math.max(0, round4(pendingUsdOf(s) - (onWireSpend.get(s) || 0)));
+
 // ── Billed text calls ────────────────────────────────────────────────────────
 
 export interface TextSpendTracker {
@@ -688,7 +731,10 @@ const UNKNOWN_TEXT_PRICE = { input: 1, output: 5 };
  * An LlmClient that reserves/settles platform billing around every call and accumulates
  * the charged cost in `tracker` (estimated from tokens when the provider reports none).
  */
-export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void } }): LlmClient {
+export function billedLlm(
+  ctx: StudioContext,
+  args: { stage: SpendKind; operation: string; tracker: TextSpendTracker; draft?: { assertActive(): void; hold(totalUsd: number): void }; textOp?: TextOpTag }
+): LlmClient {
   return {
     complete(req) {
       const size = textOf(req.messages);
@@ -722,7 +768,9 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           models: route.models,
           stage: args.stage,
           inputTokens: approxPrompt,
-          outputTokens: req.maxTokens
+          outputTokens: req.maxTokens,
+          // A repair round rides the same operation, marked: the observed rate is one pass's cost (models/textRates.ts).
+          ...(args.textOp ? { textOp: req.repair ? { ...args.textOp, repair: true as const } : args.textOp } : {})
         });
         if (reserved.ok === false) throw new StudioError('BILLING_DENIED', reserved.message, { status: 402 });
         reservation = reserved.reservation;
@@ -757,7 +805,7 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           const providerGuess =
             (route && estimateTextCostUsd(route.model, approxPrompt, outputGuess)) ??
             (approxPrompt * UNKNOWN_TEXT_PRICE.input + outputGuess * UNKNOWN_TEXT_PRICE.output) / 1_000_000;
-          await reservation?.settle({ costUsd: providerGuess, promptTokens: approxPrompt, completionTokens: outputGuess });
+          await reservation?.settle({ costUsd: providerGuess, promptTokens: approxPrompt, completionTokens: outputGuess, estimated: true });
           if (route) {
             args.tracker.usd = round4(args.tracker.usd + chargedUsd(providerGuess, route.key.byok));
             args.tracker.byok = route.key.byok;
@@ -949,9 +997,10 @@ const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_
 export const RECHECK_MODEL_LABEL = 'Page check';
 
 /**
- * Price image jobs on this doc's lock / tier / override: the registry list (exactly estimateJobs) or, with a
- * PriceBook, its unit prices (live list or observed median, never under list; models.md §2.3) + QC for pages and
- * edits, × PLATFORM_MARKUP unless BYOK. A unit the book cannot price falls back to the registry list.
+ * Price image jobs on this doc's lock / tier / override with the one quote (shared/comic/models.ts estimateJobs, the
+ * same call the client's buttons make): the registry list without a PriceBook, else its unit prices (live list or
+ * observed median, never under list; models.md §2.3) + its QC for pages, edits and panels, × PLATFORM_MARKUP unless
+ * BYOK. A unit the book cannot price falls back to the registry list.
  */
 export const priceImageJobs = (
   doc: ComicDoc,
@@ -959,27 +1008,7 @@ export const priceImageJobs = (
   byok: boolean,
   prices?: PriceBook,
   pin: RunPin = runPinOf(doc)
-): SpendEstimate => {
-  const base = estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}) });
-  if (!prices) return base;
-  const markup = byok ? 1 : PLATFORM_MARKUP;
-  const lines = jobs
-    .filter((j) => j.count > 0)
-    .map((j) => {
-      const { spec, resolution } = resolveJobFor(pin, j.kind);
-      let unit: number | null = null;
-      try {
-        unit = prices.unit(spec.id, resolution, j.kind).usd;
-      } catch {
-        unit = null;
-      }
-      const list = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
-      // A drawn page, an edit and a panel fix each get one page check (estimateJobs prices them the same way).
-      const qc = j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
-      return { label: j.label || j.kind, count: j.count, usd: round4((list + qc) * j.count * markup) };
-    });
-  return { ...base, usd: round4(lines.reduce((s, l) => s + l.usd, 0)), lines };
-};
+): SpendEstimate => estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}), ...(prices ? { prices } : {}) });
 
 /**
  * How a render_pages run treats consistency anchors (pro plan §4.2; B4 FIX note 2a): 'auto' with the
@@ -1032,13 +1061,7 @@ export const anchorSheetJobFor = (pin: RunPin) => {
 };
 const anchorSheetUnitUsd = (pin: RunPin, prices?: PriceBook): number => {
   const { spec, resolution } = anchorSheetJobFor(pin);
-  let unit: number | null = null;
-  try {
-    unit = prices ? prices.unit(spec.id, resolution, 'place').usd : null;
-  } catch {
-    unit = null;
-  }
-  return typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
+  return jobUnitUsd(spec, resolution, 'place', prices);
 };
 
 /**
@@ -1073,8 +1096,8 @@ export function estimateSpendAction(doc: ComicDoc, action: GatedSpend, byok: boo
     return { usd: round4(lines.reduce((sum, l) => sum + l.usd, 0)), imageCount: q.imageCount, model: q.model, lines };
   }
   if (action.type === 'recheck_page') {
-    // TEXT-priced: one vision call re-reads the page (lettering.md §9). No image is drawn.
-    const usd = round4(RELAYOUT_VISION_USD * (byok ? 1 : PLATFORM_MARKUP));
+    // TEXT-priced: one vision call re-reads the page (lettering.md §9), at the book's QC figure. No image is drawn.
+    const usd = recheckQuoteUsd(byok, prices);
     return { usd, imageCount: 0, model: RECHECK_MODEL_LABEL, lines: [{ label: 'page re-check', count: 1, usd }] };
   }
   const jobs: { kind: ImageJobKind; count: number; label?: string }[] = [];
@@ -1101,8 +1124,9 @@ export function estimateSpendAction(doc: ComicDoc, action: GatedSpend, byok: boo
   // When no directions are passed the runner also makes a writer call to propose them; the
   // image-only estimate would understate the quote and the budget gate. Add that text line.
   if (action.type === 'render_style_options' && !styleDirections(action).length) {
-    // Writer text spend for proposing style directions (shared with the client's StylePanel quote).
-    const usd = styleDirectionsUsd(byok);
+    // Writer text spend for proposing style directions (shared with the client's StylePanel quote), at what it
+    // really costs (the book's text rates, never under STYLE_DIRECTIONS_USD).
+    const usd = styleDirectionsQuoteUsd(byok, prices);
     return { ...est, usd: round4(est.usd + usd), lines: [...est.lines, { label: 'style directions', count: 1, usd }] };
   }
   return est;
@@ -1197,7 +1221,23 @@ export interface RunActionOptions {
   staleFrom?: number;
   /** Ops origin for session.commit (undo + "saved by software" attribution). Absent ⇒ 'director' when collecting, else none. */
   origin?: OpsOrigin;
+  /**
+   * When the person confirmed this work, for work that starts later than the confirm: the redraw a model switch chains
+   * after its sheets, or a "wait and retry" the client re-sends once the model is back. Every message the action and
+   * its run post carries it as Msg.runAt, so they never move the chat past a question asked since (settle.ts movesOn).
+   * Absent: a run's messages carry the run's own start; an action's own answer is a plain turn.
+   */
+  runAt?: number;
+  /**
+   * The sheets run of a model switch with "redraw everything": the switch starts the pages and cover itself once the
+   * sheets are ready (actions/models.ts chainAfterSheets), so this run does not offer them (switchRedrawLeftStep).
+   */
+  chained?: boolean;
 }
+
+/** The message as background work confirmed at `opts.runAt` posts it (unchanged without one). */
+const stampRunAt = (opts: Pick<RunActionOptions, 'runAt'>, msg: Msg): Msg =>
+  typeof opts.runAt === 'number' && Number.isFinite(opts.runAt) ? { ...msg, runAt: opts.runAt } : msg;
 
 export type ActionOutcome =
   | { status: 'done'; message: string; nextSteps?: NextStep[] }
@@ -1217,6 +1257,11 @@ export interface StartedAction {
   outcome: ActionOutcome;
   /** Settles when the background work (renders, QC) is finished. Never rejects. */
   done: Promise<void>;
+  /**
+   * A drawing run: whether it stopped on a key with no credit (its one `credit` card tells the whole story, so work
+   * chained after it posts nothing more). Read once `done` settles.
+   */
+  stoppedOnCredit?: () => boolean;
 }
 
 const finished = (outcome: ActionOutcome): StartedAction => ({ outcome, done: Promise.resolve() });
@@ -1232,7 +1277,7 @@ const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards
     if (objects.length) opts.collectNextSteps?.(objects);
     return;
   }
-  commitAs(ctx, [{ op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], 'job');
+  commitAs(ctx, [{ op: 'message', msg: stampRunAt(opts, governMsg(ctx, assistantMessage(text, cards, steps))) }], 'job');
 };
 
 /**
@@ -1245,7 +1290,7 @@ export const commitWithMessage = (ctx: StudioContext, opts: RunActionOptions, op
     deliver(ctx, opts, text, cards, steps);
     return;
   }
-  commitAs(ctx, [...ops, { op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], opts.origin ?? 'job', label);
+  commitAs(ctx, [...ops, { op: 'message', msg: stampRunAt(opts, governMsg(ctx, assistantMessage(text, cards, steps))) }], opts.origin ?? 'job', label);
 };
 
 /** A render run is under way for this comic: a target is queued or drawing, or a run still holds pending spend. */
@@ -1358,8 +1403,69 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
     action
   });
   if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  const short = await textCreditShort(ctx, opts, action, estimate);
+  if (short) return short;
   return handler.run(ctx, action, opts);
 }
+
+/**
+ * The balance check before an imageless paid step starts (translate, a page detail pass, the page re-check), on every
+ * path that starts one: a direct ask (runFeatureAction, startRecheck) and an approval (approveGate). Text routes are
+ * OpenRouter-first, so the payer is that key (or the allowance); what this comic is drawing right now is set aside
+ * first. null = go (fits, or unknown).
+ */
+async function textCreditShort(ctx: StudioContext, opts: RunActionOptions, action: GatedSpend, estimate: SpendEstimate): Promise<StartedAction | null> {
+  const payer = textPayerOf(ctx.keys);
+  if (!payer || !(estimate.usd > 0)) return null;
+  const budget = await creditBudgetFor(ctx, payer, { needUsd: estimate.usd, heldUsd: heldUsdFor(ctx.session, payer) });
+  if (!budget.known || fitsBudget(budget, estimate.usd)) return null;
+  return notEnoughCredit(ctx, opts, action, { plan: describeSpend(ctx.session.doc, action), byok: payer.byok, estimate }, budget);
+}
+
+/**
+ * The balance check before the writer plans or rewrites pages (Plan the pages, the planning inside "Draft it for me",
+ * revise_pages and a written new page): the same payer and set-aside as textCreditShort. A known shortfall writes
+ * nothing and posts the one "Not enough credit" card; null = go (fits, or unknown).
+ */
+async function planCreditShort(ctx: StudioContext, opts: RunActionOptions, step: { what: string; usd: number }): Promise<ActionOutcome | null> {
+  const payer = textPayerOf(ctx.keys);
+  if (!payer || !(step.usd > 0)) return null;
+  const budget = await creditBudgetFor(ctx, payer, { needUsd: step.usd, heldUsd: heldUsdFor(ctx.session, payer) });
+  if (!budget.known || fitsBudget(budget, step.usd)) return null;
+  const words = shortCreditText(budget, step, costOf(ctx));
+  deliver(ctx, opts, words.text, [shortCreditCard(budget, step)]);
+  logger.info('comic_credit_short', { projectId: ctx.projectId, action: 'plan_pages', payer: budget.payer, fits: 0 });
+  return { status: 'blocked', message: words.outcome, code: 'BILLING_DENIED' };
+}
+
+/**
+ * A model switch with "redraw everything" whose pages never started (its sheets run stopped on a key with no credit,
+ * actions/models.ts chainAfterSheets): once every drawn sheet and place is ready on the locked model, the run that drew
+ * the last of them offers what the switch still owes, priced fresh: "Redraw 3 pages and the cover". Null otherwise
+ * (no such switch, sheets still on the old model, or nothing left on it).
+ */
+export const switchRedrawLeftStep = (doc: ComicDoc, byok: boolean, prices: PriceBook | undefined, cost: CostFormatter): NextStep | null => {
+  const lock = lockOf(doc);
+  const change = lock?.changes?.[0];
+  if (!lock || change?.redraw !== 'all' || lockedSpecId(change.to) !== lockedSpecId(lock.modelId)) return null;
+  const modelId = lockedSpecId(lock.modelId);
+  const onLock = (r: RenderState) => {
+    const model = r.asset?.model ?? r.model;
+    return r.status === 'ready' && !!r.asset && !!model && lockedSpecId(model) === modelId;
+  };
+  const drawn = (r: RenderState) => r.asset?.source === 'generated';
+  if (doc.cast.some((c) => drawn(c.sheet) && !onLock(c.sheet)) || doc.places.some((p) => drawn(p.sheet) && !onLock(p.sheet))) return null;
+  const pages = doc.pages.filter((p) => drawn(p.render) && !onLock(p.render) && !isBusy(p.render));
+  const cover = drawn(doc.cover.render) && !onLock(doc.cover.render) && !isBusy(doc.cover.render);
+  if (!pages.length && !cover) return null;
+  const action: SpendAction = pages.length
+    ? { type: 'render_pages', pageIds: pages.map((p) => p.id), force: true, ...(cover ? { includeCover: true } : {}) }
+    : { type: 'render_cover' };
+  const usd = estimateSpendAction(doc, action, byok, prices).usd;
+  if (!(usd > 0)) return null;
+  const what = [pages.length ? (pages.length === 1 ? '1 page' : `${pages.length} pages`) : '', cover ? 'the cover' : ''].filter(Boolean).join(' and ');
+  return { label: `Redraw ${what} · ${cost.approx(usd)}`, action: { ...action, quotedUsd: usd }, usd };
+};
 
 /** Who is patching, for the feature sanitizers (§12.1 SanitizeCtx). */
 export const sanitizeCtxFor = (ctx: StudioContext, opts: Pick<RunActionOptions, 'caps'> = {}): SanitizeCtx => {
@@ -1427,7 +1533,13 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
     // The approved action names its commits for History (not approve_gate's own scope).
-    const started = await withHistoryAction(gate.action, () => (handler ? handler.run(ctx, gate.action, next) : startSpend(ctx, gated, next)));
+    const started = await withHistoryAction(gate.action, async () => {
+      if (!handler) return startSpend(ctx, gated, next);
+      // credit-safety.md: an approved feature spend (translate, a page detail pass) is checked against what is left
+      // before it starts, exactly like the same spend asked for directly (runFeatureAction); a shortfall reopens the card.
+      const short = handler.spend && handler.estimate ? await textCreditShort(ctx, next, gated, estimate) : null;
+      return short ?? handler.run(ctx, gate.action, next);
+    });
     if (started.outcome.status === 'blocked') reopen();
     else if (started.outcome.status === 'nothing') close();
     return started;
@@ -2029,6 +2141,108 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Ga
 };
 
 /**
+ * The key an image spend draws on (credit-safety.md): the image client's own pick, or the same-payer route the preflight
+ * chose. A route with no key is unknown to the balance check (it never blocks).
+ */
+const imagePayerOf = (ctx: StudioContext, spec: ImageModelSpec, useRoute?: ImageRoute): SpendPayer | null => {
+  const picked = imageRouteFor(spec, ctx.keys);
+  if (!picked) return null;
+  const route = useRoute && useRoute !== picked.route && ctx.keys[useRoute]?.key && !!ctx.keys[useRoute]?.byok === picked.byok ? useRoute : picked.route;
+  return { route, byok: picked.byok };
+};
+
+/** The same model on the payer's other route with a key of the same payer (pickAlternateRoute), or null. */
+const otherImagePayer = (ctx: StudioContext, spec: ImageModelSpec, payer: SpendPayer): SpendPayer | null => {
+  const key = ctx.keys[payer.route];
+  const model = spec.routes[payer.route];
+  if (!key?.key || !model) return null;
+  const alt = pickAlternateRoute(spec, ctx.keys, { route: payer.route, model, key });
+  return alt ? { route: alt.route, byok: !!alt.key.byok } : null;
+};
+
+/**
+ * The balance check of an image spend (credit-safety.md): what the key that will draw has left, after what this comic is
+ * drawing right now. When that own key is known to be short and the same model has a route on the person's other key
+ * whose balance fits or is unknown (Gemini reports none), the run draws there instead (`useRoute`), as a run that hit
+ * the empty key part-way would (release 308's rule): never blocked while another of their keys could pay.
+ */
+const imageBudgetFor = async (
+  ctx: StudioContext,
+  spec: ImageModelSpec,
+  needUsd: number,
+  useRoute?: ImageRoute
+): Promise<{ budget: CreditBudget; useRoute?: ImageRoute; movedFrom?: { route: ImageRoute; leftUsd: number; held: boolean } }> => {
+  const payer = imagePayerOf(ctx, spec, useRoute);
+  if (!payer) return { budget: UNKNOWN_BUDGET, ...(useRoute ? { useRoute } : {}) };
+  const budget = await creditBudgetFor(ctx, payer, { needUsd, heldUsd: heldUsdFor(ctx.session, payer) });
+  if (!budget.known || budget.payer !== 'own_key' || fitsBudget(budget, needUsd)) return { budget, ...(useRoute ? { useRoute } : {}) };
+  const other = otherImagePayer(ctx, spec, payer);
+  if (!other?.byok) return { budget, ...(useRoute ? { useRoute } : {}) };
+  const otherBudget = await creditBudgetFor(ctx, other, { needUsd, heldUsd: heldUsdFor(ctx.session, other) });
+  if (otherBudget.known && !fitsBudget(otherBudget, needUsd)) return { budget, ...(useRoute ? { useRoute } : {}) };
+  return { budget: otherBudget, useRoute: other.route, movedFrom: { route: payer.route, leftUsd: budget.leftUsd, held: !!budget.held } };
+};
+
+/**
+ * "Draw what fits": the leading pages of a render_pages run (with the sheets they need, never the cover) whose fresh
+ * quote fits what is left, most pages first. The whole step did not fit, so the biggest smaller run is every page
+ * without the cover when the step has one, else one page fewer; null when even one page doesn't fit (or there is no
+ * smaller run). A run of the leading n pages never costs less than one of fewer pages, so the most that fit is a binary
+ * search: about eight quotes for a 200-page book, not one per page.
+ */
+export const drawWhatFits = (
+  doc: ComicDoc,
+  action: Extract<SpendAction, { type: 'render_pages' }>,
+  byok: boolean,
+  prices: PriceBook | undefined,
+  fits: (usd: number) => boolean
+): { action: SpendAction; usd: number; pages: number } | null => {
+  const targets = drawTargets(doc, action);
+  const most = action.includeCover && coverWanted(doc, action.force) ? targets.length : targets.length - 1;
+  if (most < 1) return null;
+  const { pageIds: _ids, includeCover: _cover, quotedUsd: _quote, drawOverfull, ...rest } = action;
+  const quote = (n: number): { action: SpendAction; usd: number; pages: number } => {
+    const ids = targets.slice(0, n).map((p) => p.id);
+    const overfull = drawOverfull?.filter((id) => ids.includes(id));
+    const candidate: SpendAction = { ...rest, type: 'render_pages', pageIds: ids, ...(overfull?.length ? { drawOverfull: overfull } : {}) };
+    return { action: candidate, usd: estimateSpendAction(doc, candidate, byok, prices).usd, pages: n };
+  };
+  let best: { action: SpendAction; usd: number; pages: number } | null = null;
+  for (let lo = 1, hi = most; lo <= hi; ) {
+    const mid = (lo + hi) >> 1;
+    const q = quote(mid);
+    if (fits(q.usd)) {
+      best = q;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return best && best.usd > 0 ? { ...best, action: { ...best.action, quotedUsd: best.usd } } : null;
+};
+
+/**
+ * The balance check said no (credit-safety.md): nothing starts, ONE "Not enough credit" card says what the step needs,
+ * what is left (a governed user reads percentages only) and the ways forward. An approval that was being approved stays
+ * open (approveGate reopens a blocked start).
+ */
+const notEnoughCredit = (
+  ctx: StudioContext,
+  opts: RunActionOptions,
+  action: GatedSpend,
+  go: { plan: SpendPlan; byok: boolean; estimate: SpendEstimate },
+  budget: Extract<CreditBudget, { known: true }>,
+  prices?: PriceBook
+): StartedAction => {
+  const doc = ctx.session.doc;
+  const step = { what: go.plan.what, usd: go.estimate.usd };
+  const fits = action.type === 'render_pages' ? drawWhatFits(doc, action, go.byok, prices, (usd) => fitsBudget(budget, usd)) : null;
+  const card = shortCreditCard(budget, step, fits ?? undefined);
+  const words = shortCreditText(budget, step, costOf(ctx), fits ?? undefined);
+  deliver(ctx, opts, words.text, [card]);
+  logger.info('comic_credit_short', { projectId: ctx.projectId, action: action.type, payer: budget.payer, fits: fits?.pages ?? 0 });
+  return finished({ status: 'blocked', message: words.outcome, code: 'BILLING_DENIED' });
+};
+
+/**
  * Whether starting `next` makes the open gate's action moot: the same kind of spend and, for pages, one that draws
  * every page the gate would still draw (and the cover when the gate has it). A single-page draw beside a pending
  * "Render all" leaves that gate open: the other pages keep their approval card instead of silently losing it.
@@ -2052,10 +2266,20 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
   // reliability.md §2: check before spending — no paid run starts on a model that is down everywhere we can reach.
   const pre = await preflightFor(ctx, opts, action, prices);
   if (pre && !pre.ok) return preflightBlocked(ctx, opts, action, first, pre);
-  // The doc may have moved while the health check ran: decide again, synchronously up to the reservation.
+  // credit-safety.md: what the key that will draw (or the allowance) has left, read before the final decision.
+  const credit = await imageBudgetFor(ctx, first.spec, first.estimate.usd, pre?.useRoute);
+  const budget = credit.budget;
+  // The doc may have moved while the health and balance checks ran: decide again, synchronously up to the reservation.
   const go = decideSpend(ctx, action, opts, prices);
   if (go.kind === 'done') return go.started;
+  // A known shortfall starts nothing (no reservation, no job); an unknown balance never blocks.
+  if (budget.known && !fitsBudget(budget, go.estimate.usd)) return notEnoughCredit(ctx, opts, action, go, budget, prices);
   const { plan, spec, byok, estimate } = go;
+  // One line when the balance check moved the run to the person's other key.
+  const moved = credit.movedFrom && credit.useRoute
+    ? ` Your ${ROUTE_NAMES[credit.movedFrom.route]} key has ${formatUsd(credit.movedFrom.leftUsd)} left${credit.movedFrom.held ? ' after what’s drawing now' : ''}, so this run draws on your ${ROUTE_NAMES[credit.useRoute]} key (the same model).`
+    : '';
+  if (credit.movedFrom) logger.info('comic_credit_other_key', { projectId: ctx.projectId, from: credit.movedFrom.route, to: credit.useRoute });
   const doc = ctx.session.doc;
 
   // Proceeding: retire an open gate this spend makes moot (the same kind of spend covering everything it would draw).
@@ -2072,9 +2296,9 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
   // Pin the model (the lock), quality and override now so mid-run settings changes can't move this spend off
   // the quoted/authorised price (the latest sheets and pages are still used — see prepare()).
   const pinned = runPinOf(doc);
-  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, pre?.useRoute, action);
+  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, credit.useRoute, action);
   runner.reserve();
-  const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.${heldCard && held ? ` ${heldBackNote(held)}` : ''}`;
+  const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}).${moved} They appear on the board as they finish; I'll post when they're ready.${heldCard && held ? ` ${heldBackNote(held)}` : ''}`;
   let done: Promise<void>;
   switch (action.type) {
     case 'render_style_options':
@@ -2098,7 +2322,11 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
     default:
       throw badRequest('Unknown spend action.');
   }
-  return { outcome: { status: 'started', message, estimate }, done: done.catch(() => undefined).finally(() => runner.releaseReservation()) };
+  return {
+    outcome: { status: 'started', message, estimate },
+    done: done.catch(() => undefined).finally(() => runner.releaseReservation()),
+    stoppedOnCredit: () => runner.stoppedOnCredit
+  };
 }
 
 /**
@@ -2135,6 +2363,8 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
     action
   });
   if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  const short = await textCreditShort(ctx, opts, action, estimate);
+  if (short) return short;
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) {
     commitGate(ctx, { ...open, status: 'declined' }, 'job', { kind: 'close', status: 'superseded', by: 'system' });
@@ -2367,7 +2597,8 @@ interface JobResult {
   chargedUsd?: number;
 }
 
-type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
+/** `reroute`: the job's key was refused for credit and the same model has a same-payer route left: draw it again there now. */
+type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number } | { kind: 'reroute' };
 
 const restoredStatus = (prev: ImageJob['prev']): RenderState['status'] =>
   prev.status === 'queued' || prev.status === 'rendering' ? (prev.hasAsset ? 'ready' : 'none') : prev.status;
@@ -2451,10 +2682,27 @@ class RenderRun {
   /** Chips this run adds in front of the doc-state next steps (aspect fixes, fresh takes). */
   private readonly extraSteps: NextStep[] = [];
   private stopReason: string | null = null;
+  /**
+   * credit-safety.md: routes whose key was refused for credit in this run (imageClient creditRefusalOf). Never called
+   * again by this run: every attempt checks it first and every request excludes it from the image client's fallback.
+   */
+  private readonly refusedRoutes = new Set<ImageRoute>();
+  /** Every key refusal of this run, one per route in order (quota or credit), for the stop reason and its one card. */
+  private readonly refusals: RefusedKey[] = [];
+  /** Who pays for the refused keys (the run's own payer: a continuation never changes it). */
+  private refusedByok: boolean | null = null;
+  /** The run stopped on a key refusal with no same-payer route left: its completion carries one credit card. */
+  private creditStopped = false;
+  /** Same-payer continuations already said (one notice per switch). */
+  private readonly continued = new Set<string>();
+  /** Their notices, posted with the completion unless the run then stopped on credit (its card tells the whole story). */
+  private readonly continuedNotes: Card[] = [];
   private spentUsd = 0;
   private savedUsd = 0;
   /** Estimate still held as pending spend (released as images land or the run ends). */
   private reservedLeft = 0;
+  /** The part of it whose billing hold is made (images on the wire): heldUsdFor leaves it to the usage status. */
+  private onWireUsd = 0;
   private progressId: string | null = null;
   private progressCard: Extract<Card, { type: 'renders' }> | null = null;
   /** The live progress card sits in the director's message; the completion is appended. */
@@ -2522,7 +2770,36 @@ class RenderRun {
   releaseReservation() {
     if (this.reservedLeft > 0) addPending(this.session, -this.reservedLeft);
     this.reservedLeft = 0;
+    if (this.onWireUsd > 0) addOnWire(this.session, -this.onWireUsd);
+    this.onWireUsd = 0;
     this.signal.removeEventListener('abort', this.onAbort);
+  }
+
+  /**
+   * A job's billing hold, counted as on the wire until it is settled or released (once): the governed balance check
+   * then sets aside only the part of this run's quote that has no hold yet (heldUsdFor).
+   */
+  private holdOnWire(reservation: BillingReservation, usd: number): BillingReservation {
+    let held = Math.max(0, round4(usd));
+    this.onWireUsd = round4(this.onWireUsd + held);
+    addOnWire(this.session, held);
+    const done = () => {
+      if (!(held > 0)) return;
+      const back = Math.min(held, this.onWireUsd);
+      this.onWireUsd = round4(this.onWireUsd - back);
+      addOnWire(this.session, -back);
+      held = 0;
+    };
+    return {
+      settle: (args) => {
+        done();
+        return reservation.settle(args);
+      },
+      release: (reason) => {
+        done();
+        return reservation.release(reason);
+      }
+    };
   }
 
   /** Release part of the pending reservation (a reuse that cost nothing). */
@@ -2557,10 +2834,11 @@ class RenderRun {
   /** A job message in the user's terms (the governed-dollars safety net). */
   /**
    * Every message this run posts says when the run started (Msg.runAt): its outcome, landing after a reply the director
-   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn).
+   * wrote while it drew, never moves the chat past that reply's question (settle.ts movesOn). A run the person
+   * confirmed earlier (a chained redraw, a "wait and retry") says when they confirmed it (RunActionOptions.runAt).
    */
   private message(msg: Msg): Msg {
-    return governMsg(this.ctx, { ...msg, runAt: this.started });
+    return governMsg(this.ctx, stampRunAt(this.opts, { ...msg, runAt: this.started }));
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────
@@ -2674,7 +2952,7 @@ class RenderRun {
         try {
           const proposed = await proposeStyleDirections({
             doc: this.session.doc,
-            llm: billedLlm(this.ctx, { stage: 'style', operation: 'comic.text.writer', tracker }),
+            llm: billedLlm(this.ctx, { stage: 'style', operation: 'comic.text.writer', tracker, textOp: textOpTag('style_directions', 1) }),
             count,
             signal: this.signal
           });
@@ -3093,7 +3371,8 @@ class RenderRun {
     if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
     const doc = this.session.doc;
     const drewPages = [...drawn, ...reused].some((r) => r.job.kind === 'page');
-    if (drewPages && !failedAll.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
+    // A run that stopped (money ran out, or was refused) never suggests the next paid step.
+    if (drewPages && !failedAll.length && !this.stopReason && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
       parts.push('Want the cover next?');
     }
     return parts.join(' ');
@@ -3208,13 +3487,23 @@ class RenderRun {
     if (outage) this.notices.push(outage.card);
     const unavailable = this.modelUnavailableNotice(failed);
     if (unavailable) this.notices.push(unavailable);
+    // credit-safety.md: a run stopped on a key with no credit ends with ONE credit card, and no other paid chip (its
+    // "Draw the rest" is the one way to spend again, after a top-up or a key switch).
+    const credit = this.creditStopCard();
+    // One story per run: the stop card names every key that was refused, so "carried on with your other key" would
+    // contradict it (the other key was refused too).
+    this.notices.push(...(credit ? [credit] : this.continuedNotes));
+    const redrawLeft = this.action?.type === 'render_sheets' && !this.opts.chained ? switchRedrawLeftStep(this.session.doc, this.byok, this.prices, costOf(this.ctx)) : null;
     const steps = dedupeSteps([
       ...(outage?.steps ?? []),
       ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
       ...safety.steps.map((s) => this.priced(s)),
+      ...(redrawLeft ? [redrawLeft] : []),
       ...this.extraSteps,
       ...nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices })
-    ]).slice(0, MAX_NEXT_STEPS);
+    ])
+      .filter((step) => !credit || !(step.action && isSpendAction(step.action)))
+      .slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
@@ -3282,6 +3571,74 @@ class RenderRun {
     if (this.serial) return;
     this.serial = true;
     logger.warn('comic_render_run_serial', { projectId: this.ctx.projectId, target: renderTargetKey(job.target) });
+  }
+
+  // ── Keys out of credit (credit-safety.md) ───────────────────────────────────
+
+  /**
+   * The route a job of this run draws on: the image client's own pick, or, once that key was refused for credit, the
+   * same model on the other route with a key of the same payer (pickAlternateRoute: never another model, never
+   * another payer). null when every eligible route was refused in this run.
+   */
+  private routeFor(spec: ImageModelSpec): { route: ImageRoute; model: string; byok: boolean } | null {
+    const primary = imageRouteFor(spec, this.ctx.keys);
+    if (!primary || !this.refusedRoutes.has(primary.route)) return primary;
+    try {
+      const alt = pickAlternateRoute(spec, this.ctx.keys, pickImageRoute(spec, this.ctx.keys));
+      return alt && !this.refusedRoutes.has(alt.route) ? { route: alt.route, model: alt.model, byok: alt.key.byok } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A key of this run was refused for credit (or has no image quota): never called again by this run. */
+  private noteRefusal(route: ImageRoute, byok: boolean, noQuota: boolean) {
+    this.refusedRoutes.add(route);
+    if (this.refusedByok === null) this.refusedByok = byok;
+    const known = this.refusals.find((r) => r.route === route);
+    if (known) known.noQuota = noQuota;
+    else this.refusals.push({ route, noQuota });
+  }
+
+  /** The run stopped on a key with no credit (StartedAction.stoppedOnCredit). */
+  get stoppedOnCredit(): boolean {
+    return this.creditStopped;
+  }
+
+  /** No eligible key is left: the rest of the run does not start (its reason ends the completion, its card follows). */
+  private stopOnCredit() {
+    if (this.stopReason) return;
+    const byok = this.refusedByok ?? this.byok;
+    this.stopReason = stoppedReason({ byok, refused: this.refusals });
+    this.creditStopped = true;
+    logger.warn('comic_render_run_credit_stop', { projectId: this.ctx.projectId, routes: this.refusals.map((r) => r.route), byok });
+  }
+
+  /** The run moved to the same payer's other key: said once per switch, with the completion. */
+  private noteContinued(from: RefusedKey, to: ImageRoute, byok: boolean, model: string) {
+    const key = `${from.route}>${to}`;
+    if (from.route === to || this.continued.has(key)) return;
+    this.continued.add(key);
+    this.continuedNotes.push(noticeCard('info', continuedText(from.route, to, byok, model, from.noQuota)));
+    logger.info('comic_render_run_continued', { projectId: this.ctx.projectId, from: from.route, to });
+  }
+
+  /**
+   * The one card of a run that stopped on a key with no credit: what was drawn, what was not started (it cost nothing),
+   * and "Draw the rest" priced fresh for exactly what did not start (top up first, or switch key).
+   */
+  private creditStopCard(): Card | null {
+    if (!this.creditStopped || !this.refusals.length) return null;
+    const skipped = this.results.filter((r) => r.skipped);
+    const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked).length;
+    const narrowed = this.action && !isProSpendAction(this.action) ? narrowBlockedAction(this.action, skipped.map((r) => r.job.target), this.session.doc) : undefined;
+    let rest: { action: StudioAction; usd: number } | undefined;
+    if (narrowed && isSpendAction(narrowed)) {
+      const { quotedUsd: _old, ...fresh } = narrowed as SpendAction & { quotedUsd?: number };
+      const step = this.priced({ label: 'Draw the rest', action: fresh as SpendAction });
+      if (step.action && typeof step.usd === 'number' && step.usd > 0) rest = { action: step.action, usd: step.usd };
+    }
+    return stoppedCreditCard({ byok: this.refusedByok ?? this.byok, refused: this.refusals, drawn, notStarted: skipped.length, ...(rest ? { rest } : {}) });
   }
 
   // ── One image ─────────────────────────────────────────────────────────────
@@ -3357,6 +3714,11 @@ class RenderRun {
     } finally {
       release?.();
       this.endTurn();
+    }
+    if (outcome.kind === 'reroute') {
+      // The same model on the same payer's other key (release 308's rule, credit-safety.md): at once, never the refused key.
+      if (this.signal.aborted || this.stopReason) return this.restore(job);
+      return this.runJob(job);
     }
     if (outcome.kind === 'requeue') {
       // Incident follow-up: wait for the provider (Retry-After or 45 s, jittered, abortable), then once more.
@@ -3571,9 +3933,15 @@ class RenderRun {
       end(false);
       throw err;
     }
-    const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
+    const picked = this.routeFor(prepared.compiled.spec);
     if (!picked) {
       end(false);
+      // Every key this model can use was refused for credit in this run: not started, never failed (the run is stopping).
+      if (this.refusedRoutes.size) {
+        this.stopOnCredit();
+        this.restore(job);
+        return { outcome: { kind: 'done' }, asset: null };
+      }
       this.fail(job, `${prepared.compiled.spec.nickname} needs an OpenRouter or Gemini key. Add one in Settings → API keys.`);
       return { outcome: { kind: 'done' }, asset: null };
     }
@@ -3603,7 +3971,7 @@ class RenderRun {
       this.fail(job, reserved.message);
       return { outcome: { kind: 'done' }, asset: null };
     }
-    const reservation = reserved.reservation;
+    const reservation = this.holdOnWire(reserved.reservation, this.priceOf(job));
     if (this.signal.aborted || this.stopReason) {
       await reservation.release('cancelled_before_dispatch');
       end(false);
@@ -3624,7 +3992,19 @@ class RenderRun {
     let abandonedUsd = 0;
     // What the failed attempts of this job were charged (the mid-run outage card's chargedUsd).
     let failedCharged = 0;
+    // credit-safety.md: this job's key was refused for credit (by its own call or by a parallel job's), or the run was
+    // stopped while this job waited to retry. Either way nothing more is sent from here.
+    let keyRefused = false;
+    let stoppedBeforeRetry = false;
     while (attempts < (job.singleRequest ? 1 : MAX_IMAGE_ATTEMPTS)) {
+      if (this.refusedRoutes.has(picked.route)) {
+        keyRefused = true;
+        break;
+      }
+      if (attempts > 0 && this.stopReason) {
+        stoppedBeforeRetry = true;
+        break;
+      }
       attempts += 1;
       const startedAt = Date.now();
       try {
@@ -3637,7 +4017,8 @@ class RenderRun {
           prompt: prepared.compiled.prompt,
           references: prepared.references,
           ...(job.singleRequest ? { singleRequest: true } : {}),
-          ...(this.preferRoute ? { preferRoute: this.preferRoute } : {}),
+          // After a key refusal the run draws on the route routeFor chose and never on a refused one.
+          ...(this.refusedRoutes.size ? { preferRoute: picked.route, excludeRoutes: [...this.refusedRoutes] } : this.preferRoute ? { preferRoute: this.preferRoute } : {}),
           // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
           ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
         };
@@ -3670,6 +4051,22 @@ class RenderRun {
               suffix: abandoned ? ' (timed out)' : ' (failed attempt)'
             })
         );
+        // A confirmed credit refusal of the key (never a rate limit): no retry, no safe take, never this key again.
+        const refusal = creditRefusalOf(err);
+        if (refusal) {
+          const route = imageFailureInfo(err)?.route ?? picked.route;
+          this.noteRefusal(route, picked.byok, refusal === 'no_quota');
+          logger.warn('comic_image_key_refused', { projectId: ctx.projectId, target: renderTargetKey(job.target), route, kind: refusal });
+          keyRefused = true;
+          break;
+        }
+        // This route was only busy, but the same payer's other key, tried as its fallback, was refused for credit:
+        // that key is never called again in this run (the next attempt excludes it), and this job retries here.
+        const fallbackRefused = fallbackRefusalOf(err);
+        if (fallbackRefused) {
+          this.noteRefusal(fallbackRefused.route, picked.byok, fallbackRefused.refusal === 'no_quota');
+          logger.warn('comic_image_key_refused', { projectId: ctx.projectId, target: renderTargetKey(job.target), route: fallbackRefused.route, kind: fallbackRefused.refusal, fallback: true });
+        }
         if (lastError.code === 'RATE_LIMIT') {
           rateLimited = true;
           this.noteRateLimit(job);
@@ -3702,6 +4099,24 @@ class RenderRun {
       }
     }
 
+    if (!result && (keyRefused || stoppedBeforeRetry)) {
+      end(false);
+      const owed = round4(failedSpend + abandonedUsd);
+      if (owed > 0) await reservation.settle({ costUsd: owed, imageUnits: 0 });
+      else await reservation.release(keyRefused ? 'key_refused' : 'run_stopped');
+      if (keyRefused && !this.stopReason && !this.signal.aborted) {
+        const next = this.routeFor(prepared.compiled.spec);
+        if (next) {
+          const from = this.refusals[this.refusals.length - 1] ?? { route: picked.route, noQuota: false };
+          this.noteContinued(from, next.route, picked.byok, prepared.compiled.spec.nickname);
+          return { outcome: { kind: 'reroute' }, asset: null };
+        }
+        this.stopOnCredit();
+      }
+      // Not started, never failed: the target goes back to how it was and this job cost nothing more.
+      this.restore(job);
+      return { outcome: { kind: 'done' }, asset: null };
+    }
     if (!result) {
       end(false);
       const owed = round4(failedSpend + abandonedUsd);
@@ -4771,9 +5186,12 @@ export async function planPages(
   const origin = originOf(opts);
   const runOpts = { ...opts, confirmed: false } as RunActionOptions;
   const byok = spendIsByok(ctx.keys);
+  // The planning rate from its own source (never the floor in its place behind a cold image catalog): the budget
+  // checks below bound what this pass can really cost.
+  const planRates = async () => ({ text: await textRatesWithin(ctx) });
   if (opts.draft) {
     opts.draft.assertPlanUnchanged();
-    const maximumQuote = 2 * planPagesUsd(before, byok);
+    const maximumQuote = 2 * planPagesUsd(before, byok, await planRates());
     const cap = budgetOf(before.settings);
     if (cap !== undefined && before.spend.totalUsd + pendingUsdOf(ctx.session) + maximumQuote > cap + 1e-9) {
       throw new StudioError('BUDGET_EXCEEDED', 'The remaining comic budget is below the planning estimate including a writer repair. Change the scope or budget to start.', { status: 402 });
@@ -4794,7 +5212,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     // A whole plan says what it costs, honestly bounded (one writer pass; up to two if the plan check sends it back).
-    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok)})`;
+    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok, await planRates())})`;
     const text = `This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again${price}. Nothing was spent.`;
     deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
     return { status: 'blocked', message: `The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings${price}. Nothing was spent.`, code: 'BUDGET_EXCEEDED' };
@@ -4818,7 +5236,22 @@ export async function planPages(
   }
   const revising = !!pageIds;
 
+  // credit-safety.md §2: a direct paid step, so the balance check runs before the writer does. The need is the honest
+  // bound the quote gives (one writer pass, up to two if the plan check sends it back), for the pages being written.
+  const rewriting = revising && !rewroteAll ? before.pages.filter((p) => pageIds!.includes(p.id)) : [];
+  const short = await planCreditShort(ctx, runOpts, {
+    what: revising && !rewroteAll ? (rewriting.length ? `rewriting ${pagesPhrase(rewriting)}` : 'rewriting pages') : 'the page plan',
+    usd: 2 * (revising && !rewroteAll ? planUsd(pageIds!.length, byok, await planRates()) : planPagesUsd(before, byok, await planRates()))
+  });
+  if (short) return short;
+
   const tracker = newTextSpendTracker();
+  // A whole-book plan (a fresh one, or every page rewritten in place) is one priced operation: what its writer calls
+  // cost per page feeds the next "Plan the pages" quote (models/textRates.ts). A rewrite of some pages (revise_pages,
+  // a written insert) is not tagged: it sends the whole brief, cast and source for one or two pages, so its cost per
+  // page says nothing about a whole plan's. A repair round is marked on its own call (completeStructured) and left out
+  // of the rate, since the quote bounds the repair separately (up to twice the pass).
+  const planOp = !revising || rewroteAll ? textOpTag('plan', rewroteAll ? before.pages.length : Math.max(1, before.format.pageCount || 1)) : undefined;
   const end = activity(ctx, revising && !rewroteAll ? 'Rewriting pages' : 'Writing the page plan', 'text');
   // Expose the writer's in-flight allowance to the same budget checks used by image jobs.
   // The tracker accumulates settled writer calls until the plan's spend entry is committed.
@@ -4839,7 +5272,8 @@ export async function planPages(
         ? { ...ctx.session.doc, source: { ...ctx.session.doc.source, script: opts.draft.writerSource } }
         : ctx.session.doc,
       llm: billedLlm(ctx, { stage: 'plan', operation: 'comic.text.writer', tracker,
-        draft: opts.draft && { assertActive: opts.draft.assertPlanUnchanged, hold: holdDraftSpend } }),
+        draft: opts.draft && { assertActive: opts.draft.assertPlanUnchanged, hold: holdDraftSpend },
+        ...(planOp ? { textOp: planOp } : {}) }),
       ...(instructions ? { instructions } : {}),
       ...(revising ? { pageIds } : {}),
       // The account-clamped rating: a kids comic (or a young account) is never written above its ceiling.
@@ -5757,17 +6191,17 @@ const dedupeSteps = (steps: NextStep[]): NextStep[] => {
 };
 
 /**
- * The "Plan the pages" estimate: one writer pass for every page — about $0.016 a page billed. The plan check can send
- * a page's count, overfull or quiet-shot problems back for ONE repair round, which is another writer pass (plan §7),
- * so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
+ * The "Plan the pages" estimate: one writer pass for every page, at what planning really costs per page (the book's
+ * text rates: PLAN_USD_PER_PAGE × the observed factor, never under it; about $0.016 a page billed at the constant).
+ * The plan check can send a page's count, overfull or quiet-shot problems back for ONE repair round, which is another
+ * writer pass (plan §7), so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
  */
-export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
-  round4(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP));
+export const planPagesUsd = (doc: ComicDoc, byok: boolean, prices?: Pick<PriceBook, 'text'>): number => planUsd(Math.max(1, doc.format.pageCount || 1), byok, prices);
 
 /** "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
-export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
+export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean, prices?: Pick<PriceBook, 'text'>): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
-  const usd = planPagesUsd(doc, byok);
+  const usd = planPagesUsd(doc, byok, prices);
   return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;
 };
 
@@ -5803,7 +6237,7 @@ export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean; prices?: Pri
   if (doc.style.status === 'empty' || (doc.style.status === 'drafted' && !doc.style.options.length && !doc.style.spec)) add(say('Show me 3 styles'));
   if (!doc.cast.length) add(say('Suggest a cast'));
   if (doc.style.status !== 'empty' && !castBusy && doc.cast.some(needsSheet) && doc.planStatus === 'none') add(spend('Draw the character sheets', { type: 'render_sheets' }));
-  if (doc.planStatus === 'none') add({ label: 'Plan the pages', action: { type: 'plan_pages' }, usd: planPagesUsd(doc, byok) });
+  if (doc.planStatus === 'none') add({ label: 'Plan the pages', action: { type: 'plan_pages' }, usd: planPagesUsd(doc, byok, prices) });
   if (doc.pages.length && !pagesBusy) {
     const undrawn = doc.pages.filter((p) => p.render.status !== 'ready' && p.panels.length);
     const stale = doc.pages.filter((p) => isPageStale(doc, p));

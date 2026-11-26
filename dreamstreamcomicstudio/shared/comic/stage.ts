@@ -58,7 +58,9 @@ export const STAGE_NEXT_KEYS = [
   'publish',
   'update_published',
   'see_paused',
-  'read'
+  'read',
+  // Added after the first stored summaries: a key that ran out of credit (attention.ts 'credit').
+  'top_up'
 ] as const;
 export type StageNextKey = (typeof STAGE_NEXT_KEYS)[number];
 
@@ -253,6 +255,8 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
     if (doc?.directorDraft?.status === 'interrupted' && !pages.length) return 'resume_draft';
     // The rest of what waits on the person, in needsYouOf's order (the approval is the gate above).
     if (waiting === 'question') return 'answer_director';
+    // A drawing run stopped because a key ran out: the credit card in the conversation says what to do.
+    if (waiting === 'credit') return 'top_up';
     if (waiting === 'plan') return 'review_plan';
     if (waiting === 'style') return looks > 0 ? 'pick_look' : 'choose_look';
     // A redraw running or failed over a drawn page leads in Draw and in Publish too: the book is not as drawn as it reads.
@@ -368,6 +372,8 @@ const NEXT_PLACE: Readonly<Record<StageNextKey, StagePlace>> = {
   review_estimate: 'approval',
   // The question is the newest message in the conversation, just above the message box.
   answer_director: 'composer',
+  // The credit card (top up, switch key, draw what fits) is the newest card in the conversation.
+  top_up: 'composer',
   resume_draft: 'draft',
   tell_story: 'composer',
   choose_look: 'style',
@@ -394,6 +400,8 @@ const nextLabel = (facts: StageFacts): string => {
       return 'Review the estimate';
     case 'answer_director':
       return 'Answer the Director';
+    case 'top_up':
+      return 'Top up or switch key';
     case 'resume_draft':
       return 'Resume the draft';
     case 'tell_story':

@@ -39,6 +39,7 @@ import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
 import { tileSources, type IsUnsignable, type TileSources } from './cards/renderTile';
 import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
+import { ReplyRating } from './ReplyRating';
 import { FOCUS_RING, INK_TILE, RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
@@ -433,6 +434,11 @@ export interface AssistantMessageProps {
   settles?: SettleIndex;
   /** Rises in (MO-2: a fresh reply): its first 12 blocks stagger. Absent: static. */
   fresh?: boolean;
+  /**
+   * The Director's answer to something the person sent (replyRating.ts rateableReplyIds) carries the thumbs: 'latest'
+   * always shows them, 'older' shows them on hover or focus where a pointer can hover. Absent: no rating.
+   */
+  rating?: 'latest' | 'older';
 }
 
 export const StreamingCaret: React.FC = () => (
@@ -461,7 +467,7 @@ export const assistantRowEmpty = (
   return !(opts.showSuggestions && chipsFor(msg, opts.doc ?? null, { fallback: true }).length > 0);
 };
 
-export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio, settles, fresh }) => {
+export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio, settles, fresh, rating }) => {
   const text = stripMarkdownImages(draft ?? msg.text ?? '');
   const cards = Array.isArray(msg.cards) ? msg.cards : [];
   // The latest reply always offers a next move: its own nextSteps, else old suggestions, else
@@ -478,7 +484,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
   // only card types it doesn't know yet) still says something.
   const silent = !text && !streaming && shown.length === 0;
   return (
-    <div className="flex min-w-0 gap-3 pr-2" data-role="assistant">
+    <div className="group/reply flex min-w-0 gap-3 pr-2" data-role="assistant">
       <DirectorMark className="mt-0.5" />
       {/* Consecutive settled rows sit 4 px apart (a compact log); everything else keeps the reply's 12 px. */}
       <div className={cx('min-w-0 flex-1 space-y-3 [&>[data-settled-slot]+[data-settled-slot]]:!mt-1', fresh && 'ds-stagger')}>
@@ -501,6 +507,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
           );
         })}
         {chips.length > 0 && <NextStepChips chips={chips} studio={studio} />}
+        {rating && !streaming && !!text && <ReplyRating msg={msg} comicId={studio.doc?.id} always={rating === 'latest'} />}
       </div>
     </div>
   );

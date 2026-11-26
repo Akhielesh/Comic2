@@ -4,8 +4,8 @@ This is the living plan for Comic Studio's current programme of work. It is upda
 production (`Dreamstrream-v1`), so a new session can pick the work up from here. The repository is public: this page
 holds no keys, no security details and no one's personal data.
 
-Last updated: 2026-11-26, with the release that gives every comic a stage, rebuilds My comics and brings one side
-panel everywhere.
+Last updated: 2026-11-26, with the money release: runs that stop when a key runs out, a balance check before
+spending, your real balance, and one true price everywhere.
 
 ## How work ships
 
@@ -37,34 +37,34 @@ panel everywhere.
 | #316 | Tactile page turns in the current and the historical readers. |
 | #320 | This plan brought up to date; a timing-dependent test steadied. |
 | #321 | Studio Originals' artwork is protected from the publication cleanup (the database guard is applied). |
+| #322 | Every comic knows its stage (Story, Style, Plan, Draw, Publish) with a strip and a status line; My comics rebuilt with calm cards and the next step one tap away; one side panel everywhere; inside a comic, a parts tree, a breadcrumb and a stage map. Optional SQL to apply: `server/sql/comic_docs_listing.sql`. |
 
-## In this release (stages, My comics, one panel)
+## In this release (money)
 
 | Package | What the person sees |
 | --- | --- |
-| SH-A | Every comic knows its stage (Story, Plan, Style, Draw, Publish), shown as a stage strip and a status line in the studio. Each step goes to where that stage is worked; the next step only ever navigates, it never spends. |
-| SH-B | My comics, rebuilt: calmer cards with the cover, the comic's stage, a one-line status and the next step one tap away; comics that need you come first. |
-| SH-C1 | One side panel on My comics, New comic, Images and inside a comic: where you are, your comics with their stage, and the destinations. Open by default on wide screens, a rail when collapsed, a drawer on phones. "Open chat" now works inside a comic, and older comics no longer show as freshly finished. |
-| SH-C2 | Inside a comic: a tree of its parts (story, cast, style, every page with its drawn state, cover, read), a breadcrumb, and a stage map with what is left in each stage. |
+| MA | A drawing run stops at once when a key runs out of credit, with one card that says what to do (top up or switch key); the comic's stage, My comics and the side panel all say "Top up or switch key". A balance check runs on the server before any paid step, with a "Not enough credit" card. The real balance of your own OpenRouter key shows in the studio header and Settings; people on DreamStream's allowance see a percent, never dollars. |
+| MB | One price, from one price book, on every surface: approvals, progress, the header, draw and redraw, and the Images workspace (which showed no price before). Planning, checks and translation are priced from what is really paid. |
+| FU | A chained or retried drawing run never closes a newer question; the "drawn" alert counts only real drawings; thumbs up or down on the Director's replies, with a comment shared only when you tick the box. |
 
-SQL to apply after this release (additive, optional): `server/sql/comic_docs_listing.sql` keeps a small listing
-summary per comic so My comics reads each comic's stage without opening its document. Until it is applied, My comics
-falls back to reading the document.
+Optional SQL to apply after this release: `server/sql/token_ledger_text_ops.sql` (an index that makes the text-rate
+read faster).
 
 ## Building now
 
-**Money (ready, ships next).** MA: a drawing run stops at once when a key runs out of credit, with one card that says
-what to do; a balance check before any paid step, with a "Not enough credit" card; the real balance of your own
-OpenRouter key in the studio header and Settings (people on DreamStream's allowance see a percent). MB: one price from
-one price book on every surface, including the Images workspace, and planning, checks and translation priced from what
-is really paid. FU: chained and retried drawing runs never close a newer question; the "drawn" alert counts only real
-drawings; thumbs up or down on the Director's replies.
+**The page flip, restored.** The page swings in from the spine again, as it did before #316, in every reader and for
+past comics; comics that chose Paper, Slide or Fade keep their choice. With it: the reader's own Reduce motion is
+honoured, webtoons open each page at the top, and no blank turn on small phones.
 
 **Handmade books.** A family photographs a child's handmade book. The child's real cover becomes the comic's cover,
 cleaned but never redrawn; the handwritten story is read (with the family checking every word), and the comic is drawn
 in the child's own style with the child's own words. Private by default; shared copies hide the artist's name. Five
 packages: pages from photos at no cost (NB-1), reading the book (NB-2), cast, look and storyboard from the child's art
 (NB-3), drawing page 1 first then the rest (NB-4), and private-by-default sharing (NB-5).
+
+**Customization (designing now).** Originals-grade custom page layouts members can generate; kid-simple creation with
+almost no questions and a Director that adapts its voice; strict style from uploaded drawings and use of library
+images; visual ways to customize beyond text; publishing with series, collections and magazine-style editions.
 
 **Fixes.** A sweep of the whole product found and independently confirmed over a hundred problems. The fixes release
 covers every serious one: the backend's ability to sleep, stopping a chat really stops its spending, money never shown
