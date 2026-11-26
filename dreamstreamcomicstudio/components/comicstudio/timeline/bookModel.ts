@@ -323,7 +323,6 @@ export function dockSummary(doc: ComicDoc, money: (usd: number) => string = fail
   return parts.join(' · ');
 }
 
-/** What the next paid step on a clip would cost right now (registry price, BYOK-aware). */
 /** One forced redraw of a page or the cover for this user (markup unless own key), at their PriceBook when given. */
 export const redrawPrice = (doc: ComicDoc, kind: 'page' | 'cover', byok: boolean, prices?: PriceBook): number => unitPrice(doc, kind, { byok, ...(prices ? { prices } : {}) }).usd;
 

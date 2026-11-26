@@ -5,9 +5,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PLAN_USD_PER_PAGE, STYLE_DIRECTIONS_USD } from '../../../../shared/comic/models.js';
 import { FLOOR_TEXT_RATES, priceBookFromSources, planUsd, styleDirectionsQuoteUsd } from '../../../../shared/comic/priceBook.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   FAILURE_BACKOFF_MS,
   MAX_OP_FACTOR,
+  MIN_OP_FACTOR,
   TEXT_RATES_TTL_MS,
   createTextRateSource,
   operationsFromCalls,
@@ -52,6 +55,8 @@ describe('the tag', () => {
 
   it('reads back defensively from the ledger metadata', () => {
     expect(parseTextOpTag({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036 })).toEqual({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036 });
+    expect(parseTextOpTag({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036, repair: true })).toEqual({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036, repair: true });
+    expect(parseTextOpTag({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036, repair: 'yes' })).toEqual({ id: 'op_1', kind: 'plan', units: 3, baseUsd: 0.036 });
     for (const bad of [null, 'x', { id: '', kind: 'plan', units: 1, baseUsd: 1 }, { id: 'a', kind: 'chat', units: 1, baseUsd: 1 }, { id: 'a', kind: 'plan', units: 0, baseUsd: 1 }, { id: 'a', kind: 'plan', units: 1, baseUsd: -1 }])
       expect(parseTextOpTag(bad)).toBeUndefined();
     const row = textOpCallFromDb({ user_id: 'u', provider_cost_usd: '0.0102', created_at: '2026-11-20T00:00:00Z', metadata: { stage: 'plan', providerCostReported: true, textOp: { id: 'op_9', kind: 'plan', units: 2, baseUsd: 0.024 } } });
@@ -71,9 +76,18 @@ describe('operations from calls', () => {
     expect(operationsFromCalls(op({ factor: 2, calls: 2, reported: [true, false] }))).toEqual([]);
   });
 
-  it('leaves out an operation billed under half its estimate (stopped or cut short) and clips a runaway one', () => {
-    expect(operationsFromCalls(op({ factor: 0.3 }))).toEqual([]);
+  it('keeps a cheap complete operation and clips both tails alike', () => {
+    expect(operationsFromCalls(op({ factor: 0.3 }))[0].factor).toBeCloseTo(0.3, 6);
+    expect(operationsFromCalls(op({ factor: 0.001 }))[0].factor).toBe(MIN_OP_FACTOR);
     expect(operationsFromCalls(op({ factor: 80 }))[0].factor).toBe(MAX_OP_FACTOR);
+    expect(MIN_OP_FACTOR).toBeCloseTo(1 / MAX_OP_FACTOR, 9);
+  });
+
+  it('a repair round is not part of the pass: its call neither adds to the cost nor drops the operation', () => {
+    const [first, second] = op({ factor: 1.2, calls: 2 });
+    const repair: TextOpCallRow = { ...second, providerCostUsd: first.providerCostUsd! * 3, op: { ...second.op, repair: true } };
+    expect(operationsFromCalls([first, second, repair])[0].factor).toBeCloseTo(1.2, 6);
+    expect(operationsFromCalls([first, second, { ...repair, reported: false }])[0].factor).toBeCloseTo(1.2, 6);
   });
 });
 
@@ -97,6 +111,13 @@ describe('rates (own first, then everyone, never under the constants)', () => {
   it('outliers do not move the median: two runaway plans among eight ordinary ones', () => {
     const rates = textRatesFrom(operationsFromCalls(ops([1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 9, 40, 1.3, 1.3])), 'user-a');
     expect(rates.planPerPageUsd).toBeCloseTo(PLAN_USD_PER_PAGE * 1.3, 4);
+  });
+
+  it('genuinely cheap operations count as much as dear ones: no cut on one side only', () => {
+    // Median of all nine is 0.9 (the floor holds); dropping the four cheap ones would have made it 1.1.
+    const rates = textRatesFrom(operationsFromCalls(ops([0.3, 0.35, 0.4, 0.45, 0.9, 1.05, 1.1, 1.2, 1.3])), 'user-a');
+    expect(rates.planPerPageUsd).toBe(PLAN_USD_PER_PAGE);
+    expect(rates.basis?.plan).toEqual({ source: 'floor', n: 9, scope: 'you' });
   });
 
   it('cheaper than the constant: the constant (an observation only ever raises a quote)', () => {
@@ -131,6 +152,20 @@ describe('rates (own first, then everyone, never under the constants)', () => {
     // No book, or a book without rates: the constants, exactly as before.
     expect(planUsd(6, false)).toBe(Math.round(PLAN_USD_PER_PAGE * 6 * 1.3 * 10000) / 10000);
     expect(planUsd(6, false, priceBookFromSources({ rows: [] }))).toBe(planUsd(6, false));
+  });
+});
+
+describe('the ledger read has an index of its own', () => {
+  it('server/sql/token_ledger_text_ops.sql indexes exactly the rows the read filters on, newest first', () => {
+    const sql = readFileSync(resolve(__dirname, '../../../sql/token_ledger_text_ops.sql'), 'utf8');
+    const ddl = sql.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase();
+    expect(ddl).toContain('create index if not exists idx_token_ledger_text_ops on public.token_ledger_entries (created_at desc)');
+    expect(ddl).toContain("where (metadata -> 'textop') is not null");
+    // The read's own filters (createSupabaseTextRatesDb) are the index's predicate.
+    const read = readFileSync(resolve(__dirname, 'textRates.ts'), 'utf8');
+    expect(read).toContain(".in('entry_type', ['SETTLE', 'BYOK_SETTLED'])");
+    expect(read).toContain(".not('metadata->textOp', 'is', null)");
+    expect(read).toContain(".order('created_at', { ascending: false })");
   });
 });
 

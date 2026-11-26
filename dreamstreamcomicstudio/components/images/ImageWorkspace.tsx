@@ -16,7 +16,7 @@ import { Select } from '../ds/Select';
 import { IMAGE_PROMPT_LIMIT, IMAGE_RATIOS, MAX_IMAGE_REFS, REF_MIME_TYPES, type SavedStandaloneImage, type StandaloneRoute, type ImageFormatChoice, suggestedImageRatio } from '../../shared/standaloneImage';
 import { downloadStandalone, loadImageHistory, loadStandaloneRoute, loadReference, reopenStandalone, renderStandalone, reuseStandalone } from '../../services/standaloneImages';
 import { API_KEYS_HREF } from '../usage/links';
-import { ImagePrice } from './ImagePrice';
+import { ImagePriceLine, useImagePrice } from './ImagePrice';
 import './imageWorkspace.css';
 
 export interface ImageWorkspaceProps { userId: string; onBack: () => void }
@@ -116,6 +116,8 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
   const [previewFailed, setPreviewFailed] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState({ offset: 0, version: 0 });
+  // What one image costs, said under Generate (and read with it) only once there is a price to say.
+  const price = useImagePrice({ userId, route, quality, refs: refs.length });
   useEffect(() => {
     if (!working) return;
     const start = Date.now();
@@ -325,12 +327,12 @@ function Workspace({ userId, onBack }: ImageWorkspaceProps) {
               onChange={e => { setDraft({ ...draft, prompt: e.target.value }); retryId.current = undefined; }} />
           </Field>
           <div className="image-compose-actions">
-            <Button type="submit" onClick={() => { consent.current = paidRequired; }} disabled={reading} loading={working} aria-keyshortcuts="Control+Enter Meta+Enter" aria-describedby="image-price">{working ? 'Generating image…' : paidRequired ? 'Generate this paid image' : 'Generate image'}</Button>
+            <Button type="submit" onClick={() => { consent.current = paidRequired; }} disabled={reading} loading={working} aria-keyshortcuts="Control+Enter Meta+Enter" aria-describedby={price ? 'image-price' : undefined}>{working ? 'Generating image…' : paidRequired ? 'Generate this paid image' : 'Generate image'}</Button>
             <Button type="button" variant="outline" disabled={working || reading || refs.length >= MAX_IMAGE_REFS}
               onClick={() => fileInput.current?.click()}><Paperclip aria-hidden />Add references</Button>
           </div>
           {/* A small paid step asked for directly: it starts at once, so its cost is said right here. */}
-          <ImagePrice id="image-price" userId={userId} route={route} quality={quality} refs={refs.length} />
+          <ImagePriceLine id="image-price" words={price} />
           <div className="image-reference-input">
             <input ref={fileInput} type="file" multiple hidden aria-label="Reference image files" accept={REF_MIME_TYPES.join(',')}
               onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void attach(files); }} />

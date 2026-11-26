@@ -22,6 +22,8 @@ import { estimateDocJobs, quoteLockOf, unitPrice } from '../../../../shared/comi
 import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
+import type { PriceBook } from '../../../../shared/comic/modelLock';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { useCostFormat } from '../cost';
 import { AspectGlyph, Segmented, SectionLabel, cx } from '../ui';
 import { STARTING_FORMATS, startingFormatPatch } from './startingFormats';
@@ -125,9 +127,12 @@ export const isStalingChange = (format: Format, patch: Partial<Format>): boolean
 export const drawnCurrentPages = (doc: ComicDoc): Page[] =>
   doc.pages.filter((p) => p.render.status === 'ready' && !!p.render.asset && !isPageStale(doc, p));
 
-/** Honest registry quote for redrawing `count` pages on the comic's locked model (else its tier/override). */
-export const redrawQuoteUsd = (doc: ComicDoc, count: number, byok: boolean): number =>
-  count > 0 ? estimateDocJobs(doc, [{ kind: 'page', count }], { byok }).usd : 0;
+/**
+ * The honest quote for redrawing `count` pages on the comic's locked model (else its tier/override), at the person's
+ * PriceBook (absent = the registry list).
+ */
+export const redrawQuoteUsd = (doc: ComicDoc, count: number, byok: boolean, prices?: PriceBook): number =>
+  count > 0 ? estimateDocJobs(doc, [{ kind: 'page', count }], { byok, ...(prices ? { prices } : {}) }).usd : 0;
 
 const pagesWord = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
 
@@ -291,6 +296,8 @@ const StartingFormatPicker: React.FC<{
 export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false, caps }) => {
   const format = doc.format;
   const cost = useCostFormat({ byok, caps });
+  // The person's PriceBook: the redraw and per-page figures here are the ones the runs charge.
+  const prices = useStudioPrices({ doc });
   // Unique per instance: the panel can be open in the composer and inside a recap card at once.
   const pageCountId = `comicstudio-page-count-${React.useId().replace(/[^\w-]/g, '')}`;
   // The values a staling change replaced, so "Switch back" can restore them for free.
@@ -315,14 +322,14 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
   const canUseStartingFormat = doc.planStatus === 'none' && doc.pages.length === 0 && !doc.trash?.length
     && !doc.cover.render.asset && doc.cover.render.status !== 'queued' && doc.cover.render.status !== 'rendering';
   const drawnAspect = nearestAspect(pageModel, format.pageAspect);
-  const perPage = unitPrice(doc, 'page', { byok }).usd;
+  const perPage = unitPrice(doc, 'page', { byok, ...(prices ? { prices } : {}) }).usd;
 
   return (
     <div className="space-y-5 p-4">
       {undoStale && staleNow > 0 ? (
         <div role="status" className={cx('flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border px-3 py-2.5 text-[12px] leading-snug text-[var(--ds-ink)]', TONE_SURFACE.warning)}>
           <p className="min-w-0 flex-1 basis-[12rem] [overflow-wrap:anywhere]">
-            {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw {cost.approx(redrawQuoteUsd(doc, staleNow, byok))} when you’re
+            {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw {cost.approx(redrawQuoteUsd(doc, staleNow, byok, prices))} when you’re
             ready, or switch back to keep {staleNow === 1 ? 'it' : 'them'} as {staleNow === 1 ? 'it is' : 'they are'}.
           </p>
           <button
@@ -342,7 +349,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
           <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 [overflow-wrap:anywhere]">
             {pagesWord(drawn.length)} {drawn.length === 1 ? 'is' : 'are'} already drawn. A new page shape or lettering mode marks{' '}
-            {drawn.length === 1 ? 'it' : 'them'} out of date (redraw {cost.approx(redrawQuoteUsd(doc, drawn.length, byok))}) — nothing is redrawn until you ask.
+            {drawn.length === 1 ? 'it' : 'them'} out of date (redraw {cost.approx(redrawQuoteUsd(doc, drawn.length, byok, prices))}) — nothing is redrawn until you ask.
           </span>
         </p>
       ) : null}

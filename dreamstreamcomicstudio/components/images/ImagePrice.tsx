@@ -64,7 +64,11 @@ export interface ImagePriceProps {
   id?: string;
 }
 
-export const ImagePrice: React.FC<ImagePriceProps> = ({ userId, route, quality, refs, id }) => {
+/**
+ * The price line's words for this person, or null while there is nothing to say (the route or the sheet is not known
+ * yet, or the model has no price). The workspace points Generate's aria-describedby at the line only when this is set.
+ */
+export function useImagePrice({ userId, route, quality, refs }: Omit<ImagePriceProps, 'id'>): { text: string; spoken: string } | null {
   const book = usePriceBook(userId);
   // The registry's dated list only when the sheet could not be read (never while it is on its way: one true price).
   const failed = useSyncExternalStore(subscribePriceSheet, () => priceSheetFor(userId).failedAt > 0, () => false);
@@ -72,14 +76,21 @@ export const ImagePrice: React.FC<ImagePriceProps> = ({ userId, route, quality, 
   const priced = book ?? (failed ? registryPriceBook() : undefined);
   if (!route || !priced) return null;
   const usd = standaloneQuoteUsd(priced, route, quality, refs);
-  if (usd === null) return null;
-  const words = imagePriceWords(usd, route, cost);
-  return (
+  return usd === null ? null : imagePriceWords(usd, route, cost);
+}
+
+/** The line itself (nothing when there are no words). */
+export const ImagePriceLine: React.FC<{ words: { text: string; spoken: string } | null; id?: string }> = ({ words, id }) =>
+  words ? (
     <p className="image-usage image-price" id={id} data-image-price="">
       <span aria-hidden="true" className="tabular-nums">{words.text}</span>
       <span className="sr-only">{words.spoken}</span>
     </p>
-  );
+  ) : null;
+
+export const ImagePrice: React.FC<ImagePriceProps> = ({ id, ...props }) => {
+  const words = useImagePrice(props);
+  return <ImagePriceLine words={words} id={id} />;
 };
 
 export default ImagePrice;

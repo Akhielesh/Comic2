@@ -140,8 +140,8 @@ import {
   type SpendEstimate
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
-import { planUsd, recheckQuoteUsd, styleDirectionsQuoteUsd } from '../../../shared/comic/priceBook.js';
-import { textOpTag, type TextOpTag } from './models/textRates.js';
+import { FLOOR_TEXT_RATES, planUsd, recheckQuoteUsd, styleDirectionsQuoteUsd, textRatesOf, type TextRates } from '../../../shared/comic/priceBook.js';
+import { textOpTag, textRateSource, type TextOpTag } from './models/textRates.js';
 import { STYLE_PRESETS, briefWantsSpotColour, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -170,7 +170,7 @@ import {
   type RefusedKey,
   type SpendPayer
 } from './creditCheck.js';
-import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
+import { TEXT_RATES_WAIT_MS, createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
 import { recordImageCall } from './billing.js';
 import { planCheckGate, sanitizeDrawOverfull, type HeldBackPage, type PlanGateResult } from './planCheckGate.js';
@@ -573,6 +573,22 @@ export const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_
   }
 };
 
+/**
+ * The request's text rates (planning, style directions, translation) without waiting on the image catalog: they have
+ * their own in-memory source (models/textRates.ts, bounded at TEXT_RATES_WAIT_MS) — the very call the price sheet and
+ * the translation quote route make — so a gate or a budget check on a cold catalog quotes the rate the button showed,
+ * never the floor in its place. A request handed its own book (ctx.prices) reads that book's rates. Never throws.
+ */
+export const textRatesWithin = async (ctx: StudioContext): Promise<TextRates> => {
+  try {
+    if (ctx.prices) return textRatesOf(await priceBookFor(ctx));
+    return await textRateSource().forUser(ctx.userId, { maxWaitMs: TEXT_RATES_WAIT_MS });
+  } catch (err) {
+    logger.warn('comic_text_rates_fallback', { message: (err as Error)?.message });
+    return FLOOR_TEXT_RATES;
+  }
+};
+
 /** "your recent real costs" / "OpenRouter's current price" — the basis of a quote above the price list (no dollars). */
 const basisPhrase = (prices: PriceBook | undefined, pin: RunPin, kind: ImageJobKind): string | null => {
   const quote = (prices as Partial<ServerPriceBook> | undefined)?.quote;
@@ -738,7 +754,8 @@ export function billedLlm(
           stage: args.stage,
           inputTokens: approxPrompt,
           outputTokens: req.maxTokens,
-          ...(args.textOp ? { textOp: args.textOp } : {})
+          // A repair round rides the same operation, marked: the observed rate is one pass's cost (models/textRates.ts).
+          ...(args.textOp ? { textOp: req.repair ? { ...args.textOp, repair: true as const } : args.textOp } : {})
         });
         if (reserved.ok === false) throw new StudioError('BILLING_DENIED', reserved.message, { status: 402 });
         reservation = reserved.reservation;
@@ -5039,9 +5056,12 @@ export async function planPages(
   const origin = originOf(opts);
   const runOpts = { ...opts, confirmed: false } as RunActionOptions;
   const byok = spendIsByok(ctx.keys);
+  // The planning rate from its own source (never the floor in its place behind a cold image catalog): the budget
+  // checks below bound what this pass can really cost.
+  const planRates = async () => ({ text: await textRatesWithin(ctx) });
   if (opts.draft) {
     opts.draft.assertPlanUnchanged();
-    const maximumQuote = 2 * planPagesUsd(before, byok, await priceBookWithin(ctx));
+    const maximumQuote = 2 * planPagesUsd(before, byok, await planRates());
     const cap = budgetOf(before.settings);
     if (cap !== undefined && before.spend.totalUsd + pendingUsdOf(ctx.session) + maximumQuote > cap + 1e-9) {
       throw new StudioError('BUDGET_EXCEEDED', 'The remaining comic budget is below the planning estimate including a writer repair. Change the scope or budget to start.', { status: 402 });
@@ -5062,7 +5082,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     // A whole plan says what it costs, honestly bounded (one writer pass; up to two if the plan check sends it back).
-    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok, await priceBookWithin(ctx))})`;
+    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok, await planRates())})`;
     const text = `This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again${price}. Nothing was spent.`;
     deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
     return { status: 'blocked', message: `The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings${price}. Nothing was spent.`, code: 'BUDGET_EXCEEDED' };
@@ -5087,9 +5107,12 @@ export async function planPages(
   const revising = !!pageIds;
 
   const tracker = newTextSpendTracker();
-  // Every writer call of this pass (outline, chunks, the plan check's repair) is one priced operation: what it really
-  // cost per page feeds the next planning quote (models/textRates.ts).
-  const planOp = textOpTag('plan', pageIds ? pageIds.length : Math.max(1, before.format.pageCount || 1));
+  // A whole-book plan (a fresh one, or every page rewritten in place) is one priced operation: what its writer calls
+  // cost per page feeds the next "Plan the pages" quote (models/textRates.ts). A rewrite of some pages (revise_pages,
+  // a written insert) is not tagged: it sends the whole brief, cast and source for one or two pages, so its cost per
+  // page says nothing about a whole plan's. A repair round is marked on its own call (completeStructured) and left out
+  // of the rate, since the quote bounds the repair separately (up to twice the pass).
+  const planOp = !revising || rewroteAll ? textOpTag('plan', rewroteAll ? before.pages.length : Math.max(1, before.format.pageCount || 1)) : undefined;
   const end = activity(ctx, revising && !rewroteAll ? 'Rewriting pages' : 'Writing the page plan', 'text');
   // Expose the writer's in-flight allowance to the same budget checks used by image jobs.
   // The tracker accumulates settled writer calls until the plan's spend entry is committed.
@@ -6042,10 +6065,10 @@ const publicationBehind = (doc: ComicDoc): boolean => {
  * The plan check can send a page's count, overfull or quiet-shot problems back for ONE repair round, which is another
  * writer pass (plan §7), so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
  */
-export const planPagesUsd = (doc: ComicDoc, byok: boolean, prices?: PriceBook): number => planUsd(Math.max(1, doc.format.pageCount || 1), byok, prices);
+export const planPagesUsd = (doc: ComicDoc, byok: boolean, prices?: Pick<PriceBook, 'text'>): number => planUsd(Math.max(1, doc.format.pageCount || 1), byok, prices);
 
 /** "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
-export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean, prices?: PriceBook): string => {
+export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean, prices?: Pick<PriceBook, 'text'>): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
   const usd = planPagesUsd(doc, byok, prices);
   return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;

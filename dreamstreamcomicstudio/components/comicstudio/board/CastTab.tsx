@@ -270,7 +270,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const renderSheet = () => fire('sheet', () => studio.act({ type: 'render_sheets', characterIds: [c.id], force: true }));
   const appearances = doc.pages.reduce((n, p) => n + p.panels.filter((panel) => panel.castIds.includes(c.id)).length, 0);
   // "Drawn from older photos": the ready sheet's photos differ from today's pick (a SET compare).
-  const hint = sheetHint(doc, { kind: 'character', id: c.id }, byok);
+  const hint = sheetHint(doc, { kind: 'character', id: c.id }, byok, undefined, prices);
   const olderPhotos = !!hint?.changed;
   const priceId = `price-sheet-${c.id}`;
   const lookFields = LOOK_FIELDS.filter((f) => !f.nonHuman || kind !== 'person' || !!c.look[f.key]);

@@ -30,6 +30,8 @@ const EMPTY: PriceSheetSnapshot = Object.freeze({ owner: '', sheet: null, book: 
 
 let snapshot: PriceSheetSnapshot = EMPTY;
 let inflight: { owner: string; promise: Promise<void> } | null = null;
+/** A forced read asked for while a read for the same owner was already on its way: it runs once that one lands. */
+let queued: { owner: string; promise: Promise<void> } | null = null;
 /** Per owner: was something drawing the last time a quoting view looked (settle detection). */
 const lastBusy = new Map<string, boolean>();
 const listeners = new Set<() => void>();
@@ -58,7 +60,20 @@ export function refreshPriceSheet(owner: string | null | undefined, opts: { forc
   const now = clock();
   if (!opts.force && current.sheet && now - current.receivedAt < PRICE_SHEET_FRESH_MS) return Promise.resolve();
   if (!opts.force && current.failedAt && now - current.failedAt < PRICE_SHEET_RETRY_MS) return Promise.resolve();
-  if (inflight?.owner === owner) return inflight.promise;
+  if (inflight?.owner === owner) {
+    if (!opts.force) return inflight.promise;
+    // A run settled while an older read was on its way (that read may predate the run's own costs): read once more
+    // after it lands. Several forced asks in the meantime share that one follow-up read.
+    if (queued?.owner === owner) return queued.promise;
+    const followUp = inflight.promise.then(() => {
+      if (queued?.promise === followUp) queued = null;
+      // An account switch meanwhile: the follow-up belongs to nobody now.
+      if (snapshot.owner && snapshot.owner !== owner) return;
+      return refreshPriceSheet(owner, { force: true });
+    });
+    queued = { owner, promise: followUp };
+    return followUp;
+  }
   const promise = Promise.resolve()
     .then(() => get<unknown>(PRICE_SHEET_PATH, { expectedAccountId: owner, authOnly: true }))
     .then((body) => {
@@ -113,6 +128,7 @@ export function usePriceBook(owner: string | null | undefined, opts: { busy?: bo
 /** Test hooks. */
 export const __resetPriceSheetForTests = (): void => {
   inflight = null;
+  queued = null;
   lastBusy.clear();
   clock = () => Date.now();
   publish(EMPTY);

@@ -103,6 +103,25 @@ describe('when the sheet is read', () => {
     expect(fetchSheet).toHaveBeenCalledTimes(2);
   });
 
+  it('a run that settles while an older read is on its way reads once more after it (the run\'s costs are not lost)', async () => {
+    let land!: () => void;
+    fetchSheet.mockImplementationOnce(() => new Promise((resolve) => (land = () => resolve(sheet(0.05) as never))));
+    fetchSheet.mockImplementation(async () => sheet(0.08) as never);
+    const opening = refreshPriceSheet('owner-1');
+    await flush();
+    expect(fetchSheet).toHaveBeenCalledTimes(1);
+    // The run settles before that read lands: two views see it, one follow-up read.
+    notePriceSheetActivity('owner-1', true);
+    notePriceSheetActivity('owner-1', false);
+    const again = refreshPriceSheet('owner-1', { force: true });
+    land();
+    await opening;
+    await again;
+    await flush();
+    expect(fetchSheet).toHaveBeenCalledTimes(2);
+    expect(priceSheetFor('owner-1').book?.unit('nano-banana-2.1', '1K', 'page').usd).toBe(0.08);
+  });
+
   it('nothing reads on a timer: an open view that does nothing makes no further request', async () => {
     vi.useFakeTimers();
     const Probe = () => {

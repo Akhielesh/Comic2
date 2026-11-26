@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { estimateJobs, getImageModel, resolveImageJob } from '../../../shared/comic/models.js';
 import { estimateDocJobs, quoteRenderPages, unitPrice } from '../../../shared/comic/plan.js';
 import { priceBookFromSources, priceSheetOf, sanitizePriceSheet, type PriceBookSources } from '../../../shared/comic/priceBook.js';
+import type { ComicDoc } from '../../../shared/comic/doc.js';
 import { estimateSpendAction, nextStepsFor, priceImageJobs } from './jobs.js';
+import { overlayFix, textlessCoverQuote } from './i18n/index.js';
 import { plannedDoc } from './orchestrator.fakes.js';
 
 const doc = plannedDoc();
@@ -52,6 +54,50 @@ describe('the studio and the server name one price', () => {
       expect(chip?.usd).toBe(all);
     });
   }
+
+  /** Page 2's words do not fit its panels: Render all holds it back (the plan check, PD-1). */
+  const withOverfull = (): ComicDoc => {
+    const d = plannedDoc();
+    const words = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning'.split(' ');
+    const said = (n: number) => Array.from({ length: n }, (_, i) => words[i % words.length]).join(' ');
+    d.pages[1] = {
+      ...d.pages[1],
+      layout: 'Row 1: three small panels.',
+      panels: d.pages[1].panels.map((p, i) => ({ ...p, size: 'small' as const, lines: [{ id: `ln_over_${i}`, kind: 'speech' as const, speakerId: 'c_maya', text: said(60) }] }))
+    };
+    return d;
+  };
+
+  for (const byok of [true, false]) {
+    it(`Render all with a page held back: the board, the plan card, the chip and the gate name one price (${byok ? 'own key' : 'platform'})`, () => {
+      const d = withOverfull();
+      const opts = { byok, tier, modelOverride: d.settings.imageModelOverride };
+      // The board's Render all and the plan card's Approve & draw (both quote a Render all with holdBack: {}).
+      const client = quoteRenderPages(d, { ...opts, holdBack: {}, prices: clientBook });
+      expect(client.heldBackIds).toEqual(['pg_2']);
+      expect(client.pageIds).toEqual(['pg_1', 'pg_3']);
+      expect(client.usd).toBe(estimateSpendAction(d, { type: 'render_pages' }, byok, serverBook).usd);
+      // Leaving the hold-back out would have priced a page the run never draws.
+      expect(quoteRenderPages(d, { ...opts, prices: clientBook }).usd).toBeGreaterThan(client.usd);
+      const chip = nextStepsFor(d, { byok, prices: serverBook }).find((s) => s.action?.type === 'render_pages');
+      expect(chip?.usd).toBe(client.usd);
+    });
+  }
+
+  it('translation\'s redraws (overlay lettering, the textless cover): the Languages tab and the server\'s chips agree', () => {
+    const d = plannedDoc();
+    d.format.lettering = 'in_art';
+    const drawn = { status: 'ready' as const, history: [], asset: { path: 'u/x/p.webp', source: 'generated' as const, at: 1 } };
+    d.pages = d.pages.map((p) => ({ ...p, render: { ...p.render, ...drawn } }));
+    d.cover = { ...d.cover, render: { ...d.cover.render, ...drawn } };
+    for (const byok of [true, false]) {
+      // LanguagesTab priceOf: estimateDocJobs with the person's book.
+      const tab = estimateDocJobs(d, [{ kind: 'page', count: 3 }], { byok, prices: clientBook }).usd;
+      expect(overlayFix(d, byok, serverBook)).toEqual({ pages: ['pg_1', 'pg_2', 'pg_3'], usd: tab });
+      expect(tab).not.toBe(estimateDocJobs(d, [{ kind: 'page', count: 3 }], { byok }).usd);
+      expect(textlessCoverQuote(d, byok, serverBook)).toBe(estimateDocJobs(d, [{ kind: 'cover', count: 1 }], { byok, prices: clientBook }).usd);
+    }
+  });
 
   it('the server prices image jobs through the very function the buttons call', () => {
     const jobs = [{ kind: 'page' as const, count: 3, label: 'pages' }, { kind: 'cover' as const, count: 1, label: 'cover' }];

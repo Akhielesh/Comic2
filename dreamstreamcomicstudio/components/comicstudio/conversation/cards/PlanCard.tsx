@@ -21,6 +21,7 @@ import type { PriceBook } from '../../../../shared/comic/modelLock';
 import { useStudioPrices } from '../../usage/useStudioPrices';
 import { TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx, plural } from '../ui';
+import { heldBackPages } from '../../board/boardModel';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
 type PlanCardData = Extract<Card, { type: 'plan' }>;
@@ -34,12 +35,21 @@ export const pagesToDraw = (doc: ComicDoc): Page[] => pageTargets(doc);
 /** Lead/support cast on these pages without a usable sheet (drawn first, billed too). */
 export const sheetsNeededFor = (doc: ComicDoc, pages: Page[]): Character[] => missingSheetsFor(doc, pages);
 
-/** The honest quote for "draw everything that needs drawing" (same as the server gate, at the person's PriceBook). */
-export const estimatePlanRender = (doc: ComicDoc, byok: boolean, prices?: PriceBook): { pages: Page[]; sheets: Character[]; estimate: SpendEstimate } => {
-  const q = quoteRenderPages(doc, { byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, ...(prices ? { prices } : {}) });
+/**
+ * The honest quote for "draw everything that needs drawing": the server gate's own for a Render all — the same
+ * targets with overfull pages held back (its plan check, PD-1), at the person's PriceBook. `heldBack` names the pages
+ * left out, so the card can say so.
+ */
+export const estimatePlanRender = (
+  doc: ComicDoc,
+  byok: boolean,
+  prices?: PriceBook
+): { pages: Page[]; sheets: Character[]; heldBack: Page[]; estimate: SpendEstimate } => {
+  const q = quoteRenderPages(doc, { byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, holdBack: {}, ...(prices ? { prices } : {}) });
   const pages = q.pageIds.map((id) => doc.pages.find((p) => p.id === id)).filter((p): p is Page => !!p);
   const sheets = q.sheetIds.map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is Character => !!c);
-  return { pages, sheets, estimate: { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines } };
+  const heldBack = (q.heldBackIds ?? []).map((id) => doc.pages.find((p) => p.id === id)).filter((p): p is Page => !!p);
+  return { pages, sheets, heldBack, estimate: { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines } };
 };
 
 const PageStatus: React.FC<{ doc: ComicDoc; page: Page }> = ({ doc, page }) => {
@@ -88,7 +98,9 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
 
   const pages = [...doc.pages].sort((a, b) => a.n - b.n);
   const panelTotal = pages.reduce((n, p) => n + p.panels.length, 0);
-  const { pages: toDraw, sheets, estimate } = estimatePlanRender(doc, studio.byok, prices);
+  const { pages: toDraw, sheets, heldBack, estimate } = estimatePlanRender(doc, studio.byok, prices);
+  // Pages the plan check leaves out of the run (and the price): said in words under the button.
+  const held = heldBackPages(doc, heldBack.map((p) => p.id)).sentence;
   const drawing = pages.filter(isBusy).length;
   const allDrawn = pages.length > 0 && pages.every((p) => p.render.status === 'ready' && !isPageStale(doc, p));
   const approved = doc.planStatus === 'approved';
@@ -183,7 +195,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
         <GhostButton size="sm" className="tap-target" onClick={() => studio.setTab('pages')}>
           Open plan
         </GhostButton>
-        {!approved && toDraw.length > 0 && (
+        {!approved && (toDraw.length > 0 || heldBack.length > 0) && (
           <GhostButton size="sm" className="tap-target" busy={isPending('approve-only')} disabled={starting} onClick={() => void run('approve-only', { type: 'approve_plan' })}>
             Approve only
           </GhostButton>
@@ -194,7 +206,9 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           ? `Drawing ${plural(drawing, 'page')} — they appear on the board as they finish.`
           : allDrawn
             ? 'Every page is drawn. Ask for changes any time — only what you change is redrawn.'
-            : `Nothing is drawn until you approve. ${estimate.model ? `${getImageModel(estimate.model)?.nickname || estimate.model}, ` : ''}${plural(estimate.imageCount, 'image')}.`}
+            : held && !toDraw.length
+              ? `${held}. Fit the words, or draw ${heldBack.length === 1 ? 'it' : 'them'} anyway from the page.`
+              : `Nothing is drawn until you approve. ${estimate.model ? `${getImageModel(estimate.model)?.nickname || estimate.model}, ` : ''}${plural(estimate.imageCount, 'image')}.${held ? ` ${held}.` : ''}`}
       </p>
     </CardShell>
   );

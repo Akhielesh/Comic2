@@ -8,16 +8,18 @@
 // base is always the constant estimate, never a calibrated quote, so an observed rate never feeds on itself.
 //
 // From those rows:
-//   factor of one operation = Σ provider cost of its calls ÷ baseUsd (only when EVERY call reported its cost);
-//                             under MIN_OP_FACTOR it did not finish (stopped, cancelled, cut short) and is left out;
-//                             above MAX_OP_FACTOR it is clipped (a bound on a bad row, never a reason to drop it);
+//   factor of one operation = Σ provider cost of its calls ÷ baseUsd (only when EVERY call reported its cost: a
+//                             stopped or timed-out call settles as an estimate, unreported, so its operation is left
+//                             out); a repair round's call (tagged `repair`) is not part of one pass and does not count;
+//                             the factor is clipped to [1 / MAX_OP_FACTOR, MAX_OP_FACTOR] on both sides alike — a
+//                             cheap operation is a real observation, and a bad row only ever moves the median one step;
 //   rate of a kind          = the median factor of the newest ≤ TEXT_RATE_WINDOW operations — the person's own when
 //                             they have ≥ TEXT_RATE_MIN_N, else everyone's when those come from ≥ MIN_PLATFORM_USERS
 //                             people, else nothing observed;
 //   quoted                  = constant × max(1, rate): the constants are the floor and the fallback.
 //
-// One bounded read (the newest ≤ READ_LIMIT tagged rows of the last LOOKBACK_DAYS, DB_READ_TIMEOUT_MS) serves every
-// quote for TEXT_RATES_TTL_MS: a quote is never a hot database query, and a failed read keeps the last good batch
+// One bounded read (the newest ≤ READ_LIMIT tagged rows of the last LOOKBACK_DAYS, DB_READ_TIMEOUT_MS; indexed by
+// server/sql/token_ledger_text_ops.sql) serves every quote for TEXT_RATES_TTL_MS: a quote is never a hot database query, and a failed read keeps the last good batch
 // (else the constants) and is not retried for FAILURE_BACKOFF_MS. Nothing here runs on a timer: a read happens only
 // when a quote asks and the batch is stale.
 
@@ -41,10 +43,9 @@ export type { TextOpKind, TextRates };
 export const TEXT_RATE_MIN_N = 5;
 /** The newest operations a rate is the median of. */
 export const TEXT_RATE_WINDOW = 20;
-/** An operation billed under half its estimate did not finish: it says nothing about what a whole one costs. */
-export const MIN_OP_FACTOR = 0.5;
-/** A single operation counts at most this many times its estimate. */
+/** A single operation counts at most this many times its estimate, and at least its reciprocal (symmetric clip). */
 export const MAX_OP_FACTOR = 10;
+export const MIN_OP_FACTOR = 1 / MAX_OP_FACTOR;
 export const TEXT_RATES_TTL_MS = 10 * 60_000;
 export const FAILURE_BACKOFF_MS = 2 * 60_000;
 export const LOOKBACK_DAYS = 30;
@@ -64,6 +65,11 @@ export interface TextOpTag {
   units: number;
   /** The provider estimate the constants / token count give this operation (USD, before markup). */
   baseUsd: number;
+  /**
+   * This call is a repair round (writer.ts completeStructured sends a reply back once with its problems). Left out of
+   * the operation's cost: the rate is what one pass costs, and a quote bounds the repair on top of it.
+   */
+  repair?: true;
 }
 
 const round6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
@@ -89,7 +95,7 @@ export const parseTextOpTag = (value: unknown): TextOpTag | undefined => {
   const units = Number(v.units);
   const baseUsd = Number(v.baseUsd);
   if (!isNum(units) || units < 1 || !isNum(baseUsd) || baseUsd <= 0) return undefined;
-  return { id: v.id, kind: v.kind as TextOpKind, units: Math.floor(units), baseUsd };
+  return { id: v.id, kind: v.kind as TextOpKind, units: Math.floor(units), baseUsd, ...(v.repair === true ? { repair: true as const } : {}) };
 };
 
 // ── From ledger rows to rates (pure) ─────────────────────────────────────────
@@ -113,10 +119,14 @@ export interface TextOpObservation {
   at: number;
 }
 
-/** Calls → operations: grouped by tag id; an operation with any unreported or unpriced call is left out. */
+/**
+ * Calls → operations: grouped by tag id; an operation with any unreported or unpriced call is left out, and a repair
+ * round's call is not counted (the rate is one pass; quotes bound the repair on top).
+ */
 export const operationsFromCalls = (rows: readonly TextOpCallRow[]): TextOpObservation[] => {
   const ops = new Map<string, { userId: string; op: TextOpTag; cost: number; at: number; ok: boolean }>();
   for (const r of rows) {
+    if (r.op.repair) continue;
     const key = `${r.userId}|${r.op.id}`;
     const at = Date.parse(r.createdAt);
     const cur = ops.get(key) ?? { userId: r.userId, op: r.op, cost: 0, at: 0, ok: true };
@@ -129,8 +139,8 @@ export const operationsFromCalls = (rows: readonly TextOpCallRow[]): TextOpObser
   for (const o of ops.values()) {
     if (!o.ok || !(o.op.baseUsd > 0)) continue;
     const factor = o.cost / o.op.baseUsd;
-    if (!isNum(factor) || factor < MIN_OP_FACTOR) continue;
-    out.push({ userId: o.userId, kind: o.op.kind, factor: Math.min(MAX_OP_FACTOR, factor), at: o.at });
+    if (!isNum(factor)) continue;
+    out.push({ userId: o.userId, kind: o.op.kind, factor: Math.min(MAX_OP_FACTOR, Math.max(MIN_OP_FACTOR, factor)), at: o.at });
   }
   return out.sort((a, b) => b.at - a.at);
 };
@@ -252,7 +262,8 @@ export const createTextRateSource = (deps: TextRateSourceDeps): TextRateSource =
         },
         (err: unknown) => {
           failedAt = now();
-          logger.warn('comic_text_rates_read_failed', { message: (err as Error)?.message });
+          // An error, not a warning: until a read succeeds again every text quote stands on the constants.
+          logger.error('comic_text_rates_read_failed', { message: (err as Error)?.message, lastGoodAt: Number.isFinite(at) ? new Date(at).toISOString() : null });
         }
       )
       .finally(() => {

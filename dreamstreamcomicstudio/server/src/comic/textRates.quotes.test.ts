@@ -6,8 +6,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP, QC_USD_PER_PAGE, STYLE_DIRECTIONS_USD } from '../../../shared/comic/models.js';
 import { priceBookFromSources, sanitizeTextRates } from '../../../shared/comic/priceBook.js';
-import { estimateSpendAction, nextStepsFor, planPagesUsd, startAction } from './jobs.js';
-import { quoteTranslation, resetTranslationCalibration } from './i18n/index.js';
+import { estimateSpendAction, nextStepsFor, planPages, planPagesUsd, startAction, textRatesWithin } from './jobs.js';
+import { estimateTranslation, quoteTranslation, resetTranslationCalibration } from './i18n/index.js';
+import { TEXT_RATES_WAIT_MS } from './models/index.js';
+import { setTextRateSource } from './models/textRates.js';
 import { KEYS, fakeBilling, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { writePagePlan } from './writer.js';
 
@@ -83,5 +85,69 @@ describe('the ledger tag', () => {
     expect(writer).toHaveLength(2);
     expect(writer[0].textOp).toMatchObject({ kind: 'plan', units: pages.length, baseUsd: r4(PLAN_USD_PER_PAGE * pages.length) });
     expect(writer[1].textOp?.id).toBe(writer[0].textOp?.id);
+  });
+
+  it('a repair round rides the same operation, marked, so the observed rate is one pass', async () => {
+    const doc = plannedDoc();
+    const pages = doc.pages;
+    doc.pages = [];
+    doc.planStatus = 'none';
+    doc.format.pageCount = pages.length;
+    vi.mocked(writePagePlan).mockImplementation(async (args) => {
+      await args.llm.complete({ role: 'writer', messages: [{ role: 'user', content: 'pages' }] });
+      await args.llm.complete({ role: 'writer', messages: [{ role: 'user', content: 'pages' }], repair: true });
+      return { pages, newCast: [], model: 'w' };
+    });
+    const billing = fakeBilling();
+    const ctx = testContext(newSession(doc), { billing, llm: scriptedLlm(), keys: KEYS });
+    await startAction(ctx, { type: 'plan_pages' }, { confirmed: true });
+    const [pass, repair] = billing.reserves.filter((r) => r.stage === 'plan');
+    expect(pass.textOp?.repair).toBeUndefined();
+    expect(repair.textOp).toMatchObject({ id: pass.textOp?.id, repair: true });
+  });
+
+  it('a rewrite of one page is not a whole plan: it carries no tag and never moves the planning rate', async () => {
+    const doc = plannedDoc();
+    doc.planStatus = 'approved';
+    const page = doc.pages[1];
+    vi.mocked(writePagePlan).mockImplementation(async (args) => {
+      await args.llm.complete({ role: 'writer', messages: [{ role: 'user', content: 'one page' }] });
+      return { pages: [{ ...page, summary: 'A sharper beat' }], newCast: [], model: 'w' };
+    });
+    const billing = fakeBilling();
+    const ctx = testContext(newSession(doc), { billing, llm: scriptedLlm(), keys: KEYS });
+    const out = await planPages(ctx, { pageIds: [page.id] });
+    expect(out.status).toBe('done');
+    const writer = billing.reserves.filter((r) => r.stage === 'plan');
+    expect(writer).toHaveLength(1);
+    expect(writer[0].textOp).toBeUndefined();
+  });
+});
+
+describe('text rates are read from their own source', () => {
+  afterEach(() => setTextRateSource(null));
+
+  it('the translation gate and the planning checks never fall to the floor behind a cold image catalog', async () => {
+    const source = { forUser: vi.fn(async () => observed) };
+    setTextRateSource(source);
+    const doc = plannedDoc();
+    // No book handed to the request: its full book would wait on the image catalog; the text rates do not.
+    const ctx = { ...testContext(newSession(doc), { keys: KEYS }), prices: undefined };
+    expect(await textRatesWithin(ctx)).toEqual(observed);
+    expect(source.forUser).toHaveBeenCalledWith(ctx.userId, { maxWaitMs: TEXT_RATES_WAIT_MS });
+    const gate = await estimateTranslation(ctx, { type: 'translate', languages: ['te'] });
+    expect(gate.usd).toBe(quoteTranslation(doc, KEYS, { languages: ['te'] }, observed).estimate.usd);
+    expect(gate.usd).toBeGreaterThan(quoteTranslation(doc, KEYS, { languages: ['te'] }).estimate.usd);
+  });
+
+  it('a failing source is the constants, never an error', async () => {
+    setTextRateSource({ forUser: async () => Promise.reject(new Error('down')) });
+    const ctx = { ...testContext(newSession(plannedDoc()), { keys: KEYS }), prices: undefined };
+    expect((await textRatesWithin(ctx)).planPerPageUsd).toBe(PLAN_USD_PER_PAGE);
+  });
+
+  it('a request handed its own book reads that book\'s rates', async () => {
+    const ctx = testContext(newSession(plannedDoc()), { keys: KEYS, prices: book });
+    expect((await textRatesWithin(ctx)).translateFactor).toBeCloseTo(1.4, 6);
   });
 });

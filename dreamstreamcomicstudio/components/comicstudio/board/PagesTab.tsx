@@ -41,7 +41,8 @@ import { EmptyIllustration, FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton,
 import { PageScript } from './PageScript';
 import { ContinuityReview } from '../consistency/ContinuityReview';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
-import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
+import { byokFromDoc, estimateDraw, estimateOne, hasImage, heldBackPages, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
+import { HeldBackNote } from './HeldBackNote';
 import { useCostFormat, type CostFormat } from './costFormat';
 import { useStudioPrices } from '../usage/useStudioPrices';
 import { TONE_TEXT } from '../../chat/studioDesign';
@@ -580,6 +581,14 @@ const PlanHeader: React.FC<{
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
+  // Pages the plan check leaves out of this Render all: said in words beside the price (which leaves them out too),
+  // and the label counts what it draws instead of "all" / "remaining".
+  const held = heldBackPages(doc, quote.heldBackIds);
+  const drawLabel = held.pages.length
+    ? `${draft ? 'Approve & render' : 'Render'} ${plural(toDraw, 'page')}`
+    : draft
+      ? 'Approve & render all'
+      : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`;
 
   return (
     <div className="space-y-2" data-pages-header>
@@ -609,7 +618,7 @@ const PlanHeader: React.FC<{
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {waitingForOk ? (
           <WaitingNote header />
-        ) : toDraw > 0 && (
+        ) : toDraw > 0 ? (
           <>
             <DrawButton
               size="sm"
@@ -618,13 +627,16 @@ const PlanHeader: React.FC<{
               title={what}
               aria-describedby="pages-draw-all-price"
             >
-              {draft ? 'Approve & render all' : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`}
+              {drawLabel}
             </DrawButton>
             <PriceNote id="pages-draw-all-price">
               {cost.quote(quote.usd)} · {what}
+              {held.sentence ? ` · ${held.sentence.charAt(0).toLowerCase()}${held.sentence.slice(1)}` : ''}
             </PriceNote>
           </>
-        )}
+        ) : held.pages.length ? (
+          <HeldBackNote doc={doc} ids={quote.heldBackIds} onOpenPage={(id) => studio.openPage(id)} />
+        ) : null}
         {draft && (
           <GhostButton size="sm" busy={busyKey === 'approve'} onClick={() => fire('approve', () => studio.act({ type: 'approve_plan' }))}>
             Approve plan only

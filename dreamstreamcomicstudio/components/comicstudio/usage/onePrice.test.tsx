@@ -10,16 +10,20 @@ import React from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import type { ComicDoc } from '../../../shared/comic/doc';
 import { resolveImageJob } from '../../../shared/comic/models';
-import { quoteRenderPages } from '../../../shared/comic/plan';
+import { estimateDocJobs, quoteRenderPages } from '../../../shared/comic/plan';
 import { priceBookFromSources, priceSheetOf } from '../../../shared/comic/priceBook';
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { __resetPriceSheetForTests, __seedPriceSheetForTests } from '../../../services/priceSheet';
 import { costFormat } from '../conversation/cost';
 import { PagesTab } from '../board/PagesTab';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from '../board/__fixtures__/sampleDoc';
+import { CastCard } from '../conversation/cards/CastCard';
+import { estimatePlanRender } from '../conversation/cards/PlanCard';
+import { makeFakeStudio, makeSampleDoc as makeConversationDoc, resetUsageStatus, showDollarPrices } from '../conversation/testing/fixtures';
 
 const OWNER = 'owner-one-price';
 vi.mock('../../../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner-one-price' } }) }));
@@ -28,13 +32,20 @@ const ROOT = resolve(__dirname, '../..');
 /** Every surface that shows an image (or text-step) price, and the quote helpers it calls. */
 const SURFACES: Record<string, string[]> = {
   'comicstudio/board/PagesTab.tsx': ['quoteRenderPages', 'estimateDraw', 'estimateOne', 'redrawPrice', 'planUsd'],
-  'comicstudio/board/CastTab.tsx': ['estimateOne', 'estimateDraw'],
+  'comicstudio/board/CastTab.tsx': ['estimateOne', 'estimateDraw', 'sheetHint'],
   'comicstudio/board/StyleTab.tsx': ['estimateOne'],
   'comicstudio/board/PageEditor.tsx': ['estimateOne', 'estimateDraw', 'recheckQuoteUsd'],
   'comicstudio/breakdown/BreakdownCard.tsx': ['quoteRenderPages', 'summarizeBook', 'unitPrice'],
   'comicstudio/conversation/cards/RendersCard.tsx': ['quoteRenderPages', 'estimateDocJobs', 'retryAllFailed'],
   'comicstudio/conversation/cards/StyleChoiceCard.tsx': ['quoteStyleOptions', 'retryAllFailed'],
   'comicstudio/conversation/cards/PlanCard.tsx': ['quoteRenderPages', 'estimatePlanRender'],
+  'comicstudio/conversation/cards/CastCard.tsx': ['estimateDocJobs'],
+  'comicstudio/conversation/panels/FormatPanel.tsx': ['redrawQuoteUsd', 'unitPrice', 'estimateDocJobs'],
+  'comicstudio/i18n/LanguagesTab.tsx': ['priceOf', 'estimateDocJobs'],
+  'comicstudio/refs/refsModel.ts': ['unitPrice'],
+  'comicstudio/refs/RefsDrawer.tsx': ['sheetHint'],
+  'comicstudio/refs/RefStrip.tsx': ['sheetHint'],
+  'comicstudio/refs/RefsCard.tsx': ['sheetHint'],
   'comicstudio/conversation/cards/NoticeCard.tsx': ['quoteRenderPages', 'liveNoticeChip', 'liveRenderQuote'],
   'comicstudio/conversation/panels/StylePanel.tsx': ['estimateDocJobs', 'quoteStyleOptions', 'styleDirectionsQuoteUsd'],
   'comicstudio/conversation/panels/QualityPanel.tsx': ['jobUnitUsd', 'jobQcUsd'],
@@ -135,11 +146,68 @@ describe('the screen names the book’s price', () => {
     expect(header().textContent).toContain(fmt.approx(quoteRenderPages(doc, { ...opts, prices: book }).usd));
   });
 
+  /** Page 2's words do not fit its panels: Render all holds it back (the server's plan check, PD-1). */
+  const withOverfull = (): ComicDoc =>
+    makeSampleDoc((d) => {
+      const said = Array.from({ length: 60 }, (_, i) => ['listen', 'the', 'carrier', 'behind', 'those', 'stalls'][i % 6]).join(' ');
+      const p = d.pages.find((x) => x.id === 'pg_2')!;
+      p.layout = 'Row 1: three small panels.';
+      p.panels = p.panels.map((pn, i) => ({ ...pn, size: 'small', lines: [{ id: `ln_over_${i}`, kind: 'speech', speakerId: 'ch_maya', text: said }] }));
+    });
+
+  it('Render all with a page held back: the board and the plan card name the server gate\'s figure (the page left out)', () => {
+    __seedPriceSheetForTests(OWNER, sheet);
+    const held = withOverfull();
+    const studio = makeStudio(held, { caps: { ...DEFAULT_CAPS, byok: true } });
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    const opts = { byok: true, tier: held.settings.quality, modelOverride: held.settings.imageModelOverride };
+    // The server's render_pages quote for a Render all (server/src/comic/onePrice.parity.test.ts checks it is this).
+    const gate = quoteRenderPages(held, { ...opts, holdBack: {}, prices: book });
+    expect(gate.heldBackIds).toEqual(['pg_2']);
+    const everything = quoteRenderPages(held, { ...opts, prices: book }).usd;
+    const fmt = costFormat(DOLLAR_CONTEXT);
+    expect(fmt.approx(gate.usd)).not.toBe(fmt.approx(everything));
+    expect(header().textContent).toContain(fmt.approx(gate.usd));
+    expect(header().textContent).not.toContain(fmt.approx(everything));
+    expect(estimatePlanRender(held, true, book).estimate.usd).toBe(gate.usd);
+  });
+
   it('governed: the same price as a share of the usage, and no dollar sign anywhere on the board', () => {
     __seedPriceSheetForTests(OWNER, sheet);
     const studio = makeStudio(doc, { caps: { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 70, exhausted: false, pctPerStandardPage: 1.5 } } });
     const { container } = render(<PagesTab studio={studio} doc={studio.doc!} />);
     expect(header().textContent).toMatch(/% of your usage/);
     expect(container.textContent).not.toContain('$');
+  });
+});
+
+describe('the chat\'s Cast card names the book\'s price and sends it as the quote', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('offline'))));
+    __resetPriceSheetForTests();
+    showDollarPrices();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    __resetPriceSheetForTests();
+    resetUsageStatus();
+  });
+
+  it('Draw 1 sheet: the label and quotedUsd are the book\'s figure, not the registry list', async () => {
+    const doc = makeConversationDoc();
+    const job = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride);
+    const sheet = priceSheetOf({ rows: [], observed: [{ modelId: job.spec.id, kind: 'sheet', res: job.resolution, n: 8, medianUsd: 0.35, minUsd: 0.3, maxUsd: 0.4, scope: 'you' }], qc: null }, SAMPLE_NOW);
+    __seedPriceSheetForTests(OWNER, sheet);
+    const book = priceBookFromSources(sheet.sources);
+    const real = estimateDocJobs(doc, [{ kind: 'sheet', count: 1, label: 'character sheets' }], { byok: false, prices: book }).usd;
+    const registry = estimateDocJobs(doc, [{ kind: 'sheet', count: 1, label: 'character sheets' }], { byok: false }).usd;
+    expect(real).toBeGreaterThan(registry);
+    const studio = makeFakeStudio({ doc });
+    render(<CastCard card={{ type: 'cast', id: 'card_c', characterIds: ['c_maya', 'c_arjun'] }} studio={studio} />);
+    const button = screen.getByRole('button', { name: /Draw 1 sheet/ });
+    expect(button.textContent).toContain(costFormat(DOLLAR_CONTEXT).approx(real));
+    fireEvent.click(button);
+    await waitFor(() => expect(studio.act).toHaveBeenCalledWith(expect.objectContaining({ type: 'render_sheets', characterIds: ['c_arjun'], quotedUsd: real })));
   });
 });

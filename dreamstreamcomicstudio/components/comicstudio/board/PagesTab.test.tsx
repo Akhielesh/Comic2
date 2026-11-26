@@ -184,6 +184,69 @@ describe('PagesTab', () => {
     expect(studio.act).toHaveBeenCalledWith({ type: 'approve_plan' });
   });
 
+  describe('pages whose words do not fit their panels (the plan check holds them back from Render all)', () => {
+    const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning'.split(' ');
+    const said = (n: number) => Array.from({ length: n }, (_, i) => WORDS[i % WORDS.length]).join(' ');
+    /** Overfull: three small panels, each with far more words than it holds. */
+    const overfill = (doc: ComicDoc, id: string) => {
+      const page = doc.pages.find((p) => p.id === id)!;
+      page.layout = 'Row 1: three small panels.';
+      page.panels = page.panels.map((pn, i) => ({ ...pn, size: 'small', lines: [{ id: `ln_over_${id}_${i}`, kind: 'speech', speakerId: 'ch_maya', text: said(60) }] }));
+    };
+    const allQuote = (doc: ComicDoc) => quoteRenderPages(doc, { byok: true, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, holdBack: {} });
+
+    it('the button names what it draws, the price leaves the held-back page out, and the note says which and why', () => {
+      const doc = makeSampleDoc((d) => {
+        overfill(d, 'pg_2');
+        d.planStatus = 'approved';
+      });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      const quote = allQuote(doc);
+      expect(quote.heldBackIds).toEqual(['pg_2']);
+      expect(quote.pageIds).toEqual(['pg_5', 'pg_6']);
+      const button = within(header()).getByRole('button', { name: 'Render 2 pages' });
+      const note = document.getElementById(button.getAttribute('aria-describedby')!)!;
+      expect(note).toHaveTextContent(`≈ ${formatUsd(quote.usd)}`);
+      expect(note).toHaveTextContent('page 2 is held back — too much text for its panels');
+      expect(within(header()).queryByRole('button', { name: /remaining/ })).toBeNull();
+      // The run is the server's Render all (it holds the same page back and offers the free fixes).
+      fireEvent.click(button);
+      expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages' });
+    });
+
+    it('in a draft the approval counts the pages too', () => {
+      const doc = makeSampleDoc((d) => overfill(d, 'pg_2'));
+      render(<PagesTab studio={dollarStudio(doc)} doc={doc} />);
+      expect(within(header()).getByRole('button', { name: 'Approve & render 2 pages' })).toBeInTheDocument();
+    });
+
+    it('every page left is held back: no draw button and no price, a plain line and the way on', () => {
+      const doc = makeSampleDoc((d) => {
+        for (const id of ['pg_2', 'pg_5', 'pg_6']) overfill(d, id);
+        d.planStatus = 'approved';
+      });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      expect(allQuote(doc)).toMatchObject({ pageIds: [], nothing: true, heldBackIds: ['pg_2', 'pg_5', 'pg_6'] });
+      expect(within(header()).queryByRole('button', { name: DRAW_ALL })).toBeNull();
+      expect(within(header()).queryByRole('button', { name: /^Render/ })).toBeNull();
+      expect(document.getElementById('pages-draw-all-price')).toBeNull();
+      expect(header()).toHaveTextContent('Pages 2, 5 and 6 are held back — too much text for their panels. Fit the words, or draw them anyway from the page.');
+      expect(header().textContent).not.toContain('$');
+      fireEvent.click(within(header()).getByRole('button', { name: 'Open page 2' }));
+      expect(studio.openPage).toHaveBeenCalledWith('pg_2');
+      expect(studio.act).not.toHaveBeenCalled();
+    });
+
+    it('governed: the held-back words beside a share of the usage, never dollars', () => {
+      const doc = makeSampleDoc((d) => overfill(d, 'pg_2'));
+      const { container } = render(<PagesTab studio={governedStudio(doc)} doc={doc} />);
+      expect(document.getElementById('pages-draw-all-price')).toHaveTextContent(/% of your usage.*page 2 is held back/);
+      expect(container.textContent).not.toContain('$');
+    });
+  });
+
   it('"Include the cover" adds the cover to the draw-all, quoted like the server gate', () => {
     const studio = dollarStudio();
     const doc = studio.doc!;

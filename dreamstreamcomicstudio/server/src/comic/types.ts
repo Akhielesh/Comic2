@@ -118,6 +118,11 @@ export interface LlmRequest {
   signal?: AbortSignal;
   /** Streaming text callback (director narration). */
   onDelta?: (text: string) => void;
+  /**
+   * A repair round of a strict-JSON completion (writer.ts completeStructured): the model's reply sent back once with
+   * its problems. Billing marks the call so the observed text rates leave repairs out of a pass's cost.
+   */
+  repair?: boolean;
 }
 
 export interface LlmResult {
