@@ -28,15 +28,13 @@ settled chat options.
 | #303 | Truer live data in Chat, research pictures that are safe to use, groundwork for the platform's own daily comics. |
 | #304 | Drawn looks wait for Approve, look pictures at once, big lettering styles, a calmer board, ink icons. |
 | #305 | The Director keeps working when you leave a comic; alerts with two chimes; one account menu with Settings. |
-
-## In this release
-
-- **Register interest** asks only questions a visitor can answer (what they would like to make, how they heard of us,
-  anything else, and one unticked box to be kept updated). Nobody is emailed. The unexplained "other studios" lines
-  are gone from the form and from under the Register interest card.
-- **One compact progress card** when several pages draw, instead of one loading tile per page.
-- **Chat options settle** once answered, once the person types a reply, or once the agent moves on, and stay settled
-  after a reload. An open Approve stays live until it is answered, so typing a question never cancels a paid step.
+| #306 | Register-interest questions a visitor can answer; one compact progress card when several pages draw; chat options that settle once answered and stay settled after a reload. |
+| #307 | Sign-up opens with a verified email or Google, with referrals (rewards "coming soon"); the Director's whole-book drawing approval and reader; standalone reference images; text and voice chat; branded account mail; your own provider usage on the dashboard and a balance view for operators; artwork backups. |
+| #308 | After a provider refuses for quota, drawing moves on to the next usable key or provider; older image drafts are kept; provider setup in place; approved translations keep running; ready for many creators at once. |
+| #309 | Story continuity across long books; visual corrections carried through a whole book; discovery and release tools. |
+| #310, #311 | Classic Review compares saved panel artwork; creators can dismiss and restore visual findings; new and older Director artwork is stored privately in the project. |
+| #312 to #315, #317, #318 | DreamStream Studio Originals in the public library, each edition published through its own PG review. |
+| #316 | Tactile page turns in the current and the historical readers. |
 
 ## Building now (release "stages, My comics, panel, money")
 
@@ -83,7 +81,8 @@ settled chat options.
 
 ## Rules every release keeps
 
-- Sign-up stays closed; people can register interest, and nobody on that list is emailed.
+- Sign-up is open with a verified email or Google (since #307). Auth and account rules change only in a release that
+  is about them.
 - Shared and public links are read-only (readers may download). Public pages show only published comics within PG-13.
 - People on DreamStream's allowance never see dollars or cents. No colour sits on or beside a price or a control that
   spends. Paid steps wait for Approve, except small steps a person asks for directly, which say their cost.

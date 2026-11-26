@@ -10,8 +10,8 @@ import { SESSION_IDLE_MS, StudioSession } from './session.js';
 
 const req = { user: { id: 'user-1' }, header: () => undefined } as unknown as Request;
 
-const build = (assets = fakeAssetStore()) => {
-  const session = new StudioSession({ projectId: 'p1', userId: 'user-1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+const build = (assets = fakeAssetStore(), now?: () => number) => {
+  const session = new StudioSession({ projectId: 'p1', userId: 'user-1', doc: createEmptyDoc('p1'), store: fakeDocStore(), now });
   const events: StudioEvent[] = [];
   session.subscribe((e) => events.push(e));
   const ctx = createStudioContext({
@@ -72,8 +72,11 @@ describe('createStudioContext', () => {
   });
 
   it('tracked work keeps the session from going idle', async () => {
-    const { ctx, session } = build();
-    const later = Date.now() + SESSION_IDLE_MS + 1;
+    // A fixed clock: releasing the work marks the session active "now", so on the wall clock a slow runner moved
+    // that mark past `later` and the session read as recently used rather than idle.
+    const clock = 1_000_000;
+    const { ctx, session } = build(fakeAssetStore(), () => clock);
+    const later = clock + SESSION_IDLE_MS + 1;
     let release!: () => void;
     void ctx.track(new Promise<void>((r) => (release = r)));
     session.dispose(); // drop the test subscriber so only the tracked work counts
