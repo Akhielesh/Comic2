@@ -8,6 +8,7 @@ import { IconButton } from '../ds/IconButton';
 import { useImageReveal } from '../ds/useImageReveal';
 import { samplePageUrl, type SampleLook } from '../comicstudio/library/sampleArt';
 import { PaperTurnSurface, type PaperTurnDirection, type PaperTurnHandle } from '../comicstudio/reader/PaperTurnSurface';
+import { readReduceMotionPref } from '../comicstudio/immersive/readerMotionPref';
 import './comicsLanding.css';
 
 export type SampleStory = 'paper-boat' | 'last-tram' | 'hello-europa' | 'a-small-giant';
@@ -78,6 +79,7 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
   };
 }) {
   const [pageIndex, setPageIndex] = useState(0);
+  const [reduceMotion] = useState(readReduceMotionPref);
   const pageScroll = useRef<HTMLDivElement>(null);
   const isShelf = !standalone && story !== 'paper-boat';
   const captionId = useId();
@@ -126,8 +128,10 @@ export function ComicSampleReader({ look, standalone = false, story = 'paper-boa
         {sample.pages.length === 1 ? current : (
           <PaperTurnSurface
             ref={fullSize ? dialogTurn : inlineTurn}
-            // The sample shows the house turn: the page flip (the OS reduced-motion setting changes pages at once).
+            // The sample shows the house turn: the page flip. Reduce motion (the OS setting, or the reader's own from
+            // the full-screen reader's settings on this device) changes the page at once.
             turnStyle="flip"
+            reducedMotion={reduceMotion}
             pageKey={`${story}/${look}/${pageIndex}`}
             enabled={fullSize || !reader?.open}
             canTurn={canTurn}

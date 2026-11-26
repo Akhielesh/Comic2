@@ -690,7 +690,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           // Home and End flip too: the first page swings in backwards, the last one forwards.
           const target = e.key === 'Home' ? 0 : Math.max(pages.length - 1, 0);
           if (target === pageIndex) return;
-          const move = () => { modeChosen.current = true; setPageIndex(target); };
+          const move = () => { if (soundOn) playPageTurnSound(); modeChosen.current = true; setPageIndex(target); };
           if (turnSurface.current) turnSurface.current.jump(target > pageIndex ? 1 : -1, move, renderFlipPage(target, true));
           else move();
         }
@@ -709,7 +709,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode, rtl]);
+  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode, rtl, soundOn]);
 
   // The reading mode's Back-stack layer ('fullscreen') comes and goes with readingMode: entering pushes its entry,
   // leaving with a control pops it (useBackLayer above).

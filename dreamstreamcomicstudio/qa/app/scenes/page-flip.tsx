@@ -10,6 +10,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { PageTurnStyle } from '../../../shared/comic/doc';
 import { PaperTurnSurface, type PaperTurnDirection, type PaperTurnHandle } from '../../../components/comicstudio/reader/PaperTurnSurface';
 import { FLIP_NEXT, FLIP_PREV } from '../../../components/comicstudio/reader/pageFlip';
+import { PAGE_TURN_OPTIONS } from '../../../components/comicstudio/immersive/readerPrefs';
 import { PageHeader } from '../../../components/ds';
 import { Button } from '../../../components/ds/Button';
 import { Segmented } from '../../../components/ds/Segmented';
@@ -25,12 +26,7 @@ const PAGES = [
   { src: `${ART}/a-small-giant-page-1-768.webp`, alt: 'A mouse, a hedgehog and an owl share a warm drink under a scarf.' }
 ];
 
-const STYLES: { value: PageTurnStyle; label: string }[] = [
-  { value: 'flip', label: 'Flip' },
-  { value: 'paper', label: 'Paper' },
-  { value: 'slide', label: 'Slide' },
-  { value: 'fade', label: 'Fade' }
-];
+const STYLES = PAGE_TURN_OPTIONS.map(({ value, label }) => ({ value, label }));
 
 /** A page on paper, letterboxed in the stage. */
 function Sheet({ index }: { index: number }) {

@@ -196,6 +196,24 @@ describe('Comics landing', () => {
     expect(scene).toHaveTextContent('Page 1 of 2');
   });
 
+  it('the sample flips; the reader’s own Reduce motion (stored by the full-screen reader) changes the page at once', async () => {
+    const turnOnce = async () => {
+      const figure = screen.getByRole('figure', { name: 'The Last Tram' });
+      const surface = figure.querySelector<HTMLElement>('[data-paper-turn-surface]')!;
+      // jsdom lays nothing out: give the stage a size, as a browser would.
+      vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 400, bottom: 600, width: 400, height: 600, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+      fireEvent.click(within(figure).getByRole('button', { name: 'Next sample page' }));
+      await waitFor(() => expect(within(figure).getByRole('status')).toHaveTextContent('Page 2 of 2'), { timeout: 3000 });
+      return figure.querySelector('.animate-page-flip-next, .animate-page-flip-prev');
+    };
+    const first = renderLanding();
+    expect(await turnOnce()).not.toBeNull();
+    first.unmount();
+    localStorage.setItem('comicstudio.reader.prefs.v1', JSON.stringify({ turn: 'auto', reduceMotion: true }));
+    renderLanding();
+    expect(await turnOnce()).toBeNull();
+  });
+
   it('turns the sample page, announces the scene, and preserves the page across look changes', () => {
     renderLanding();
     fireEvent.click(screen.getByRole('button', { name: 'Preview Ligne claire' }));

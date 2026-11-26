@@ -47,6 +47,7 @@ import { plateWidthFor } from '../export/batch';
 import { exportComicPdf } from '../export/pdfExport';
 import { exportMotionComic, MOTION_SIZES, type MotionAspect } from '../export/motionComic';
 import { ImmersiveReader } from '../immersive/ImmersiveReader';
+import { PAGE_TURN_OPTIONS } from '../immersive/readerPrefs';
 import { LanguageSwitch, languageSwitchOptions } from '../i18n/LanguageSwitch';
 import { useReaderLanguage } from '../i18n/readerLanguage';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
@@ -166,12 +167,7 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
           size="xs"
           value={creatorTurnOf(r)}
           onChange={(turn) => set({ turn, turnChosen: true }, 'Change page turn')}
-          options={[
-            { value: 'flip', label: 'Flip', title: 'The new page swings in from the spine' },
-            { value: 'paper', label: 'Paper', title: 'Readers drag the page and it folds like paper' },
-            { value: 'slide', label: 'Slide', title: 'Pages slide across' },
-            { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
-          ]}
+          options={PAGE_TURN_OPTIONS.map(({ value, label, creatorTitle }) => ({ value, label, title: creatorTitle }))}
         />
       </div>
       <div className="mt-1 grid gap-0.5 md:grid-cols-2">

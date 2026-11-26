@@ -121,6 +121,13 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
       // Validation errors come back to the model as "Error: …" with what to fix.
       const patch = sanitizeReaderPatch(raw);
       const before = readerOf(doc);
+      // Readers already get that style (the page flip on a comic that never chose one): nothing to store, so no undo
+      // step and no "Done" for a change nobody would see.
+      if (patch.turn !== undefined && patch.turn === creatorTurnOf(before)) {
+        delete patch.turn;
+        delete patch.turnChosen;
+      }
+      if (!Object.keys(patch).length) return `Those reader settings were already in place — nothing changed.${guidedNote}`;
       const after = readerOf(commit(ctx, [{ op: 'reader', patch }], 'Reader settings'));
       const changed = changeSentence(before, after);
       if (!changed.length) return `Those reader settings were already in place — nothing changed.${guidedNote}`;

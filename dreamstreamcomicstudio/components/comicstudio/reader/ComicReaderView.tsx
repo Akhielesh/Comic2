@@ -429,6 +429,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // box (a phone in portrait, 360 px), where the leading controls scroll sideways and the trailing group (the menus
   // and Full screen) keeps its place on the row instead of dropping under it.
   const oneRow = compactH || boxW < 560;
+  // Phone-narrow (under 400 px), the one row also holds the pinned arrows: the counter shrinks to "3/12" (the whole
+  // "Page 2 · 3/12" is still read out), Share moves into the More menu, and when four controls would still trail the
+  // row (an embed's link, the language, More and Full screen), Full screen joins the menu too. At 320 px every
+  // control then stays on the screen.
+  const tight = oneRow && boxW < 400;
   // Where this box sits on the screen (ui-findings 2026-10-29): a dual-screen hinge matters only when
   // the box actually spans the fold (the studio's board pane sits on ONE segment; the public reader
   // spans both), and the home-indicator inset only when the box ends at the screen's bottom edge (a
@@ -622,6 +627,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           setNote(null);
           goToView(target);
           hideChromeNow();
+          // The page-turn sound, as on every other turn.
+          if (prefs.sound && !reduced) playPageTurn('turn');
         };
         if (turnRef.current) turnRef.current.jump(target > viewIdx ? 1 : -1, move, viewPreview(target));
         else move();
@@ -830,6 +837,13 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     if (!box || decision.fit !== 'width' || layout === 'scroll') return;
     box.scrollTop = back ? box.scrollHeight : 0;
   }, [currentView?.key, decision.fit, layout]);
+  // A page taller than its window (fit to width) swings about the middle of what shows of it, where the reset above
+  // opens it (its top, or one step back its foot), never about the middle of the whole tall page: otherwise the visible
+  // slice shears instead of swinging in from the spine. Read in the render that shows the new page (lastView is the
+  // page before it until the reset runs).
+  const flipOriginY = decision.fit === 'width' && geo && geo.book.h > stageH + 1
+    ? Math.round(Math.max(0, Math.min(geo.book.h, viewIdx === lastView.current - 1 ? geo.book.h + 12 - stageH / 2 : stageH / 2 - geo.book.y)))
+    : undefined;
   /** The zoomable canvases: one over the stage, or one per segment on a dual-screen device. */
   const panes = useMemo(() => {
     if (!geo) return [];
@@ -955,8 +969,22 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     { value: 'scroll' as const, label: <><Rows3 className="h-3 w-3" aria-hidden /><span className={cx(oneRow && 'sr-only')}>{t('scroll')}</span></>, title: t('scrollHelp') }
   ];
   const narrow = boxW < 560 || compactH;
+  const fullEntry = immersiveEntry || fullscreenControl;
+  const foldShare = tight && !!onShare;
+  const foldFull = tight && fullEntry && (toolbarExtra ? 1 : 0) + (language ? 1 : 0) + 2 >= 4;
   const currentPageN = layout === 'scroll' ? pageNOf(items[itemIdx]) : pageNOfView(views, items, viewIdx);
   const menuItems = [
+    ...(foldFull
+      ? [immersiveEntry
+          ? { id: 'full-screen', label: t('fullScreen'), icon: <Expand className="h-4 w-4" aria-hidden />, onSelect: openImmersive }
+          : {
+              id: 'full-screen',
+              label: fullscreen ? t('exitFullScreen') : t('fullScreen'),
+              icon: fullscreen ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />,
+              onSelect: toggleFullscreen
+            }]
+      : []),
+    ...(foldShare && onShare ? [{ id: 'share', label: t('share'), icon: <Share2 className="h-4 w-4" aria-hidden />, onSelect: onShare }] : []),
     ...(layout !== 'scroll' && decision.allowSpread && kind !== 'strip' && kind !== 'webtoon' ? [{
       id: 'page-layout',
       label: t(layout === 'spread' ? 'singlePage' : 'facingPages'),
@@ -990,8 +1018,15 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
         <ChevronLeft className="h-4 w-4" />
       </IconButton>
-      <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', oneRow ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
-        {counter}
+      <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', tight ? 'px-1' : oneRow ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
+        {tight ? (
+          <>
+            <span className="sr-only">{counter}</span>
+            <span aria-hidden>{`${viewIdx + 1}/${views.length}`}</span>
+          </>
+        ) : (
+          counter
+        )}
       </span>
       <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
         <ChevronRight className="h-4 w-4" />
@@ -1056,14 +1091,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       <div className={cx('ml-auto flex items-center gap-1', oneRow ? 'shrink-0' : 'min-w-0')} data-testid="reader-toolbar-actions">
         {toolbarExtra}
         {language && <ReaderLanguagePicker {...language} source={doc.format.language} compact={narrow} />}
-        {onShare && (
+        {onShare && !foldShare && (
           <IconButton label={t('share')} onClick={onShare}>
             <Share2 className="h-4 w-4" />
           </IconButton>
         )}
         <ReaderMenu label="More" items={menuItems} />
         {/* data-action="read": the one full-screen reading entry in this view (declutter C2; DC-1 wave note 4). */}
-        {immersiveEntry ? (
+        {foldFull ? null : immersiveEntry ? (
           <button
             type="button"
             onClick={openImmersive}
@@ -1199,7 +1234,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             turnStyle={eff.turn}
             reducedMotion={reduced}
             // A spread swings as a pair around its spine; a single page from its own spine edge (the class's).
-            flipOrigin={viewLayout === 'spread' ? `${geo.spineX}px 50%` : undefined}
+            flipOrigin={viewLayout === 'spread' ? `${geo.spineX}px ${flipOriginY === undefined ? '50%' : `${flipOriginY}px`}` : undefined}
+            flipOriginY={flipOriginY}
             canTurn={direction => !!views[viewIdx + direction]}
             onTurn={commitTurn}
             className="relative h-full w-full"

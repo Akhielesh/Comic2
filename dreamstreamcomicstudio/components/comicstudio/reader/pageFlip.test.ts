@@ -22,6 +22,12 @@ describe('the original swing, from index.css', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.animate-page-flip-next, \.animate-page-flip-prev \{ animation: none; \}/);
   });
 
+  it('the Classic stage drops its padding only for the paper turn’s sheet-sized preview (a slide or fade lands at the face’s size)', () => {
+    const surfaceCss = fs.readFileSync(path.resolve(__dirname, 'paperTurnSurface.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const unpadded = [...surfaceCss.matchAll(/([^{}]+)\{\s*padding:\s*0;\s*\}/g)].map((m) => m[1].trim());
+    expect(unpadded).toEqual([".classic-paper-stage[data-turn-kind='paper'] > .paper-turn-preview"]);
+  });
+
   it('mirrors the swing in right-to-left books', () => {
     expect(flipClass(1, false)).toBe(FLIP_NEXT);
     expect(flipClass(-1, false)).toBe(FLIP_PREV);

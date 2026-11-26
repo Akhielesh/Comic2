@@ -6,16 +6,8 @@ import React from 'react';
 import { Download, Keyboard, Share2, X } from 'lucide-react';
 import type { PageTurnStyle } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
-import { turnStyleFor, type ReaderPrefs, type RoomLight } from './readerPrefs';
+import { PAGE_TURN_OPTIONS, pageTurnLabel, turnStyleFor, type ReaderPrefs, type RoomLight } from './readerPrefs';
 import { HudButton } from './ReaderHud';
-
-/** The page-turn styles as the reader picks them: the flip first. */
-export const TURN_STYLE_OPTIONS: { value: PageTurnStyle; label: string; title: string }[] = [
-  { value: 'flip', label: 'Flip', title: 'The new page swings in from the spine' },
-  { value: 'paper', label: 'Paper', title: 'Drag the page and it folds like paper' },
-  { value: 'slide', label: 'Slide', title: 'Pages slide across' },
-  { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
-];
 
 export interface ReaderSettingsSheetProps {
   open: boolean;
@@ -128,9 +120,10 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             label="Page turn style"
             value={turn}
             // Picking the creator's own style follows the creator again ('auto'), so a later change of theirs reaches you.
-            onChange={(next) => p.onPrefs({ turn: next === p.creatorTurn ? 'auto' : next })}
-            options={TURN_STYLE_OPTIONS.map((o) => (o.value === p.creatorTurn ? { ...o, title: `${o.title} (the creator’s choice)` } : o))}
-            hint={reduced ? 'Reduced motion is on: pages change at once.' : undefined}
+            onChange={(next) => p.onPrefs(next === p.creatorTurn ? { turn: 'auto' } : { turn: next, turnPicked: true })}
+            options={PAGE_TURN_OPTIONS.map(({ value, label, title }) => ({ value, label, title: value === p.creatorTurn ? `${title} (this comic’s own style)` : title }))}
+            // Said on screen (and read with the group): which style is the comic's own, so a phone shows it too.
+            hint={`${pageTurnLabel(p.creatorTurn)} is this comic’s own style.${reduced ? ' Reduced motion is on: pages change at once.' : ''}`}
           />
         )}
         {p.onCopyPageLink && !!p.pageNumber && p.pageNumber > 0 && (

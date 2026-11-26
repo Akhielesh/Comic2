@@ -147,6 +147,13 @@ describe('the inline reader turns with the page flip by default', () => {
     press('ArrowRight');
     await waitFor(() => expect(shownKeys()).toEqual(['pg_1']));
     expect(sound.playPageTurn).toHaveBeenCalledTimes(1);
+    // Home and End are turns too: they sound like one.
+    press('End');
+    await waitFor(() => expect(shownKeys()).toEqual(['pg_6']));
+    expect(sound.playPageTurn).toHaveBeenCalledTimes(2);
+    press('Home');
+    await waitFor(() => expect(shownKeys()).toEqual(['cover']));
+    expect(sound.playPageTurn).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -170,6 +177,31 @@ describe('reader-turn fixes', () => {
     scroller.scrollTop = 500;
     press('Home');
     expect(scroller.scrollTop).toBe(0);
+  });
+
+  it('a webtoon page taller than its window swings about the middle of what shows: its top going forward, its foot one step back', async () => {
+    render(<ComicReaderView doc={drawnDoc((d) => (d.format.kind = 'webtoon'))} urlFor={fakeUrlFor} />);
+    const book = () => face().closest<HTMLElement>('[data-layout]')!;
+    const pageH = parseFloat(book().style.height);
+    const bookTop = parseFloat(book().style.top);
+    // jsdom measures no stage box: the reader lays the page out in the window less the toolbar row.
+    const windowH = 800 - 48;
+    expect(pageH).toBeGreaterThan(windowH);
+    const originY = (prefix: 'left' | 'right') => {
+      const m = face().style.transformOrigin.match(new RegExp(`^${prefix} (\\d+)px$`));
+      expect(m, `origin "${face().style.transformOrigin}"`).not.toBeNull();
+      return Number(m![1]);
+    };
+    press('ArrowRight');
+    await waitFor(() => expect(face().classList.contains(FLIP_NEXT)).toBe(true));
+    // Forward: the page opens at its top, so the pivot is the middle of the window, not of the whole tall page.
+    expect(originY('left')).toBe(Math.round(windowH / 2 - bookTop));
+    press('ArrowRight');
+    await waitFor(() => expect(shownKeys()).toEqual(['pg_2']));
+    press('ArrowLeft');
+    await waitFor(() => expect(face().classList.contains(FLIP_PREV)).toBe(true));
+    // One step back: the page opens at its foot, and swings from the other spine edge about the foot's middle.
+    expect(originY('right')).toBe(Math.round(pageH + 12 - windowH / 2));
   });
 
   it('each page is named against the book’s page count, not the drawn pages', () => {

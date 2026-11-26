@@ -62,6 +62,13 @@ test.describe('inline reader turns', () => {
       const first = root?.querySelector<HTMLElement>('[data-testid="reader-page"]');
       if (!root || !toolbar || !nav || !next || !first) return null;
       const r = next.getBoundingClientRect();
+      const actions = root.querySelector<HTMLElement>('[data-testid="reader-toolbar-actions"]');
+      const outside = [...(actions?.querySelectorAll<HTMLElement>('button, a[href]') ?? [])]
+        .filter((el) => {
+          const b = el.getBoundingClientRect();
+          return b.width > 0 && (b.left < -0.5 || b.right > innerWidth + 0.5);
+        })
+        .map((el) => el.getAttribute('aria-label') || el.textContent || el.tagName);
       const masked = (el: Element | null): boolean => {
         for (let n = el; n && n !== root; n = n.parentElement) {
           const cs = getComputedStyle(n);
@@ -75,6 +82,8 @@ test.describe('inline reader turns', () => {
         nextMasked: masked(next),
         nextEnabled: !next.disabled,
         nextInside: r.left >= 0 && r.right <= innerWidth + 0.5 && r.width > 0,
+        rowOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+        outside,
         overlays: getComputedStyle(toolbar).position === 'absolute',
         toolbarH: toolbar.offsetHeight,
         firstTop: first.getBoundingClientRect().top - root.getBoundingClientRect().top
@@ -86,6 +95,9 @@ test.describe('inline reader turns', () => {
     expect(m.nextMasked, 'no fade mask over Next').toBe(false);
     expect(m.nextEnabled, 'Next is enabled on the cover').toBe(true);
     expect(m.nextInside, 'Next sits inside the viewport').toBe(true);
+    // The pinned arrows never push the trailing controls (More, Full screen) off the row or the screen.
+    expect(m.rowOverflow, 'the toolbar row fits its box').toBeLessThanOrEqual(1);
+    expect(m.outside, 'every trailing control sits inside the viewport').toEqual([]);
     if (m.overlays) expect(m.firstTop, `the first page starts below the ${m.toolbarH} px toolbar`).toBeGreaterThanOrEqual(m.toolbarH - 1);
   });
 

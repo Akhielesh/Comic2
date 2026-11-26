@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { isWithheld, swipeDelta, type ReaderItem } from '../reader/readerModel';
+import { FLIP_DECODE_MS, FLIP_SWIPE_PX } from '../reader/pageFlip';
 import { cubicBezier, decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
 import { cameraDuration, IDENTITY_CAMERA, type Camera } from './guidedModel';
@@ -63,14 +64,12 @@ export interface BookStageProps {
 
 const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [data-no-turn]';
 const DRAG_SLOP = 6;
-/** The flip never follows a finger: a swipe this long (and mostly horizontal) turns the page when released. */
-const FLIP_SWIPE_PX = 45;
 /**
  * Never blank (reader.md §8.2): after the turn gate (≤ turnGate for the pages themselves), a tapped turn keeps waiting,
- * this long in all at most, until each page has at least its stand-in decoded, so it never lands on bare paper on a
- * slow phone. A failed load never holds it.
+ * this long in all at most (the inline flip's own decode wait), until each page has at least its stand-in decoded, so it
+ * never lands on bare paper on a slow phone. A failed load never holds it.
  */
-export const NEVER_BLANK_MS = 1800;
+export const NEVER_BLANK_MS = FLIP_DECODE_MS;
 /** The page-block edge: its thickest (px at layout scale 1) and how much each view adds. */
 export const EDGE_MAX = 6;
 export const edgeThickness = (views: number): number => Math.min(EDGE_MAX, 0.6 * Math.max(0, views));
@@ -130,6 +129,13 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   /** A tapped turn waiting (≤ 300 ms) for its pages to decode: which corner shows the progress arc. */
   const [gate, setGate] = useState<{ dir: 1 | -1 } | null>(null);
   const gateCancel = useRef<(() => void) | null>(null);
+  /**
+   * The flip whose swing has begun (its motion). Until then (the turn gate, the camera easing back from a zoom) its pages
+   * keep their idle roles: the page you are on stays, and the new one waits hidden while it decodes. It shows in the
+   * same commit that its swing class goes on (the layout effect below), so it never sits flat first.
+   */
+  const [swinging, setSwinging] = useState<unknown>(null);
+  const flipToStart = useRef<TurnEngine | null>(null);
   const cancelGate = () => {
     gateCancel.current?.();
     gateCancel.current = null;
@@ -222,6 +228,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   }, [views, state.view, plan, props.warmViews, geomAt]);
 
   const currentKeys = useMemo(() => geom1.slots.filter((s) => s.content.kind !== 'blank').map((s) => contentKey(s.content)), [geom1]);
+  /** The plan the layers follow: a flip that has not begun to swing (or was called back) leaves them as they were. */
+  const rolePlan = plan && plan.kind === 'flip' && swinging !== motion ? null : plan;
 
   useEffect(() => {
     props.onVisibleItems?.(views[state.view]?.items ?? []);
@@ -373,6 +381,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       const start = () => {
         if (engine.current !== eng) return;
         setGate(null);
+        if (plan.kind === 'flip') {
+          flipToStart.current = eng;
+          setSwinging(motion);
+          return;
+        }
         eng.startAuto();
         // The swish plays as the paper lifts (not when it lands).
         if (sound && !reduced) playPageTurn(plan.kind === 'board' ? 'heavy' : 'turn');
@@ -421,6 +434,17 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, motion, ready]);
+
+  // The flip's swing starts once its pages have their turn roles on screen (before the browser paints that commit).
+  useLayoutEffect(() => {
+    const eng = flipToStart.current;
+    if (!eng || swinging !== engineMotion.current) return;
+    flipToStart.current = null;
+    if (engine.current !== eng) return;
+    eng.startAuto();
+    if (sound && !reduced) playPageTurn('turn');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swinging]);
 
   useEffect(
     () => () => {
@@ -913,7 +937,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
             const g = geomAt(m.view, L);
             const s = g.slots[m.slotIdx];
             if (!s) return null;
-            const role = roleOf(key, currentKeys, plan);
+            const role = roleOf(key, currentKeys, rolePlan);
             const visible = role !== 'hidden';
             const isCurrent = currentKeys.includes(key);
             const itemIndex = s.content.kind === 'item' ? s.content.index : -1;

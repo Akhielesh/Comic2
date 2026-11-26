@@ -2,7 +2,7 @@ import React, { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, u
 import type { PageTurnStyle } from '../../../shared/comic/doc';
 import { durationFor, TurnEngine } from '../immersive/leafEngine';
 import { type Vec } from '../immersive/flipGeometry';
-import { FLIP_DECODE_MS, flipClass, playFlip } from './pageFlip';
+import { FLIP_DECODE_MS, FLIP_NEXT, FLIP_SWIPE_PX, flipClass, playFlip } from './pageFlip';
 import './paperTurnSurface.css';
 
 // The inline readers' page-turn stage (Classic ComicReader, ComicReaderView, the landing sample). One component for every
@@ -44,10 +44,13 @@ export interface PaperTurnProps extends Omit<React.HTMLAttributes<HTMLDivElement
   reducedMotion?: boolean;
   /** Flip: the swing's transform-origin (a spread swings as a pair around its spine); default the page's spine edge. */
   flipOrigin?: string;
+  /**
+   * Flip, a page taller than its window (fit to width): the swing's vertical pivot in px from the page's top, the middle
+   * of what shows. The spine edge stays the class's (left going forward, right going back). `flipOrigin` wins.
+   */
+  flipOriginY?: number;
 }
 
-/** A horizontal swipe at least this long (and mostly horizontal) turns a page that does not follow the finger. */
-const SWIPE_MIN_PX = 45;
 /** A committed flip swings in only if the host shows the new page within this long (a refused commit never swings later). */
 const FLIP_COMMIT_WINDOW_MS = 1500;
 
@@ -166,6 +169,7 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     turnStyle = 'paper',
     reducedMotion = false,
     flipOrigin,
+    flipOriginY,
     children,
     className,
     style,
@@ -320,8 +324,10 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     const el = latest.current.paperElement?.() ?? current.current;
     if (!el || prefersStill()) return;
     stopFlip.current?.();
-    stopFlip.current = playFlip(el, flipClass(p.dir, rtl), {
-      origin: latest.current.flipOrigin,
+    const cls = flipClass(p.dir, rtl);
+    const { flipOrigin: origin, flipOriginY: originY } = latest.current;
+    stopFlip.current = playFlip(el, cls, {
+      origin: origin ?? (originY === undefined ? undefined : `${cls === FLIP_NEXT ? 'left' : 'right'} ${originY}px`),
       done: () => {
         stopFlip.current = null;
       }
@@ -504,8 +510,8 @@ export const PaperTurnSurface = forwardRef<PaperTurnHandle, PaperTurnProps>(func
     const dx = p.x - g.down.x,
       dy = p.y - g.down.y;
     if (turnStyle !== 'paper') {
-      // A swipe: at least SWIPE_MIN_PX, mostly horizontal, one finger, never while zoomed (the Classic reader's rule).
-      if (aborted || zoomed() || Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      // A swipe: at least FLIP_SWIPE_PX, mostly horizontal, one finger, never while zoomed (the Classic reader's rule).
+      if (aborted || zoomed() || Math.abs(dx) < FLIP_SWIPE_PX || Math.abs(dx) < Math.abs(dy) * 1.2) return;
       begin(dx < 0 !== rtl ? 1 : -1);
       return;
     }

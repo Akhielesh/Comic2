@@ -92,6 +92,22 @@ describe('prefs', () => {
     }
   });
 
+  it('a stored paper without the reader’s mark (#316’s Reading mode switch wrote it) follows the creator, else the flip', () => {
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"paper","fancyTurns":"auto","sound":true}');
+    const legacy = readPrefs();
+    expect(legacy).toEqual({ ...DEFAULT_PREFS, sound: true });
+    expect(effectiveReader(DEFAULT_READER, legacy, 'comic').turn).toBe('flip');
+    expect(effectiveReader({ ...DEFAULT_READER, turn: 'slide' }, legacy, 'comic').turn).toBe('slide');
+    expect(effectiveReader({ ...DEFAULT_READER, turn: 'paper', turnChosen: true }, legacy, 'comic').turn).toBe('paper');
+    // Picked in "Page turn style" (marked): the reader's paper wins, and the mark survives a round trip.
+    writePrefs({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true });
+    expect(readPrefs()).toEqual({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true });
+    expect(effectiveReader(DEFAULT_READER, readPrefs(), 'comic').turn).toBe('paper');
+    // Slide and fade could only ever be picked: kept without the mark. Back to 'auto', the mark goes.
+    expect(sanitizePrefs({ turn: 'fade' }).turn).toBe('fade');
+    expect(sanitizePrefs({ turn: 'auto', turnPicked: true })).toEqual(DEFAULT_PREFS);
+  });
+
   it('keeps a stored flip preference and maps anything unknown to auto', () => {
     expect(sanitizePrefs({ turn: 'flip' }).turn).toBe('flip');
     expect(sanitizePrefs({ turn: 'curl' }).turn).toBe('auto');

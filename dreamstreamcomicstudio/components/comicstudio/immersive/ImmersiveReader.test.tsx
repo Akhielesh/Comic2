@@ -222,9 +222,13 @@ describe('ImmersiveReader', () => {
     const style = within(screen.getByRole('group', { name: 'Page turn style' }));
     expect(style.getAllByRole('radio').map((r) => r.closest('label')!.textContent)).toEqual(['Flip', 'Paper', 'Slide', 'Fade']);
     expect(style.getByRole('radio', { name: 'Flip' })).toBeChecked();
-    expect(style.getByRole('radio', { name: 'Flip' }).closest('label')).toHaveAttribute('title', expect.stringMatching(/the creator’s choice/));
+    expect(style.getByRole('radio', { name: 'Flip' }).closest('label')).toHaveAttribute('title', expect.stringMatching(/this comic’s own style/));
+    // Said on screen too (touch screens show no tooltips) and read with the group.
+    const group = screen.getByRole('group', { name: 'Page turn style' });
+    expect(group).toHaveAccessibleDescription(/^Flip is this comic’s own style\./);
     fireEvent.click(style.getByRole('radio', { name: 'Paper' }));
-    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'paper' });
+    // The reader's own pick carries its mark, so it is never read as #316's mode-switch 'paper'.
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'paper', turnPicked: true });
     fireEvent.click(screen.getByRole('radio', { name: 'Scroll' }));
     expect(screen.getByRole('radio', { name: 'Scroll' })).toBeChecked();
     expect(screen.queryByRole('group', { name: 'Page turn style' })).toBeNull();
@@ -234,6 +238,7 @@ describe('ImmersiveReader', () => {
     // Picking the creator's own style follows the creator again.
     fireEvent.click(within(screen.getByRole('group', { name: 'Page turn style' })).getByRole('radio', { name: 'Flip' }));
     expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'auto' });
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).not.toHaveProperty('turnPicked');
     press('Escape');
     expect(screen.queryByRole('dialog', { name: 'Reader settings' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));

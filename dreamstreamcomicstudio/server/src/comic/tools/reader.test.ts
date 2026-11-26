@@ -84,6 +84,18 @@ describe('set_reader_options', () => {
     expect(await tools().set_reader_options.execute({ turn: 'flip' })).toMatch(/already in place — nothing changed/);
   });
 
+  it('asking for the flip on a comic that never chose one stores nothing: readers already get it', async () => {
+    const { tools, session, ctx } = setup();
+    const rev = session.doc.rev;
+    expect(await tools().set_reader_options.execute({ turn: 'flip' })).toMatch(/^Those reader settings were already in place — nothing changed\./);
+    expect(readerOf(session.doc)).toEqual(DEFAULT_READER);
+    expect(session.doc.rev).toBe(rev);
+    expect(opsOf(ctx.events)).toEqual([]);
+    // With another change beside it, only that change is stored.
+    expect(await tools().set_reader_options.execute({ turn: 'flip', ambient: false })).toMatch(/^Done — the reading room stays plain dark\./);
+    expect(opsOf(ctx.events)).toEqual([{ op: 'reader', patch: { ambient: false } }]);
+  });
+
   it('an old comic’s stored default “paper” reads as the flip; asking for paper makes it the creator’s choice', async () => {
     const doc = drawnDoc();
     doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };

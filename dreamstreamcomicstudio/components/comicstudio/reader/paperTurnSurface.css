@@ -88,7 +88,9 @@
     padding: 0.75rem;
   }
 }
-.classic-paper-stage > .paper-turn-preview {
+/* The paper turn sizes its preview to the sheet's own box, so it drops the stage's padding. Slide and fade size theirs to
+   the whole stage, like the face, so they keep it and land at the face's size. */
+.classic-paper-stage[data-turn-kind='paper'] > .paper-turn-preview {
   padding: 0;
 }
 /* Flip (pageFlip.ts): the incoming page decodes out of sight, then the host shows it and it swings in from the spine. */

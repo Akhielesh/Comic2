@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project, TextLayout } from '../types';
 import { ComicReader } from './ComicReader';
@@ -439,11 +439,18 @@ describe('the page flip', () => {
     await open();
     key('ArrowRight');
     expect(made).toHaveBeenCalledTimes(1);
+    // Home and End are turns too: they sound like one.
+    key('End');
+    await waitFor(() => expect(made).toHaveBeenCalledTimes(2));
+    key('Home');
+    await waitFor(() => expect(made).toHaveBeenCalledTimes(3));
     window.localStorage.setItem('reader_sound', 'off');
     cleanupReaders();
     await open();
     key('ArrowRight');
-    expect(made).toHaveBeenCalledTimes(1);
+    key('End');
+    await act(async () => {});
+    expect(made).toHaveBeenCalledTimes(3);
     vi.unstubAllGlobals();
   });
 

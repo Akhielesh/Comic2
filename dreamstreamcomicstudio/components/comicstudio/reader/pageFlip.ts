@@ -10,8 +10,13 @@ export const FLIP_NEXT = 'animate-page-flip-next';
 export const FLIP_PREV = 'animate-page-flip-prev';
 /** The swing's length: index.css's 0.45 s (pageFlip.test.ts pins the two together). */
 export const FLIP_MS = 450;
-/** How long a flip waits for the incoming page's pictures to decode before it swings in anyway. */
+/**
+ * How long a turn waits for the incoming page's pictures to decode before it goes anyway: the inline flip (PaperTurnSurface)
+ * and the full-screen reader's never-blank hold (BookStage).
+ */
 export const FLIP_DECODE_MS = 1800;
+/** A swipe that turns the page with the flip (it never follows the finger): at least this long, mostly horizontal. */
+export const FLIP_SWIPE_PX = 45;
 
 /** Forward swings in from the left spine in a left-to-right book; a right-to-left book mirrors it (the classes swap). */
 export const flipClass = (dir: 1 | -1, rtl: boolean): string => ((dir > 0) !== rtl ? FLIP_NEXT : FLIP_PREV);
