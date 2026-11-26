@@ -314,6 +314,24 @@ export const creditRefusalOf = (err: unknown): CreditRefusal | undefined => {
 
 const keyRefused = (error: StudioError, kind: CreditRefusal): StudioError => Object.assign(error, { creditRefusal: kind });
 
+/**
+ * The same payer's other route, tried as the fallback after the first route was only busy (a rate limit or an outage),
+ * refused its key for credit. The error reported stays the first route's, so the run retries there, and this tells the
+ * run never to call the refused key again (excludeRoutes on the next attempt).
+ */
+export interface FallbackRefusal {
+  route: ImageRoute;
+  refusal: CreditRefusal;
+}
+
+/** The fallback route's credit refusal carried on an error the image generator threw, or undefined. */
+export const fallbackRefusalOf = (err: unknown): FallbackRefusal | undefined => {
+  const info = (err as { fallbackRefusal?: unknown } | null)?.fallbackRefusal as Partial<FallbackRefusal> | undefined;
+  if (!info || typeof info !== 'object') return undefined;
+  const refusal = creditRefusalOf({ creditRefusal: info.refusal });
+  return refusal && (info.route === 'openrouter' || info.route === 'gemini') ? { route: info.route, refusal } : undefined;
+};
+
 /** Map an HTTP / SDK / network failure to a StudioError. */
 export const classifyImageError = (
   err: unknown,
@@ -1284,6 +1302,10 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         // The first route was only paused (no call was made): the answer the user needs is the one the other route gave.
         const reported = isRoutePausedError(err) && altErr instanceof StudioError ? (altErr as StudioError & { spentUsd?: number }) : error;
         if (total > 0) reported.spentUsd = total;
+        // The first route was only busy but the other key was refused for credit: keep that refusal, so the run never
+        // falls back onto that key again (credit-safety.md §1) while it retries the first route.
+        const altRefusal = reported === altErr ? undefined : creditRefusalOf(altErr);
+        if (altRefusal) Object.assign(reported, { fallbackRefusal: { route: alt.route, refusal: altRefusal } satisfies FallbackRefusal });
         throw reported;
       }
     }

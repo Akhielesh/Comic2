@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getImageModel } from '../../../shared/comic/models.js';
 import { __resetSharedKeyCircuit } from '../ai/providerCircuit.js';
-import { __resetImageClientForTests, classifyImageError, createImageGenerator, creditRefusalOf, imageFailureInfo, type GeminiModelsLike } from './imageClient.js';
+import { __resetImageClientForTests, classifyImageError, createImageGenerator, creditRefusalOf, fallbackRefusalOf, imageFailureInfo, type GeminiModelsLike } from './imageClient.js';
 import { __setModelHealthForTests } from './models/health.js';
 import { fakeModelHealth } from './models/health.fakes.js';
 import type { ImageRequest, StudioKeys } from './types.js';
@@ -99,6 +99,59 @@ describe('excludeRoutes: a key refused in this run is never called again', () =>
     });
     await expect(generate(req({ preferRoute: 'gemini', excludeRoutes: ['openrouter'] }))).rejects.toMatchObject({ code: 'RATE_LIMIT' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a busy first route whose fallback key is refused for credit reports the busy route and keeps the refusal, so a retry never calls that key', async () => {
+    const fetchMock = vi.fn(async () => json({ error: { message: 'Rate limited' } }, 429));
+    const generateContent = vi.fn().mockRejectedValue(Object.assign(new Error('RESOURCE_EXHAUSTED generate_content_free_tier_requests, limit: 0'), { status: 429 }));
+    const generate = createImageGenerator(BOTH_OWN, {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: async () => undefined,
+      createGemini: () => ({ generateContent }) as GeminiModelsLike,
+      imageEndpoints: async () => null
+    });
+    const err = await generate(req()).catch((e) => e);
+    // The run retries the first route (a rate limit), and learns the other key must never be called again.
+    expect(err).toMatchObject({ code: 'RATE_LIMIT' });
+    expect(creditRefusalOf(err)).toBeUndefined();
+    expect(fallbackRefusalOf(err)).toEqual({ route: 'gemini', refusal: 'no_quota' });
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    // The run's next attempt excludes it: the first route is still busy (or paused by the breaker), and the refused key
+    // is not called again.
+    const again = await generate(req({ preferRoute: 'openrouter', excludeRoutes: ['gemini'] })).catch((e) => e);
+    expect(again).toMatchObject({ code: expect.stringMatching(/^(RATE_LIMIT|PROVIDER_ERROR)$/) });
+    expect(creditRefusalOf(again)).toBeUndefined();
+    expect(fallbackRefusalOf(again)).toBeUndefined();
+    expect(generateContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('an outage on the first route and a 402 on the other key keep that key\'s credit refusal too', async () => {
+    const fetchMock = vi.fn(async () => json({ error: { message: 'upstream unavailable' } }, 503));
+    const generateContent = vi.fn().mockRejectedValue(Object.assign(new Error('Insufficient credits'), { status: 402 }));
+    const generate = createImageGenerator(BOTH_OWN, {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: async () => undefined,
+      createGemini: () => ({ generateContent }) as GeminiModelsLike,
+      imageEndpoints: async () => null
+    });
+    const err = await generate(req()).catch((e) => e);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(creditRefusalOf(err)).toBeUndefined();
+    expect(fallbackRefusalOf(err)).toEqual({ route: 'gemini', refusal: 'credit' });
+  });
+
+  it('a fallback that was only busy too carries no refusal', async () => {
+    const fetchMock = vi.fn(async () => json({ error: { message: 'Rate limited' } }, 429));
+    const generateContent = vi.fn().mockRejectedValue(Object.assign(new Error('Rate limited'), { status: 429 }));
+    const generate = createImageGenerator(BOTH_OWN, {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: async () => undefined,
+      createGemini: () => ({ generateContent }) as GeminiModelsLike,
+      imageEndpoints: async () => null
+    });
+    const err = await generate(req()).catch((e) => e);
+    expect(err).toMatchObject({ code: 'RATE_LIMIT' });
+    expect(fallbackRefusalOf(err)).toBeUndefined();
   });
 
   it('with every route excluded, nothing is called and nothing is charged', async () => {

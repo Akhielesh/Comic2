@@ -109,6 +109,12 @@ export async function runDirectorDraft(ctx: StudioContext, idea: string, screenN
   const writerSource = before.source.script && before.source.script !== idea ? before.source.script + '\n\n' + idea : undefined;
   const instructions = [guidance, screenNote?.trim()].filter(Boolean).join('\n\n');
   const result = await planPages(ctx, { instructions }, { origin: 'director', draft: { assertActive, assertPlanUnchanged, writerSource } });
+  // Not enough credit to plan (credit-safety.md §2): the "Not enough credit" card is already in the chat and nothing
+  // was written or charged. The draft stops there, with the idea kept, so it can start again after a top-up.
+  if (result.status === 'blocked' && result.code === 'BILLING_DENIED' && session.doc.directorDraft?.status === 'planning') {
+    session.commit([{ op: 'director_draft', draft: { idea, status: 'interrupted' } }], { origin: 'job' });
+    return {};
+  }
   assertActive();
   if (result.status !== 'done') throw new StudioError(result.status === 'blocked' && result.code ? result.code : 'CONFLICT', result.message);
   const page = [...session.doc.pages].sort((a, b) => a.n - b.n)[0];

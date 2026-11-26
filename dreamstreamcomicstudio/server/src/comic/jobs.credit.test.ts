@@ -6,7 +6,9 @@ import type { CreditCard } from '../../../shared/comic/credit.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ProviderBalanceReport } from '../../../shared/providerBalances.js';
 import { registryPriceBook } from './models/index.js';
-import { JOB_TIMINGS, drawWhatFits, estimateSpendAction, runAction, runFeatureAction, startAction } from './jobs.js';
+import { JOB_TIMINGS, drawWhatFits, estimateSpendAction, heldUsdFor, pendingUsdOf, planPages, planPagesUsd, runAction, runFeatureAction, startAction } from './jobs.js';
+import { costViewFor } from './costText.js';
+import { PLATFORM_MARKUP } from '../../../shared/comic/models.js';
 import { actionHandlerFor } from './actions/index.js';
 import type { ActionHandler } from './extensions.js';
 import { classifyImageError } from './imageClient.js';
@@ -184,6 +186,46 @@ describe('MN-1: a run stops at once when its key runs out of credit', () => {
     expect(lastText(doc)).toMatch(/Stopped before pages 1–3: your OpenRouter and Gemini keys ran out of credit/);
   });
 
+  it('a busy first key whose fallback key was refused for credit: the retry stays on the first key and never calls the refused one', async () => {
+    const session = newSession(sheetsReady());
+    // OpenRouter answered 429, so the client tried the same model on Gemini, which has no image quota: the error the
+    // run sees is the rate limit, carrying the other key's refusal (imageClient fallbackRefusal).
+    const busyThenRefused = () =>
+      Object.assign(new StudioError('RATE_LIMIT', 'The image model is busy right now (rate limited).', { status: 429, retryable: true }), {
+        imageFailure: { route: 'openrouter', status: 429 },
+        fallbackRefusal: { route: 'gemini', refusal: 'no_quota' }
+      });
+    const images = fakeImages((req: ImageRequest, i) => (i === 0 ? busyThenRefused() : req.excludeRoutes?.includes('gemini') ? undefined : busyThenRefused()));
+    const ctx = testContext(session, { keys: OWN_BOTH, images });
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    const doc = session.doc;
+    expect(doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
+    // Every call after the refusal excludes the refused key and stays on the first one.
+    const after = images.calls.slice(1);
+    expect(after.length).toBeGreaterThanOrEqual(doc.pages.length);
+    expect(after.every((c) => c.excludeRoutes?.includes('gemini') && c.preferRoute === 'openrouter')).toBe(true);
+    // The run did not move and did not stop: no credit card, no "carried on" notice.
+    expect(creditCards(doc)).toEqual([]);
+    expect(allCards(doc).some((c) => c.type === 'notice' && /carried on/.test(c.text))).toBe(false);
+  });
+
+  it('a busy first key whose fallback was refused, then the first key refused too: the run stops and names both keys', async () => {
+    const session = newSession(sheetsReady());
+    const busyThenRefused = () =>
+      Object.assign(new StudioError('RATE_LIMIT', 'The image model is busy right now (rate limited).', { status: 429, retryable: true }), {
+        imageFailure: { route: 'openrouter', status: 429 },
+        fallbackRefusal: { route: 'gemini', refusal: 'credit' }
+      });
+    const images = fakeImages((req: ImageRequest) => (req.excludeRoutes?.includes('gemini') ? outOfCredit('openrouter') : busyThenRefused()));
+    const ctx = testContext(session, { keys: OWN_BOTH, images });
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    const doc = session.doc;
+    expect(doc.pages.map((p) => p.render.status)).toEqual(['none', 'none', 'none']);
+    const [card] = creditCards(doc);
+    expect(card).toMatchObject({ reason: 'stopped', payer: 'own_key', provider: 'openrouter', keys: [{ provider: 'gemini' }, { provider: 'openrouter' }] });
+    expect(images.calls.every((c, i) => i < 2 || c.excludeRoutes?.includes('gemini'))).toBe(true);
+  });
+
   it('a key with no image quota is named for what it is when the run carries on with the other key', async () => {
     const session = newSession(sheetsReady());
     const images = fakeImages((req: ImageRequest) =>
@@ -353,6 +395,79 @@ describe('MN-2: the balance check before spending', () => {
     expect(findPageStatus(session.doc, 1)).toBe('none');
   });
 
+  it('governed: an image already on the wire is counted once (the usage status holds it), so a step that fits still starts', async () => {
+    const doc = sheetsReady();
+    const session = newSession(doc);
+    const usage = { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 4 };
+    const before: StudioCaps = { ...DEFAULT_CAPS, usage };
+    const pctPerUsd = costViewFor(before).pctPerUsd!;
+    const onePct = (pageQuote(doc, 1, false) / PLATFORM_MARKUP) * pctPerUsd;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const images = fakeImages(async () => {
+      await held;
+      return undefined;
+    });
+    const billing = fakeBilling();
+    const ctx = testContext(session, { keys: PLATFORM, images, billing, caps: before, prices });
+    const first = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[0].id] }, { confirmed: true, caps: before });
+    expect(first.outcome.status).toBe('started');
+    await vi.waitFor(() => expect(images.calls).toHaveLength(1));
+    // Page 1's hold is made, so only the own-key check sets it aside; the allowance's status already counts it.
+    expect(pendingUsdOf(session)).toBeGreaterThan(0);
+    expect(heldUsdFor(session, { byok: true })).toBe(pendingUsdOf(session));
+    expect(heldUsdFor(session, { byok: false })).toBeCloseTo(0, 4);
+    // The status the next request reads includes page 1's in-flight hold: one and a half pages are left after it.
+    const after: StudioCaps = { ...DEFAULT_CAPS, usage: { ...usage, pctLeft: Math.round(onePct * 1.5 * 10) / 10 } };
+    Object.assign(ctx, { caps: after });
+    const second = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[1].id] }, { confirmed: true, caps: after });
+    expect(second.outcome.status).toBe('started');
+    expect(creditCards(session.doc)).toEqual([]);
+    release();
+    await first.done;
+    await second.done;
+    expect([findPageStatus(session.doc, 0), findPageStatus(session.doc, 1)]).toEqual(['ready', 'ready']);
+    // Every hold settled: nothing is left counted as on the wire or held.
+    expect(heldUsdFor(session, { byok: false })).toBe(0);
+    expect(pendingUsdOf(session)).toBe(0);
+  });
+
+  it('governed: a page that has no hold yet is still set aside', async () => {
+    const doc = sheetsReady();
+    const session = newSession(doc);
+    const usage = { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 4 };
+    const before: StudioCaps = { ...DEFAULT_CAPS, usage };
+    const pctPerUsd = costViewFor(before).pctPerUsd!;
+    const onePct = (pageQuote(doc, 1, false) / PLATFORM_MARKUP) * pctPerUsd;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const images = fakeImages(async () => {
+      await held;
+      return undefined;
+    });
+    // The billing hold itself waits, so page 1 is quoted and held but not yet on the wire.
+    const billing = fakeBilling();
+    const reserve = billing.reserve.bind(billing);
+    let letReserve: () => void = () => undefined;
+    const reserving = new Promise<void>((resolve) => (letReserve = resolve));
+    billing.reserve = async (args) => {
+      await reserving;
+      return reserve(args);
+    };
+    const ctx = testContext(session, { keys: PLATFORM, images, billing, caps: before, prices });
+    const first = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[0].id] }, { confirmed: true, caps: before });
+    expect(first.outcome.status).toBe('started');
+    expect(heldUsdFor(session, { byok: false })).toBe(pendingUsdOf(session));
+    const after: StudioCaps = { ...DEFAULT_CAPS, usage: { ...usage, pctLeft: Math.round(onePct * 1.5 * 10) / 10 } };
+    Object.assign(ctx, { caps: after });
+    const second = await startAction(ctx, { type: 'render_pages', pageIds: [doc.pages[1].id] }, { confirmed: true, caps: after });
+    expect(second.outcome.status).toBe('blocked');
+    expect(creditCards(session.doc)[0]).toMatchObject({ reason: 'short', payer: 'allowance', held: true });
+    letReserve();
+    release();
+    await first.done;
+  });
+
   it('draws on the person\'s other key when the known one is short and the other could pay (never blocked on unknown)', async () => {
     const session = newSession(sheetsReady());
     const images = fakeImages(() => ({ route: 'gemini', byok: true, model: 'gemini-nano-banana-2.1' }));
@@ -395,6 +510,63 @@ describe('MN-2: the balance check before spending', () => {
       expect(run).toHaveBeenCalledTimes(1);
     } finally {
       vi.mocked(actionHandlerFor).mockImplementation(real);
+    }
+  });
+
+  it('Plan the pages on an empty own key: the writer never runs, nothing is charged, and one "Not enough credit" card says why', async () => {
+    const doc = plannedDoc();
+    doc.pages = [];
+    doc.planStatus = 'none';
+    const session = newSession(doc);
+    const billing = fakeBilling();
+    const ctx = withCredit(testContext(session, { keys: OWN_OR, billing, prices }), port(reading(0)));
+    const started = await startAction(ctx, { type: 'plan_pages' }, { confirmed: true });
+    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'BILLING_DENIED' });
+    expect(ctx.llmFake.calls).toEqual([]);
+    expect(billing.reserves).toEqual([]);
+    expect(session.doc.pages).toEqual([]);
+    expect(session.doc.planStatus).toBe('none');
+    const [card] = creditCards(session.doc);
+    // The need is the quote's honest bound: one writer pass, and up to one more if the plan check sends it back.
+    expect(card).toMatchObject({ reason: 'short', payer: 'own_key', provider: 'openrouter', what: 'the page plan', leftUsd: 0, needUsd: 2 * planPagesUsd(doc, true, prices) });
+    expect(card.fits).toBeUndefined();
+    expect(lastText(session.doc)).toMatch(/^Not enough credit, so I haven't started the page plan: it needs ≈ \$\d+\.\d\d and your OpenRouter key has \$0\.00 left\. Nothing was charged\.$/);
+  });
+
+  it('rewriting a page is checked the same way (revise_pages and a written new page go through planPages)', async () => {
+    const doc = plannedDoc();
+    const session = newSession(doc);
+    const ctx = withCredit(testContext(session, { keys: OWN_OR, prices }), port(reading(0)));
+    const outcome = await planPages(ctx, { instructions: 'Make it a splash page.', pageIds: [doc.pages[1].id] });
+    expect(outcome).toMatchObject({ status: 'blocked', code: 'BILLING_DENIED' });
+    expect(ctx.llmFake.calls).toEqual([]);
+    expect(creditCards(session.doc)[0]).toMatchObject({ reason: 'short', what: 'rewriting page 2' });
+  });
+
+  it('governed planning with no usage left: the writer never runs and the card speaks in shares, never dollars', async () => {
+    const doc = plannedDoc();
+    doc.pages = [];
+    doc.planStatus = 'none';
+    const session = newSession(doc);
+    const caps: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 0, exhausted: true, pctPerStandardPage: 4 } };
+    const ctx = testContext(session, { keys: PLATFORM, caps, prices });
+    await runAction(ctx, { type: 'plan_pages' }, { confirmed: true, caps });
+    expect(ctx.llmFake.calls).toEqual([]);
+    const [card] = creditCards(session.doc);
+    expect(card).toMatchObject({ reason: 'short', payer: 'allowance', what: 'the page plan' });
+    expect(lastText(session.doc)).not.toContain('$');
+  });
+
+  it('planning with room on the key, or an unknown balance, runs the writer as before', async () => {
+    for (const credit of [port(reading(50)), port(null)]) {
+      const doc = plannedDoc();
+      doc.pages = [];
+      doc.planStatus = 'none';
+      const session = newSession(doc);
+      const ctx = withCredit(testContext(session, { keys: OWN_OR, prices }), credit);
+      await runAction(ctx, { type: 'plan_pages' }, { confirmed: true }).catch(() => undefined);
+      expect(ctx.llmFake.calls.length).toBeGreaterThan(0);
+      expect(creditCards(session.doc)).toEqual([]);
     }
   });
 

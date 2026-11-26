@@ -10,8 +10,9 @@
 -- The index holds only tagged rows (a small share of the ledger), newest first. Its predicate is the one condition
 -- the read states as a literal (PostgREST sends the entry types as a parameter, which a partial index predicate
 -- cannot be matched against in a generic plan), so the planner can always use it; entry_type is filtered on the few
--- rows it returns. Additive and idempotent: nothing is dropped or rewritten, and the server works the same with or
--- without it (only faster with it).
+-- rows it returns. Additive and idempotent: nothing is dropped or rewritten. Without it nothing breaks, but once the
+-- ledger is large the read times out and planning, style directions and translations are quoted at the fixed figures
+-- again (never under them, but no longer at what they really cost).
 --
 -- Apply AFTER server/sql/token_billing_foundation.sql. On a large ledger, build it without blocking writes instead:
 -- run `create index concurrently if not exists …` (the same statement with CONCURRENTLY) on its own, outside a

@@ -10,6 +10,7 @@ import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.j
 import { JOB_TIMINGS, estimateSpendAction, startAction, type RunActionOptions } from '../jobs.js';
 import { registryPriceBook } from '../models/index.js';
 import { fakeImages, newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
+import { classifyImageError } from '../imageClient.js';
 import { checkRenderSafety, onRenderVerdict } from '../safety/index.js';
 import { StudioError, type StudioKeys } from '../types.js';
 import { analyzePageRender } from '../vision.js';
@@ -330,3 +331,85 @@ describe("change_image_model 'all': sheets first, pages only on new-model sheets
   });
 });
 
+
+describe("change_image_model with a key that can't pay (credit-safety.md)", () => {
+  const OWN: StudioKeys = { openrouter: { key: 'sk-or-synthetic-owner', byok: true } };
+  // Drawing on their own key: prices in dollars.
+  const OWN_CAPS: StudioCaps = { ...PAID, byok: true };
+  const OWN_UI: RunActionOptions = { ...UI, caps: OWN_CAPS };
+  const reading = (remaining: number) => ({
+    provider: 'openrouter' as const,
+    status: 'reported' as const,
+    checkedAt: Date.now(),
+    accountBalances: null,
+    keyQuotaUsd: { limit: 20, remaining, usage: 20 - remaining }
+  });
+  const creditCards = (doc: ComicDoc) => doc.conversation.flatMap((m) => m.cards || []).filter((c) => c.type === 'credit');
+  const outOfCredit = () => Object.assign(classifyImageError({ status: 402, message: 'Insufficient credits' }, { route: 'openrouter', byok: true }), { imageFailure: { route: 'openrouter', status: 402 } });
+
+  it('a redraw the own key is known to be short of switches NOTHING: one "Not enough credit" card and Switch without redrawing', async () => {
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS });
+    Object.assign(ctx, { credit: { ownKeyBalance: async () => reading(0.05) } });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'BILLING_DENIED' });
+    // The book stays whole on its model: no lock change, no image, no hold.
+    expect(session.doc.imageModel).toBeUndefined();
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+    const cards = creditCards(session.doc);
+    expect(cards).toEqual([expect.objectContaining({ reason: 'short', payer: 'own_key', leftUsd: 0.05, what: 'switching to Nano Banana Pro and redrawing 5 pages, the cover and 4 character sheets' })]);
+    const msg = session.doc.conversation.at(-1)!;
+    expect(msg.text).toMatch(/^Not enough credit, so I haven't started switching to Nano Banana Pro and redrawing .+: it needs ≈ \$\d+\.\d\d and your OpenRouter key has \$0\.05 left\. Nothing was charged\.$/);
+    expect(msg.nextSteps?.map((s) => s.label)).toEqual(['Switch without redrawing']);
+  });
+
+  it('with room on the key the same switch redraws as before', async () => {
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS });
+    Object.assign(ctx, { credit: { ownKeyBalance: async () => reading(19) } });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(session.doc.imageModel?.modelId).toBe('nano-banana-pro');
+    expect(creditCards(session.doc)).toEqual([]);
+  });
+
+  it('the sheets run stops on an empty key: its credit card is the one story, and Draw the rest then offers the pages and cover', async () => {
+    let refuse = true;
+    const images = fakeImages((_req, i) => (refuse && i > 0 ? outOfCredit() : { route: 'openrouter', byok: true, model: 'google/gemini-3-pro-image-preview' }));
+    const { session, ctx } = setup(lake(), { keys: OWN, caps: OWN_CAPS, images });
+    const quotedUsd = redrawQuote(session.doc, 'nano-banana-pro', 'all', registryPriceBook(), true).usd!;
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), OWN_UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    // The pages never started, and nothing but the stop card follows: no "weren't redrawn" notice, no paid chip.
+    expect(session.doc.pages.every((p) => p.render.asset?.model === 'nano-banana-2.1')).toBe(true);
+    expect(session.doc.conversation.some((m) => /weren't redrawn|waits for the new character sheets/.test(m.text))).toBe(false);
+    const cards = creditCards(session.doc);
+    expect(cards).toHaveLength(1);
+    const [card] = cards as Extract<(typeof cards)[number], { type: 'credit' }>[];
+    expect(card).toMatchObject({ reason: 'stopped', rest: { action: { type: 'render_sheets' } } });
+    const last = session.doc.conversation.at(-1)!;
+    expect((last.nextSteps || []).some((s) => !!s.action)).toBe(false);
+    // After a top-up, Draw the rest finishes the sheets on the new model and offers what the switch still owes.
+    refuse = false;
+    const rest = await startAction(ctx, card.rest!.action, OWN_UI);
+    expect(rest.outcome.status).toBe('started');
+    await rest.done;
+    expect(session.doc.cast.every((c) => c.sheet.asset?.model === 'nano-banana-pro')).toBe(true);
+    const offer = session.doc.conversation.at(-1)!.nextSteps?.find((s) => /^Redraw 5 pages and the cover · /.test(s.label));
+    expect(offer).toMatchObject({ action: { type: 'render_pages', force: true, includeCover: true, pageIds: session.doc.pages.map((p) => p.id), quotedUsd: expect.any(Number) } });
+  });
+
+  it('a switch whose chain finished on the new model offers nothing more after a later sheet', async () => {
+    const { session, ctx } = setup(lake());
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    await started.done;
+    expect(session.doc.pages.every((p) => p.render.asset?.model === 'nano-banana-pro')).toBe(true);
+    const again = await startAction(ctx, { type: 'render_sheets', characterIds: [session.doc.cast[0].id], force: true }, UI);
+    await again.done;
+    expect((session.doc.conversation.at(-1)!.nextSteps || []).some((s) => /^Redraw \d+ pages?/.test(s.label))).toBe(false);
+  });
+});
