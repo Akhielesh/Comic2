@@ -9,6 +9,8 @@ import {
   STAGE_PLACE,
   STAGE_UNKNOWN,
   comicStage,
+  pageStanding,
+  pictureStanding,
   publicationBehind,
   readStageFacts,
   stageFacts,
@@ -364,6 +366,41 @@ describe('stage boundaries', () => {
       expect(next).not.toHaveProperty('action');
     }
     expect(STAGE_PLACE).toEqual({ story: 'story', style: 'style', plan: 'pages', draw: 'pages', publish: 'read' });
+  });
+});
+
+describe('one page’s standing (the side panel’s parts tree reads it)', () => {
+  it('every page reads one standing, and the standings add up to the stage’s own counts', () => {
+    const doc = planned(9);
+    doc.pages[0].render = render('ready', picture());
+    doc.pages[1].render = render('stale', picture());
+    doc.pages[2].render = { ...render('ready', picture()), specHash: 'drawn-from-an-older-script' };
+    doc.pages[3].render = render('rendering', picture());
+    doc.pages[4].render = render('failed', picture());
+    doc.pages[5].render = render('queued');
+    doc.pages[6].render = render('ready', blocked());
+    doc.pages[7].render = render('failed');
+    doc.pages[8] = { ...doc.pages[8], panels: [] };
+    const standings = doc.pages.map((p) => pageStanding(doc, p));
+    expect(standings).toEqual(['current', 'out_of_date', 'out_of_date', 'redrawing', 'redraw_failed', 'drawing', 'withheld', 'failed', 'empty']);
+    const facts = stageFacts(doc);
+    const count = (...kinds: string[]) => standings.filter((s) => kinds.includes(s)).length;
+    expect(facts.current).toBe(count('current'));
+    expect(facts.outOfDate).toBe(count('out_of_date'));
+    expect(facts.drawn).toBe(count('current', 'out_of_date', 'redrawing', 'redraw_failed'));
+    expect(facts.drawing).toBe(count('drawing'));
+    expect(facts.withheld).toBe(count('withheld'));
+    expect(facts.failed).toBe(count('failed'));
+  });
+
+  it('older pages read as far as their fields go: no render, no panels, a picture with no plan', () => {
+    const doc = planned(1);
+    const bare = { id: 'pg_old', n: 2 } as unknown as Page;
+    expect(pageStanding(doc, bare)).toBe('empty');
+    expect(pageStanding(doc, { ...bare, render: render('ready', picture()) } as Page)).toBe('current');
+    expect(pictureStanding(undefined)).toBe('empty');
+    expect(pictureStanding(render('none'), false, true)).toBe('planned');
+    expect(pictureStanding(render('stale', picture()))).toBe('out_of_date');
   });
 });
 
