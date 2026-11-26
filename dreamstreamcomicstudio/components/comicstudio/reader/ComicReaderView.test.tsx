@@ -675,8 +675,12 @@ describe('ComicReaderView on devices', () => {
     const lead = within(toolbar).getByTestId('reader-toolbar-lead');
     expect(lead.className).toMatch(/\boverflow-x-auto\b/);
     expect(lead.className).toContain('[&>*]:shrink-0');
-    expect(lead).toContainElement(within(toolbar).getByTestId('reader-counter'));
     expect(lead).toContainElement(within(toolbar).getByRole('radiogroup', { name: 'Reading mode' }));
+    // The arrows and the counter are pinned beside the lead, never under its fade (320 px: Next reads as enabled).
+    const nav = within(toolbar).getByTestId('reader-page-nav');
+    expect(lead).not.toContainElement(nav);
+    expect(nav).toContainElement(within(toolbar).getByTestId('reader-counter'));
+    expect(nav.className).toMatch(/\bshrink-0\b/);
     const actions = within(toolbar).getByTestId('reader-toolbar-actions');
     expect(actions.className).toMatch(/\bshrink-0\b/);
     expect(actions).toContainElement(within(toolbar).getByRole('button', { name: 'More' }));

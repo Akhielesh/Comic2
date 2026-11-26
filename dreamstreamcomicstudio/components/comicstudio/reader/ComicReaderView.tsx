@@ -39,7 +39,8 @@ import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOp
 import { availableCachedPath, connectionHints, pageImageCache } from '../immersive/pageImageCache';
 import { SlotContentView, slotImageSource, useReaderFrameUrl, type SlotImage } from '../immersive/ReaderSlot';
 import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookGeometry, type BookView, type LayoutPref } from '../immersive/readerLayout';
-import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition } from '../immersive/readerPrefs';
+import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition, type ReaderPrefs } from '../immersive/readerPrefs';
+import { playPageTurn } from '../immersive/paperSound';
 import { createUrlSync } from '../immersive/readerUrl';
 import { useBackLayer } from '../mobile/backStack';
 import { useFormFactor } from '../mobile/useFormFactor';
@@ -364,6 +365,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const t = useCallback((key: Parameters<typeof readerString>[1], vars?: Record<string, string | number>) => readerString(chromeLang, key, vars), [chromeLang]);
   const fallback = useMemo(() => (localized !== doc ? fallbackLineIds(localized) : []), [localized, doc]);
   const drawnPages = items.filter(item => item.kind === 'page').length;
+  // "Page 9 of 12": the book's page count (pages are numbered in the book, drawn or not), never just the drawn ones.
+  const bookPages = Math.max(localized.pages.length, ...items.map((item) => item.page?.n ?? 0));
   const rtl = localized.format.readingDirection === 'rtl';
   const kind = localized.format.kind;
   const trim = useMemo(() => trimAspect(items, aspectNumber(localized.format.pageAspect)), [items, localized.format.pageAspect]);
@@ -383,11 +386,16 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   // ── Device, prefs ─────────────────────────────────────────────────────────
   const ff = useFormFactor();
-  const reduced = usePrefersReducedMotion() || ff.reducedMotion;
+  // The reader's own settings (the full-screen reader's sheet writes them): turn style, sound, Reduce motion. Read again
+  // when the full-screen reader closes, so a change made there applies here at once.
+  const [prefs, setPrefs] = useState<ReaderPrefs>(readPrefs);
+  // Reduce motion: the OS setting, the device's, or the reader's own; every turn then lands at once.
+  const reduced = usePrefersReducedMotion() || ff.reducedMotion || prefs.reduceMotion;
   // Phone landscape: the host pane is ~100 px tall, so the toolbar is one dense row (icon-only
   // segments, no wrapping) — ui-findings 2026-10-29, board/read at 734×343.
   const compactH = ff.heightClass === 'compact';
-  const eff = useMemo(() => effectiveReader(creator, readPrefs(), kind), [creator, kind]);
+  // The turn style: the reader's choice, else the creator's, else the page flip (readerPrefs turnStyleFor).
+  const eff = useMemo(() => effectiveReader(creator, prefs, kind), [creator, prefs, kind]);
   const net = useMemo(() => connectionHints(), []);
   const img = useMemo<SlotImage>(
     () => ({ urlFor, dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, saveData: ff.saveData || net.saveData, original: false }),
@@ -404,6 +412,15 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const rootRef = useRef<HTMLDivElement>(null);
   const [rootSizeRef, rootSize] = useElementSize<HTMLDivElement>();
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
+  // The stage box is a size ref AND, fit to width (a webtoon, a phone in landscape), the page's vertical scroller.
+  const stageScroller = useRef<HTMLDivElement | null>(null);
+  const setStageBox = useCallback(
+    (el: HTMLDivElement | null) => {
+      stageScroller.current = el;
+      stageRef(el);
+    },
+    [stageRef]
+  );
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1024;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 768;
   const boxW = rootSize.width || winW;
@@ -548,7 +565,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     setNote(null);
     goToView(viewIdx + direction);
     hideChromeNow();
-  }, [goToView, viewIdx, hideChromeNow]);
+    // The reader's page-turn sound (off unless they turned it on), as the new page comes in.
+    if (prefs.sound && !reduced && views[viewIdx + direction]) playPageTurn('turn');
+  }, [goToView, viewIdx, hideChromeNow, prefs.sound, reduced, views]);
   const go = useCallback(
     (delta: number) => {
       if (!delta) return;
@@ -596,9 +615,16 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         const c = scrollRef.current;
         if (c) c.scrollTop = e.key === 'Home' ? 0 : c.scrollHeight;
       } else {
-        setNote(null);
-        turnRef.current?.cancel();
-        goToView(e.key === 'Home' ? 0 : views.length - 1);
+        // Home and End turn the page as every other turn does (the flip swings the first or last view in).
+        const target = e.key === 'Home' ? 0 : views.length - 1;
+        if (target === viewIdx) return;
+        const move = () => {
+          setNote(null);
+          goToView(target);
+          hideChromeNow();
+        };
+        if (turnRef.current) turnRef.current.jump(target > viewIdx ? 1 : -1, move, viewPreview(target));
+        else move();
       }
       return;
     }
@@ -684,6 +710,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const closeImmersive = useCallback(() => {
     const n = immersivePage.current;
     setImmersive(null);
+    setPrefs(readPrefs());
     if (n !== null && items.length) {
       const r = resolvePageN(items, n);
       setPos({ key: items[r.index]?.key ?? null, end: false });
@@ -793,6 +820,16 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     return bookGeometry({ view, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment && hingeX ? hingeX : undefined });
   }, [stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
   const geo = useMemo(() => currentView && layout !== 'scroll' ? geometryFor(currentView) : null, [currentView, layout, geometryFor]);
+  // Fit to width, the page scrolls inside the stage box: a new page opens at its top going forward, at its foot coming
+  // back (where you left the page before it), never mid-page where the last one was scrolled to.
+  const lastView = useRef(viewIdx);
+  useLayoutEffect(() => {
+    const back = viewIdx < lastView.current;
+    lastView.current = viewIdx;
+    const box = stageScroller.current;
+    if (!box || decision.fit !== 'width' || layout === 'scroll') return;
+    box.scrollTop = back ? box.scrollHeight : 0;
+  }, [currentView?.key, decision.fit, layout]);
   /** The zoomable canvases: one over the stage, or one per segment on a dual-screen device. */
   const panes = useMemo(() => {
     if (!geo) return [];
@@ -948,6 +985,20 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     </div>
   ) : null;
 
+  const pageNav = layout !== 'scroll' ? (
+    <div className={cx('flex items-center gap-0.5', oneRow && 'shrink-0')} data-testid="reader-page-nav">
+      <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
+        <ChevronLeft className="h-4 w-4" />
+      </IconButton>
+      <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', oneRow ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
+        {counter}
+      </span>
+      <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
+        <ChevronRight className="h-4 w-4" />
+      </IconButton>
+    </div>
+  ) : null;
+
   const toolbar = (
     <div
       ref={(el) => {
@@ -978,19 +1029,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         }
       >
         {!continuous && items.length > 1 && <Segmented label="Reading mode" size="xs" value={layoutValue} onChange={value => setLayoutChoice(value === 'scroll' ? 'scroll' : pagedPref.current)} options={layoutOptions} />}
-        {layout !== 'scroll' && (
-          <div className="flex items-center gap-0.5">
-            <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
-              <ChevronLeft className="h-4 w-4" />
-            </IconButton>
-            <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', oneRow ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
-              {counter}
-            </span>
-            <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
-              <ChevronRight className="h-4 w-4" />
-            </IconButton>
-          </div>
-        )}
+        {!oneRow && pageNav}
         {layout === 'scroll' && <span className="text-[12px] text-[var(--ds-muted)]">{counter}</span>}
         {rating && <RatingBadge rating={rating} reason={ratingReason} />}
         {/* At a compact height the two information chips are read out, not drawn: the one row needs the room
@@ -1011,6 +1050,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           </span>
         )}
       </div>
+      {/* One row (a phone, a short pane): the arrows and the counter stay pinned beside the scrolling lead, never under
+          its fade, so Next reads as enabled at 320 px. */}
+      {oneRow && pageNav}
       <div className={cx('ml-auto flex items-center gap-1', oneRow ? 'shrink-0' : 'min-w-0')} data-testid="reader-toolbar-actions">
         {toolbarExtra}
         {language && <ReaderLanguagePicker {...language} source={doc.format.language} compact={narrow} />}
@@ -1096,7 +1138,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       const c = slot.content;
       if (c.kind === 'blank') return null;
       const item = c.kind === 'item' ? items[c.index] : undefined;
-      const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: drawnPages })) : undefined;
+      const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: bookPages })) : undefined;
       return (
         <div
           key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
@@ -1125,6 +1167,21 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       );
     });
 
+  /** Another view, scaled into this book box: the page a turn brings in (and the page Home or End jumps to). */
+  function viewPreview(v: number): React.ReactNode {
+    const next = views[v];
+    if (!next || !geo) return null;
+    const target = geometryFor(next);
+    const scale = Math.min(geo.book.w / target.book.w, geo.book.h / target.book.h);
+    return (
+      <div className="absolute" style={{ width: target.book.w, height: target.book.h,
+        left: (geo.book.w - target.book.w * scale) / 2, top: (geo.book.h - target.book.h * scale) / 2,
+        transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+        {renderSlots(target, target.slots.map((_, index) => index), true)}
+      </div>
+    );
+  }
+
   // Apply the fold to the paper itself. Separate physical screen segments retain independent zoom/pan.
   const bookAt = (indices: number[], dx: number, region: boolean) => {
     if (!geo || !currentView) return null;
@@ -1139,22 +1196,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             rtl={rtl}
             spread={viewLayout === 'spread'}
             isZoomed={zoomedIn}
+            turnStyle={eff.turn}
+            reducedMotion={reduced}
+            // A spread swings as a pair around its spine; a single page from its own spine edge (the class's).
+            flipOrigin={viewLayout === 'spread' ? `${geo.spineX}px 50%` : undefined}
             canTurn={direction => !!views[viewIdx + direction]}
             onTurn={commitTurn}
             className="relative h-full w-full"
-            renderAdjacent={direction => {
-              const next = views[viewIdx + direction];
-              if (!next) return null;
-              const target = geometryFor(next);
-              const scale = Math.min(geo.book.w / target.book.w, geo.book.h / target.book.h);
-              return (
-                <div className="absolute" style={{ width: target.book.w, height: target.book.h,
-                  left: (geo.book.w - target.book.w * scale) / 2, top: (geo.book.h - target.book.h * scale) / 2,
-                  transform: `scale(${scale})`, transformOrigin: 'top left' }}>
-                  {renderSlots(target, target.slots.map((_, index) => index), true)}
-                </div>
-              );
-            }}
+            renderAdjacent={direction => viewPreview(viewIdx + direction)}
           >{face}</PaperTurnSurface>
         ) : face}
       </div>
@@ -1288,7 +1337,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           style={frame.flushBottom ? { marginBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
           data-testid="reader-scroll"
         >
-          <div className={cx('mx-auto flex max-w-[860px] flex-col items-stretch px-3 py-4', kind === 'webtoon' ? 'gap-0' : 'gap-5', autoHide && 'pt-14')}>
+          <div
+            className={cx('mx-auto flex max-w-[860px] flex-col items-stretch px-3 py-4', kind === 'webtoon' ? 'gap-0' : 'gap-5')}
+            // Auto-hide chrome overlays the top: the first page starts below the toolbar's measured height.
+            style={autoHide && toolbarSize.height ? { paddingTop: toolbarSize.height + 16 } : undefined}
+          >
             {items.map((item, i) => (
               <ScrollPage key={item.key} doc={localized} item={item} img={img} paper={eff.paper} eager={i < 2} onImageError={onImageError} />
             ))}
@@ -1307,7 +1360,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           className="relative min-h-0 flex-1 select-none"
           // Flush with the screen's bottom edge: the home-indicator inset is kept clear (--sa-bottom-eff
           // collapses while a keyboard is up). The inner box is what the geometry measures.
-          style={{ ...(frame.flushBottom ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : null), touchAction: viewportZoomed ? 'manipulation' : 'pan-y pinch-zoom' }}
+          // Auto-hide chrome overlays the stage: the page is laid out below the toolbar's measured height, never under it.
+          style={{ ...(frame.flushBottom ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : null), ...(autoHide && toolbarSize.height ? { paddingTop: toolbarSize.height } : null), touchAction: viewportZoomed ? 'manipulation' : 'pan-y pinch-zoom' }}
           data-zoomed={viewportZoomed ? 'true' : undefined}
           onPointerDown={(e) => {
             if (e.isPrimary || pointers.current.size === 0) {
@@ -1355,7 +1409,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           }}
         >
           <div
-            ref={stageRef}
+            ref={setStageBox}
             data-testid="reader-stage-box"
             className={cx('relative h-full w-full', decision.fit === 'width' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden')}
             // Without the reader's own zoom (fit to width, zoomable off) the browser may pinch-zoom the page; with it,
