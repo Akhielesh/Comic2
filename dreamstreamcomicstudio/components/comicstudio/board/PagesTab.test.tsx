@@ -6,6 +6,9 @@ import type { ComicDoc, Gate } from '../../../shared/comic/doc';
 import { ACCENT_FILL } from '../../chat/studioDesign';
 import { formatUsd } from '../../../shared/comic/models';
 import { quoteRenderPages } from '../../../shared/comic/plan';
+import { layoutFitFix } from '../../../shared/comic/layoutFit';
+import { splitHeldBack } from '../../../shared/comic/pagePlanCheck';
+import type { Page } from '../../../shared/comic/doc';
 import { PagesTab, DENSITY_KEY } from './PagesTab';
 import { byokFromDoc, estimateDraw, estimateOne, pagesForIds, pagesToDraw } from './boardModel';
 import { SAMPLE_NOW, asset, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
@@ -236,6 +239,37 @@ describe('PagesTab', () => {
       expect(header().textContent).not.toContain('$');
       fireEvent.click(within(header()).getByRole('button', { name: 'Open page 2' }));
       expect(studio.openPage).toHaveBeenCalledWith('pg_2');
+      expect(studio.act).not.toHaveBeenCalled();
+    });
+
+    it('every page left is held back and a layout fits: the free fix is offered first, and it only patches', async () => {
+      const say = (n: number, seed = 0) => Array.from({ length: n }, (_, i) => WORDS[(seed + i) % WORDS.length]).join(' ');
+      const sp = (id: string, n: number, seed = 0) => ({ id, kind: 'speech' as const, speakerId: 'ch_maya', text: say(n, seed) });
+      const pn = (n: number, over: Partial<Page['panels'][number]>): Page['panels'][number] => ({ id: `pg_2_p${n}`, n, size: 'medium', shot: 'medium', action: `Beat ${n}.`, castIds: ['ch_maya'], lines: [], ...over });
+      const doc = makeSampleDoc((d) => {
+        const p2 = d.pages.find((p) => p.id === 'pg_2')!;
+        // Two equal / one wide / three small: panels 5 and 6 are too full for their small cells, and a blueprint fits.
+        p2.layout = 'Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.';
+        p2.panels = [
+          pn(1, { shot: 'wide', lines: [sp('l1', 10)] }),
+          pn(2, { lines: [{ id: 'l2', kind: 'sfx', text: 'BZZT' }] }),
+          pn(3, { size: 'wide', shot: 'wide' }),
+          pn(4, { size: 'small', shot: 'insert', castIds: [], lines: [{ id: 'l4', kind: 'sfx', text: 'CLICK' }] }),
+          pn(5, { size: 'small', shot: 'close_up', lines: [sp('l5', 17, 3)] }),
+          pn(6, { size: 'small', lines: [sp('l6a', 15, 5), sp('l6b', 14, 9)] })
+        ];
+        d.pages = d.pages.filter((p) => p.id === 'pg_1' || p.id === 'pg_2');
+        d.planStatus = 'approved';
+      });
+      const layout = splitHeldBack(doc, ['pg_2']).heldBack[0]?.layoutFix;
+      const ops = layoutFitFix(doc, doc.pages.find((p) => p.id === 'pg_2')!, layout);
+      expect(ops).not.toBeNull();
+      expect(allQuote(doc)).toMatchObject({ pageIds: [], heldBackIds: ['pg_2'] });
+      const studio = dollarStudio(doc);
+      render(<PagesTab studio={studio} doc={doc} />);
+      fireEvent.click(within(header()).getByRole('button', { name: /^Use the layout that fits page 2/ }));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(studio.patch).toHaveBeenCalledWith(ops, { label: 'Use the layout that fits' });
       expect(studio.act).not.toHaveBeenCalled();
     });
 

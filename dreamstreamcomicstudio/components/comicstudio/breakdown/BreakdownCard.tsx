@@ -72,8 +72,8 @@ import {
   type PanelSummary,
   type PageSummary
 } from '../../../shared/comic/plan';
-import { applyOps, layoutFixOps, type DocOp, type StudioAction } from '../../../shared/comic/ops';
-import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
+import type { DocOp, StudioAction } from '../../../shared/comic/ops';
+import { layoutFitFix } from '../../../shared/comic/layoutFit';
 import { needMeter } from '../../../shared/comic/density';
 import { letteringAspect } from '../../../shared/comic/lettering/layout';
 import { panelWords, textUnitFor, unitCount, type TextUnit } from '../../../shared/comic/panelRules';
@@ -225,21 +225,8 @@ export const fitWords = (dot: FitDot, words: number, budget: number, unit: Pick<
   return `Fits (${words} of ${unitCount(budget, u)})`;
 };
 
-/**
- * The free "Use the layout that fits" fix for a held-back page (K1 contract, the server's heldBackLayoutFixOps):
- * the shared `layoutFixOps` — the blueprint PLUS panel sizes that agree with it; a bare `page.layout` patch would
- * leave a 'wide' panel in a shared row and the prompt would draw the old, overfull layout. Null (no chip) when it
- * gives no ops, or when the page is still overfull once they are applied.
- */
-export const layoutFitFix = (doc: ComicDoc, page: Page, layout: string | undefined): DocOp[] | null => {
-  if (!layout) return null;
-  const ops = layoutFixOps(doc, page, layout);
-  if (!ops.length) return null;
-  const fitted = applyOps(doc, ops);
-  const after = fitted.pages.find((p) => p.id === page.id);
-  if (!after) return null;
-  return checkPagePlan(fitted, after, { fixLayout: false }).state === 'overfull' ? null : ops;
-};
+/** The free "Use the layout that fits" fix for a held-back page (shared/comic/layoutFit.ts: the Pages header offers it too). */
+export { layoutFitFix };
 
 /**
  * Pages a gate's run draws whatever their fit: every page it names (the server stores a gate bound to the pages it

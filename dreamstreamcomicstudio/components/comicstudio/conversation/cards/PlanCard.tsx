@@ -188,7 +188,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
               disabled={starting}
               onClick={() => void run('approve', { type: 'approve_plan' }, { type: 'render_pages', quotedUsd: estimate.usd })}
             >
-              Approve &amp; render all ({cost.approx(estimate.usd)})
+              Approve &amp; render {heldBack.length ? drawLabel : 'all'} ({cost.approx(estimate.usd)})
             </PrimaryButton>
           )
         ) : null}

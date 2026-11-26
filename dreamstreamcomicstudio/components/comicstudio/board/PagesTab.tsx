@@ -635,7 +635,12 @@ const PlanHeader: React.FC<{
             </PriceNote>
           </>
         ) : held.pages.length ? (
-          <HeldBackNote doc={doc} ids={quote.heldBackIds} onOpenPage={(id) => studio.openPage(id)} />
+          <HeldBackNote
+            doc={doc}
+            ids={quote.heldBackIds}
+            onOpenPage={(id) => studio.openPage(id)}
+            onFix={(ops, label) => fire('fit', () => studio.patch(ops, { label }))}
+          />
         ) : null}
         {draft && (
           <GhostButton size="sm" busy={busyKey === 'approve'} onClick={() => fire('approve', () => studio.act({ type: 'approve_plan' }))}>

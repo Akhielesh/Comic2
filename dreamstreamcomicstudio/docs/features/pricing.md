@@ -59,8 +59,9 @@ and the textless cover with it too (`i18n/index.ts` `overlayFix`, `textlessCover
 ("Render 4 pages", "Approve & render 4 pages", "Draw 4 pages") and the price line says which pages wait and why ("page
 3 is held back — too much text for its panels"). When every page left is held back there is nothing to spend, so there
 is no draw button and no price: one muted line ("Pages 3 and 5 are held back — too much text for their panels. Fit the
-words, or draw them anyway from the page.") and "Open page 3" (`board/HeldBackNote.tsx`); a page's own Draw is an
-explicit draw, which the plan check never holds back.
+words, or draw them anyway from the page."), the free "Use the layout that fits page 3" when one exists (the breakdown
+card's own fix, `shared/comic/layoutFit.ts`; a doc patch, nothing drawn) and "Open page 3" (`board/HeldBackNote.tsx`); a
+page's own Draw is an explicit draw, which the plan check never holds back.
 
 `quotedUsd` on a tapped step is that figure; the server re-quotes with its own book and re-gates only when the fresh
 quote is more than 15 % + $0.01 above it, which the shared book now makes rare.
