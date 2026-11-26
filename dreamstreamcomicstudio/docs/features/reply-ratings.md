@@ -29,7 +29,21 @@ screens always show them.
 
 Leaving the comic with the thumbs-down note still open records the thumbs-down once (a ticked note with it), as general
 chat does. The status line is a polite live region; a rated thumb keeps focus (it is `aria-disabled`, never removed).
-No colour anywhere: ink on paper, the chosen thumb filled.
+Undo and Try again are one button that stays in place while its request runs (`aria-disabled`, the status line says
+"Undoing…" or "Sending…") and when it fails, so keyboard focus never drops to the page: a failed Undo leaves focus on
+Try again, a Try again that lands leaves it on Undo, and a finished Undo puts it back on the thumb. No colour anywhere:
+ink on paper, the chosen thumb filled.
+
+## Where a rating's state lives
+
+In this page's memory, keyed by comic and message (`conversation/replyRatingMemory.ts`), not inside the row. So the
+rating stays as it is while the conversation changes around it: a reply that grows old enough to render offscreen,
+the pane mounted again, or a layout swap all show the same "Thanks" and Undo (or the same open note with its words
+and its box), and a reply is never rated twice in one visit. A request that lands after its row went away still
+settles there. Every row of the conversation keeps one wrapper element (`ConversationPane`: only the offscreen class
+changes), so a row is never mounted again just because newer messages arrived. The abandoned thumbs-down is recorded
+only when the last control showing that rating really leaves (checked at the end of that commit), never when a row
+is only mounted again.
 
 ## What is sent
 
@@ -50,11 +64,14 @@ is sent on a timer.
 
 ## Left out
 
-- A rating is not read back after a reload (`user_feedback` is service-role only), the same as general chat.
+- A rating is not read back after a reload (`user_feedback` is service-role only), the same as general chat; within
+  one visit it is (above).
 - No note on a thumbs-up, the same as general chat.
 
 ## Tests
 
 `conversation/replyRating.test.ts` (which replies, what is sent), `conversation/ReplyRating.test.tsx` (states, note
-consent, Undo, failures, keyboard, hover reveal), `conversation/ConversationPane.test.tsx` (placement),
+consent, Undo, failures, keyboard focus through Undo and Try again, a row mounted again, a late send, hover reveal),
+`conversation/ConversationPane.test.tsx` (placement), `conversation/ConversationPane.rating.test.tsx` (a rating and an
+open note stay put while six more messages land and when the pane is mounted again; leaving with the note open),
 `server/src/services/telemetryStore.test.ts` and `server/src/routes/telemetry.withdraw.test.ts` (Undo's scope).

@@ -2734,8 +2734,7 @@ class RenderRun {
    * confirmed earlier (a chained redraw, a "wait and retry") says when they confirmed it (RunActionOptions.runAt).
    */
   private message(msg: Msg): Msg {
-    const confirmed = this.opts.runAt;
-    return governMsg(this.ctx, { ...msg, runAt: typeof confirmed === 'number' && Number.isFinite(confirmed) ? confirmed : this.started });
+    return governMsg(this.ctx, stampRunAt(this.opts, { ...msg, runAt: this.started }));
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────

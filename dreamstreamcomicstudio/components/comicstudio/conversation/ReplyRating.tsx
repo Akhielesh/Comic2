@@ -1,25 +1,25 @@
 // Rate a reply (docs/features/reply-ratings.md): two quiet ink thumbs under a Director reply. Thumbs up is sent at once;
 // thumbs down opens a short optional note first, which goes only when the person ticks "Share this note". Either way
 // the row then reads "Thanks" with an Undo that really takes the rating back (POST /api/telemetry/feedback/withdraw:
-// the person's own row for this reply is removed). Every request is a click: nothing waits on a timer.
+// the person's own row for this reply is removed). Every request is a click: nothing waits on a timer. Where the rating
+// stands lives in page memory (replyRatingMemory.ts), so the row mounted again shows the same state and never re-sends.
 //
 // Keyboard and screen reader: the thumbs are toggle buttons (aria-pressed) in a named group; a rated thumb keeps focus
-// (aria-disabled, never removed from under it); the note's field takes focus when it opens and Escape closes it; the
-// status ("Thanks", "Couldn't send") is a polite live region. On a pointer that can hover, an older reply shows its
-// thumbs on hover or focus; the latest reply, a rating in progress and every touch screen always show them.
+// (aria-disabled, never removed from under it); Undo and Try again are one button that stays put while its request
+// runs and fails (aria-disabled while busy), so focus never falls to the page; the note's field takes focus when it
+// opens and Escape closes it; the status ("Thanks", "Couldn't send") is a polite live region. On a pointer that can
+// hover, an older reply shows its thumbs on hover or focus; the latest reply, a rating in progress and every touch
+// screen always show them.
 
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useSyncExternalStore } from 'react';
 import { ThumbsDown, ThumbsUp } from 'lucide-react';
 import type { FeedbackVoteValue } from '../../../apiTypes';
 import type { Msg } from '../../../shared/comic/doc';
-import { submitFeedback } from '../../../services/feedback';
 import { cn } from '../../../lib/utils';
 import { Button, Checkbox, Field, IconButton, Textarea } from '../../ds';
 import { DENSITY, FOCUS_RING, MUTED, RADIUS_CONTROL } from '../../chat/studioDesign';
-import { RATING_NOTE_MAX, replyRatingInput, withdrawReplyRating } from './replyRating';
-
-/** Where the rating stands. `noting`: thumbs down chosen, the note is open, nothing sent yet. */
-type Status = 'idle' | 'noting' | 'sending' | 'sent' | 'failed' | 'undoing' | 'undoFailed';
+import { RATING_NOTE_MAX } from './replyRating';
+import { getRating, patchRating, ratingKey, sendRating, showRating, subscribeRatings, undoRating, type RatingStatus, type RatingSubject } from './replyRatingMemory';
 
 export interface ReplyRatingProps {
   msg: Pick<Msg, 'id' | 'cards' | 'nextSteps'>;
@@ -29,42 +29,62 @@ export interface ReplyRatingProps {
   always?: boolean;
 }
 
-const STATUS_TEXT: Partial<Record<Status, string>> = {
+const STATUS_TEXT: Partial<Record<RatingStatus, string>> = {
   sending: 'Sending…',
+  resending: 'Sending…',
   sent: 'Thanks',
   failed: 'Couldn’t send.',
   undoing: 'Undoing…',
   undoFailed: 'Couldn’t undo.'
 };
 
+/** The one follow-up button: what pressing it does now, and whether its request is still running. */
+const ACTION: Partial<Record<RatingStatus, { label: string; name?: string; busy?: boolean }>> = {
+  sent: { label: 'Undo', name: 'Undo rating' },
+  undoing: { label: 'Undo', name: 'Undo rating', busy: true },
+  failed: { label: 'Try again' },
+  undoFailed: { label: 'Try again' },
+  resending: { label: 'Try again', busy: true }
+};
+
 const THUMB = 'size-3.5';
-const LINK = cn('inline-flex min-h-6 items-center px-1.5 text-[12px] font-medium text-[var(--ds-ink)] underline-offset-2 hover:underline', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING);
+const LINK = cn(
+  'inline-flex min-h-6 items-center px-1.5 text-[12px] font-medium text-[var(--ds-ink)] underline-offset-2 hover:underline aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:no-underline',
+  RADIUS_CONTROL,
+  DENSITY.coarse,
+  FOCUS_RING
+);
 
 export const ReplyRating: React.FC<ReplyRatingProps> = ({ msg, comicId, always }) => {
-  const [status, setStatus] = useState<Status>('idle');
-  const [vote, setVote] = useState<FeedbackVoteValue | null>(null);
-  const [note, setNote] = useState('');
-  const [share, setShare] = useState(false);
+  const key = ratingKey(comicId, msg.id);
+  const { status, vote, note, share } = useSyncExternalStore(
+    subscribeRatings,
+    () => getRating(key),
+    () => getRating(key)
+  );
   const upRef = useRef<HTMLButtonElement | null>(null);
   const downRef = useRef<HTMLButtonElement | null>(null);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
   const mounted = useRef(true);
-  // What an unmount reads: a thumbs-down whose note was still open is recorded once (as general chat does).
-  const latest = useRef({ status, note, share, msg, comicId });
-  latest.current = { status, note, share, msg, comicId };
+  // What the rating sends, read when the person leaves with the note open (the row may be gone by then).
+  const subject = useRef<RatingSubject>({ msg, comicId });
+  subject.current = { msg, comicId };
   const noteId = `reply-note-${useId().replace(/:/g, '')}`;
 
   useEffect(() => {
     mounted.current = true;
+    const leave = showRating(key, () => subject.current);
     return () => {
       mounted.current = false;
-      const { status: s, note: n, share: sh, msg: m, comicId: c } = latest.current;
-      if (s === 'noting') void submitFeedback(replyRatingInput(m, c, 'dislike', { text: n, share: sh }));
+      leave();
     };
-  }, []);
+  }, [key]);
 
+  // The note takes focus when the person opens it here (a row mounted again with its note open never steals focus).
+  const opened = useRef(status);
   useEffect(() => {
-    if (status === 'noting') noteRef.current?.focus();
+    if (status === 'noting' && opened.current !== 'noting') noteRef.current?.focus();
+    opened.current = status;
   }, [status]);
 
   const thumbOf = (v: FeedbackVoteValue) => (v === 'like' ? upRef : downRef);
@@ -72,33 +92,14 @@ export const ReplyRating: React.FC<ReplyRatingProps> = ({ msg, comicId, always }
     if (v) requestAnimationFrame(() => thumbOf(v).current?.focus());
   };
 
-  const send = async (v: FeedbackVoteValue, withNote?: { text: string; share: boolean }) => {
-    setVote(v);
-    setStatus('sending');
-    const result = await submitFeedback(replyRatingInput(msg, comicId, v, withNote));
-    if (!mounted.current) return;
-    setStatus(result.persisted ? 'sent' : 'failed');
-  };
-
   const undo = async () => {
-    setStatus('undoing');
-    const result = await withdrawReplyRating(msg.id);
-    if (!mounted.current) return;
-    if (!result.withdrawn) {
-      setStatus('undoFailed');
-      return;
-    }
     const was = vote;
-    setStatus('idle');
-    setVote(null);
-    setNote('');
-    setShare(false);
-    focusThumb(was);
+    const settled = await undoRating(key, msg.id);
+    if (settled === 'idle' && mounted.current) focusThumb(was);
   };
 
   const closeNote = () => {
-    setStatus('idle');
-    setVote(null);
+    patchRating(key, { status: 'idle' });
     focusThumb('dislike');
   };
 
@@ -107,22 +108,21 @@ export const ReplyRating: React.FC<ReplyRatingProps> = ({ msg, comicId, always }
     if (locked) return;
     if (v === 'dislike') {
       if (status === 'noting') closeNote();
-      else {
-        setVote('dislike');
-        setStatus('noting');
-      }
+      else patchRating(key, { status: 'noting', vote: 'dislike' });
       return;
     }
-    void send('like');
+    void sendRating(key, subject.current, 'like');
   };
 
-  const retry = () => {
-    if (status === 'undoFailed') void undo();
-    else if (status === 'failed' && vote) void send(vote, vote === 'dislike' ? { text: note, share } : undefined);
+  const action = ACTION[status];
+  const onAction = () => {
+    if (!action || action.busy) return;
+    if (status === 'sent' || status === 'undoFailed') void undo();
+    else if (status === 'failed' && vote) void sendRating(key, subject.current, vote, vote === 'dislike' ? { text: note, share } : undefined);
   };
 
   const sendNote = () => {
-    void send('dislike', { text: note, share });
+    void sendRating(key, subject.current, 'dislike', { text: note, share });
     focusThumb('dislike');
   };
 
@@ -159,14 +159,9 @@ export const ReplyRating: React.FC<ReplyRatingProps> = ({ msg, comicId, always }
         <span role="status" className={cn('min-w-0 px-1 text-[12px]', MUTED)}>
           {text}
         </span>
-        {status === 'sent' && (
-          <button type="button" className={LINK} aria-label="Undo rating" onClick={() => void undo()}>
-            Undo
-          </button>
-        )}
-        {(status === 'failed' || status === 'undoFailed') && (
-          <button type="button" className={LINK} onClick={retry}>
-            Try again
+        {action && (
+          <button type="button" className={LINK} aria-label={action.name} aria-disabled={action.busy || undefined} onClick={onAction}>
+            {action.label}
           </button>
         )}
       </div>
@@ -180,13 +175,13 @@ export const ReplyRating: React.FC<ReplyRatingProps> = ({ msg, comicId, always }
           }}
         >
           <Field label="What could be better? (optional)" id={noteId}>
-            <Textarea ref={noteRef} rows={2} maxLength={RATING_NOTE_MAX} value={note} onChange={(e) => setNote(e.target.value)} />
+            <Textarea ref={noteRef} rows={2} maxLength={RATING_NOTE_MAX} value={note} onChange={(e) => patchRating(key, { note: e.target.value })} />
           </Field>
           <Checkbox
             label="Share this note with DreamStream"
             description="Left unticked, only your thumbs-down is sent."
             checked={share}
-            onCheckedChange={setShare}
+            onCheckedChange={(next) => patchRating(key, { share: next })}
           />
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={sendNote}>

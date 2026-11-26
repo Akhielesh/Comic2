@@ -40,7 +40,7 @@ the core makes a network request or wakes the backend.
 | `plan` | The page plan waits for its OK (draft, pages, a live plan or breakdown card, nothing drawing) | Needs you |
 | `approval` | A paid step is held for Approve (an open gate) | Needs you |
 | `style` | Looks drawn and waiting to be picked | Needs you |
-| `drawn` / `drawn_issues` | Pages, cover or sheets drawn since the stream started (a redraw counts) / some failed or were withheld. A picture counts as drawn by the progress card's own rule (`shared/comic/renderOutcome.ts` `progressState`, with the `since` of the newest renders card that includes it): never a take the content check withheld (it needs a look, like a failure), and never an earlier picture put back (a reuse or a kept take), so a run that drew nothing new says nothing is ready | Ready / Needs you |
+| `drawn` / `drawn_issues` | Pages, cover or sheets drawn since the stream started (a redraw counts) / some failed or were withheld. A picture counts as drawn by the progress card's own rule (`shared/comic/renderOutcome.ts` `progressState`, with the `since` of the newest renders card that includes it): never a take the content check withheld (it needs a look, like a failure), and never an earlier picture put back (a reuse or a kept take), so a run that drew nothing new says nothing is ready. Not shown yet: it reaches people once the Comic Studio sources below are wired | Ready / Needs you |
 | `translated` / `translate_issues` | A stream that translated (a Translate action, an approved translate gate, or a turn that posted a translation card) wrote these languages, each now complete / one incomplete. An edit that only leaves an edition stale is not a translation | Ready / Needs you |
 | `published` / `publish_failed` | The chat Publish card moved to done / failed | Ready / Needs you |
 | `failed` | A stream ended with a server error (never Stop, BUSY or a lost connection) | Needs you |
@@ -117,7 +117,8 @@ alerts on the main site, each with its own preferences and audio unlock. Nothing
 Comic Studio feeds `studioTransitions(prev, next, memo, now)` with frames built by `studioFrameOf(projectId, state)`
 from each rendered state (mounted) or from each event folded through `studioReducer` (a held stream): both produce the
 same alerts. The studio sources themselves (the mounted hook and holding a comic's streams after the person leaves it)
-are not wired yet; until they are, comic alerts come only from what the core is given.
+are not wired yet; until they are, no comic moment in the table above (`reply` through `failed`) reaches anyone, and
+the "drawn" rule is ready for the day they are.
 
 ## Chat
 

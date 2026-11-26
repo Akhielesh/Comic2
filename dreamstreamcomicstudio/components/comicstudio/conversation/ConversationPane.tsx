@@ -277,13 +277,13 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                         rating={rateable.ids.has(msg.id) ? (msg.id === rateable.latest ? 'latest' : 'older') : undefined}
                       />
                     );
-                  // Older messages skip rendering while offscreen (cheap on long conversations).
-                  return i < docEntries.length - CV_KEEP_LIVE ? (
-                    <div key={msg.id} className="cv-auto min-w-0">
+                  // Older messages skip rendering while offscreen (cheap on long conversations). One wrapper for every row,
+                  // only its class changing, so a row that grows older is never mounted again (its rating, a note being
+                  // written and any other state inside it stay).
+                  return (
+                    <div key={msg.id} className={i < docEntries.length - CV_KEEP_LIVE ? 'cv-auto min-w-0' : 'min-w-0'}>
                       {item}
                     </div>
-                  ) : (
-                    <React.Fragment key={msg.id}>{item}</React.Fragment>
                   );
                 })}
                 {pendingMessage && (
