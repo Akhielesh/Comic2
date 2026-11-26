@@ -1,7 +1,7 @@
 # Comic stages (Comic Studio)
 
-**Status:** shipped. The studio shows it as a stage strip; the AI activity feed's "In progress" rows read it from the
-saved summary.
+**Status:** shipped. The studio shows it as a stage strip; the AI activity feed's "In progress" rows and My comics'
+cards (`docs/features/my-comics.md`) read it from the saved summary.
 
 **What it is for.** Every comic says where it stands, in one of five stages, how far along that stage is, and the one
 next step: "Drawing · 6 of 12 pages drawn · Next: draw the rest". The studio shows it as a stage strip (under the
@@ -150,8 +150,8 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
 
 ## 7. Left out on purpose
 
-- My comics cards and the side panel do not show the stage yet; they are the next readers of this summary
-  (`stageSummaryOf`), so they will say the same words without loading a full comic.
+- The side panel's recent comics do not show the stage. My comics' cards and its Continue card do (SH-B,
+  `docs/features/my-comics.md`): they read this summary in one list read and say the same words as the strip.
 - Counting a cast as a story (the Director's suggestions treat a cast as an idea): the brief defines Story by the story
   or premise, so a cast alone keeps Story current, with the words "No story yet".
 - A "question waiting" next step: see §3.
