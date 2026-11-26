@@ -38,6 +38,13 @@ export interface PublicationBackend extends PublicationStore {
   /** pub/<key>/ prefixes older than a day with no live/suspended row (weekly sweep). */
   orphanKeys(limit: number): Promise<string[]>;
   /**
+   * Asset keys of every Studio Original edition (studio_original_editions, any status). Editorial
+   * editions keep their artwork under pub/<asset_key>/ too, with no comic_publications row, so the
+   * sweep must never treat their folders as orphans. null when the lookup failed: the sweep then
+   * deletes nothing rather than guess. Optional for test doubles (none means no editions).
+   */
+  editorialKeys?(): Promise<string[] | null>;
+  /**
    * The publication row of a project, whoever owns it (service role). Moderation maintenance only
    * (removePublicationObjects) — never reachable from a client request. Optional for test doubles.
    */
@@ -318,6 +325,19 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
       return (Array.isArray(data) ? data : []).map((k) => (typeof k === 'string' ? k : String((k as Record<string, unknown>)?.comic_publication_orphan_keys ?? ''))).filter((k) => /^[A-Za-z0-9]{22}$/.test(k));
     },
 
+    async editorialKeys() {
+      const { data, error } = await admin().from('studio_original_editions').select('asset_key');
+      if (error) {
+        // No editions table on this server: nothing editorial to protect. Anything else: refuse to guess.
+        if (isMissingTable(error)) return [];
+        logger.warn('comic_publication_editorial_scan_failed', { code: pgCode(error) });
+        return null;
+      }
+      return (Array.isArray(data) ? data : [])
+        .map((r) => String((r as Record<string, unknown>)?.asset_key ?? ''))
+        .filter((k) => /^[A-Za-z0-9]{22}$/.test(k));
+    },
+
     async getByProject(projectId) {
       if (!projectId) return null;
       const { data, error } = await admin().from('comic_publications').select(COLUMNS).eq('project_id', projectId).maybeSingle();
@@ -474,6 +494,9 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
       return 'maya_draws';
     },
     async orphanKeys() {
+      return [];
+    },
+    async editorialKeys() {
       return [];
     },
     async getByProject(projectId) {
