@@ -1,8 +1,10 @@
 # The side panel (Comic Studio navigation)
 
-**Status:** shipped (SH-C1). One panel, the same everywhere in Comic Studio: My comics (All comics), New comic, Images
-(on the comics host) and inside a comic. It replaced two navigations that showed stacked in the studio: the creator
-list (`ComicProjectNavigation`, with its AI activity feed) and the studio's own rail (`WorkspaceNavigation`).
+**Status:** shipped (SH-C1; inside a comic, SH-C2). One panel, the same everywhere in Comic Studio: My comics (All
+comics), New comic, Images (on the comics host) and inside a comic. It replaced two navigations that showed stacked in
+the studio: the creator list (`ComicProjectNavigation`, with its AI activity feed) and the studio's own rail
+(`WorkspaceNavigation`). Inside a comic its own section holds the comic's parts as a tree, and the studio header carries
+a breadcrumb (§6).
 
 ## 1. What it shows, from the top
 
@@ -12,10 +14,12 @@ list (`ComicProjectNavigation`, with its AI activity feed) and the studio's own 
    row in Your comics, only look current (`data-panel-current`), so a screen reader hears "current page" once. The slim
    rail, which has no "Where you are", marks its current destination instead.
 2. **This comic** (inside a comic only, `panel/ComicSection.tsx`). The comic's stage (SH-A, `comic-stages.md`): the five
-   marks beside "This comic", and one two-line button, "Drawing · 6 of 12 pages drawn" / "Next: draw the rest", which
-   only opens the place (a board tab, the approval or the draft in the conversation, the composer, the Share sheet; its
-   description says which). Then Ask the Director, then the board's tabs (Story, Cast, Style, Pages n/N, Read and the
-   registry tabs). It is the comic's own section, and the place its parts tree grows (SH-C2).
+   marks beside "This comic", which open the stage map in place (`comic-stages.md` §5a), and one two-line button,
+   "Drawing · 6 of 12 pages drawn" / "Next: draw the rest", which only opens the place (a board tab, the approval or the
+   draft in the conversation, the composer, the Share sheet; its description says which). Then Ask the Director, then
+   the board as the comic's parts tree (§6: Story, Cast with each character, Style, Pages with each page, the Cover,
+   Read and the registry tabs), with "Find a page" on a book over 10 pages. The slim rail keeps the board's tabs as
+   icons.
 3. **Your comics** (`panel/PanelComics.tsx`, `panel/panelModel.ts`). Every comic once, in the group that needs the
    person most: **Needs you** (an approval, a question, a plan to review, a look to choose, an interrupted draft, a
    drawing issue), **In progress**, **Finished**, **Recent**. Each row: the title, the stage's five marks, and one status
@@ -105,8 +109,9 @@ response for a previous account is dropped. Without an account (previews, QA sce
   navigation" (drawer), "Expand project navigation" / "Collapse project navigation" (docked); the drawer is the dialog
   "Project navigation".
 - **Keyboard and screen readers**: the reading order is the visual order (where you are, this comic, your comics, Go
-  to). The board tabs are one tab stop: Arrow keys, Home and End move along them without opening one (Enter or Space
-  opens it). Drawers take focus, trap it, and Escape returns it to the toggle. No headings in the panel (the page's
+  to). The board is one tab stop: in the rail its tabs (Arrow keys, Home and End move along them; Enter or Space opens
+  one), open and in the drawer its parts tree (§6). Moving never opens anything, so the drawer stays open while you
+  explore. Drawers take focus, trap it, and Escape returns it to the toggle. No headings in the panel (the page's
   outline starts at its own h1); groups are labelled lists.
 - **Phones**: 44 px targets, titles clip with an ellipsis (their full words are the tooltip and the name), no sideways
   scroll at 360 px. The frame's drawer pads its foot by the safe area (`--sa-bottom-eff`), so Go to's last row stays
@@ -124,7 +129,68 @@ response for a previous account is dropped. Without an account (previews, QA sce
 - `tsconfig.json` leaves out `dist-qa/` (the QA harness build, gitignored): with `allowJs`, a QA build in the checkout
   made the client typecheck run out of memory.
 
-## 6. Key files and tests
+## 6. Inside a comic: its parts and the breadcrumb (SH-C2)
+
+### 6a. The parts tree (`panel/PartsTree.tsx`, model `panel/partsModel.ts`)
+
+The board's tabs grew into the comic's parts. Open (and in the phone drawer) the "Board" is an ARIA tree, drawn flat:
+each visible row is one `treeitem` with its level, position and set size, so a closed group renders nothing.
+
+| Row | Shows | Goes to |
+| --- | --- | --- |
+| Story, Style, Read, the registry tabs (Assets, Languages, History) | the tab's icon and name | that tab |
+| Cast | the cast size; each character under it, leads first, then support, then extras (the Cast tab's order) | the Cast tab; a character: its card, brought into view with focus on it |
+| Pages | drawn/total (the Pages badge); the pages under it | the Pages tab; a page: the page editor (`openPage`, the board's own page focus) |
+| Cover (after Pages: it leads the Pages grid) | its picture's state | the Pages tab, with focus on the cover's card |
+| A chapter or a block of pages | its name and drawn/total | nothing: it opens and closes |
+
+- **A page's state** is the stage's own reading (`pageStanding`, `shared/comic/stage.ts`, which `stageFacts` counts
+  with): a check when drawn and current, else one word: Out of date, Redrawing, Redraw failed, Drawing, Withheld,
+  Failed, Planned, Empty (the page card's words). So the pages with a check are exactly the strip's "6 of 12 pages
+  drawn" and the Pages badge. The tooltip adds the page's gist (StoryMap's: its summary, else its first action).
+- **Long books.** Up to 24 pages list flat. Chapters (`page.chapterTitle`, StoryMap's rule; the pages before the first
+  one are a group named by their numbers, never an invented title) group the pages; without chapters a longer book goes
+  in blocks of 20 ("Pages 21–40"), and a chapter over 24 pages splits into blocks inside it. A 200-page book is about ten
+  rows until one opens, and an opened group never lists more than 24 pages.
+- **Find a page** (books over 10 pages, as the breakdown card's "Find a page in this story"): a search field above the
+  tree that reads the same index (`breakdown/storyMapIndex.ts`: chapter, place, cast, script, dialogue, continuity). It
+  is built only while it has words. The matches replace the tree (the first 50, then "Add a word to narrow it"); one
+  opens its page; Escape clears it.
+- **Current.** The page in the editor; else the card you are on in the open tab (a character, page or cover card that
+  has focus or was last pressed, `board/boardPart.ts`); else the open tab. It is the one `aria-selected` row, never an
+  `aria-current="page"` (the panel keeps its one). The rows above it are in heavier ink, so it shows inside a closed group.
+- **What opens by itself**: the open tab's parts, and the path to the page in the editor. Going somewhere opens its
+  path again; a card you move to inside the board marks its row but opens nothing, so the panel does not jump while
+  you work. A chevron opens or closes a row by pointer without going there.
+- **Keyboard** (APG tree): one tab stop, the current row (coming back into the tree lands there again); Up and Down,
+  Home and End move; Right opens a row or steps into it, Left closes it or steps out; Enter or Space goes there (a
+  group opens or closes). The tree does not wrap.
+- **Rows**: the top level 44 px, the rows under it 36 px under a mouse and 44 px for touch; labels clip with an ellipsis,
+  every word in the tooltip and the name. Ink only (`components/comicstudio/panel/**` stays under the ink-only rule).
+- **Bringing a card into view** (`board/boardPart.ts` `revealPart`): once its tab has rendered (a few frames at most; a
+  card that never appears, a character just removed, is left alone), the card scrolls to the top of the board (no smooth
+  scroll under reduced motion) and takes focus for that visit only (its `tabindex` goes again when focus leaves). In the
+  drawer it runs after the drawer has closed and handed focus back. Cards carry ids for it: a character's
+  (`characterCardId`), a page's and the cover's in the Pages grid (`board/cardIds.ts`).
+
+### 6b. The breadcrumb (`breadcrumb/StudioBreadcrumb.tsx`, model `breadcrumb/breadcrumbModel.ts`)
+
+`My comics › Salt Road › Cast › Maya`, in the studio header where the title was (StudioHeader gains one prop, `trail`).
+
+- **My comics** leaves the studio (the shell's Back).
+- **The comic** is its name field: click to rename, Enter or leaving it saves, Escape puts it back, as before. It sizes
+  to its words (a hidden copy sets its width), so the crumbs after it sit beside the name.
+- **The area**: the board tab, only while the board is on screen (not in Chat only, not in a phone's chat view). It
+  goes back to the top of that area: the page editor closes, the board scrolls up and takes focus.
+- **The part**: the page in the editor, else the card you are on in that area (§6a). It brings the card back into view
+  with focus on it.
+- The last crumb is `aria-current="page"`; the separators are decoration.
+- **Folding**: from 1024 px every crumb; below, My comics is left to the panel's drawer (whose first row it is); on a
+  phone only the deepest crumb follows the name. The name shrinks first (to 4rem, 2.5rem on a phone), the area and the
+  part clip with an ellipsis (their tooltips have every word), and the breadcrumb clips sideways rather than push the
+  header's controls, so nothing scrolls sideways at 320 px. 44 px targets on touch.
+
+## 7. Key files and tests
 
 - `components/comicstudio/panel/ComicSidePanel.tsx` (+ test: open and rail, remembered per viewer, the default
   following the width, storage that throws, where you are marked once, the one fill, focus order, board keyboard, the
@@ -141,9 +207,18 @@ response for a previous account is dropped. Without an account (previews, QA sce
   wide desktop, the rail below, Chat, the phone drawer), `ComicStudio.stage.test.tsx` (the panel's next step only
   navigates; the open comic's row follows the live doc from Needs you to In progress).
 - `App.accountNav.test.tsx` (App gives the studio its Chat).
-- `tests/e2e/workspace.navigation.spec.ts` (the studio's panel at three sizes).
+- `tests/e2e/workspace.navigation.spec.ts` (the studio's panel at three sizes, its parts tree's keys and 44 px rows).
+- SH-C2: `panel/partsModel.ts` (+ test: board order and registry tabs, the Cover after Pages, the cast's order, page
+  states equal to the stage's counts and the Pages badge, an empty comic and empty pages, older docs without a cast,
+  cover, panels, numbers or renders, flat / chapters / blocks / a long chapter, 200 pages, the current part and its
+  path), `panel/PartsTree.tsx` (+ test: what opens by itself and what does not, one tab stop and the APG keys, focus
+  coming back to the current row, targets, the chevron, 200 pages, 44 px rows, ink only, Find a page),
+  `board/boardPart.ts`, `board/cardIds.ts`, `breakdown/storyMapIndex.ts` (StoryMap reads it), `breadcrumb/` (+ test:
+  which crumbs, folding, every crumb past the name navigates, the name still renames, truncation, ink only),
+  `ComicStudio.parts.test.tsx` (the breadcrumb follows the card you are on, area and part crumbs, the page in the editor,
+  Chat only, the phone; the tree's character, page and cover in the docked panel and the phone drawer; nothing spends).
 
-## 7. Left out on purpose
+## 8. Left out on purpose
 
 - No SQL and no server change: the list reads the summary the server already saves.
 - The two old open/closed keys (`cs.workspace.navigation.expanded`, `comicstudio.creation.navigation`) are not migrated:
@@ -151,4 +226,7 @@ response for a previous account is dropped. Without an account (previews, QA sce
   written on every toggle; the frame's defaulted to open), so merging them into one choice would guess, and the new
   default is the point. One click sets the new choice.
 - No "Needs you" count on the rail: the list says it when open.
-- The comic's parts tree (SH-C2).
+- The breadcrumb's comic crumb does not navigate: it stays the comic's name field (people rename there), and there is
+  no level above the board's areas to go to; the panel toggle beside it opens the comic's parts.
+- No parts tree in the slim rail (it keeps the board's tabs), no type-ahead in the tree (Find a page covers long books),
+  no reordering there (the book timeline does it), and open or closed rows are not remembered across reloads.
