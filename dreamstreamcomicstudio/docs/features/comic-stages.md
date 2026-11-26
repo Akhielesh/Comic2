@@ -119,14 +119,15 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
 - Keyboard: native buttons in reading order; ArrowLeft, ArrowRight, Home and End move along the steps. A screen
   reader hears a polite note when the stage changes, never on each page drawn (the run's own card covers those).
 - Layout, one row high:
-  - from 768 px: the five named stages, then the status and the "Next: …" button;
+  - from 768 px: the five named stages, then the status and the "Next: …" button, then the Stage map button (§5a);
   - below 768 px (a narrow split, the first screen of a book-posture foldable, and the phone's board): one 44 px row
     with 16 px gutters. A stage button shows the five stages as marks (a check when done, a filled ink dot for the
-    current one, a ring for the rest; named "Stages: Draw, 3 of 5 done") and opens the five named stages in a row
-    below; choosing one, or Escape (from the stage button or the list), closes them and returns focus to the stage
-    button. Next to it, the status is one button: its first line is "Drawing · 6 of 12 pages drawn", its second "Next:
-    draw the rest". Below 360 px a done stage in the opened row shows only its check, keeping its name for screen
-    readers and as a tooltip.
+    current one, a ring for the rest; named "Stages: Draw, 3 of 5 done", tooltip "Stage map") and is the row's one way
+    into the stages: it opens the stage map (§5a; a bottom sheet on phones), where every stage has its name, what is
+    left in it and a way there. Choosing one, or Escape, closes it and returns focus to the marks. Next to it, the
+    status is one button: its first line is "Drawing · 6 of 12 pages drawn", its second "Next: draw the rest". (The
+    row of five named stages that the marks used to open, and the separate map button beside them, are gone: two
+    controls showing the same five stages in one 44 px row was one too many.)
   - The marks are SVG drawn in the text colour (`currentColor`), never a background fill, so the current stage keeps
     its dot in forced colours (Windows high contrast).
   - Coarse pointers get 44 px targets. It hides while the on-screen keyboard is up (`html.kb-open`), like the tab bar.
@@ -135,7 +136,8 @@ No SQL: the summary lives in the existing `comic_docs.doc` jsonb, read by the ex
   words as one button ("Drawing · 6 of 12 pages drawn" / "Next: draw the rest", the five marks beside "This comic",
   which open the stage map), and its board is labelled "Board" (it was "Project stages"): the board's tabs, grown into
   the comic's parts tree (SH-C2), not the comic's stages.
-- A **Stage map** button ends the strip in both layouts (44 px on touch) and opens the stage map (§5a).
+- The stage map (§5a) is one control away in both layouts: a **Stage map** button ends the one-row strip (44 px on
+  touch); in the compact row the marks open it.
 
 ## 5a. The stage map (`stage/StageMap.tsx`, words in `stage/stageMapModel.ts`, SH-C2)
 
@@ -150,9 +152,11 @@ The five stages on one small map, from the same facts as the strip, so it never 
 
 - Ink weights only: the current stage semibold, done stages ink, the rest muted. No hue, no spark, no wash, no price,
   and every target only navigates (the strip's `onGo`): nothing on the map can start a paid step.
-- **From the strip**: the "Stage map" button opens it as a popover anchored to the button, a bottom sheet titled
-  "Stage map" on phones. Focus lands on the current stage's target; a target closes the map and goes there; Escape or a
-  click outside closes it and returns focus to the button.
+- **From the strip**: the "Stage map" button (from 768 px) or the five marks (below) open it as a popover anchored to
+  the button, a bottom sheet titled "Stage map" on phones. Focus lands on the target of the row that leads, the comic's
+  next step: the current stage's, or on a published comic (every row done) Publish's "Read your comic" / "Publish your
+  changes", never Story's "Open Story". A target closes the map and goes there; Escape or a click outside closes it and
+  returns focus to the button.
 - **From the side panel**: the five marks beside "This comic" are a disclosure ("Stage map", `aria-expanded`) that shows
   the map in place under the next step; in the phone drawer a target closes the drawer first.
 - **Keyboard and screen readers**: an ordered list labelled "Stage map"; the current stage's row is `aria-current="step"`.
@@ -173,12 +177,14 @@ The five stages on one small map, from the same facts as the strip, so it never 
 - `services/comicWorkspaceActivity.ts` (+ test); the side panel's Your comics reads it (`components/comicstudio/panel/`,
   `comic-navigation.md`).
 - `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, the 360 px row
-  and its opened stages, Escape from the stage button, forced-colour marks, 320 px, foldable, the server's "behind", one
-  count with the Board badge, the Stage map button last), `stage/stageMarks.tsx` (the shared mark and place words),
+  and its marks as the one way into the map (a target goes there and closes it, Escape back on the marks),
+  forced-colour marks, 320 px, foldable, the server's "behind", one count with the Board badge, the Stage map button
+  last in one row), `stage/stageMarks.tsx` (the shared mark and place words),
   `stage/stageMapModel.ts` (+ test: a new comic, drawing with every kind of page, a comic planned before its look,
   partial and full plans, an open approval, ready and paused, published with and without changes, live with a new page,
   the strip's own next step), `stage/StageMap.tsx` (+ test: states and descriptions, keyboard, ink only, the popover's
-  focus and Escape, a target closes it, the phone sheet, the panel's disclosure), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
+  focus and Escape, a published comic opening on its next step, a target closes it, the phone sheet from the marks, the
+  panel's disclosure), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
   board placement, the approval and the draft focused on a desktop split, the Share sheet for a paused publication).
 
 ## 7. Left out on purpose

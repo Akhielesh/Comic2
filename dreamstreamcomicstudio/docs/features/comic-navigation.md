@@ -11,8 +11,10 @@ a breadcrumb (§6).
 1. **Where you are.** "My comics", then the place itself in heavier ink as the current page: the comic's title, "New
    comic" or "Images". On My comics, "My comics" is itself the current page. From anywhere else it is the way back
    ("Back to My comics"). This is the panel's one `aria-current="page"`: the same place in Go to, and the open comic's
-   row in Your comics, only look current (`data-panel-current`), so a screen reader hears "current page" once. The slim
-   rail, which has no "Where you are", marks its current destination instead.
+   row in Your comics, only look current (`data-panel-current`), so a screen reader hears "current page" once. Inside a
+   comic the header's breadcrumb (§6b) is the page's current page, so there the comic's title here only looks current
+   too (`hereInBreadcrumb`): one current page in the whole document. The slim rail, which has no "Where you are", marks
+   its current destination instead.
 2. **This comic** (inside a comic only, `panel/ComicSection.tsx`). The comic's stage (SH-A, `comic-stages.md`): the five
    marks beside "This comic", which open the stage map in place (`comic-stages.md` §5a), and one two-line button,
    "Drawing · 6 of 12 pages drawn" / "Next: draw the rest", which only opens the place (a board tab, the approval or the
@@ -142,7 +144,7 @@ each visible row is one `treeitem` with its level, position and set size, so a c
 | Story, Style, Read, the registry tabs (Assets, Languages, History) | the tab's icon and name | that tab |
 | Cast | the cast size; each character under it, leads first, then support, then extras (the Cast tab's order) | the Cast tab; a character: its card, brought into view with focus on it |
 | Pages | drawn/total (the Pages badge); the pages under it | the Pages tab; a page: the page editor (`openPage`, the board's own page focus) |
-| Cover (after Pages: it leads the Pages grid) | its picture's state | the Pages tab, with focus on the cover's card |
+| Cover (after Pages: it leads the Pages grid; only once there is a page, as the grid and its cover card) | its picture's state | the Pages tab, with focus on the cover's card |
 | A chapter or a block of pages | its name and drawn/total | nothing: it opens and closes |
 
 - **A page's state** is the stage's own reading (`pageStanding`, `shared/comic/stage.ts`, which `stageFacts` counts
@@ -153,16 +155,29 @@ each visible row is one `treeitem` with its level, position and set size, so a c
   one are a group named by their numbers, never an invented title) group the pages; without chapters a longer book goes
   in blocks of 20 ("Pages 21–40"), and a chapter over 24 pages splits into blocks inside it. A 200-page book is about ten
   rows until one opens, and an opened group never lists more than 24 pages.
-- **Find a page** (books over 10 pages, as the breakdown card's "Find a page in this story"): a search field above the
-  tree that reads the same index (`breakdown/storyMapIndex.ts`: chapter, place, cast, script, dialogue, continuity). It
-  is built only while it has words. The matches replace the tree (the first 50, then "Add a word to narrow it"); one
-  opens its page; Escape clears it.
+- **Find a page** (books over 10 pages, as the breakdown card's "Find a page in this story"): the ds `SearchField` above
+  the tree (its Clear button on touch, the match count as its description) that reads the same index
+  (`breakdown/storyMapIndex.ts`: chapter, place, cast, script, dialogue, continuity). It is built only while it has
+  words. The matches replace the tree (the first 50, then "Add a word to narrow it"); one opens its page. The count is a
+  status line that is always there (empty while there are no words), so the first result is announced too. Escape
+  clears it, in the phone drawer as well: the sheets leave Escape to a field marked `data-escape-clears` while it has
+  words (`useSheetBehaviour`), so the first Escape clears the search and the next closes the drawer.
 - **Current.** The page in the editor; else the card you are on in the open tab (a character, page or cover card that
   has focus or was last pressed, `board/boardPart.ts`); else the open tab. It is the one `aria-selected` row, never an
-  `aria-current="page"` (the panel keeps its one). The rows above it are in heavier ink, so it shows inside a closed group.
-- **What opens by itself**: the open tab's parts, and the path to the page in the editor. Going somewhere opens its
-  path again; a card you move to inside the board marks its row but opens nothing, so the panel does not jump while
-  you work. A chevron opens or closes a row by pointer without going there.
+  `aria-current="page"` (the header's breadcrumb has the page's one). The rows above it are in heavier ink. If you close
+  its group by hand, that group row takes the tab stop and is described "Holds Page 8, where you are", so a screen
+  reader hears it too.
+- **What opens by itself**: the open tab's parts and the path to where you are: the page in the editor, and the card
+  you are on in the board (a card is only reached from the board, so its group opens while you are not in the tree,
+  never under you). Going somewhere opens its path again, whatever was closed by hand. A chevron opens or closes a row
+  by pointer without going there.
+- **Into view**: a deliberate move (another tab, a page opened from the book timeline or the breakdown card) and the
+  panel opening bring the current row into view in the panel's scrolling list (`scrollIntoView`, nearest, no smooth
+  scroll). A card you move to in the board marks its row without scrolling the panel.
+- **Cheap moves between cards**: the card you are on lives in a small store (`board/boardPartStore.ts`), not in the
+  shell's state. The shell only tracks it; the tree (`LivePartsTree`) and the breadcrumb (`LiveStudioBreadcrumb`)
+  subscribe, so moving between cards re-renders those two, never the shell, the header, the strip or the board's page
+  cards (a 200-page book's every card).
 - **Keyboard** (APG tree): one tab stop, the current row (coming back into the tree lands there again); Up and Down,
   Home and End move; Right opens a row or steps into it, Left closes it or steps out; Enter or Space goes there (a
   group opens or closes). The tree does not wrap.
@@ -176,21 +191,28 @@ each visible row is one `treeitem` with its level, position and set size, so a c
 
 ### 6b. The breadcrumb (`breadcrumb/StudioBreadcrumb.tsx`, model `breadcrumb/breadcrumbModel.ts`)
 
-`My comics › Salt Road › Cast › Maya`, in the studio header where the title was (StudioHeader gains one prop, `trail`).
+`My comics › Salt Road › Cast › Maya`, in the studio header where the title was (StudioHeader gains one prop, `trail`:
+the shell's way to build the trail from the card you are on, which `LiveStudioBreadcrumb` reads from the store).
 
 - **My comics** leaves the studio (the shell's Back).
 - **The comic** is its name field: click to rename, Enter or leaving it saves, Escape puts it back, as before. It sizes
-  to its words (a hidden copy sets its width), so the crumbs after it sit beside the name.
+  to its words (a hidden copy sets its width; the field itself is `size={1}`, so it adds no width of its own), so the
+  crumbs after it sit right beside the name.
 - **The area**: the board tab, only while the board is on screen (not in Chat only, not in a phone's chat view). It
   goes back to the top of that area: the page editor closes, the board scrolls up and takes focus.
-- **The part**: the page in the editor, else the card you are on in that area (§6a). It brings the card back into view
-  with focus on it.
-- The last crumb is `aria-current="page"`; the separators are decoration.
-- **Folding**: from 1024 px every crumb; below, My comics is left to the panel's drawer (whose first row it is); on a
-  phone only the deepest crumb follows the name. The name shrinks first (to 4rem, 2.5rem on a phone), the area keeps
-  its short word, the part clips with an ellipsis but never below a 44 px target (its tooltip has every word), and the
-  breadcrumb clips sideways rather than push the header's controls, so nothing scrolls sideways at 320 px. 44 px
-  targets on touch.
+- **The part**: the page in the editor (the crumb opens it again), else the card you are on in that area (§6a), which
+  the crumb brings back into view with focus on it. A page's card stays a card: its crumb never opens the page editor.
+- The last crumb is `aria-current="page"`, the document's only one (§1); the separators are decoration.
+- **Folding**: from 1024 px every crumb; below, My comics is left to the panel's drawer (whose first row it is). A phone
+  held upright (below 600 px, `BREADCRUMB_TRAIL_MIN_WIDTH`) has 40 to 110 px beside the panel toggle, Share, the wallet,
+  Ask and ⋯: the name alone, taking all of it, and the trail folds into the drawer, whose tree marks where you are. A
+  phone held sideways has the room for the name, the area and the part.
+- **Truncation**: the name shrinks first, to a readable 5rem; then the area and the part, each ending in an ellipsis
+  and never below a 44 px target (the tooltip has every word). The breadcrumb never pushes the header's controls and
+  clips sideways only as a last resort, so nothing scrolls sideways at 320 px. 44 px targets on touch.
+  `tests/e2e/workspace.navigation.spec.ts` measures it on the board at 360×740, 852×393 and 1440×900, for a person on
+  DreamStream's usage and on their own key (the wider wallet chip; the QA harness's `byok=1`): every crumb whole inside
+  the breadcrumb and at least 44 px wide, the name readable and as wide as its words, no sideways scroll.
 
 ## 7. Key files and tests
 
@@ -209,16 +231,21 @@ each visible row is one `treeitem` with its level, position and set size, so a c
   wide desktop, the rail below, Chat, the phone drawer), `ComicStudio.stage.test.tsx` (the panel's next step only
   navigates; the open comic's row follows the live doc from Needs you to In progress).
 - `App.accountNav.test.tsx` (App gives the studio its Chat).
-- `tests/e2e/workspace.navigation.spec.ts` (the studio's panel at three sizes, its parts tree's keys and 44 px rows).
+- `tests/e2e/workspace.navigation.spec.ts` (the studio's panel at three sizes, its parts tree's keys and 44 px rows;
+  the breadcrumb's crumbs whole and 44 px wide, the name readable, at three sizes, on usage and on an own key).
 - SH-C2: `panel/partsModel.ts` (+ test: board order and registry tabs, the Cover after Pages, the cast's order, page
   states equal to the stage's counts and the Pages badge, an empty comic and empty pages, older docs without a cast,
   cover, panels, numbers or renders, flat / chapters / blocks / a long chapter, 200 pages, the current part and its
   path), `panel/PartsTree.tsx` (+ test: what opens by itself and what does not, one tab stop and the APG keys, focus
-  coming back to the current row, targets, the chevron, 200 pages, 44 px rows, ink only, Find a page),
-  `board/boardPart.ts`, `board/cardIds.ts`, `breakdown/storyMapIndex.ts` (StoryMap reads it), `breadcrumb/` (+ test:
-  which crumbs, folding, every crumb past the name navigates, the name still renames, truncation, ink only),
-  `ComicStudio.parts.test.tsx` (the breadcrumb follows the card you are on, area and part crumbs, the page in the editor,
-  Chat only, the phone; the tree's character, page and cover in the docked panel and the phone drawer; nothing spends).
+  coming back to the current row, targets, the chevron, 200 pages, 44 px rows, ink only, the card you are on opening
+  its group, a group closed by hand describing where you are, a deliberate move scrolling its row into view and a card
+  move not, Find a page), `board/boardPart.ts`, `board/boardPartStore.ts`, `board/cardIds.ts`,
+  `breakdown/storyMapIndex.ts` (StoryMap reads it), `breadcrumb/` (+ test: which crumbs, folding, every crumb past the
+  name navigates, the name still renames and sizes to its words, truncation, the name alone on a phone, ink only),
+  `ComicStudio.parts.test.tsx` (the breadcrumb follows the card you are on, area and part crumbs, a page card's crumb
+  bringing the card back without the editor, the page in the editor, Chat only, the document's one current page, a phone
+  upright and sideways; a move between cards re-rendering neither the shell nor the board; the tree's character, page
+  and cover in the docked panel and the phone drawer; Find a page's Escape in the drawer; nothing spends).
 
 ## 8. Left out on purpose
 
