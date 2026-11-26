@@ -27,6 +27,7 @@ const TITLE = 'Spice Market';
 const ALERT_SAMPLES: readonly AlertDraft[] = [
   { kind: 'reply', key: 's1', target: comic, title: TITLE },
   { kind: 'question', key: 's2', target: comic, title: TITLE },
+  { kind: 'credit', key: 's2b', target: comic, title: TITLE },
   { kind: 'plan', key: 's3', target: comic, title: TITLE },
   { kind: 'approval', key: 's4', target: comic, title: TITLE, imageCount: 6 },
   { kind: 'style', key: 's5', target: comic, title: TITLE },

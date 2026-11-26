@@ -96,10 +96,11 @@ describe('needsYouOf', () => {
   });
 
   it('a credit card (a run stopped on an empty key, a step that did not fit) waits on the person until they move past it', () => {
+    // Its own reason: it waits on a top-up or a key switch, not on an answer to the Director.
     const stopped: Card = { type: 'credit', id: 'cr', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 2, notStarted: 4 };
-    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [stopped])] }))).toEqual({ why: 'question', key: 'card:a1:cr' });
+    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [stopped])] }))).toEqual({ why: 'credit', key: 'card:a1:cr' });
     const short: Card = { type: 'credit', id: 'cs', reason: 'short', payer: 'allowance', leftPct: 0.5, needPct: 4 };
-    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [short])] }))).toEqual({ why: 'question', key: 'card:a1:cs' });
+    expect(needsYouOf(doc({ conversation: [msg('u1', 'user'), msg('a1', 'assistant', [short])] }))).toEqual({ why: 'credit', key: 'card:a1:cs' });
     // Moved past (a later message of theirs): nothing waits.
     expect(needsYouOf(doc({ conversation: [msg('a1', 'assistant', [stopped]), msg('u2', 'user'), msg('a2', 'assistant')] }))).toBeNull();
   });

@@ -5,7 +5,7 @@ import { loadComicActivity, type ComicActivityRow } from '../../../services/comi
 import { requestTaskTarget, taskDestination, WORK_CHANGED_EVENT } from './workspaceTaskTarget';
 
 const attentionLabel: Record<WorkAttention, string> = {
-  approval: 'Review drawing estimate', question: 'Answer the Director', plan: 'Review page plan',
+  approval: 'Review drawing estimate', question: 'Answer the Director', credit: 'Top up or switch key', plan: 'Review page plan',
   style: 'Choose a look', interrupted: 'Resume interrupted draft', render_failed: 'Review drawing issue'
 };
 function finishedLabel(work: FinishedWork) {

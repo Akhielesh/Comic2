@@ -27,4 +27,13 @@ describe('private comic summaries', () => {
     doc.conversation.push({ id: 'ask', role: 'user', text: 'Explore a theme', at: 8 }, { id: 'answer', role: 'assistant', text: 'Draft completed.', at: 9 });
     expect(summarizeComicWork(doc).finished).toContainEqual({ kind: 'reply', at: 9 });
   });
+  it('a run that stopped on an empty key asks for a top-up or a key switch, not an answer', () => {
+    const doc = makeSampleDoc();
+    doc.pages.forEach((p) => (p.render = { ...p.render, status: p.render.status === 'rendering' || p.render.status === 'queued' ? 'none' : p.render.status }));
+    doc.conversation = [
+      { id: 'u1', role: 'user', text: 'Draw the pages', at: 10 },
+      { id: 'a1', role: 'assistant', text: 'Stopped before pages 3–6: your OpenRouter key ran out of credit.', at: 11, cards: [{ type: 'credit', id: 'cr', reason: 'stopped', payer: 'own_key', provider: 'openrouter', drawn: 2, notStarted: 4 }] }
+    ];
+    expect(summarizeComicWork(doc).attention).toBe('credit');
+  });
 });

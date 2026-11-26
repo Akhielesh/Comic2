@@ -20,6 +20,11 @@ own key, a percentage and plain words for DreamStream's included usage (governed
 - The refused route goes into the run's `refusedRoutes`. Every attempt checks it before dispatch and every request
   carries `excludeRoutes`, so neither the run nor the image client's own same-model fallback calls that key again in
   this run.
+- **A refusal on the fallback counts too.** When the first route was only busy (a rate limit or an outage) and the
+  image client's same-model fallback was refused for credit, the error reported stays the first route's (the job
+  retries there) and carries the fallback's refusal (`fallbackRefusalOf(err)`: `{ route, refusal }`). The run notes it
+  before it retries, so the next attempt excludes that key; if the first key is refused later, the stop card names
+  both.
 - **Same-payer continuation** (release 308's rule for standalone images, commit 336a3e63): when the same model has a
   route on a key of the same payer (`pickAlternateRoute`: the person's own OpenRouter and Gemini keys, or two platform
   keys, never one of each) that was not refused, the refused job is drawn there at once (`DrawOutcome` `reroute`) and
@@ -35,8 +40,16 @@ own key, a percentage and plain words for DreamStream's included usage (governed
   Nothing more was charged.` (both keys: `your OpenRouter and Gemini keys ran out of credit …`; governed: `the drawing
   service ran out of capacity. Nothing more was used from your usage.`) and never suggests the next paid step. It
   carries **one** `credit` card and no other paid chip.
-- The card is a **needs-you** (`shared/comic/attention.ts`, like a live outage card): the "needs you" alert fires instead
-  of "Pages are ready", and My comics and the AI activity feed flag the comic until the chat moves past the card.
+- The card is a **needs-you** of its own (`shared/comic/attention.ts` why `credit`, never a question): the "needs you"
+  alert fires instead of "Pages are ready" ("Waiting for a top-up or another key": alerts carry no money word), and the
+  AI activity feed lists the comic under Needs you as "Top up or switch key" until the chat moves past the card. A
+  summary saved before this reason existed still reads "Answer the Director".
+- **A model switch that redraws everything** draws the sheets first, then the pages and cover
+  (`actions/models.ts` `chainAfterSheets`). When that sheets run stops on credit, its one card is the whole story: the
+  switch posts nothing more and offers no paid chip. Once "Draw the rest" has drawn the sheets left on the new model,
+  that run offers what the switch still owes, priced fresh: "Redraw 5 pages and the cover · ≈ $X"
+  (`jobs.ts` `switchRedrawLeftStep`; the switch's own sheets run never offers it, since the switch starts the pages
+  itself).
 
 ## 2. The balance check before spending
 
@@ -48,11 +61,22 @@ Runs on the server right before an approved paid step starts, never at quote tim
   detail pass asked for directly (`runFeatureAction`) **and approved** (`approveGate` runs the same check before the
   handler; most translations start from an approval, since the Director opens one for every translate it is asked
   for), and the page re-check (`startRecheck`, both ways).
+- Planning, through `planCreditShort` before the writer runs (`planPages`): "Plan the pages", the planning inside
+  "Draft it for me", `revise_pages` and a written new page (the clip menu's Write). The need is the quote's honest
+  bound: twice one pass for the pages being written (one pass, and one repair if the plan check sends it back). A
+  shortfall writes nothing and posts the card ("…haven't started the page plan…"); the draft stops as interrupted with
+  its idea kept, so it can start again after a top-up.
+- A model switch that redraws (`change_image_model` with redraw), before anything is switched: the whole redraw on
+  the new model (sheets, pages and cover) against what its payer has left. Short: nothing is switched, so the book is
+  never left half on each model (as with the budget check), one card, and the free "Switch without redrawing".
 
-**What is left** is what the payer has left minus what this comic is drawing right now (`pendingUsdOf`: the quotes runs
-still under way hold). A reading is usually taken before such a run started, so without this a second step approved
-while the first draws would pass the check and stop mid-run instead. The card then says "left after what's drawing
-now" (`held`).
+**What is left** is what the payer has left minus what this comic is drawing right now (`heldUsdFor`). A reading is
+usually taken before such a run started, so without this a second step approved while the first draws would pass the
+check and stop mid-run instead. The card then says "left after what's drawing now" (`held`). For an own key that is
+the whole held quote (`pendingUsdOf`: a reading never includes calls still in flight). For DreamStream's allowance it
+is only the part with no billing hold yet: the usage status a request reads already counts the hold of every image on
+the wire (`inflight_usd`), so those are not set aside twice (`RenderRun.holdOnWire` counts a job's hold from its
+reservation until it settles or is released).
 
 **A reading that would refuse is read again first.** When an own-key reading says no and is more than 30 s old
 (`RECHECK_REFUSAL_AFTER_MS`), the provider is read once more, past the 60 s provider cache, and the newer reading
@@ -125,7 +149,9 @@ when a view that shows it opens and the reading is missing or older than 15 minu
 - **Settings → API keys** — `components/usage/KeyBalancePanel.tsx`, first under "DreamStream usage left": the figure
   large, when it was read (and "an older reading" past 15 minutes), the key limit, its usage and the account credits
   when reported, Check now, Add funds. When OpenRouter shares no balance for the key it says so (set a credit limit on
-  the key, or check the credits there). Settings' per-provider "Check provider" feeds the same reading.
+  the key, or check the credits there). One reading both ways: Settings' per-provider "Check provider" feeds the panel,
+  and the OpenRouter card shows the panel's reading when it is newer than the saved one (`ProviderActivity.tsx`
+  `PersonalProviderBalance`), so the page never shows two figures for one key.
 - **Governed people** keep the "usage left" percentage in the header (`usage` slot) and in Settings.
 
 ## Gotchas
@@ -139,11 +165,17 @@ when a view that shows it opens and the reading is missing or older than 15 minu
 
 ## Tests
 
-`server/src/comic/imageClient.credit.test.ts` (classification, `excludeRoutes`), `server/src/comic/jobs.credit.test.ts`
-(the run stopping, same-payer continuation, both keys refused, a no-quota key carried on, the pre-spend check: fits,
-short, unknown, governed, the open approval, an approved translation, the re-read after a top-up, the held quote of a
-run under way, the other key, Draw what fits with the cover and against a brute force),
+`server/src/comic/imageClient.credit.test.ts` (classification, `excludeRoutes`, a busy first route whose fallback key
+was refused), `server/src/comic/jobs.credit.test.ts` (the run stopping, same-payer continuation, both keys refused, a
+no-quota key carried on, a fallback refusal never called again, the pre-spend check: fits, short, unknown, governed,
+the open approval, an approved translation, the re-read after a top-up, the held quote of a run under way, governed
+images on the wire counted once, the other key, planning and a page rewrite on an empty key, Draw what fits with the
+cover and against a brute force), `server/src/comic/directorDraft.test.ts` (the draft's planning on an empty key),
+`server/src/comic/actions/models.test.ts` (a switch the key can't redraw switches nothing; a sheets run that stopped
+posts nothing more, and Draw the rest then offers the pages and cover), `shared/comic/workspaceActivity.test.ts`,
+`components/comicstudio/home/ComicTaskActivity.test.tsx` (the feed's "Top up or switch key"), `services/alerts/copy.test.ts`,
 `server/src/services/accountProviderUsage.latest.test.ts` (fresh, stale, the stricter re-read, the shared read and its
 cooldown), `shared/comic/credit.test.ts`, `shared/comic/attention.test.ts`, `components/comicstudio/alerts/studioTransitions.test.ts`,
-`services/keyBalance.test.ts`, `components/comicstudio/usage/{CreditCard,KeyBalanceSlot}.test.tsx` (the header by width
-and the Spending sheet line), `components/usage/KeyBalancePanel.test.tsx`.
+`services/keyBalance.test.ts`, `components/comicstudio/usage/{CreditCard,KeyBalanceSlot}.test.tsx` (the header by width,
+the Spending sheet line, and the real StudioHeader at 360 px carrying it), `components/usage/KeyBalancePanel.test.tsx`
+(and the OpenRouter card showing the panel's newer reading).

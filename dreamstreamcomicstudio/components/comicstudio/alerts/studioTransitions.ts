@@ -68,7 +68,7 @@ const NOT_FAILURES = new Set(['CANCELLED', 'connection_lost', 'BUSY', 'NOT_RUNNI
 /** Keep remembered picture and needs-you keys bounded on a long session. */
 const REPORTED_MAX = 400;
 
-const NEEDS_KIND: Record<NeedsWhy, AlertKind> = { approval: 'approval', question: 'question', plan: 'plan', style: 'style' };
+const NEEDS_KIND: Record<NeedsWhy, AlertKind> = { approval: 'approval', question: 'question', credit: 'credit', plan: 'plan', style: 'style' };
 
 const conv = (doc: ComicDoc | null | undefined): Msg[] => (Array.isArray(doc?.conversation) ? doc!.conversation : []);
 const lastUserIndex = (msgs: readonly Msg[]): number => {

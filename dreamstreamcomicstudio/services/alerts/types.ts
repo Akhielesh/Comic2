@@ -20,6 +20,7 @@ export const sameTarget = (a: AlertTarget | null | undefined, b: AlertTarget | n
 export type AlertKind =
   | 'reply'
   | 'question'
+  | 'credit'
   | 'plan'
   | 'approval'
   | 'style'
@@ -38,6 +39,7 @@ export type AlertKind =
 export const ALERT_KINDS: readonly AlertKind[] = [
   'reply',
   'question',
+  'credit',
   'plan',
   'approval',
   'style',
@@ -57,8 +59,8 @@ export const ALERT_KINDS: readonly AlertKind[] = [
 /** The two chimes: "Ready" (a rising fifth) and "Needs you" (a lower rising minor third). */
 export type ChimeTier = 'ready' | 'needsYou';
 
-/** Kinds that mean the person is waited on (a question, an approval, a plan, looks to pick). */
-const NEEDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['question', 'plan', 'approval', 'style', 'chat_question', 'chat_confirm']);
+/** Kinds that mean the person is waited on (a question, a top-up, an approval, a plan, looks to pick). */
+const NEEDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['question', 'credit', 'plan', 'approval', 'style', 'chat_question', 'chat_confirm']);
 /** Kinds that mean something did not finish as asked. */
 const FAILURES: ReadonlySet<AlertKind> = new Set<AlertKind>(['drawn_issues', 'translate_issues', 'publish_failed', 'failed', 'chat_failed']);
 

@@ -53,3 +53,13 @@ it('keeps last checked results on failure, recovers on reconnect and never shows
   await act(async () => late(result([row('Private A')])));
   expect(screen.queryByText('Private A')).toBeNull();
 });
+it('a comic whose key ran out says what to do (top up or switch key), not "Answer the Director", and opens the conversation', async () => {
+  load.mockResolvedValue(result([{ ...row('Night ferry'), attention: 'credit' }, { ...row('Old summary'), id: 'comic-2', attention: 'question' }]));
+  render(mount('owner')); expand();
+  const credit = await screen.findByRole('link', { name: /Night ferry .*Top up or switch key/ });
+  expect(screen.queryByRole('link', { name: /Night ferry .*Answer the Director/ })).toBeNull();
+  // A summary saved before money had its own reason still reads as it did.
+  expect(screen.getByRole('link', { name: /Old summary .*Answer the Director/ })).toBeTruthy();
+  fireEvent.click(credit);
+  expect(consumeTaskTarget('owner', 'comic-1')).toBe('conversation');
+});

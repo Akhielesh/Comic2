@@ -37,6 +37,7 @@ the core makes a network request or wakes the backend.
 |---|---|---|
 | `reply` | A Director turn that only talked has replied | Ready |
 | `question` | An open options card (with choices), a conflict card, a publish confirm or a model-outage choice, in any assistant message since the person's last message, while the card is still live (a later turn from the agent settles it; a message from work that was already running does not) | Needs you |
+| `credit` | A live `credit` card in the same place as a question: a run stopped on a key with no credit, or a paid step that did not fit (credit-safety.md). "Waiting for a top-up or another key", never a money word | Needs you |
 | `plan` | The page plan waits for its OK (draft, pages, a live plan or breakdown card, nothing drawing) | Needs you |
 | `approval` | A paid step is held for Approve (an open gate) | Needs you |
 | `style` | Looks drawn and waiting to be picked | Needs you |
