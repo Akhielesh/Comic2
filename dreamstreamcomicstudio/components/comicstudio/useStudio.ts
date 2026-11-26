@@ -1608,8 +1608,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           if (typeof action.tab === 'string' && (STUDIO_TABS.has(action.tab) || action.tab === HISTORY_TAB)) setTab(action.tab);
           return;
         case 'open_share': {
-          // The mounted Share button opens its sheet on this event (and may preventDefault to say
-          // so); otherwise the Read tab, where sharing lives, opens its own Share sheet.
+          // The header's Share button opens its sheet on this event and calls preventDefault to say so (one
+          // sheet, the board stays put); with no Share button mounted, the Read tab opens its own Share sheet.
           let handled = false;
           if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
             handled = !window.dispatchEvent(new CustomEvent(OPEN_SHARE_EVENT, { cancelable: true }));

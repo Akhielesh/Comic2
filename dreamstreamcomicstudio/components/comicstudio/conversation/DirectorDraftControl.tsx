@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, Feather } from 'lucide-react';
 import { DIRECTOR_DRAFT_IDEA_LIMIT } from '../../../shared/comic/doc';
 import { stageFacts } from '../../../shared/comic/stage';
@@ -21,6 +21,9 @@ export function DirectorDraftControl({ studio, readComposerDraft }: Props) {
   const anchor = useRef<HTMLButtonElement>(null);
   const field = useId();
   const doc = studio.doc;
+  // The stage strip's count (shared/comic/stage.ts): drawn, current and shown to you. A withheld picture is never ready.
+  // Once per doc: the facts also read what waits on the person (a pass over the conversation).
+  const readyPages = useMemo(() => (doc ? stageFacts(doc).current : 0), [doc]);
   if (!doc) return null;
 
   const draft = doc.directorDraft;
@@ -29,8 +32,6 @@ export function DirectorDraftControl({ studio, readComposerDraft }: Props) {
   const planning = status === 'planning';
   const hasPages = doc.pages.length > 0;
   const openGate = doc.gate?.status === 'open';
-  // The stage strip's count (shared/comic/stage.ts): drawn, current and shown to you. A withheld picture is never ready.
-  const readyPages = stageFacts(doc).current;
   const readable = directorLed && hasPages && readyPages === doc.pages.length;
   const drawing = directorLed && doc.pages.some(p => p.render.status === 'queued' || p.render.status === 'rendering');
   const plans = [...doc.pages].sort((a, b) => a.n - b.n);

@@ -27,6 +27,18 @@ const facts = (extra: Partial<StageFacts>): StageFacts => ({
 const table = (f: StageFacts) => stageMapRows(f).map((r) => [r.label, r.stateWord, r.left, r.target.label, r.target.place]);
 
 describe('the stage map', () => {
+  it('every page drawn but some redrawing or failed to redraw: the Draw row says so, never "Nothing left"', () => {
+    const f = facts({ stage: 'publish', done: ['story', 'style', 'plan', 'draw'], pages: 12, planned: 12, drawn: 12, current: 8, redrawing: 3, redrawFailed: 1, next: 'watch_drawing' });
+    const rows = stageMapRows(f);
+    expect(table(f)[3]).toEqual(['Draw', 'Done', '3 redrawing · 1 redraw failed', 'Open Pages', 'pages']);
+    expect(rows[3].sentence).toBe('Draw, done. 3 redrawing, 1 redraw failed.');
+    // The Publish row, current, goes to the run.
+    expect(table(f)[4]).toEqual(['Publish', 'Now', 'Ready to publish', 'Watch the pages draw', 'pages']);
+    // Drawing too: the redraws join what is left.
+    const drawingNow = facts({ stage: 'draw', done: ['story', 'style', 'plan'], pages: 4, planned: 4, drawn: 3, current: 1, outOfDate: 1, redrawing: 1, drawing: 1, next: 'watch_drawing' });
+    expect(table(drawingNow)[3][2]).toBe('1 page to draw · 1 drawing now · 1 out of date · 1 redrawing');
+  });
+
   it('a new comic: Story now (its next step), Style next, the rest later, each opening its tab', () => {
     expect(table(stageFacts(createEmptyDoc('c0', 'Untitled comic', 1)))).toEqual([
       ['Story', 'Now', 'No story yet', 'Tell the Director your idea', 'composer'],

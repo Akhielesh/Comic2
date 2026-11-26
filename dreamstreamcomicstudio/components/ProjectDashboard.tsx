@@ -735,6 +735,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
     onHome={showMyComics}
     navigation={{ projects, projectsLoaded: projectsLoaded || projects.length > 0, accountId, onOpenStudioWork, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
+      stageRows: stages.rows,
       onNewComic: beginNewComic,
       onImages: onNavigate && (() => onNavigate('images')),
       onChat: onNavigate && (() => onNavigate('chat')),

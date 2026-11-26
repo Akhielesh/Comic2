@@ -1,7 +1,8 @@
 // Loads the small activity rows behind the panel's "Your comics" (the old AI activity feed's loader,
 // services/comicWorkspaceActivity.ts: a scalar projection of the owner's own comic_docs, the 25 most recently changed),
 // and remembers which finished work this viewer cleared. Every comic is listed from App's project list; these rows add
-// the news (Needs you, In progress, Finished) of the comics that changed lately, which is where news is.
+// the news (Needs you, In progress, Finished) of the comics that changed lately, which is where news is. On My comics the
+// page's own stage read (every comic) adds the stage and "Needs you" of the rest (panelModel.ts stageRows).
 //
 // When it fetches (SH-C1; the backend and the database stay idle otherwise): when the list mounts (the panel opens),
 // when the tab comes back into view or gets focus after FOCUS_REFRESH_MS, shortly after a run settles in this tab
@@ -13,12 +14,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadComicActivity, type ComicActivityRow } from '../../../services/comicWorkspaceActivity';
 import type { FinishedKind, FinishedWork } from '../../../shared/comic/workspaceActivity';
-import { WORK_CHANGED_EVENT } from '../home/workspaceTaskTarget';
+import { WORK_CHANGED_EVENT, WORK_FOCUS_REFRESH_MS } from '../home/workspaceTaskTarget';
 
 export type ActivityStatus = 'loading' | 'ready' | 'failed' | 'offline';
 
 export const CACHE_FRESH_MS = 20_000;
-export const FOCUS_REFRESH_MS = 30_000;
+export const FOCUS_REFRESH_MS = WORK_FOCUS_REFRESH_MS;
 export const SETTLE_DELAY_MS = 700;
 export const LOAD_TIMEOUT_MS = 12_000;
 

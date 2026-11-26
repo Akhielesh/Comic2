@@ -28,7 +28,7 @@ import { Skeleton } from '../../ds/Skeleton';
 import { CHIP, CLIP_TEXT, LIFT, MUTED, WRAP_TEXT } from '../../chat/studioDesign';
 import { COMIC_STAGES, type StageView } from '../../../shared/comic/stage';
 import { EmptyArt } from '../library/procedural/EmptyArt';
-import { StageMark } from '../stage/stageMarks';
+import { StageMarks } from '../stage/stageMarks';
 import { coverCandidates, PROJECT_NAME_MAX, type MyComicCardModel, type MyComicNext } from './homeModel';
 import type { TaskDestination } from './workspaceTaskTarget';
 
@@ -63,17 +63,7 @@ export function StageLine({ view, className }: { view: StageView; className?: st
   const at = COMIC_STAGES.indexOf(view.stage) + 1;
   return (
     <p data-slot="stage-line" className={cn('m-0 flex min-w-0 items-center gap-2 text-[length:var(--ds-text-sm)] leading-5', className)}>
-      <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-0.5">
-        {view.steps.map((step) => (
-          <span
-            key={step.stage}
-            data-stage-mark={step.done ? 'done' : step.current ? 'current' : 'upcoming'}
-            className={cn('flex h-2.5 w-2.5 items-center justify-center', step.done || step.current ? 'text-[var(--ds-ink)]' : MUTED)}
-          >
-            <StageMark done={step.done} current={step.current} />
-          </span>
-        ))}
-      </span>
+      <StageMarks steps={view.steps} />
       <span className="sr-only">{view.complete ? 'Every stage done:' : `Stage ${at} of ${COMIC_STAGES.length}:`} </span>
       <span className={cn('font-medium text-[var(--ds-ink)]', CLIP_TEXT)}>{view.word}</span>
     </p>

@@ -14,6 +14,7 @@
 import React from 'react';
 import { ArrowLeft, BookOpen, Bug, CircleHelp, Image as ImageIcon, Layers, MessageCircle, Plus } from 'lucide-react';
 import type { Project } from '../../../types';
+import type { ComicStageRow } from '../../../services/comicWorkspaceActivity';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT } from '../../chat/studioDesign';
 import { openFeedbackReport } from '../../../services/openFeedbackReport';
@@ -50,6 +51,11 @@ export interface ComicPanelLinks {
   onOpenProject(id: string): void;
   /** Open a Comic Studio comic (App's openComicStudio); onOpenProject otherwise. */
   onOpenStudioWork?(id: string): void;
+  /**
+   * My comics' one stage read (useComicStages): every comic's stage and "Needs you", for the comics the panel's own read
+   * (the 25 most recently saved) leaves out, so the panel beside the grid puts the same comics in Needs you.
+   */
+  stageRows?: ReadonlyMap<string, ComicStageRow>;
 }
 
 export interface ComicSidePanelProps {
@@ -172,6 +178,7 @@ export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, 
           <PanelComics
             projects={links.projects}
             projectsLoaded={links.projectsLoaded}
+            stageRows={links.stageRows}
             accountId={links.accountId}
             disabled={disabled}
             current={comic}

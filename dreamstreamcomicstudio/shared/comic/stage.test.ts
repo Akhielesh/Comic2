@@ -2,7 +2,7 @@
 // Every comic knows its stage (SH-A): the boundaries from real doc fields, the progress and the one next step, and the
 // stored summary reading the same words as the doc. Synthetic docs only.
 import { describe, expect, it } from 'vitest';
-import { createEmptyDoc, normalizeDoc, type AssetRef, type ComicDoc, type Page, type RenderState } from './doc';
+import { createEmptyDoc, normalizeDoc, type AssetRef, type Card, type ComicDoc, type Msg, type Page, type RenderState } from './doc';
 import {
   COMIC_STAGES,
   STAGE_NEXT_KEYS,
@@ -212,15 +212,16 @@ describe('stage boundaries', () => {
     const doc = planned(3);
     drawnPages(doc, 3);
     expect(comicStage(doc).stage).toBe('publish');
-    // Redrawing page 2: it still has its picture, so the comic stays ready to publish.
+    // Redrawing page 2: it still has its picture, so Draw stays done, but the step is the run, not publishing.
     doc.pages[1].render = render('rendering', picture());
     expect(comicStage(doc).stage).toBe('publish');
+    expect(comicStage(doc).line).toBe('Ready to publish · 2 of 3 pages drawn · 1 redrawing · Next: watch the pages draw');
     // A first draw of a new page: drawing, not drawn. The redraw in flight is not counted current (the Board badge's 2 of 4).
     doc.pages.push(page(4, render('queued')));
     const view = comicStage(doc);
     expect(view.stage).toBe('draw');
-    expect(stageFacts(doc)).toMatchObject({ drawn: 3, current: 2, drawing: 1 });
-    expect(view.line).toBe('Drawing · 2 of 4 pages drawn · Next: watch the pages draw');
+    expect(stageFacts(doc)).toMatchObject({ drawn: 3, current: 2, drawing: 1, redrawing: 1 });
+    expect(view.line).toBe('Drawing · 2 of 4 pages drawn · 1 redrawing · Next: watch the pages draw');
   });
 
   it('a reused or out-of-date picture is a picture: Draw is done, and the words say which page is out of date', () => {
@@ -242,7 +243,49 @@ describe('stage boundaries', () => {
     doc.pages[2].render = render('rendering', picture());
     const view = comicStage(doc);
     expect(view.stage).toBe('publish');
-    expect(view.progress).toBe('2 of 3 pages drawn');
+    // The words say why one drawn page is not counted: it is being drawn again.
+    expect(view.progress).toBe('2 of 3 pages drawn · 1 redrawing');
+    expect(view.next.key).toBe('watch_drawing');
+  });
+
+  it('redraws running and failed over drawn pages are named, and lead the step even with every page drawn', () => {
+    // A 12-page book: 8 current, 3 redrawing, 1 whose redraw failed (its earlier picture still stands).
+    const doc = planned(12);
+    drawnPages(doc, 12);
+    for (const i of [3, 4, 5]) doc.pages[i].render = render(i === 3 ? 'queued' : 'rendering', picture());
+    doc.pages[8].render = render('failed', picture());
+    const facts = stageFacts(doc);
+    expect(facts).toMatchObject({ stage: 'publish', drawn: 12, current: 8, redrawing: 3, redrawFailed: 1, drawing: 0, failed: 0 });
+    expect(comicStage(doc).line).toBe('Ready to publish · 8 of 12 pages drawn · 3 redrawing · 1 redraw failed · Next: watch the pages draw');
+    expect(roundTrip(facts)).toEqual(facts);
+    // The runs settle: the failed redraw is the step, by its own name.
+    for (const i of [3, 4, 5]) doc.pages[i].render = render('ready', picture());
+    const settled = comicStage(doc);
+    expect(settled.line).toBe('Ready to publish · 11 of 12 pages drawn · 1 redraw failed · Next: review 1 failed redraw');
+    expect(settled.next.place).toBe('pages');
+    expect(roundTrip(stageFacts(doc))).toEqual(stageFacts(doc));
+    // A failed first draw beside it: both are failed pages.
+    doc.pages.push(page(13, render('failed')));
+    expect(comicStage(doc).next.label).toBe('Review 2 failed pages');
+    // Published, a failed redraw still leads (never "Read your comic" over a page that did not redraw).
+    const published = planned(2);
+    drawnPages(published, 2);
+    live(published);
+    published.pages[1].render = { ...render('failed', picture()), updatedAt: 1 };
+    expect(comicStage(published)).toMatchObject({ complete: true, next: { key: 'review_failed' } });
+  });
+
+  it('a summary written before the redraw counts reads them as none', () => {
+    const doc = planned(3);
+    drawnPages(doc, 3);
+    const { redrawing: _r, redrawFailed: _f, ...older } = stageFacts(doc);
+    expect(readStageFacts(JSON.parse(JSON.stringify(older)))).toMatchObject({ redrawing: 0, redrawFailed: 0, next: 'publish' });
+    // But a stored redraw step needs its count, and Publish has no first draws to watch.
+    expect(readStageFacts({ ...older, next: 'watch_drawing' })).toBeNull();
+    expect(readStageFacts({ ...older, next: 'review_failed' })).toBeNull();
+    expect(readStageFacts({ ...older, redrawing: 1, current: 2, next: 'watch_drawing' })).toMatchObject({ redrawing: 1 });
+    expect(readStageFacts({ ...older, redrawing: 4 })).toBeNull(); // more than the drawn pages
+    expect(readStageFacts({ ...older, redrawFailed: -1 })).toBeNull();
   });
 
   it('a drawn comic is ready to publish; the next step opens Read', () => {
@@ -404,6 +447,88 @@ describe('one page’s standing (the side panel’s parts tree reads it)', () =>
   });
 });
 
+describe('what waits on the person is the next step, whatever the stage', () => {
+  const msg = (id: string, role: Msg['role'], cards?: Card[]): Msg => ({ id, role, text: role === 'user' ? 'Show me some looks' : 'Here you go.', at: NOW, ...(cards ? { cards } : {}) });
+  /** A drafted look, then two looks drawn to compare it with (propose_styles after set_style), the choice still live. */
+  const comparing = (patch: (doc: ComicDoc) => void = () => undefined): ComicDoc =>
+    withLook((d) => {
+      d.style.options = [
+        { id: 'so_1', name: 'Ink wash', spec: 'a', render: render('ready', picture({ path: 'u/p/style/1.webp' })) },
+        { id: 'so_2', name: 'Bold pop', spec: 'b', render: render('ready', picture({ path: 'u/p/style/2.webp' })) }
+      ];
+      d.conversation = [msg('u1', 'user'), msg('a1', 'assistant', [{ type: 'style_choice', id: 'sc' }])];
+      patch(d);
+    });
+
+  it('looks drawn to compare over a drafted spec: the comic is choosing its look again, so Style is the stage', () => {
+    const doc = comparing();
+    const view = comicStage(doc);
+    expect(view.stage).toBe('style');
+    expect(view.line).toBe('Style · 2 looks to compare · Next: pick a look');
+    expect(view.next.place).toBe('style');
+    expect(roundTrip(stageFacts(doc))).toEqual(stageFacts(doc));
+    // The panel's row and My comics' card read the same wait from the same summary.
+    expect(summarizeComicWork(doc).attention).toBe('style');
+    // Picked (the look locks) or moved past (a new message): the drafted spec stands again and the stage moves on.
+    const locked = comparing((d) => (d.style.status = 'locked'));
+    expect(comicStage(locked).line).toBe('Planning · No pages planned yet · Next: plan the pages');
+    const moved = comparing((d) => d.conversation.push(msg('u2', 'user')));
+    expect(comicStage(moved).stage).toBe('plan');
+  });
+
+  it('once a page is drawn the look it was drawn in stands, and the open choice still leads the step', () => {
+    const doc = comparing((d) => {
+      d.pages = [page(1), page(2)];
+      d.planStatus = 'approved';
+      drawnPages(d, 1);
+    });
+    const facts = stageFacts(doc);
+    expect(facts).toMatchObject({ stage: 'draw', next: 'pick_look', looks: 2 });
+    expect(comicStage(doc).line).toBe('Drawing · 1 of 2 pages drawn · Next: pick a look');
+    expect(roundTrip(facts)).toEqual(facts);
+  });
+
+  it('a look suggested to pick (free presets) is the step; nothing drawn, so the drafted spec keeps Style done', () => {
+    const doc = withLook((d) => (d.conversation = [msg('u1', 'user'), msg('a1', 'assistant', [{ type: 'style_presets', id: 'sp', presetIds: ['noir-ink'] }])]));
+    const facts = stageFacts(doc);
+    expect(facts).toMatchObject({ stage: 'plan', next: 'choose_look', looks: 0 });
+    expect(comicStage(doc).line).toBe('Planning · No pages planned yet · Next: choose a look');
+    expect(roundTrip(facts)).toEqual(facts);
+  });
+
+  it('a question from the Director: "Answer the Director", at the message box', () => {
+    const question: Card = { type: 'options', id: 'o1', question: 'Which ending?', choices: [{ id: 'a', label: 'Happy' }, { id: 'b', label: 'Sad' }] };
+    const doc = withLook((d) => (d.conversation = [msg('u1', 'user'), msg('a1', 'assistant', [question])]));
+    const view = comicStage(doc);
+    expect(view.line).toBe('Planning · No pages planned yet · Next: answer the Director');
+    expect(view.next.place).toBe('composer');
+    expect(roundTrip(stageFacts(doc))).toEqual(stageFacts(doc));
+    // Answered: the stage's own step again.
+    doc.conversation.push(msg('u2', 'user'));
+    expect(comicStage(doc).next.key).toBe('plan_pages');
+  });
+
+  it('the page plan waiting for its OK leads in any stage', () => {
+    const doc = withLook((d) => {
+      d.style = { status: 'empty', refs: [], options: [] }; // planned before a look: the stage is Style
+      d.pages = [page(1), page(2)];
+      d.planStatus = 'draft';
+      d.conversation = [msg('u1', 'user'), msg('a1', 'assistant', [{ type: 'plan', id: 'pl' }])];
+    });
+    const facts = stageFacts(doc);
+    expect(facts).toMatchObject({ stage: 'style', next: 'review_plan' });
+    expect(comicStage(doc).line).toBe('Style · Not chosen yet · Next: review the plan');
+    expect(roundTrip(facts)).toEqual(facts);
+  });
+
+  it('an open approval still comes first', () => {
+    const doc = comparing((d) => {
+      d.gate = { id: 'g1', action: { type: 'render_style_options', count: 2 }, title: 'Draw 2 looks', summary: '', estimateUsd: 0.1, imageCount: 2, model: 'm', createdAt: NOW, status: 'open', reason: 'first_render' } as ComicDoc['gate'];
+    });
+    expect(stageFacts(doc).next).toBe('review_estimate');
+  });
+});
+
 describe('the stored summary', () => {
   const docs: Array<[string, ComicDoc]> = [
     ['empty', createEmptyDoc('e', 'Untitled comic', NOW)],
@@ -433,7 +558,7 @@ describe('the stored summary', () => {
     drawnPages(doc, 2);
     const stored = JSON.stringify(summarizeComicWork(doc).stage);
     expect(stored).not.toMatch(/Night Ferry|ferry|webp|pages\/|usd|price|model|Ink wash/i);
-    expect(Object.keys(summarizeComicWork(doc).stage!).sort()).toEqual(['current', 'done', 'drawing', 'drawn', 'failed', 'looks', 'next', 'outOfDate', 'pages', 'paused', 'planned', 'stage', 'v', 'withheld']);
+    expect(Object.keys(summarizeComicWork(doc).stage!).sort()).toEqual(['current', 'done', 'drawing', 'drawn', 'failed', 'looks', 'next', 'outOfDate', 'pages', 'paused', 'planned', 'redrawFailed', 'redrawing', 'stage', 'v', 'withheld']);
   });
 
   it('a comic saved before stages, or an unreadable stage, reads "Open to see", never a guess', () => {

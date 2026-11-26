@@ -4,7 +4,7 @@
 
 import type { Project } from '../../../types';
 import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../../../services/studioDeepLink';
-import { COMIC_STAGES, STAGE_UNKNOWN, stageView, type ComicStage, type StageFacts, type StagePlace, type StageView } from '../../../shared/comic/stage';
+import { COMIC_STAGES, STAGE_UNKNOWN, lowerFirst, stageView, type ComicStage, type StageFacts, type StagePlace, type StageView } from '../../../shared/comic/stage';
 import type { WorkAttention } from '../../../shared/comic/workspaceActivity';
 import { taskDestination, type TaskDestination } from './workspaceTaskTarget';
 
@@ -217,23 +217,29 @@ const ATTENTION_NEXT: Readonly<Record<WorkAttention, string>> = {
   render_failed: 'Review the drawing problem'
 };
 
-/** The stage's own waits: what waits on the person never replaces them (they are what the conversation shows first). */
-const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'follow_planning', 'resume_draft']);
+/**
+ * The stage's own waits: what waits on the person never replaces them (they are what the conversation shows first). The
+ * stage names every wait needsYouOf finds (stage.ts), so the card, the strip and the panel's row give one step.
+ */
+const WAIT_STEPS: ReadonlySet<string> = new Set(['review_estimate', 'answer_director', 'follow_planning', 'resume_draft']);
 
 /**
  * A page whose drawing failed, by the stage's own counts. The summary's "render_failed" means ANY render failed: a page,
  * the cover, a cast or place sheet, or a look (and a look that failed stays failed after another is picked), so on its
  * own it never says the problem is on the Pages tab. In Draw or Publish the counts do: a page with no picture whose
- * drawing failed, or a picture that still stands but is neither current nor out of date while nothing is drawing (its
- * redraw failed). Anywhere else the stage's own step stays (the card still says Needs you).
+ * drawing failed, a failed redraw, or (a summary written before the redraw counts) a picture that still stands but is
+ * neither current, out of date nor redrawing while nothing is drawing. Anywhere else the stage's own step stays (the card
+ * still says Needs you).
  */
 const pageFailed = (facts: StageFacts, working: boolean): boolean =>
-  (facts.stage === 'draw' || facts.stage === 'publish') && (facts.failed > 0 || (!working && facts.drawn > facts.current + facts.outOfDate));
+  (facts.stage === 'draw' || facts.stage === 'publish') &&
+  (facts.failed > 0 || (facts.redrawFailed ?? 0) > 0 || (!working && facts.drawn > facts.current + facts.outOfDate + (facts.redrawing ?? 0)));
 
 /**
- * What waits on the person when it leads the card's next step instead of the stage's own: a question from the Director,
- * or a failed page the stage does not already name ("Review 2 failed pages"), unless the stage is itself waiting. The
- * rest (an approval, a plan, a look, an interrupted draft) are the stage's own steps.
+ * What waits on the person when it leads the card's next step instead of the stage's own: a question from the Director
+ * (a stage that already names it reads "Answer the Director" itself), or a failed page the stage does not already name
+ * ("Review 2 failed pages"), unless the stage is itself waiting. The rest (an approval, a plan, a look, an interrupted
+ * draft) are the stage's own steps.
  */
 const leadingAttention = (attention: WorkAttention | null, view: StageView, facts: StageFacts, working: boolean): WorkAttention | null => {
   if (!attention || WAIT_STEPS.has(view.next.key)) return null;
@@ -247,7 +253,6 @@ const timeLeft = (value: unknown): string => {
   return /^(?:\d+m ?)?\d+s$|^\d+m$/.test(text) && /[1-9]/.test(text) ? text : '';
 };
 
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const OPEN_HINT = 'Opens the comic in the studio';
 const nextTo = (label: string, destination: TaskDestination): MyComicNext => ({ label: `Next: ${lowerFirst(label)}`, destination, hint: DESTINATION_HINT[destination] });
 

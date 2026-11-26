@@ -26,8 +26,10 @@ describe('owner task listing', () => {
   });
   it('keeps a stored stage only when it reads as a whole; older summaries and garbage carry none', () => {
     const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next: 'draw_rest' };
+    // A summary written before the redraw counts reads them as none.
+    const read = { ...stage, redrawing: 0, redrawFailed: 0 };
     const activity = { v: 1 as const, attention: null, working: true, finished: [] };
-    expect(comicActivityRow({ project_id: 'p', activity: { ...activity, stage } as never }).stage).toEqual(stage);
+    expect(comicActivityRow({ project_id: 'p', activity: { ...activity, stage } as never }).stage).toEqual(read);
     expect(comicActivityRow({ project_id: 'p', activity }).stage).toBeUndefined();
     expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: { ...stage, stage: 'publish' } } as never })).toBe(false);
     expect('stage' in comicActivityRow({ project_id: 'p', activity: { ...activity, stage: 'Drawing' } as never })).toBe(false);
@@ -35,6 +37,8 @@ describe('owner task listing', () => {
   });
   it('My comics reads every card’s stage in one paged list read of the listing column (never the doc), the owner’s rows, until they run out', async () => {
     const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next: 'draw_rest' };
+    // A summary written before the redraw counts reads them as none.
+    const read = { ...stage, redrawing: 0, redrawFailed: 0 };
     // As the comic_docs_listing trigger writes it: the summary, and JSON nulls for the scalars a doc does not have.
     const listing = (activity: unknown, scalars: Record<string, string | null> = {}) => ({ activity, gate: null, plan: null, draft: null, lastCard: null, ...scalars });
     const rows = Array.from({ length: STAGE_PAGE_SIZE + 2 }, (_, i) => ({ project_id: `p${i}`, listing: listing({ v: 1, attention: i === 1 ? 'approval' : null, working: i === 2, finished: [], stage }) }));
@@ -58,7 +62,7 @@ describe('owner task listing', () => {
     expect(query.eq).toHaveBeenCalledWith('user_id', 'A');
     expect(query.range.mock.calls).toEqual([[0, STAGE_PAGE_SIZE - 1], [STAGE_PAGE_SIZE, 2 * STAGE_PAGE_SIZE - 1]]);
     expect(out.size).toBe(STAGE_PAGE_SIZE + 4);
-    expect(out.get('p0')).toEqual({ id: 'p0', stage, attention: null, working: false });
+    expect(out.get('p0')).toEqual({ id: 'p0', stage: read, attention: null, working: false });
     expect(out.get('p1')?.attention).toBe('approval');
     expect(out.get('p2')?.working).toBe(true);
     // A doc saved before summaries: no stage, and its open approval still reads as waiting on the person.
@@ -69,6 +73,8 @@ describe('owner task listing', () => {
 
   it('a database without the listing column yet reads the same values from scalar paths in the doc', async () => {
     const stage = { v: 1, stage: 'draw', done: ['story', 'style', 'plan'], pages: 12, planned: 12, drawn: 6, current: 6, outOfDate: 0, drawing: 0, withheld: 0, failed: 0, looks: 0, paused: false, next: 'draw_rest' };
+    // A summary written before the redraw counts reads them as none.
+    const read = { ...stage, redrawing: 0, redrawFailed: 0 };
     const answers = [
       { data: null, error: { code: '42703', message: 'column comic_docs.listing does not exist' } },
       { data: [{ project_id: 'p', activity: { v: 1, attention: 'question', working: false, finished: [], stage } }, { project_id: 'old', gate: 'open' }], error: null }
@@ -80,7 +86,7 @@ describe('owner task listing', () => {
     expect(query.select.mock.calls).toEqual([[STAGE_SELECT], [STAGE_DOC_SELECT]]);
     // Never the doc itself, its text or anything private: the summary and four scalar keys.
     expect(STAGE_DOC_SELECT.split(',')).toEqual(['project_id', 'activity:doc->workspaceActivity', 'gate:doc->gate->>status', 'plan:doc->>planStatus', 'draft:doc->directorDraft->>status', 'lastCard:doc->conversation->-1->cards->0->>type']);
-    expect(out.get('p')).toEqual({ id: 'p', stage, attention: 'question', working: false });
+    expect(out.get('p')).toEqual({ id: 'p', stage: read, attention: 'question', working: false });
     expect(out.get('old')).toEqual({ id: 'old', attention: 'approval', working: false });
   });
 

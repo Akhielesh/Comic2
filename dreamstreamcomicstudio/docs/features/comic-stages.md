@@ -24,7 +24,7 @@ its pages before choosing a look reads "Style", with Plan already ticked. No sta
 | Stage | Done when |
 | --- | --- |
 | Story | a premise, logline or pasted script (trimmed), or any page exists. A title alone is not a story. |
-| Style | `style.spec` is set (the test drawing itself uses: `jobs.ts` `ensureStyle`), or any page holds a picture. A name, refs or undrawn options are not a look. |
+| Style | `style.spec` is set (the test drawing itself uses: `jobs.ts` `ensureStyle`), or any page holds a picture. A name, refs or undrawn options are not a look. Drawn looks waiting to be compared (a live look choice, `attention.ts` "style", over a drafted spec: `propose_styles` after `set_style`) mean the look is being chosen again, so Style is not done until one is picked or the choice is moved past; once a page is drawn the look it was drawn in stands. |
 | Plan | pages exist, every page is planned (panels, or a picture), and the plan is approved (`planStatus: 'approved'`) or drawing began. An older doc normalised to `'draft'` that already has pictures counts. |
 | Draw | every page has a picture the owner can be served (below). |
 | Publish | `publication.status === 'live'`. A publication paused by moderation (`'suspended'`) is not published. |
@@ -38,9 +38,12 @@ its pages before choosing a look reads "Style", with Plan already ticked. No sta
   first draw in flight or a failed first draw does not.
 
 **The count the words show** is the board's own: pages drawn, current and shown to you (`current`, the same number as
-`boardModel` `pageProgress`, the Pages and phone Board badges, and the reader's "6 of 12 pages drawn"), plus the
-reader's "· 1 out of date" (`outOfDate`). So with a page out of date the strip reads "Ready to publish · 11 of 12 pages
-drawn · 1 out of date", next to a Board badge of 11 of 12, never "All 12". A redraw in flight is not current. The
+`boardModel` `pageProgress`, the Pages and phone Board badges, and the reader's "6 of 12 pages drawn"), then why a drawn
+page is not current: the reader's "· 1 out of date" (`outOfDate`), "· 3 redrawing" (`redrawing`: queued or drawing over a
+picture the owner can be served) and "· 1 redraw failed" (`redrawFailed`: the earlier picture still stands). So with a
+page out of date the strip reads "Ready to publish · 11 of 12 pages drawn · 1 out of date", next to a Board badge of 11
+of 12, never "All 12", and a book with redraws under way reads "Ready to publish · 8 of 12 pages drawn · 3 redrawing · 1
+redraw failed · Next: watch the pages draw", the same pages the parts tree marks "Redrawing" and "Redraw failed". The
 badge, the reader's count and the Director-led draft control ("Drawing your comic · 6 of 12 pages drawn", and its Read
 comic button) never count a picture the content check withheld.
 
@@ -51,12 +54,13 @@ comic button) never count a picture the content check withheld.
 | Story | Story | No story yet (true whatever else is done: a look picked first, a cast) | Tell the Director your idea (composer) |
 | Style | Style | Not chosen yet · N looks to compare | Choose a look · Pick a look (Style tab) |
 | Plan | Planning | No pages planned yet · P of N pages planned · N pages planned | Plan the pages · Plan the rest · Review the plan (Pages tab) |
-| Draw | Drawing | C of N pages drawn (· K out of date) | Watch the pages draw · Review N withheld pages · Review N failed pages · Draw the pages · Draw the rest (Pages tab) |
-| Publish | Ready to publish | All N pages drawn, or C of N pages drawn · K out of date | Read and publish (Read tab) |
+| Draw | Drawing | C of N pages drawn (· K out of date · R redrawing · F redraw failed) | Watch the pages draw · Review N withheld pages · Review N failed pages · Review N failed redraws · Draw the pages · Draw the rest (Pages tab) |
+| Publish | Ready to publish | All N pages drawn, or C of N pages drawn · K out of date · R redrawing · F redraw failed | Watch the pages draw while a redraw runs, Review N failed redraws after one failed (Pages tab), else Read and publish (Read tab) |
 | Publish, paused | Publishing paused | as above | See why it is paused (Share sheet, which shows the reason; sharing is off while paused) |
 | (all done) | Published | as above | Read your comic (Read tab) · Publish your changes (Share sheet, like the Director's "Update the published version" chip) |
 
-Three waits come before the stage's own step, at any stage, without moving the stage:
+What waits on the person comes before the stage's own step, at any stage, without moving the stage (the one exception
+is a look choice, which reopens Style, §2), in this order:
 
 1. an open approval: "Review the estimate" (the approval card in the conversation);
 2. the Director planning a draft: "Follow the Director", progress "The Director is planning" (the draft's control in the
@@ -64,7 +68,18 @@ Three waits come before the stage's own step, at any stage, without moving the s
    written for, and the draft throws that plan away (`directorDraft.ts` `assertPlanUnchanged`);
 3. an interrupted Director draft **with no pages yet**: "Resume the draft" (the draft's control, whose sheet offers the
    retry). Once a draft has pages (stopped during the book offer, "Your page plan changed", a restart) there is nothing
-   to resume: the stage's own step leads ("Review the plan", the drawing steps, publishing).
+   to resume: the stage's own step leads ("Review the plan", the drawing steps, publishing);
+4. the rest of `needsYouOf` (`shared/comic/attention.ts`, the same function the summary's `attention` and the side
+   panel's "Needs you" come from): a question from the Director (an open options card, a conflict, a publish confirm, a
+   model-outage choice): "Answer the Director" (the message box, under the question); the page plan waiting for its OK:
+   "Review the plan" (Pages tab); a look to pick: "Pick a look" with drawn looks, "Choose a look" for a suggestion of
+   free presets (Style tab). So the strip, "This comic" in the side panel, its Your comics row and My comics' card name
+   one step: a drafted look with two looks drawn to compare reads "Style · 2 looks to compare · Next: pick a look"
+   everywhere, never "Next: plan the pages" beside a panel row that says "Choose a look".
+
+A redraw running or failed leads in Draw and in Publish too (after the waits): "Watch the pages draw" while any page
+draws or redraws, then withheld pages, then "Review N failed pages" / "Review N failed redraws". A book never reads
+"Next: read and publish" while its pages are being drawn again.
 
 "Publish your changes" follows `publicationBehind` (exported from `shared/comic/stage.ts`, and the same function the
 server's "Update the published version" chip uses in `jobs.ts`): a page or the cover drawn after the last publish. In
@@ -73,23 +88,29 @@ and rating) adds to it when it is loaded, so the strip never says "Read your com
 "changes not published". Lists have no such view and keep the render rule.
 
 **The next step only navigates.** It carries no action, so it never starts anything that spends, and it never shows a
-price. A question the Director is waiting on is left to the conversation's own card and the summary's `attention`
-(reading it needs the settle index).
+price. "Answer the Director" opens the message box; the question's own card, just above it, holds the choices.
 
 ## 4. The saved summary (lists without full docs)
 
 `summarizeComicWork` (`shared/comic/workspaceActivity.ts`) runs on every save (`server/src/comic/store.ts`
 `storedOwnerDoc`) and now carries `stage: StageFacts`: the current stage, the done stages, page counts (pages, planned,
-drawn, current, outOfDate, drawing, withheld, failed), drawn looks, whether the publication is paused, and the next-step
-key. Counts and keys only: no title, text, prompts,
+drawn, current, outOfDate, drawing, withheld, failed, redrawing, redrawFailed), drawn looks, whether the publication is
+paused, and the next-step key. Counts and keys only: no title, text, prompts,
 prices, models or paths. It stays private: `sanitizePublicDoc` strips `workspaceActivity`, and the summary keeps
 `v: 1` (the field is optional, so older readers ignore it).
 
 - `readStageFacts(value)` validates stored JSON strictly: known stage and step keys, safe integer counts, counts within
-  the page count (current and out-of-date pages within the drawn ones), the current stage being the first one not done,
-  done flags the counts agree with (Draw done only when every page is drawn; a live publication is never paused), and a
-  next step that fits (from the current stage; never "publish" while paused; "resume the draft" only with no pages).
-  Anything else is `null`.
+  the page count (current, out-of-date, redrawing and redraw-failed pages within the drawn ones), the current stage
+  being the first one not done, done flags the counts agree with (Draw done only when every page is drawn; a live
+  publication is never paused), and a next step that fits (a wait from any stage; a stage's own step from its stage;
+  "watch the pages draw" and "review failed" in Publish only with a redraw running or failed; never "publish" while
+  paused; "resume the draft" only with no pages). `redrawing` and `redrawFailed` came later: a summary without them
+  reads them as 0. Anything else is `null`.
+- **Filled on first open.** A comic saved before stages carries a summary without one, so the lists say "Open to see".
+  The first time such a comic is opened, the server's load (`server/src/comic/store.ts` `fillListing`) writes the
+  summary into its stored doc once, at the revision just read (`rev` must still match, so a newer save is never
+  touched) and without `updated_at` (opening a comic never moves it up the lists). Best effort and once per comic and
+  revision in a process; a failure is logged and the next save fills it as before. The listing trigger copies it on.
 - `stageSummaryOf(value)` gives a list its line: "Drawing · 6 of 12 pages drawn", or **"Open to see"**
   (`STAGE_UNKNOWN`) for a comic saved before stages or with an unreadable stage. Lists never guess a stage.
 - `stageView(readStageFacts(saved))` equals `comicStage(doc)` for the doc it was saved from (tested), so a list and the
@@ -150,7 +171,7 @@ The five stages on one small map, from the same facts as the strip, so it never 
 | --- | --- |
 | The mark | a check when done, a filled dot for the current stage, a ring for the rest, joined by one hairline (SVG in the text colour, so forced colours keep it) |
 | The name and state | "Draw · Now": Done, Now, Next (the first stage after the current one that is not done), Later; a published comic's last stage reads "Published" |
-| What is left | Story "No story yet"; Style "No look chosen yet", "3 looks to compare"; Plan "No pages planned yet", "4 pages to plan", "The plan is ready to review"; Draw "5 pages to draw · 2 drawing now · 1 withheld · 1 failed · 1 out of date", "Nothing to draw yet", and when done "1 page out of date"; Publish "Publish once the pages are drawn", "Ready to publish", "Paused for review", "Changes not published yet", "Live · new pages not published yet"; otherwise "Nothing left" |
+| What is left | Story "No story yet"; Style "No look chosen yet", "3 looks to compare"; Plan "No pages planned yet", "4 pages to plan", "The plan is ready to review"; Draw "5 pages to draw · 2 drawing now · 1 withheld · 1 failed · 1 out of date · 1 redrawing", "Nothing to draw yet", and when done "1 page out of date", "3 redrawing · 1 redraw failed" (never "Nothing left" while a drawn page is not current); Publish "Publish once the pages are drawn", "Ready to publish", "Paused for review", "Changes not published yet", "Live · new pages not published yet"; otherwise "Nothing left" |
 | The target | the current stage's next step (the label and place of "Next: …"; so is a published comic's last one: "Read your comic", "Publish your changes"); any other stage opens its tab ("Open Pages") |
 
 - Ink weights only: the current stage semibold, done stages ink, the rest muted. No hue, no spark, no wash, no price,
@@ -172,7 +193,11 @@ The five stages on one small map, from the same facts as the strip, so it never 
 - `shared/comic/stage.ts`, `shared/comic/stage.test.ts`: the model, every boundary (empty, older and partial docs,
   withheld, failed, drawing, redraw in flight, reused, stale, blank pages, draft and approved plans, published,
   published and behind (render rule and the server's view), paused, published with a new page, open approval, the
-  Director planning at Style, an interrupted draft with and without pages), the summary round trip and validation.
+  Director planning at Style, an interrupted draft with and without pages, looks to compare over a drafted look, a
+  preset suggestion, a question, the plan's OK, redraws running and failed in a drawn book, a summary written before the
+  redraw counts), the summary round trip and validation.
+- `server/src/comic/store.ts` `fillListing` (+ `store.test.ts`: filled once on first open at the same revision and
+  `updated_at`, never over a newer save, a failed fill only logged, the memory store alike).
 - `components/comicstudio/board/boardModel.ts` `pageProgress` (+ test: a withheld picture is never ready),
   `conversation/DirectorDraftControl.tsx` (+ test), `conversation/ConversationPane.tsx` (`revealApiRef`),
   `conversation/cards/GateCard.tsx` (the open card is marked and focusable), `board/BoardPane.tsx` (`lead`, + test).
@@ -182,18 +207,20 @@ The five stages on one small map, from the same facts as the strip, so it never 
 - `components/comicstudio/stage/StageStrip.tsx` (+ test: names, places, keyboard, announcement, no hue, the 360 px row
   and its marks as the one way into the map (a target goes there and closes it, Escape back on the marks),
   forced-colour marks, 320 px, foldable, the server's "behind", one count with the Board badge, the Stage map button
-  last in one row), `stage/stageMarks.tsx` (the shared mark and place words),
+  last in one row), `stage/stageMarks.tsx` (the shared mark, the five marks as one row (`StageMarks`, drawn by the
+  strip, My comics' cards and the side panel) and the place words; `lowerFirst` for "Next: …" lives in `stage.ts`),
   `stage/stageMapModel.ts` (+ test: a new comic, drawing with every kind of page, a comic planned before its look,
   partial and full plans, an open approval, ready and paused, published with and without changes, live with a new page,
   the strip's own next step), `stage/StageMap.tsx` (+ test: states and descriptions, keyboard, ink only, the popover's
   focus and Escape, a published comic opening on its next step, a target closes it, the phone sheet from the marks, the
   panel's disclosure), `components/comicstudio/ComicStudio.stage.test.tsx` (the strip in the shell: the phone
-  board placement, the approval and the draft focused on a desktop split, the Share sheet for a paused publication).
+  board placement, the approval and the draft focused on a desktop split, the Share sheet for a paused publication),
+  `ComicStudio.share.test.tsx` (the real `useStudio`, header Share slot and Read tab: My comics' share target, the strip's
+  and the Director's `open_share` open exactly one Share sheet, on desktop and phone).
 
 ## 7. Left out on purpose
 
 - Counting a cast as a story (the Director's suggestions treat a cast as an idea): the brief defines Story by the story
   or premise, so a cast alone keeps Story current, with the words "No story yet".
-- A "question waiting" next step: see §3.
 - The stage map is not in the slim rail (open the panel), and it has no actions of its own: it shows the way, the
   places themselves do the work.

@@ -55,7 +55,7 @@ describe('a next step from My comics, arriving in the studio', () => {
     mount(studio);
     expect(studio.runClientAction).toHaveBeenCalledWith({ type: 'open_share' });
     expect(studio.setTab).not.toHaveBeenCalledWith('share');
-    // A phone opens on the conversation: the sheet opens over the Read tab, so the board comes forward, not the chat.
+    // A phone opens on the conversation: the sheet opens over the board, so the board comes forward, not the chat.
     expect(pane('board')).not.toHaveAttribute('inert');
     expect(pane('chat')).toHaveAttribute('inert');
     expect(studio.act).not.toHaveBeenCalled();

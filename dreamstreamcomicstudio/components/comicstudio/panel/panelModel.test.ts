@@ -19,6 +19,25 @@ const classicProject = (id: string, name: string, updatedAt: number, state: Reco
 const groupsOf = (result: ReturnType<typeof panelComics>) => Object.fromEntries(result.groups.map((g) => [g.group, g.comics.map((c) => c.id)]));
 
 describe('panelComics: grouping', () => {
+  it('on My comics, a comic the activity read leaves out takes its stage and news from the page’s stage read', () => {
+    // 30 comics: the activity read (the 25 most recently saved) has no row for the 27th, which waits on an approval.
+    const projects = Array.from({ length: 30 }, (_, i) => studioProject(`c${i}`, `Comic ${i}`, NOW - (i + 1) * HOUR));
+    const rows = projects.slice(0, 25).map((p) => row(p.id, { stage: planning, updatedAt: p.updatedAt }));
+    const waiting: StageFacts = { ...drawing, drawing: 0, next: 'review_estimate' };
+    const stageRows = new Map([
+      ['c26', { id: 'c26', stage: waiting, attention: 'approval' as const, working: false }],
+      ['c27', { id: 'c27', stage: planning, attention: null, working: false }],
+      // An activity row wins over the stage read (it carries the finished news too).
+      ['c0', { id: 'c0', stage: drawing, attention: 'question' as const, working: false }]
+    ]);
+    const result = panelComics({ projects, projectsLoaded: true, rows, stageRows, now: NOW });
+    expect(groupsOf(result).needs).toEqual(['c26']);
+    const c26 = result.groups[0].comics[0];
+    expect([c26.status, c26.task, c26.stage?.summary]).toEqual(['Review drawing estimate', 'conversation', 'Drawing · 6 of 12 pages drawn']);
+    // Without the stage read (any other page), the same comic is a plain Recent row, as before.
+    expect(groupsOf(panelComics({ projects, projectsLoaded: true, rows, now: NOW })).needs).toBeUndefined();
+  });
+
   it('puts every comic in one group, the one that needs the person most: Needs you, In progress, Finished, Recent', () => {
     const rows = [
       row('needs', { attention: 'approval', working: true, finished: [{ kind: 'pages', at: NOW - HOUR, count: 2 }] }),

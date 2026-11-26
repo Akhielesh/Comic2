@@ -75,10 +75,13 @@ row on Images and inside a comic.
 (`WORK_SELECT`, the 25 most recently changed, account-checked); it never loads a full comic. Every comic is listed from
 App's project list; these rows add the news of the comics that changed lately, which is where news is (finished work
 moves a comic to the top). There is no "Check older comics": it paged through comics the list already shows, so it
-almost never changed what the panel showed. It fetches:
+almost never changed what the panel showed. On My comics the page's own stage read of every comic
+(`ComicPanelLinks.stageRows`, `my-comics.md` §1) gives a comic with no activity row its stage and "Needs you", so an
+older comic that waits on the person is in Needs you beside the grid that puts it first. It fetches:
 
 - when the list mounts (the panel opens; not while it is the rail);
-- when the tab comes back into view or gets focus, at most every 30 s;
+- when the tab comes back into view or gets focus, at most every 30 s (`WORK_FOCUS_REFRESH_MS`, the same wait My comics'
+  cards use, so the grid and the panel change together);
 - 700 ms after a run settles in this tab (`WORK_CHANGED_EVENT`, from `live/studioStreams.ts`);
 - on reconnecting, and on Refresh.
 
@@ -226,8 +229,9 @@ the shell's way to build the trail from the card you are on, which `LiveStudioBr
   failure, offline and reconnect, a previous owner's late response, when it fetches, quiet background loads, no
   interval, the remembered rows), `panelModel.ts` (+ test: grouping, ordering, recent limit, App's list as the list
   (deleted and renamed comics), the open comic's live news and no Finished, replies not finished work, fresh rules,
-  older, classic and Page Studio comics, row names), `usePanelActivity.ts`, `panelPreference.ts`, `panelStyles.ts`,
-  `StageMarks.tsx`.
+  older, classic and Page Studio comics, row names, My comics' stage rows for comics the activity read leaves out),
+  `usePanelActivity.ts`, `panelPreference.ts`, `panelStyles.ts`; the five marks are `stage/stageMarks.tsx` `StageMarks`
+  (the strip's and My comics' cards' own row).
 - `components/comicstudio/ComicCreationWorkspace.tsx` and `comicCreationWorkspace.css` (the frame, the rail column);
   `tests/config/creationWorkspaceTokens.test.ts`.
 - `components/comicstudio/ComicStudio.tsx` (the aside and the drawer), `ComicStudio.test.tsx` (open by default on a
@@ -252,7 +256,7 @@ the shell's way to build the trail from the card you are on, which `LiveStudioBr
 
 ## 8. Left out on purpose
 
-- No SQL and no server change: the list reads the summary the server already saves.
+- No SQL: the list reads the summary the server already saves (filled on a comic's first open, `comic-stages.md` §4).
 - The two old open/closed keys (`cs.workspace.navigation.expanded`, `comicstudio.creation.navigation`) are not migrated:
   they were per browser, not per viewer, and meant different things (the studio's defaulted to collapsed and was
   written on every toggle; the frame's defaulted to open), so merging them into one choice would guess, and the new

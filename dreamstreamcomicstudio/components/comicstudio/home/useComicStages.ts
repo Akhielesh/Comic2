@@ -1,13 +1,15 @@
 // My comics' stage read (SH-B): one request for every card's stage and "Needs you" (services/comicWorkspaceActivity.ts
-// loadComicStages), made when the view opens, again when a list reload starts (back from the studio, a new comic), and
-// after a run in this tab settles (studioStreams' WORK_CHANGED_EVENT, the moment the side panel's Your comics beside it
-// reads again). Never on a timer, never one request per card. The last answer stays while a new one runs, so cards never
-// flicker, and this tab remembers it: coming back to the view paints the cards at once and reads again behind them.
+// loadComicStages), made when the view opens, again when a list reload starts (back from the studio, a new comic), after
+// a run in this tab settles (studioStreams' WORK_CHANGED_EVENT), and when the tab comes back into view or gets focus
+// WORK_FOCUS_REFRESH_MS after the last read (a run on another device): the same moments the side panel's Your comics
+// beside it reads again, so the grid and the panel change together. Never on a timer, never one request per card. The
+// last answer stays while a new one runs, so cards never flicker, and this tab remembers it: coming back to the view
+// paints the cards at once and reads again behind them.
 
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { loadComicStages, type ComicStageRow } from '../../../services/comicWorkspaceActivity';
 import type { CardStageStatus } from './homeModel';
-import { WORK_CHANGED_EVENT } from './workspaceTaskTarget';
+import { WORK_CHANGED_EVENT, WORK_FOCUS_REFRESH_MS } from './workspaceTaskTarget';
 
 /** The read itself: the real one, or fixture rows in the QA scene. */
 export type ComicStagesLoader = (accountId: string, signal: AbortSignal) => Promise<ReadonlyMap<string, ComicStageRow>>;
@@ -50,13 +52,16 @@ export function useComicStages(accountId: string | undefined, projectsLoaded: bo
   const [reload, setReload] = useState(0);
   const wasLoaded = useRef(projectsLoaded);
   const owner = useRef(accountId);
+  /** When the last read started (0: none yet). */
+  const lastRead = useRef(0);
   useEffect(() => {
     if (wasLoaded.current && !projectsLoaded) setReload((n) => n + 1);
     wasLoaded.current = projectsLoaded;
   }, [projectsLoaded]);
 
   // A run of this account's that settles changes what its card says (a drawing to approve, pages drawn): read again,
-  // after the burst, while the page is in view. One that settles while the tab is hidden is read when it shows again.
+  // after the burst, while the page is in view. One that settles while the tab is hidden is read when it shows again;
+  // coming back (shown or focused) a while after the last read reads again too, for work done elsewhere.
   useEffect(() => {
     if (!accountId) return;
     let delayed: number | undefined;
@@ -72,15 +77,22 @@ export function useComicStages(accountId: string | undefined, projectsLoaded: bo
       else missed = true;
     };
     const shown = () => {
-      if (!missed || !visible()) return;
-      missed = false;
-      readSoon();
+      if (!visible()) return;
+      if (missed) {
+        missed = false;
+        readSoon();
+      } else if (lastRead.current && Date.now() - lastRead.current > WORK_FOCUS_REFRESH_MS) {
+        lastRead.current = Date.now(); // a focus right after a visibility change reads once
+        setReload((n) => n + 1);
+      }
     };
     window.addEventListener(WORK_CHANGED_EVENT, changed);
     document.addEventListener('visibilitychange', shown);
+    window.addEventListener('focus', shown);
     return () => {
       window.removeEventListener(WORK_CHANGED_EVENT, changed);
       document.removeEventListener('visibilitychange', shown);
+      window.removeEventListener('focus', shown);
       window.clearTimeout(delayed);
     };
   }, [accountId]);
@@ -99,6 +111,7 @@ export function useComicStages(accountId: string | undefined, projectsLoaded: bo
     }
     const ctrl = new AbortController();
     let current = true;
+    lastRead.current = Date.now();
     setStatus('loading');
     const timeout = window.setTimeout(() => {
       ctrl.abort();

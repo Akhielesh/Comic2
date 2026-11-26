@@ -1050,7 +1050,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       if (!target) return;
       setNavigationOpen(false);
       if (target === 'conversation') showChat();
-      // My comics' "Publish your changes" / "See why it is paused": the Share sheet, over the Read tab, with the board shown.
+      // My comics' "Publish your changes" / "See why it is paused": the header's Share sheet (one sheet), with the board shown.
       else if (target === 'share') { runClientAction({ type: 'open_share' }); showBoard(); }
       else { setTab(target); showBoard(); }
     };

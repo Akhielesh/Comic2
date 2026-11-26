@@ -3,7 +3,7 @@
 // never says something the strip does not. Targets only navigate: the current stage's is its next step (the label and
 // place of "Next: …"), every other stage's opens the tab it is worked in. No price, no action.
 
-import { COMIC_STAGES, STAGE_LABEL, STAGE_PLACE, stageView, type ComicStage, type StageFacts, type StagePlace } from '../../../shared/comic/stage';
+import { COMIC_STAGES, STAGE_LABEL, STAGE_PLACE, notCurrentWords, stageView, type ComicStage, type StageFacts, type StagePlace } from '../../../shared/comic/stage';
 
 export type StageMapState = 'done' | 'current' | 'next' | 'later';
 
@@ -49,14 +49,19 @@ const leftIn = (stage: ComicStage, done: boolean, complete: boolean, facts: Stag
       if (!facts.pages) return 'No pages planned yet';
       return facts.planned < facts.pages ? `${plural(facts.pages - facts.planned, 'page')} to plan` : 'The plan is ready to review';
     case 'draw': {
-      if (done) return facts.outOfDate ? `${plural(facts.outOfDate, 'page')} out of date` : NOTHING_LEFT;
+      // Every page drawn, but not all of them current: an out-of-date page, a redraw running or failed (the strip's words).
+      if (done) {
+        const notCurrent = notCurrentWords(facts);
+        if (!notCurrent.length) return NOTHING_LEFT;
+        return notCurrent.length === 1 && facts.outOfDate ? `${plural(facts.outOfDate, 'page')} out of date` : notCurrent.join(' · ');
+      }
       if (!facts.pages) return 'Nothing to draw yet';
       const parts = [
         `${plural(facts.pages - facts.drawn, 'page')} to draw`,
         facts.drawing ? `${facts.drawing} drawing now` : '',
         facts.withheld ? `${facts.withheld} withheld` : '',
         facts.failed ? `${facts.failed} failed` : '',
-        facts.outOfDate ? `${facts.outOfDate} out of date` : ''
+        ...notCurrentWords(facts)
       ];
       return parts.filter(Boolean).join(' · ');
     }

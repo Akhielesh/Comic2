@@ -384,6 +384,73 @@ describe('createSupabaseDocStore', () => {
     await expect(store.load(PID, USER)).rejects.toMatchObject({ code: 'INTERNAL', retryable: true });
   });
 
+  it('a comic saved before stages gets its stage summary the first time it is opened: same revision, same order, once', async () => {
+    const { db, store } = setup();
+    await store.create({ projectId: PID, userId: USER, doc: docWith({ rev: 4, brief: { title: 'Spice Market', premise: 'Rivals cook.', notes: [] }, pages: [page(1, 'ready', 'u/a/p1.webp')] }) });
+    const row = db.tables.comic_docs[0];
+    // As production stored it before stages: a summary with no `stage`.
+    row.doc.workspaceActivity = { v: 1, attention: null, working: false, finished: [] };
+    row.updated_at = '2026-01-02T03:04:05.000Z';
+    const projectWrites = () => db.calls.filter((c) => c.table === 'projects').length;
+    const docWrites = () => db.calls.filter((c) => c.table === 'comic_docs' && c.op === 'update').length;
+    const projectsBefore = projectWrites();
+
+    const doc = await store.load(PID, USER);
+    expect(doc).not.toHaveProperty('workspaceActivity');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(docWrites()).toBe(1);
+    expect(row.rev).toBe(4);
+    expect(row.updated_at).toBe('2026-01-02T03:04:05.000Z'); // opening a comic never moves it up the lists
+    expect(row.doc.workspaceActivity.stage).toMatchObject({ v: 1, stage: 'publish', pages: 1, drawn: 1, next: 'publish' });
+    expect(row.doc.brief.title).toBe('Spice Market');
+    expect(projectWrites()).toBe(projectsBefore);
+    // Filled: the next open writes nothing.
+    await store.load(PID, USER);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(docWrites()).toBe(1);
+  });
+
+  it('the fill never touches a newer save, and a failed fill is only logged', async () => {
+    const db = makeDb();
+    // A save lands at rev 3 between the read and the fill: the fill's own update is sent after it.
+    let beforeFill: (() => void) | null = null;
+    const admin = () =>
+      ({
+        from: (table: string) => {
+          const query = db.client.from(table) as unknown as { update: (payload: Row) => unknown };
+          const update = query.update.bind(query);
+          query.update = (payload: Row) => {
+            beforeFill?.();
+            beforeFill = null;
+            return update(payload);
+          };
+          return query;
+        }
+      }) as unknown as SupabaseClient;
+    const store = createSupabaseDocStore({ admin, now: () => 10_000 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith({ rev: 2 }) });
+    const row = db.tables.comic_docs[0];
+    row.doc.workspaceActivity = { v: 1, attention: null, working: false, finished: [] };
+    beforeFill = () => {
+      row.rev = 3;
+      row.doc = { ...row.doc, rev: 3, brief: { ...row.doc.brief, title: 'Newer' } };
+    };
+    await store.load(PID, USER);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(beforeFill).toBeNull(); // the fill was sent
+    expect(row.doc.brief.title).toBe('Newer');
+    expect(row.doc.workspaceActivity.stage).toBeUndefined();
+
+    const other = '66666666-6666-4666-8666-666666666666';
+    await store.create({ projectId: other, userId: USER, doc: docWith({ id: other, rev: 1 }) });
+    const second = db.tables.comic_docs.find((r) => r.project_id === other)!;
+    second.doc.workspaceActivity = { v: 1, attention: null, working: false, finished: [] };
+    db.failNext('comic_docs', 'update', { code: '08006', message: 'connection failure' });
+    await expect(store.load(other, USER)).resolves.toMatchObject({ id: other });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(second.doc.workspaceActivity.stage).toBeUndefined();
+  });
+
   it('saves the doc and mirrors name/state onto projects, preserving keys other flows wrote', async () => {
     const { db, store } = setup();
     await store.create({ projectId: PID, userId: USER, doc: docWith() });
@@ -672,6 +739,17 @@ describe('jsonbSafe (P2-GATE L5)', () => {
 });
 
 describe('createMemoryDocStore', () => {
+  it('fills a missing stage summary on load like the Supabase store, without counting a save', async () => {
+    const store = createMemoryDocStore();
+    await store.create({ projectId: PID, userId: USER, doc: docWith({ rev: 2 }) });
+    const row = store.rows.get(PID)!;
+    (row.doc as Record<string, any>).workspaceActivity = { v: 1, attention: null, working: false, finished: [] };
+    await store.load(PID, USER);
+    expect((row.doc as Record<string, any>).workspaceActivity.stage).toMatchObject({ v: 1, stage: 'story', next: 'tell_story' });
+    expect(row.rev).toBe(2);
+    expect(store.saveCount).toBe(0);
+  });
+
   it('round-trips, guards ownership and staleness, and models visibility', async () => {
     const store = createMemoryDocStore();
     await store.create({ projectId: PID, userId: USER, doc: docWith() });

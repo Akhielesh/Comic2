@@ -20,12 +20,12 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { stageFacts, stageView, type StagePlace } from '../../../shared/comic/stage';
+import { lowerFirst, stageFacts, stageView, type StagePlace } from '../../../shared/comic/stage';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT, FOCUS_RING, MUTED } from '../../chat/studioDesign';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { StageMapButton } from './StageMap';
-import { PLACE_HINT, StageMark } from './stageMarks';
+import { PLACE_HINT, StageMarks } from './stageMarks';
 
 /** From this width the named stages and the status share one row. */
 export const STAGE_STRIP_ONE_ROW_MIN = 768;
@@ -37,8 +37,6 @@ export interface StageStripProps {
   /** Open where a stage, or the next step, is worked. */
   onGo: (place: StagePlace) => void;
 }
-
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 export function StageStrip({ doc, behind, onGo }: StageStripProps) {
   const ff = useFormFactor();
@@ -165,16 +163,7 @@ export function StageStrip({ doc, behind, onGo }: StageStripProps) {
         <div className="flex min-h-11 min-w-0 items-center gap-2" data-stage-status>
           {/* The marks: where the comic stands at a glance, and the way into the stage map. */}
           <StageMapButton facts={facts} onGo={onGo} label={`Stages: ${current.label}, ${doneCount} of ${view.steps.length} done`} align="start">
-            {view.steps.map((step) => (
-              <span
-                key={step.stage}
-                aria-hidden
-                data-stage-mark={step.done ? 'done' : step.current ? 'current' : 'upcoming'}
-                className={cn('flex h-2.5 w-2.5 items-center justify-center', step.done || step.current ? 'text-[var(--ds-ink)]' : MUTED)}
-              >
-                <StageMark done={step.done} current={step.current} />
-              </span>
-            ))}
+            <StageMarks steps={view.steps} />
           </StageMapButton>
           <button
             type="button"

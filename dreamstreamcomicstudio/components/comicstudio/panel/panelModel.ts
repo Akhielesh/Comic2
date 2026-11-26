@@ -12,7 +12,7 @@
 // on My comics changes here at once, while the activity rows (cached, refetched only now and then) add the news.
 
 import type { Project } from '../../../types';
-import type { ComicActivityRow } from '../../../services/comicWorkspaceActivity';
+import type { ComicActivityRow, ComicStageRow } from '../../../services/comicWorkspaceActivity';
 import type { ComicWorkSummary, FinishedKind, FinishedWork, WorkAttention } from '../../../shared/comic/workspaceActivity';
 import { STAGE_UNKNOWN, stageView, type StageFacts, type StageView } from '../../../shared/comic/stage';
 import { isStudioV4Project, resolveProjectView } from '../../../services/studioDeepLink';
@@ -126,6 +126,12 @@ export interface PanelComicsInput {
   projectsLoaded?: boolean;
   /** The loaded activity rows; null until the first page has loaded. */
   rows: readonly ComicActivityRow[] | null;
+  /**
+   * My comics' stage read (every comic, services/comicWorkspaceActivity.ts loadComicStages), on My comics only: the stage
+   * and news of a comic without an activity row (the activity read covers the 25 most recently saved), so the panel's
+   * Needs you holds the comics the grid beside it puts first. It has no finished news; an activity row wins.
+   */
+  stageRows?: ReadonlyMap<string, ComicStageRow>;
   now: number;
   /** True when this viewer cleared that finished work (or a later one of its kind). */
   isCleared?: (projectId: string, work: FinishedWork) => boolean;
@@ -160,7 +166,7 @@ const unstagedLabel = (project: Project | undefined) => (resolveProjectView(proj
 const byAt = (a: PanelComic, b: PanelComic) => b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** Every comic once, in the group that needs the person most, each group in its own order. */
-export function panelComics({ projects, projectsLoaded = false, rows, now, isCleared, current, recentLimit = RECENT_LIMIT }: PanelComicsInput): PanelComics {
+export function panelComics({ projects, projectsLoaded = false, rows, stageRows, now, isCleared, current, recentLimit = RECENT_LIMIT }: PanelComicsInput): PanelComics {
   const rowById = new Map<string, ComicActivityRow>();
   for (const row of rows ?? []) if (row?.id && !rowById.has(row.id)) rowById.set(row.id, row);
   const projectById = new Map<string, Project>();
@@ -181,16 +187,17 @@ export function panelComics({ projects, projectsLoaded = false, rows, now, isCle
   const loaded = rows !== null;
   const comics: PanelComic[] = ids.map((id): PanelComic => {
     const row = rowById.get(id);
+    const listed = row ? undefined : stageRows?.get(id);
     const project = projectById.get(id);
     const live = current?.id === id ? current : undefined;
-    const studio = !!row || !!live || isStudioV4Project(project);
-    const facts = live ? live.facts : row?.stage ?? null;
+    const studio = !!row || !!listed || !!live || isStudioV4Project(project);
+    const facts = live ? live.facts : row?.stage ?? listed?.stage ?? null;
     const stage = facts ? stageView(facts) : null;
     const updatedAt = Math.max(row?.updatedAt ?? 0, project?.updatedAt ?? 0);
     const title = live?.title?.trim() || titleOf(row, project);
     // The open comic's news is its live doc's (the saved row can be a whole drawing run behind); it has no finished
     // news, since you are looking at it.
-    const news: Pick<ComicActivityRow, 'attention' | 'working'> | undefined = live?.summary ?? row;
+    const news: Pick<ComicActivityRow, 'attention' | 'working'> | undefined = live?.summary ?? row ?? listed;
     const fresh = live
       ? []
       : (row?.finished ?? []).filter((work) => !NOT_NEWS.has(work.kind) && isFreshWork(id, work, now, isCleared)).sort((a, b) => b.at - a.at);

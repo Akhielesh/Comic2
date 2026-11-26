@@ -6,18 +6,21 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, CheckCheck, FileText, RefreshCw } from 'lucide-react';
 import type { Project } from '../../../types';
+import type { ComicStageRow } from '../../../services/comicWorkspaceActivity';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE } from '../../chat/studioDesign';
 import { requestTaskTarget } from '../home/workspaceTaskTarget';
 import { comicRowName, FINISHED_SHOWN, panelComics, type PanelComic, type PanelCurrentComic } from './panelModel';
 import { usePanelActivity, type PanelActivity } from './usePanelActivity';
-import { StageMarks } from './StageMarks';
+import { StageMarks } from '../stage/stageMarks';
 import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_INK } from './panelStyles';
 
 export interface PanelComicsProps {
   projects: readonly Project[];
   /** App's project list has loaded: it is the list (panelModel.ts). */
   projectsLoaded?: boolean;
+  /** My comics' stage read, for the comics the panel's own read leaves out (panelModel.ts). */
+  stageRows?: ReadonlyMap<string, ComicStageRow>;
   accountId?: string;
   disabled?: boolean;
   /** The comic you are in (its row looks current and reads its live stage and news). */
@@ -46,7 +49,7 @@ function AccountComics(props: PanelComicsProps & { accountId: string }) {
   return <ComicList {...props} activity={activity} />;
 }
 
-function ComicList({ projects, projectsLoaded, accountId, disabled, current, onOpenStudio, onOpenProject, onAllComics, activity }: PanelComicsProps & { activity: PanelActivity | null }) {
+function ComicList({ projects, projectsLoaded, stageRows, accountId, disabled, current, onOpenStudio, onOpenProject, onAllComics, activity }: PanelComicsProps & { activity: PanelActivity | null }) {
   const labelId = useId();
   const groupId = useId();
   const [showAll, setShowAll] = useState(false);
@@ -56,7 +59,7 @@ function ComicList({ projects, projectsLoaded, accountId, disabled, current, onO
   const refreshRef = useRef<HTMLButtonElement>(null);
   const rows = activity?.rows ?? null;
   // A small list, read again on each render: the viewer's cleared choices and the clock move it too.
-  const { groups, hiddenRecent, empty } = panelComics({ projects, projectsLoaded, rows: activity ? rows : [], now: Date.now(), isCleared: activity?.isCleared, current });
+  const { groups, hiddenRecent, empty } = panelComics({ projects, projectsLoaded, rows: activity ? rows : [], stageRows, now: Date.now(), isCleared: activity?.isCleared, current });
   const status = activity?.status;
   // A background load (after a run settles, on coming back to the tab) is quiet: the Refresh icon turns, and the
   // list neither announces it nor moves. Only a load the person asked for, or the first one, says so.

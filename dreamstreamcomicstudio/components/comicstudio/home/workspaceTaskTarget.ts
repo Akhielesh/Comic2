@@ -5,6 +5,12 @@ import type { StudioTab } from '../../../shared/comic/doc';
 export type TaskDestination = 'conversation' | 'share' | Extract<StudioTab, 'story' | 'pages' | 'cast' | 'style' | 'languages' | 'read'>;
 export const TASK_TARGET_EVENT = 'dreamstream:comic-task-target';
 export const WORK_CHANGED_EVENT = 'dreamstream:comic-work-changed';
+/**
+ * A list that reads the comics' news (the side panel's Your comics, My comics' cards) reads again when the tab comes back
+ * into view or gets focus this long after its last read (work done on another device), never on a timer. One value, so
+ * the grid and the panel beside it change together.
+ */
+export const WORK_FOCUS_REFRESH_MS = 30_000;
 const destinations = new Set<TaskDestination>(['conversation', 'share', 'story', 'pages', 'cast', 'style', 'languages', 'read']);
 let pending: { accountId: string; projectId: string; destination: TaskDestination } | undefined;
 

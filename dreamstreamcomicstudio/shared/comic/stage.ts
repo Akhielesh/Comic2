@@ -9,8 +9,13 @@
 //
 // The next step only navigates (a board tab, the approval or the draft in the conversation, the composer, or the Share
 // sheet). It never carries an action, so it can never start anything that spends.
+//
+// What waits on the person (attention.ts needsYouOf: an approval, a question from the Director, the page plan's OK, a
+// look to pick) is the next step whatever the stage, so the strip, the stage map, My comics' card and the side panel's
+// "Needs you" row all name the one step the Director is waiting on.
 
 import { isPageStale, type ComicDoc, type Page, type RenderState } from './doc.js';
+import { needsYouOf } from './attention.js';
 import { progressState } from './renderOutcome.js';
 import { canServeToOwner } from './safety.js';
 
@@ -36,6 +41,7 @@ export const STAGE_PLACE: Readonly<Record<ComicStage, Extract<StagePlace, 'story
 
 export const STAGE_NEXT_KEYS = [
   'review_estimate',
+  'answer_director',
   'resume_draft',
   'tell_story',
   'choose_look',
@@ -83,6 +89,13 @@ export interface StageFacts {
   withheld: number;
   /** Pages whose drawing failed and that have no picture. */
   failed: number;
+  /**
+   * Drawn pages being drawn again (queued or drawing over a picture the owner can be served): drawn, not current. Absent
+   * in summaries written before it (read as 0).
+   */
+  redrawing?: number;
+  /** Drawn pages whose redraw failed (the earlier picture still stands): drawn, not current. Absent before it (0). */
+  redrawFailed?: number;
   /** Drawn looks waiting to be picked (the look is not set yet). */
   looks: number;
   /** The publication is paused by moderation: sharing is off until it is reviewed. */
@@ -195,6 +208,8 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
   let drawing = 0;
   let withheld = 0;
   let failed = 0;
+  let redrawing = 0;
+  let redrawFailed = 0;
   for (const page of pages) {
     if (plannedPage(page)) planned += 1;
     // The board's "ready" (boardModel pageVisualStatus) is current: ready and matching its script; stale is out of date.
@@ -203,6 +218,8 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
       drawn += 1;
       if (standing === 'current') current += 1;
       else if (standing === 'out_of_date') outOfDate += 1;
+      else if (standing === 'redrawing') redrawing += 1;
+      else redrawFailed += 1;
     } else if (standing === 'drawing') drawing += 1;
     else if (standing === 'withheld') withheld += 1;
     else if (standing === 'failed') failed += 1;
@@ -211,10 +228,13 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
   const attempted = drawn + drawing + withheld + failed > 0;
   const planStatus = doc?.planStatus;
   const paused = doc?.publication?.status === 'suspended';
+  const waiting = needsYouOf(doc)?.why ?? null;
 
   const isDone: Record<ComicStage, boolean> = {
     story: text(doc?.brief?.premise) || text(doc?.brief?.logline) || text(doc?.source?.script) || pages.length > 0,
-    style: text(doc?.style?.spec) || drawn > 0,
+    // Drawn looks waiting to be compared mean the look is being chosen again, even over a drafted spec (propose_styles
+    // after set_style); once a page is drawn, the look it was drawn in stands.
+    style: (text(doc?.style?.spec) && !(waiting === 'style' && looks > 0)) || drawn > 0,
     plan: pages.length > 0 && planned === pages.length && (planStatus === 'approved' || attempted),
     draw: pages.length > 0 && drawn === pages.length,
     publish: doc?.publication?.status === 'live'
@@ -231,6 +251,16 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
     // An interrupted draft is resumed from its own control only while it has no pages yet; with pages the person
     // carries on from the plan, so the stage's own step leads.
     if (doc?.directorDraft?.status === 'interrupted' && !pages.length) return 'resume_draft';
+    // The rest of what waits on the person, in needsYouOf's order (the approval is the gate above).
+    if (waiting === 'question') return 'answer_director';
+    if (waiting === 'plan') return 'review_plan';
+    if (waiting === 'style') return looks > 0 ? 'pick_look' : 'choose_look';
+    // A redraw running or failed over a drawn page leads in Draw and in Publish too: the book is not as drawn as it reads.
+    if (stage === 'draw' || stage === 'publish') {
+      if (drawing + redrawing > 0) return 'watch_drawing';
+      if (withheld) return 'review_withheld';
+      if (failed + redrawFailed > 0) return 'review_failed';
+    }
     switch (stage) {
       case 'story':
         return 'tell_story';
@@ -240,9 +270,6 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
         if (!pages.length) return 'plan_pages';
         return planned < pages.length ? 'plan_rest' : 'review_plan';
       case 'draw':
-        if (drawing) return 'watch_drawing';
-        if (withheld) return 'review_withheld';
-        if (failed) return 'review_failed';
         return drawn ? 'draw_rest' : 'draw_pages';
       default:
         // A paused publication cannot be shared again until it is reviewed: the step says why, it never offers to publish.
@@ -250,34 +277,36 @@ export function stageFacts(doc: ComicDoc, options: StageOptions = {}): StageFact
         return publicationBehind(doc) || options.behind === true ? 'update_published' : 'read';
     }
   })();
-  return { v: 1, stage, done, pages: pages.length, planned, drawn, current, outOfDate, drawing, withheld, failed, looks, paused, next };
+  return { v: 1, stage, done, pages: pages.length, planned, drawn, current, outOfDate, drawing, withheld, failed, redrawing, redrawFailed, looks, paused, next };
 }
 
 // ── From a stored summary ────────────────────────────────────────────────────
 
 const STAGE_SET: ReadonlySet<string> = new Set(COMIC_STAGES);
 const NEXT_SET: ReadonlySet<string> = new Set(STAGE_NEXT_KEYS);
-/** The stage each next step belongs to (the three waiting steps belong to any stage). */
-const NEXT_STAGE: Readonly<Partial<Record<StageNextKey, ComicStage>>> = {
-  tell_story: 'story',
-  choose_look: 'style',
-  pick_look: 'style',
-  plan_pages: 'plan',
-  plan_rest: 'plan',
-  review_plan: 'plan',
-  watch_drawing: 'draw',
-  review_withheld: 'draw',
-  review_failed: 'draw',
-  draw_pages: 'draw',
-  draw_rest: 'draw',
-  publish: 'publish',
-  update_published: 'publish',
-  see_paused: 'publish',
-  read: 'publish'
+/**
+ * The stages each next step belongs to. What waits on the person (an approval, a question, the plan's OK, a look to pick,
+ * the Director planning or its interrupted draft) belongs to any stage; a redraw running or failed leads in Publish too.
+ */
+const NEXT_STAGES: Readonly<Partial<Record<StageNextKey, readonly ComicStage[]>>> = {
+  tell_story: ['story'],
+  plan_pages: ['plan'],
+  plan_rest: ['plan'],
+  watch_drawing: ['draw', 'publish'],
+  review_withheld: ['draw'],
+  review_failed: ['draw', 'publish'],
+  draw_pages: ['draw'],
+  draw_rest: ['draw'],
+  publish: ['publish'],
+  update_published: ['publish'],
+  see_paused: ['publish'],
+  read: ['publish']
 };
 /** Far above any book (DOC_LIMITS.pages); a larger stored count is not ours. */
 const COUNT_MAX = 10_000;
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= COUNT_MAX ? v : null);
+/** A count added after the first summaries: absent reads 0, present must be a count. */
+const laterCount = (v: unknown): number | null => (v === undefined ? 0 : count(v));
 
 /**
  * Stored stage facts, validated, or null. Anything unexpected reads as null, so a list shows STAGE_UNKNOWN rather than a
@@ -301,11 +330,14 @@ export function readStageFacts(value: unknown): StageFacts | null {
   const drawing = count(raw.drawing);
   const withheld = count(raw.withheld);
   const failed = count(raw.failed);
+  const redrawing = laterCount(raw.redrawing);
+  const redrawFailed = laterCount(raw.redrawFailed);
   const looks = count(raw.looks);
   if (pages === null || planned === null || drawn === null || current === null || outOfDate === null || drawing === null || withheld === null || failed === null || looks === null) return null;
+  if (redrawing === null || redrawFailed === null) return null;
   if (typeof raw.paused !== 'boolean') return null;
   const paused = raw.paused;
-  if (planned > pages || drawn + drawing + withheld + failed > pages || current + outOfDate > drawn) return null;
+  if (planned > pages || drawn + drawing + withheld + failed > pages || current + outOfDate + redrawing + redrawFailed > drawn) return null;
   // The done flags the counts decide.
   if (doneSet.has('draw') !== (pages > 0 && drawn === pages)) return null;
   if (doneSet.has('plan') && (pages === 0 || planned < pages)) return null;
@@ -316,14 +348,16 @@ export function readStageFacts(value: unknown): StageFacts | null {
   const expected = COMIC_STAGES.find((s) => !doneSet.has(s)) ?? 'publish';
   if (stage !== expected) return null;
   const next = raw.next as StageNextKey;
-  const nextStage = NEXT_STAGE[next];
-  if (nextStage && nextStage !== stage) return null;
+  const nextStages = NEXT_STAGES[next];
+  if (nextStages && !nextStages.includes(stage)) return null;
+  // In Publish (every page drawn) only a redraw can be running or failed.
+  if (stage === 'publish' && ((next === 'watch_drawing' && !redrawing) || (next === 'review_failed' && !redrawFailed))) return null;
   const complete = done.length === COMIC_STAGES.length;
   if (((next === 'publish' || next === 'see_paused') && complete) || ((next === 'read' || next === 'update_published') && !complete)) return null;
   if ((next === 'publish' && paused) || (next === 'see_paused' && !paused)) return null;
-  if ((next === 'review_withheld' && !withheld) || (next === 'review_failed' && !failed) || (next === 'pick_look' && !looks)) return null;
+  if ((next === 'review_withheld' && !withheld) || (next === 'review_failed' && !failed && !redrawFailed) || (next === 'pick_look' && !looks)) return null;
   if (next === 'resume_draft' && pages > 0) return null;
-  return { v: 1, stage, done, pages, planned, drawn, current, outOfDate, drawing, withheld, failed, looks, paused, next };
+  return { v: 1, stage, done, pages, planned, drawn, current, outOfDate, drawing, withheld, failed, redrawing, redrawFailed, looks, paused, next };
 }
 
 // ── Words ────────────────────────────────────────────────────────────────────
@@ -332,6 +366,8 @@ const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ?
 
 const NEXT_PLACE: Readonly<Record<StageNextKey, StagePlace>> = {
   review_estimate: 'approval',
+  // The question is the newest message in the conversation, just above the message box.
+  answer_director: 'composer',
   resume_draft: 'draft',
   tell_story: 'composer',
   choose_look: 'style',
@@ -356,6 +392,8 @@ const nextLabel = (facts: StageFacts): string => {
   switch (facts.next) {
     case 'review_estimate':
       return 'Review the estimate';
+    case 'answer_director':
+      return 'Answer the Director';
     case 'resume_draft':
       return 'Resume the draft';
     case 'tell_story':
@@ -377,7 +415,8 @@ const nextLabel = (facts: StageFacts): string => {
     case 'review_withheld':
       return `Review ${plural(facts.withheld, 'withheld page')}`;
     case 'review_failed':
-      return `Review ${plural(facts.failed, 'failed page')}`;
+      // A redraw that failed keeps its earlier picture: it is a failed redraw, not a failed page.
+      return facts.failed ? `Review ${plural(facts.failed + (facts.redrawFailed ?? 0), 'failed page')}` : `Review ${plural(facts.redrawFailed ?? 0, 'failed redraw')}`;
     case 'draw_pages':
       return 'Draw the pages';
     case 'draw_rest':
@@ -394,14 +433,23 @@ const nextLabel = (facts: StageFacts): string => {
 };
 
 /**
- * "6 of 12 pages drawn", "All 12 pages drawn", "11 of 12 pages drawn · 1 out of date": the board's count of current
- * pages and the reader's out-of-date words (ComicReaderView drawnLabel), so the strip, the Board badge and the reader agree.
+ * "6 of 12 pages drawn", "All 12 pages drawn", "11 of 12 pages drawn · 1 out of date", "8 of 12 pages drawn · 3 redrawing
+ * · 1 redraw failed": the board's count of current pages, then why a drawn page is not current (the reader's out-of-date
+ * words, ComicReaderView drawnLabel), so the strip, the Board badge, the reader and the parts tree agree.
  */
 const drawnWords = (facts: StageFacts): string => {
   const all = facts.current === facts.pages;
   const base = !all ? `${facts.current} of ${plural(facts.pages, 'page')} drawn` : facts.pages === 1 ? '1 page drawn' : `All ${facts.pages} pages drawn`;
-  return facts.outOfDate ? `${base} · ${facts.outOfDate} out of date` : base;
+  return [base, ...notCurrentWords(facts)].join(' · ');
 };
+
+/** Why drawn pages are not current: "1 out of date", "3 redrawing", "1 redraw failed" (none when every drawn page is). */
+export const notCurrentWords = (facts: StageFacts): string[] =>
+  [
+    facts.outOfDate ? `${facts.outOfDate} out of date` : '',
+    facts.redrawing ? `${facts.redrawing} redrawing` : '',
+    facts.redrawFailed ? `${facts.redrawFailed} ${facts.redrawFailed === 1 ? 'redraw' : 'redraws'} failed` : ''
+  ].filter(Boolean);
 
 const progressWords = (facts: StageFacts): string => {
   if (facts.next === 'follow_planning') return 'The Director is planning';
@@ -427,7 +475,8 @@ const wordOf = (facts: StageFacts, complete: boolean): string => {
   return WORD[facts.stage];
 };
 
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+/** "Plan the pages" → "plan the pages", after "Next: " (the strip, the panel, My comics' cards). */
+export const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** The words and places for a set of stage facts (from a doc or a stored summary: the same facts read the same). */
 export function stageView(facts: StageFacts): StageView {

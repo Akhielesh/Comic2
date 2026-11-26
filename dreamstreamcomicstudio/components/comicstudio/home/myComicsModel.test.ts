@@ -104,6 +104,40 @@ describe('a studio comic with a saved stage', () => {
     expect(JSON.stringify(model)).not.toMatch(/\$|estimateUsd|test-model|render_pages/);
   });
 
+  it('looks drawn to compare over a drafted look: the card, the strip and the panel name one step, "Pick a look"', () => {
+    // The Director drafted a look (set_style), then drew two to compare it with (propose_styles); the choice is live.
+    const comparing = comic((doc) => {
+      doc.brief.premise = 'A ferry that only runs after midnight.';
+      doc.style = { ...doc.style, status: 'drafted', name: 'Ink wash', spec: 'Soft ink washes.' };
+      doc.style.options = [
+        { id: 'so_1', name: 'Ink wash', spec: 'a', render: render('ready', picture({ path: 'u/p/style/1.webp' })) },
+        { id: 'so_2', name: 'Bold pop', spec: 'b', render: render('ready', picture({ path: 'u/p/style/2.webp' })) }
+      ];
+      doc.conversation = [
+        { id: 'u1', role: 'user', text: 'Show me some looks', at: AT },
+        { id: 'a1', role: 'assistant', text: 'Here are 2 directions for the look.', at: AT, cards: [{ type: 'style_choice', id: 'sc' }] }
+      ];
+    });
+    const row = saved(comparing);
+    expect(row.attention).toBe('style');
+    const model = card(studio('s', { studioPages: 0, studioRendered: 0 }), row);
+    expect(model.needsYou).toBe(true);
+    expect(model.stageWord).toBe('Style');
+    expect(model.status).toBe('2 looks to compare · edited 2 hours ago');
+    expect(model.next).toMatchObject({ label: 'Next: pick a look', destination: 'style' });
+  });
+
+  it('a question from the Director in the saved summary: the stage names it, so the card does too', () => {
+    const asked = saved(drawing(12, 6, (doc) => {
+      doc.conversation = [
+        { id: 'u1', role: 'user', text: 'Make it longer', at: AT },
+        { id: 'a1', role: 'assistant', text: 'Which ending?', at: AT, cards: [{ type: 'options', id: 'o1', question: 'Which ending?', choices: [{ id: 'a', label: 'Happy' }, { id: 'b', label: 'Sad' }] }] }
+      ];
+    }));
+    expect(asked).toMatchObject({ attention: 'question', stage: { next: 'answer_director' } });
+    expect(card(studio('s'), asked).next).toMatchObject({ label: 'Next: answer the Director', destination: 'conversation' });
+  });
+
   it('a question waiting on the person leads, except where the stage is already waiting (an approval)', () => {
     const asked = saved(drawing(12, 6));
     expect(card(studio('s'), { ...asked, attention: 'question' }).next).toMatchObject({ label: 'Next: answer the Director', destination: 'conversation' });
@@ -112,15 +146,19 @@ describe('a studio comic with a saved stage', () => {
   });
 
   it('a redraw that failed over a standing picture leads with the problem; failed pages the stage already names keep its words', () => {
-    // The page keeps its earlier picture, so the stage counts it drawn and is ready to publish; the summary says a render failed.
+    // The page keeps its earlier picture, so the stage counts it drawn (Draw done), and names the failed redraw itself.
     const redrawFailed = saved(drawing(2, 2, (doc) => {
       doc.pages[1].render = { ...render('failed', picture()), error: 'timeout' } as RenderState;
     }));
     expect(redrawFailed.attention).toBe('render_failed');
-    expect(redrawFailed.stage?.next).toBe('publish');
+    expect(redrawFailed.stage).toMatchObject({ stage: 'publish', next: 'review_failed', redrawFailed: 1 });
     const model = card(studio('s'), redrawFailed);
     expect(model.needsYou).toBe(true);
-    expect(model.next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
+    expect(model.next).toMatchObject({ label: 'Next: review 1 failed redraw', destination: 'pages' });
+    // A summary written before the redraw counts ("Ready to publish"): the card still leads with the problem.
+    const { redrawing: _r, redrawFailed: _f, ...older } = redrawFailed.stage!;
+    const olderRow = { ...redrawFailed, stage: { ...older, next: 'publish' as const } };
+    expect(card(studio('s'), olderRow).next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
     // A first draw that failed (no picture): the stage's own "Review 1 failed page".
     const firstFailed = saved(drawing(2, 1, (doc) => {
       doc.pages[1].render = render('failed');
@@ -159,15 +197,20 @@ describe('a studio comic with a saved stage', () => {
     expect(card(studio('s'), cover).next).toMatchObject({ label: 'Next: draw the rest', destination: 'pages' });
   });
 
-  it('a failed look beside a page redraw still running: nothing says the page failed, so the stage step stays', () => {
+  it('a failed look beside a page redraw still running: nothing says the page failed, so the stage step (the run) stays', () => {
     const row = saved(drawing(2, 2, (doc) => {
       doc.pages[1].render = render('rendering', picture());
       failedLook(doc);
     }));
     expect(row).toMatchObject({ attention: 'render_failed', working: true });
-    expect(card(studio('s'), row).next).toMatchObject({ label: 'Next: read and publish', destination: 'read' });
-    // Without the working flag (a row that never said), the standing picture that is not ready reads as a failed redraw.
-    expect(card(studio('s'), { ...row, working: undefined }).next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
+    // Every page has a picture, but one is being drawn again: watch it, never "read and publish" mid-run.
+    expect(card(studio('s'), row).next).toMatchObject({ label: 'Next: watch the pages draw', destination: 'pages' });
+    // The redraw count says which page is not current, so a row without the working flag reads the same.
+    expect(card(studio('s'), { ...row, working: undefined }).next).toMatchObject({ label: 'Next: watch the pages draw', destination: 'pages' });
+    // A summary written before the redraw counts, with no working flag: the standing picture that is not ready reads as a
+    // failed redraw (the old inference).
+    const { redrawing: _r, redrawFailed: _f, ...older } = row.stage!;
+    expect(card(studio('s'), { ...row, working: undefined, stage: { ...older, next: 'publish' } }).next).toMatchObject({ label: 'Next: review the drawing problem', destination: 'pages' });
   });
 
   it('a failed page while others still draw leads with the problem, on the Pages tab', () => {

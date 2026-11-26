@@ -23,7 +23,8 @@ import { ProjectDashboard } from './ProjectDashboard';
 import { fakeSupabase } from '../services/projectRows.testkit';
 import { STAGE_DOC_SELECT, STAGE_SELECT, type ComicStageRow } from '../services/comicWorkspaceActivity';
 import { ComicStagesSource, forgetComicStages, STAGE_READ_TIMEOUT_MS, STAGE_REFRESH_DELAY_MS, type ComicStagesLoader } from './comicstudio/home/useComicStages';
-import { consumeTaskTarget, WORK_CHANGED_EVENT } from './comicstudio/home/workspaceTaskTarget';
+import { consumeTaskTarget, WORK_CHANGED_EVENT, WORK_FOCUS_REFRESH_MS } from './comicstudio/home/workspaceTaskTarget';
+import { FOCUS_REFRESH_MS } from './comicstudio/panel/usePanelActivity';
 import { WASH_EMPTY } from './chat/studioDesign';
 import { clearOtherComicIdeaDrafts } from './comicstudio/comicIdeaDraft';
 
@@ -284,6 +285,33 @@ describe('My comics: when the stage read runs', () => {
     act(() => void document.dispatchEvent(new Event('visibilitychange')));
     await act(async () => void vi.advanceTimersByTime(STAGE_REFRESH_DELAY_MS));
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it('coming back to the tab a while after the last read reads again (work done on another device), as the side panel does', async () => {
+    vi.useFakeTimers();
+    // One wait for both, so the grid and the panel beside it change together.
+    expect(WORK_FOCUS_REFRESH_MS).toBe(FOCUS_REFRESH_MS);
+    let rows: ReadonlyMap<string, ComicStageRow> = new Map([['a', { id: 'a', stage: draw(12, 6, 'watch_drawing'), attention: null, working: true }]]);
+    const loader = vi.fn<ComicStagesLoader>(async () => rows);
+    renderDashboard([studio('a', 'Alpha', 1), studio('b', 'Bravo', 0.5)], {}, loader);
+    await act(async () => void (await Promise.resolve()));
+    expect(gridTitles()).toEqual(['Bravo', 'Alpha']);
+    // Soon after the read, focus reads nothing.
+    act(() => void window.dispatchEvent(new Event('focus')));
+    await act(async () => void (await Promise.resolve()));
+    expect(loader).toHaveBeenCalledTimes(1);
+    // The run, started on the phone, settled with an approval; the person comes back to this tab later.
+    rows = new Map([['a', { id: 'a', stage: draw(12, 6, 'review_estimate'), attention: 'approval', working: false }]]);
+    await act(async () => void vi.advanceTimersByTime(WORK_FOCUS_REFRESH_MS + 1));
+    expect(loader).toHaveBeenCalledTimes(1); // never on a timer
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('focus')); // the focus that comes with it reads nothing more
+    });
+    await act(async () => void (await Promise.resolve()));
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(gridTitles()).toEqual(['Alpha', 'Bravo']);
+    expect(within(screen.getByRole('article', { name: 'Alpha' })).getByText('Needs you', { selector: '.sr-only' })).toBeInTheDocument();
   });
 
   it('back from a comic, while the list reloads: the cards already known paint at once, in their order, and are read again', async () => {

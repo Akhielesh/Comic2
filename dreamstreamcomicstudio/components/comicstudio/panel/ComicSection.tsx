@@ -9,14 +9,13 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, ChevronDown, MessageSquare } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
-import { stageView, type StageFacts, type StagePlace } from '../../../shared/comic/stage';
+import { lowerFirst, stageView, type StageFacts, type StagePlace } from '../../../shared/comic/stage';
 import type { StudioTab } from '../types';
 import { boardTabsFor } from '../board/boardNavigation';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE, TRANSITION, WRAP_TEXT } from '../../chat/studioDesign';
-import { PLACE_HINT } from '../stage/stageMarks';
+import { PLACE_HINT, StageMarks } from '../stage/stageMarks';
 import { StageMap } from '../stage/StageMap';
-import { StageMarks } from './StageMarks';
 import { LivePartsTree, PageSearch, PAGE_SEARCH_MIN } from './PartsTree';
 import type { PartTarget } from './partsModel';
 import type { BoardPartStore } from '../board/boardPartStore';
@@ -40,8 +39,6 @@ export interface ComicSectionProps {
   /** Open a character's card, a page or the cover (an area opens through onSelect). */
   onOpenPart?: (target: Exclude<PartTarget, { kind: 'area' }>) => void;
 }
-
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect, onConversation, onGo, focusedPageId, partStore, onOpenPart }: ComicSectionProps) {
   const tabs = boardTabsFor(doc, caps, tab);
