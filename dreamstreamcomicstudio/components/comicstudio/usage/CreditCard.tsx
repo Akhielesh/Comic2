@@ -15,14 +15,14 @@
 import React from 'react';
 import { ExternalLink, KeyRound, Mail, Wallet } from 'lucide-react';
 import { creditProviderName, creditShareWords, type CreditCard as CreditCardData, type CreditKey } from '../../../shared/comic/credit';
-import { formatUsd } from '../../../shared/comic/models';
 import { getProviderDef } from '../../../shared/providers';
 import { readingAge } from '../../../services/keyBalance';
 import { SUPPORT_EMAIL } from '../../legal/contacts';
 import { cn } from '../../../lib/utils';
 import { FOCUS_RING, HAIRLINE, INK, MUTED, RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
 import type { CardProps } from '../extensions';
-import { useCostFormat } from '../conversation/cost';
+import { costFormat, useCostFormat } from '../conversation/cost';
+import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { useAction } from '../conversation/cards/useAction';
 import { CardShell, GhostButton } from '../conversation/ui';
 
@@ -52,6 +52,9 @@ export interface CreditWords {
   /** "Switch key" (own key) · "Use my own key" (the allowance). */
   keyLabel: string;
 }
+
+/** Own-key money is the person's own dollars, printed by the studio's one format (conversation/cost.ts). */
+const OWN = costFormat(DOLLAR_CONTEXT);
 
 /** The card's words (pure). Own-key amounts are dollars; the allowance is only ever a share of the usage. */
 export function creditWords(card: CreditCardData, now: number = Date.now()): CreditWords {
@@ -103,8 +106,8 @@ export function creditWords(card: CreditCardData, now: number = Date.now()): Cre
   // The figure left already sets aside what this comic is drawing right now.
   const after = card.held ? ' after what’s drawing now' : '';
   if (own) {
-    const need = typeof card.needUsd === 'number' ? `≈ ${formatUsd(card.needUsd)}` : 'more than is left';
-    const left = typeof card.leftUsd === 'number' ? formatUsd(card.leftUsd) : 'too little';
+    const need = typeof card.needUsd === 'number' && card.needUsd > 0 ? OWN.approx(card.needUsd) : 'more than is left';
+    const left = typeof card.leftUsd === 'number' ? OWN.exact(card.leftUsd) : 'too little';
     return {
       title: 'Not enough credit',
       body: `It needs ${need}${forWhat}, and your ${provider} key has ${left} left${after}. Nothing was started or charged.`,

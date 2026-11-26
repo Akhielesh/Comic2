@@ -21,7 +21,7 @@ import {
   Trash2,
   Type
 } from 'lucide-react';
-import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
+import { planUsd } from '../../../shared/comic/priceBook';
 import { failClosedMoney } from './bookModel';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import type { ClipVM } from './bookModel';
@@ -80,7 +80,7 @@ export function clipMenuItems(
   }
 ): ClipMenuItem[] {
   const price = opts.price ?? failClosedMoney;
-  const writeUsd = opts.writeUsd ?? PLAN_USD_PER_PAGE * PLATFORM_MARKUP;
+  const writeUsd = opts.writeUsd ?? planUsd(1, false);
   const busyReason = clip.busy ? `${clip.label} is still drawing — wait for it to finish.` : undefined;
   if (clip.plate) {
     return [

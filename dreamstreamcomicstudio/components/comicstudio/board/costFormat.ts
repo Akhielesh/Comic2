@@ -10,8 +10,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
-import { formatUsd } from '../../../shared/comic/models';
 import { DOLLAR_CONTEXT, costContextFromAllowance, formatCostForUser, standardPageProviderUsd, type CostDisplayContext } from '../../../services/costDisplay';
+import { costFormat } from '../conversation/cost';
 import { getLastAllowanceStatus, subscribeAllowanceStatus, type AllowanceStatus } from '../../../services/usageAllowance';
 import { formatSpend } from './boardModel';
 
@@ -44,11 +44,19 @@ export interface CostFormat {
   spent(usd: number, opts?: { byok?: boolean }): string;
 }
 
-export const costFormatFor = (ctx: CostDisplayContext): CostFormat => ({
-  governed: ctx.governed,
-  quote: (usd) => (ctx.governed ? formatCostForUser(usd, ctx, { includesMarkup: true }) : `≈ ${formatUsd(Number.isFinite(usd) && usd > 0 ? usd : 0)}`),
-  spent: (usd, opts) => (!ctx.governed || opts?.byok ? formatSpend(usd) : formatCostForUser(usd, ctx, { includesMarkup: true }))
-});
+/**
+ * A board price is the studio's one quote format (conversation/cost.ts `costFormat(ctx).approx`): the Draw button
+ * here, the chip and the Approve card print the same figure the same way ("≈ $0.07", "≈2% of your usage", "Free").
+ * Money already spent keeps the board's per-call precision ("$0.004").
+ */
+export const costFormatFor = (ctx: CostDisplayContext): CostFormat => {
+  const one = costFormat(ctx);
+  return {
+    governed: ctx.governed,
+    quote: (usd) => one.approx(usd),
+    spent: (usd, opts) => (!ctx.governed || opts?.byok ? formatSpend(usd) : formatCostForUser(usd, ctx, { includesMarkup: true }))
+  };
+};
 
 /** The board's cost formatter, kept current with the shared usage status (subscribe only; no requests). */
 export const useCostFormat = (caps: CapsLike): CostFormat => {

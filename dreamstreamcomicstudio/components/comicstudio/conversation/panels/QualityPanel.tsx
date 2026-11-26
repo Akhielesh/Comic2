@@ -16,11 +16,12 @@ import React, { useState } from 'react';
 import { Check, Gauge } from 'lucide-react';
 import type { ComicDoc, QualityTier } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, TIER_PRESETS, imagePriceUsd, resolveImageJob } from '../../../../shared/comic/models';
+import { PLATFORM_MARKUP, TIER_PRESETS, jobQcUsd, jobUnitUsd, resolveImageJob } from '../../../../shared/comic/models';
 import { deriveLock, drawnTargets } from '../../../../shared/comic/modelLock';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, RADIUS_CONTROL, TRANSITION } from '../../../chat/studioDesign';
 import { useCostFormat } from '../cost';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { cx } from '../ui';
 import { LockLine } from '../../models/LockLine';
 import { TierChangeConfirm } from '../../models/TierChangeConfirm';
@@ -42,6 +43,8 @@ export interface QualityPanelProps {
 export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = false, onDone, caps }) => {
   const current = doc.settings.quality;
   const cost = useCostFormat({ byok, caps });
+  // The person's PriceBook: each tier's page price is what a page will be quoted at once it is picked.
+  const prices = useStudioPrices({ doc });
   // MERGE ORDER: this display is true only once the server resolves every image job through the same lock
   // (M1-LOCK-SERVER, models.md §3.4 item 1: jobs.ts `resolveImageJob(kind, tier, override, deriveLock(doc))`). On a
   // server that still resolves by tier (jobs.ts at ef30a77b), a locked Standard comic switched to Pro would draw on
@@ -52,7 +55,7 @@ export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = f
   const jobFor = (tier: QualityTier) => resolveImageJob('page', tier, lock ? undefined : override, lock);
   const pagePrice = (tier: QualityTier) => {
     const { spec, resolution } = jobFor(tier);
-    return (imagePriceUsd(spec, resolution) + QC_USD_PER_PAGE) * (byok ? 1 : PLATFORM_MARKUP);
+    return (jobUnitUsd(spec, resolution, 'page', prices) + jobQcUsd(prices)) * (byok ? 1 : PLATFORM_MARKUP);
   };
   const apply = (tier: QualityTier) => {
     void patch([{ op: 'settings', patch: { quality: tier } }]);

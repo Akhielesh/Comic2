@@ -6,6 +6,10 @@
 //   GET /api/comic/models/catalog?projectId=   ModelCatalogRow[]; with a projectId the comic's owner also gets
 //                                               `fit` (shared modelFit over that doc and their StudioCaps) and
 //                                               `current` (the locked or migrated model)
+//   GET /api/comic/models/prices                 the caller's price sheet: the sources their PriceBook is built from
+//                                               (list prices, observed medians, QC, text rates; no notes), so the
+//                                               studio's buttons quote with the same book as the server's gates
+//                                               (shared/comic/priceBook.ts; docs/features/pricing.md)
 //   GET /api/comic/models/trends?range=30d|90d  T2–T7 (models.md §4.4), only from data we hold
 //   GET /api/comic/models/:id[?projectId=]      one model's detail (row + registry facts + history)
 //
@@ -26,7 +30,9 @@ import { studioCapsFor } from '../comic/access.js';
 import { costViewFor, type CostView } from '../comic/costText.js';
 import { spendIsByok } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
-import { TREND_RANGES, modelCatalog, type ModelCatalog, type TrendRange } from '../comic/models/index.js';
+import { TREND_RANGES, modelCatalog, priceSourcesFor, type ModelCatalog, type TrendRange } from '../comic/models/index.js';
+import type { TextRateSource } from '../comic/models/textRates.js';
+import { priceSheetOf } from '../../../shared/comic/priceBook.js';
 import { getStudioSession } from '../comic/session.js';
 import { createSupabaseDocStore } from '../comic/store.js';
 import { StudioError, type DocStore, type StudioKeys } from '../comic/types.js';
@@ -34,9 +40,9 @@ import { StudioError, type DocStore, type StudioKeys } from '../comic/types.js';
 /** Kept for the W-M stubs that still import it (comicModelStatus.ts until M1-RELIABILITY replaces it). */
 export const NOT_BUILT = { error: 'not built yet' } as const;
 /** Sub-paths of /models that other routers own (never treated as a model id). */
-const RESERVED_MODEL_SEGMENTS: ReadonlySet<string> = new Set(['status', 'lab']);
+const RESERVED_MODEL_SEGMENTS: ReadonlySet<string> = new Set(['status', 'lab', 'prices']);
 
-export const MODELS_PATHS = ['/models/catalog', '/models/trends', '/models/:id'] as const;
+export const MODELS_PATHS = ['/models/catalog', '/models/prices', '/models/trends', '/models/:id'] as const;
 
 const PROJECT_ID = /^[A-Za-z0-9-]{1,64}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
@@ -49,6 +55,9 @@ export interface ComicModelsRouterDeps {
   /** Overrides for tests (default: studioCapsFor with the request's keys). */
   capsFor?: (req: Request, opts: { byok: boolean }) => Promise<StudioCaps>;
   keysFor?: (req: Request) => StudioKeys;
+  /** Default: the process text-rate source (models/textRates.ts). */
+  textRates?: TextRateSource;
+  now?: () => number;
 }
 
 const lazy = <T>(make: () => T) => {
@@ -144,6 +153,16 @@ export function createComicModelsRouter(deps: ComicModelsRouterDeps = {}): Route
       const caps = await capsOf(req);
       const ctx = await fitContext(req, userId, caps);
       reply(res, await catalog().rows({ userId, ...ctx }), costViewFor(caps));
+    })
+  );
+
+  router.get(
+    '/models/prices',
+    handle(async (req, res) => {
+      const userId = userOf(req);
+      const caps = await capsOf(req);
+      const sources = await priceSourcesFor({ userId, catalog: catalog(), ...(deps.textRates ? { textRates: deps.textRates } : {}) });
+      reply(res, priceSheetOf(sources, (deps.now ?? Date.now)()), costViewFor(caps));
     })
   );
 

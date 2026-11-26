@@ -341,3 +341,66 @@ export const priceBookFromSources = (src: PriceBookSources): SharedPriceBook => 
 
 /** A book from the registry's dated price list and the constants only (no I/O). */
 export const registryPriceBook = (): SharedPriceBook => priceBookFromSources({ rows: [] });
+
+// ── The price sheet (GET /api/comic/models/prices) ──────────────────────────
+
+/** What the server serves so the client builds the same book: the caller's sources, without notes. */
+export interface PriceSheet {
+  v: 1;
+  /** When the server built it (ms since epoch). */
+  at: number;
+  sources: PriceBookSources;
+}
+
+const BASES = new Set<string>(['openrouter_endpoint', 'vendor_table', 'derived_mp', 'registry']);
+const RESOLUTIONS = new Set<string>(['512', '1K', '2K', '4K']);
+const MAX_SHEET_ROWS = 200;
+const MAX_SHEET_OBSERVED = 2000;
+
+/** The sheet for some sources: prices and bases only (notes stay on the server: they are words, and some name dollars). */
+export const priceSheetOf = (sources: PriceBookSources, at: number): PriceSheet => ({
+  v: 1,
+  at,
+  sources: {
+    rows: (sources.rows ?? []).map((r) => ({
+      id: r.id,
+      price: Object.fromEntries(Object.entries(r.price ?? {}).map(([res, p]) => [res, { usd: p?.usd ?? null, basis: p?.basis ?? 'registry' }])) as PriceBookRow['price'],
+      perRefUsd: r.perRefUsd ?? null,
+      ...(r.fetchedAt?.catalog ? { fetchedAt: { catalog: r.fetchedAt.catalog } } : {}),
+      ...(r.stale ? { stale: true } : {})
+    })),
+    observed: (sources.observed ?? []).map((o) => ({ ...o })),
+    qc: sources.qc ? { medianUsd: sources.qc.medianUsd, n: sources.qc.n } : null,
+    text: sanitizeTextRates(sources.text)
+  }
+});
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const finiteOrNull = (v: unknown): number | null => (isFiniteNumber(v) && v >= 0 ? v : null);
+
+/** A well-formed sheet from the wire, or null (anything malformed is dropped: the quote then reads the registry). */
+export const sanitizePriceSheet = (value: unknown): PriceSheet | null => {
+  if (!isObj(value) || value.v !== 1 || !isFiniteNumber(value.at) || !isObj(value.sources)) return null;
+  const src = value.sources;
+  const rows: PriceBookRow[] = (Array.isArray(src.rows) ? src.rows : []).slice(0, MAX_SHEET_ROWS).flatMap((r): PriceBookRow[] => {
+    if (!isObj(r) || typeof r.id !== 'string' || !r.id) return [];
+    const price: PriceBookRow['price'] = {};
+    for (const [res, p] of Object.entries(isObj(r.price) ? r.price : {})) {
+      if (!RESOLUTIONS.has(res) || !isObj(p)) continue;
+      price[res as Resolution] = { usd: finiteOrNull(p.usd), basis: (typeof p.basis === 'string' && BASES.has(p.basis) ? p.basis : 'registry') as PriceBasis };
+    }
+    const catalogAt = isObj(r.fetchedAt) && typeof r.fetchedAt.catalog === 'string' ? r.fetchedAt.catalog : undefined;
+    return [{ id: r.id, price, perRefUsd: finiteOrNull(r.perRefUsd), ...(catalogAt ? { fetchedAt: { catalog: catalogAt } } : {}), ...(r.stale === true ? { stale: true } : {}) }];
+  });
+  const observed: ObservedMedian[] = (Array.isArray(src.observed) ? src.observed : []).slice(0, MAX_SHEET_OBSERVED).flatMap((o): ObservedMedian[] => {
+    if (!isObj(o) || typeof o.modelId !== 'string' || typeof o.kind !== 'string' || typeof o.res !== 'string' || !RESOLUTIONS.has(o.res)) return [];
+    const n = o.n;
+    const med = o.medianUsd;
+    if (!isFiniteNumber(n) || n < 1 || !isFiniteNumber(med) || med < 0) return [];
+    const min = isFiniteNumber(o.minUsd) ? o.minUsd : med;
+    const max = isFiniteNumber(o.maxUsd) ? o.maxUsd : med;
+    return [{ modelId: o.modelId, kind: o.kind, res: o.res as Resolution, n, medianUsd: med, minUsd: min, maxUsd: max, scope: o.scope === 'platform' ? 'platform' : 'you' }];
+  });
+  const qc = isObj(src.qc) && isFiniteNumber(src.qc.medianUsd) && isFiniteNumber(src.qc.n) ? { medianUsd: src.qc.medianUsd, n: src.qc.n } : null;
+  return { v: 1, at: value.at, sources: { rows, observed, qc, text: sanitizeTextRates(src.text) } };
+};

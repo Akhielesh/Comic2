@@ -43,6 +43,8 @@ import { ImageDevelop } from '../../../studio/kit/streamMotion';
 import { studioRefresh } from '../../board/ui';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import type { PriceBook } from '../../../../shared/comic/modelLock';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
 import {
   capitalize,
@@ -75,10 +77,13 @@ export interface FailedItem {
 export const retryAllFailed = (
   doc: ComicDoc,
   failed: FailedItem[],
-  byok: boolean
+  byok: boolean,
+  /** The person's PriceBook (the studio's price sheet): the retry names the price its run is drawn at. */
+  prices?: PriceBook
 ): { actions: SpendAction[]; usd: number; count: number } => {
   const tier = doc.settings.quality;
   const override = doc.settings.imageModelOverride;
+  const priced = prices ? { prices } : {};
   const actions: SpendAction[] = [];
   let usd = 0;
 
@@ -86,7 +91,7 @@ export const retryAllFailed = (
   // Sheets the page retry draws first anyway (missing sheets of those pages, billed in its quote).
   const drawnByPages = new Set<string>();
   if (pageIds.length) {
-    const q = quoteRenderPages(doc, { pageIds, force: true, byok, tier, modelOverride: override });
+    const q = quoteRenderPages(doc, { pageIds, force: true, byok, tier, modelOverride: override, ...priced });
     actions.push({ type: 'render_pages', pageIds, force: true, quotedUsd: q.usd });
     usd += q.usd;
     for (const id of q.sheetIds) drawnByPages.add(id);
@@ -102,7 +107,7 @@ export const retryAllFailed = (
     const est = estimateDocJobs(
       doc,
       [...(chars ? [{ kind: 'sheet' as const, count: chars }] : []), ...(places ? [{ kind: 'place' as const, count: places }] : [])],
-      { byok, tier, modelOverride: override }
+      { byok, tier, modelOverride: override, ...priced }
     );
     actions.push({ type: 'render_sheets', characterIds: sheetIds, force: true, quotedUsd: est.usd });
     usd += est.usd;
@@ -114,13 +119,13 @@ export const retryAllFailed = (
     .filter((o): o is NonNullable<typeof o> => !!o)
     .map((o) => ({ name: o.name, spec: o.spec }));
   if (directions.length) {
-    const est = estimateDocJobs(doc, [{ kind: 'style_option', count: directions.length }], { byok, tier, modelOverride: override });
+    const est = estimateDocJobs(doc, [{ kind: 'style_option', count: directions.length }], { byok, tier, modelOverride: override, ...priced });
     actions.push({ type: 'render_style_options', directions, quotedUsd: est.usd });
     usd += est.usd;
   }
 
   if (failed.some((f) => f.target.kind === 'cover')) {
-    const est = estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok, tier, modelOverride: override });
+    const est = estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok, tier, modelOverride: override, ...priced });
     actions.push({ type: 'render_cover', quotedUsd: est.usd });
     usd += est.usd;
   }
@@ -306,14 +311,16 @@ interface FailureLineProps {
   approx: (usd: number) => string;
   /** The finished card's "Details" toggle (the provider's words for what failed); the run in flight has its own. */
   details?: React.ReactNode;
+  prices?: PriceBook;
 }
 
 /** "Page 5 didn’t draw · rate limited      Retry ≈ $0.06": one quiet line for every failure in the run. */
-const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, onRetry, retrying, approx, details }) => {
+const FailureLine: React.FC<FailureLineProps> = ({ p, doc, byok, onRetry, retrying, approx, details, prices }) => {
   const retry = retryAllFailed(
     doc,
     p.failed.map((f): FailedItem => ({ target: f.target, render: f.render })),
-    byok
+    byok,
+    prices
   );
   const reason = failedReason(p.failed);
   const label = p.failed.length === 1 ? `Retry ${itemName(p.failed[0])}` : `Retry ${p.failed.length} failed ${p.kind === 'pages' ? 'pages' : 'images'}`;
@@ -346,6 +353,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
   const guard = useStudioSequenceGuard(studio);
   const { run, isPending } = useAction(studio.act, { guard });
   const cost = useCostFormat(studio);
+  const prices = useStudioPrices(studio);
   const [open, setOpen] = useState(() => detailsOpen.get(card.id) === true);
   const detailsId = useId();
   const p = doc ? runProgress(doc, card.targets, typeof card.since === 'number' ? card.since : undefined) : null;
@@ -401,6 +409,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
       onRetry={(actions) => void run('retry-all', ...actions)}
       retrying={isPending('retry-all')}
       approx={cost.approx}
+      prices={prices}
       details={!p.busy && missedDetails ? detailsButton : undefined}
     />
   );

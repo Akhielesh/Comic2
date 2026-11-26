@@ -32,6 +32,7 @@ import { sheetHint } from '../refs/refsModel';
 import { EmptyIllustration, FrameBadge, ImageFrame, VersionsButton, frameSources } from './ImageFrame';
 import { CLEAR, byokFromDoc, estimateOne, hasImage, initials, isBusy, jobModel, nameHue, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { CharacterDetail, characterCardId } from './CharacterDetail';
 import { ConfirmStrip, EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, Surface, cx, useClickGuard } from './ui';
 
@@ -244,6 +245,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
 }) => {
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
+  const prices = useStudioPrices(studio);
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const [expanded, setExpanded] = useState(false);
   const [inspecting, setInspecting] = useState(false);
@@ -254,7 +256,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const drawn = hasImage(c.sheet);
   const src = frameSources(studio.urlFor, c.sheet.asset, { sizes: '(max-width: 640px) 90vw, 320px' });
   const busy = isBusy(c.sheet);
-  const price = estimateOne(doc, 'sheet', byok).usd;
+  const price = estimateOne(doc, 'sheet', byok, 1, prices).usd;
   const spec = jobModel(doc, 'sheet');
   const set = (patch: Partial<Character>) => void studio.patch([{ op: 'character', id: c.id, patch }]);
   const setLook = (key: keyof CharacterLook, value: string) => set({ look: { [key]: value } as unknown as CharacterLook });
@@ -466,6 +468,7 @@ export const PlaceCard: React.FC<{ studio: StudioController; doc: ComicDoc; plac
 }) => {
   const fallbackCost = useCostFormat(studio.caps);
   const cost = costProp ?? fallbackCost;
+  const prices = useStudioPrices(studio);
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const [confirmRemove, setConfirmRemove] = useState(false);
   const { busyKey, fire } = useClickGuard();
@@ -473,7 +476,7 @@ export const PlaceCard: React.FC<{ studio: StudioController; doc: ComicDoc; plac
   const busy = isBusy(p.sheet);
   const status = sheetVisualStatus(p.sheet);
   const src = frameSources(studio.urlFor, p.sheet.asset, { sizes: '(max-width: 640px) 90vw, 320px' });
-  const price = estimateOne(doc, 'place', byok).usd;
+  const price = estimateOne(doc, 'place', byok, 1, prices).usd;
   const set = (patch: Partial<Place>) => void studio.patch([{ op: 'place', id: p.id, patch }]);
   const renderSheet = () => fire('sheet', () => studio.act({ type: 'render_sheets', characterIds: [p.id], force: true }));
   const used = doc.pages.reduce((n, page) => n + page.panels.filter((panel) => panel.placeId === p.id).length, 0);
@@ -550,12 +553,13 @@ export const PlaceCard: React.FC<{ studio: StudioController; doc: ComicDoc; plac
 export const CastTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
   const byok = byokFromDoc(doc);
   const cost = useCostFormat(studio.caps);
+  const prices = useStudioPrices(studio);
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const { busyKey, fire } = useClickGuard(3000);
   const tierOrder = { lead: 0, support: 1, extra: 2 } as const;
   const cast = [...doc.cast].sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier]);
   const missing = doc.cast.filter((c) => c.tier !== 'extra' && c.sheet.status !== 'ready' && !isBusy(c.sheet));
-  const missingPrice = estimateOne(doc, 'sheet', byok, missing.length).usd;
+  const missingPrice = estimateOne(doc, 'sheet', byok, missing.length, prices).usd;
   const addCharacter = () =>
     void studio.patch([{ op: 'character', id: newId('ch'), patch: { name: `New character ${doc.cast.length + 1}`, tier: 'support', look: { summary: '' } } }]);
   const addPlace = () => void studio.patch([{ op: 'place', id: newId('pl'), patch: { name: `New place ${doc.places.length + 1}`, look: '' } }]);

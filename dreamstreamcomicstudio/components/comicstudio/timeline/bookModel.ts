@@ -33,6 +33,7 @@ import {
 } from '../../../shared/comic/doc';
 import { applyOp, assetPartOf, type DocOp } from '../../../shared/comic/ops';
 import { aspectFromSize, aspectMatches, aspectRatioOf, getImageModel, IMAGE_MODELS } from '../../../shared/comic/models';
+import type { PriceBook } from '../../../shared/comic/modelLock';
 import { spendByTarget, unitPrice } from '../../../shared/comic/plan';
 import { describeOps, inverseOps, isUndoable } from '../../../shared/comic/undo';
 import { canServeToOwner } from '../../../shared/comic/safety';
@@ -323,7 +324,8 @@ export function dockSummary(doc: ComicDoc, money: (usd: number) => string = fail
 }
 
 /** What the next paid step on a clip would cost right now (registry price, BYOK-aware). */
-export const redrawPrice = (doc: ComicDoc, kind: 'page' | 'cover', byok: boolean): number => unitPrice(doc, kind, { byok }).usd;
+/** One forced redraw of a page or the cover for this user (markup unless own key), at their PriceBook when given. */
+export const redrawPrice = (doc: ComicDoc, kind: 'page' | 'cover', byok: boolean, prices?: PriceBook): number => unitPrice(doc, kind, { byok, ...(prices ? { prices } : {}) }).usd;
 
 // ── Op builders (the UI, keyboard and the undo toast share them) ─────────────
 

@@ -14,8 +14,9 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ChevronUp, GripHorizontal, Images } from 'lucide-react';
 import { newId, renderTargetKey, type ComicDoc, type RenderTarget } from '../../../shared/comic/doc';
-import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
+import { planUsd } from '../../../shared/comic/priceBook';
 import { useCostFormat } from '../conversation/cost';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { keepRefusedInComposer } from '../conversation/composerBus';
 import { isPhoneLayout } from '../mobile/formFactor';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
@@ -181,8 +182,10 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const [open, setOpen] = useStoredFlag(DOCK_OPEN_KEY, ff.width >= DOCK_OPEN_MIN_WIDTH);
   const doc = studio.doc;
   const edit = useTimelineEdit(studio);
-  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars. The figures are the
+  // person's own (their PriceBook), so a redraw here names the price its approval will.
   const cost = useCostFormat(studio);
+  const prices = useStudioPrices(studio);
   const phoneLayout = isPhoneLayout(ff.layout);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ key: string; rect: DOMRect | null } | null>(null);
@@ -360,7 +363,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
         return openVersions(clip, true);
       case 'redraw':
         if (!clip.page) return;
-        return void studio.act({ type: 'render_pages', pageIds: [clip.key], ...(clip.drawn ? { force: true } : {}), quotedUsd: redrawPrice(doc, 'page', byok) });
+        return void studio.act({ type: 'render_pages', pageIds: [clip.key], ...(clip.drawn ? { force: true } : {}), quotedUsd: redrawPrice(doc, 'page', byok, prices) });
       case 'fit':
         if (!clip.target) return;
         return void studio.act({ type: 'fit_render', target: clip.target });
@@ -380,7 +383,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
       case 'delete':
         return remove(clip);
       case 'cover_redesign':
-        return void studio.act({ type: 'render_cover', quotedUsd: redrawPrice(doc, 'cover', byok) });
+        return void studio.act({ type: 'render_cover', quotedUsd: redrawPrice(doc, 'cover', byok, prices) });
       case 'cover_text':
         return studio.setTab('pages');
       case 'plate_edit':
@@ -584,17 +587,17 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const pageIdx = menuClip ? pageIndex(menuClip.key) : -1;
   const menuItems = menuClip
     ? clipMenuItems(menuClip, {
-        redrawUsd: redrawPrice(doc, 'page', byok),
-        coverUsd: redrawPrice(doc, 'cover', byok),
+        redrawUsd: redrawPrice(doc, 'page', byok, prices),
+        coverUsd: redrawPrice(doc, 'cover', byok, prices),
         canMoveLeft: pageIdx > 0,
         canMoveRight: pageIdx >= 0 && pageIdx < pages.length - 1,
         canAddPage: canAddPage(doc, maxPages),
         pageCount: pages.length,
         price: cost.approx,
-        writeUsd: PLAN_USD_PER_PAGE * (byok ? 1 : PLATFORM_MARKUP)
+        writeUsd: planUsd(1, byok, prices)
       })
     : [];
-  const pagePrice = cost.approx(redrawPrice(doc, 'page', byok));
+  const pagePrice = cost.approx(redrawPrice(doc, 'page', byok, prices));
 
   const strip = (
     <div

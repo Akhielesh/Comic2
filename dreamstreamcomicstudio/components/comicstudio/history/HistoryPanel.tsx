@@ -38,6 +38,7 @@ import { UndoAiSheet } from './UndoAiSheet';
 import { useHistory, useLatestAiRow, type HistoryStudio } from './useHistory';
 import { HistorySheet, IconBtn, Note, QuietBtn, RestoredToast, useHistoryReducedMotion, useIsPhone, type ToastAction } from './ui';
 import { redrawPrice } from '../timeline/bookModel';
+import { useStudioPrices } from '../usage/useStudioPrices';
 import { VersionReader } from './VersionReader';
 
 /** A request to open History at a view (each request gets a fresh seq, so the same request twice still applies). */
@@ -97,6 +98,10 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   costRef.current = cost;
   const studioRef = useRef(studio);
   studioRef.current = studio;
+  // The person's PriceBook: the quoted redraw in a restore's follow-up is the price its approval will name.
+  const prices = useStudioPrices(studio);
+  const pricesRef = useRef(prices);
+  pricesRef.current = prices;
   const doc = studio.doc;
 
   // A request (the header button, a card, a link, a typed "show history"): the list first, then — on the next
@@ -184,7 +189,7 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
           const n = doc?.pages.find((p) => p.id === followUp.pageId)?.n ?? followUp.pageN;
           // Own-key comics: the full controller carries byok (caps.byok otherwise).
           const st = studioRef.current as HistoryStudio & { byok?: boolean };
-          const usd = doc ? redrawPrice(doc, 'page', !!(st.byok || st.caps?.byok)) : 0;
+          const usd = doc ? redrawPrice(doc, 'page', !!(st.byok || st.caps?.byok), pricesRef.current) : 0;
           setToast({
             message: `${message}. ${HISTORY_COPY.panelDrawing}`,
             undo,

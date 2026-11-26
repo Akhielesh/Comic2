@@ -63,7 +63,7 @@ describe('model catalog routes', () => {
   it('keeps its export names and answers only its own paths', async () => {
     expect(NOT_BUILT).toEqual({ error: 'not built yet' });
     expect(typeof comicModelsRouter).toBe('function');
-    expect(MODELS_PATHS).toEqual(['/models/catalog', '/models/trends', '/models/:id']);
+    expect(MODELS_PATHS).toEqual(['/models/catalog', '/models/prices', '/models/trends', '/models/:id']);
     // The static list, status and the lab belong to other routers.
     expect((await get('/api/comic/models', 'owner-1')).body).toMatchObject({ route: 'fallthrough' });
     expect((await get('/api/comic/models/status', 'owner-1')).body).toMatchObject({ route: 'fallthrough' });
@@ -141,6 +141,28 @@ describe('model catalog routes', () => {
     expect(unknown.body.error.message).toBe("We don't know that model.");
   });
 
+  it('GET /models/prices: the caller\'s price sheet — the same sources their server book is built from, without notes', async () => {
+    const r = await get('/api/comic/models/prices', 'owner-1');
+    expect(r.status).toBe(200);
+    expect(r.cache).toBe('private, no-store');
+    expect(r.body).toMatchObject({ v: 1 });
+    expect(typeof r.body.at).toBe('number');
+    const nb = r.body.sources.rows.find((x: { id: string }) => x.id === 'nano-banana-2.1');
+    expect(nb.price['1K']).toEqual({ usd: 0.0336, basis: expect.any(String) });
+    expect(JSON.stringify(r.body)).not.toContain('"note"');
+    // No observations: the text rates are the constants, the floor.
+    expect(r.body.sources.text).toMatchObject({ planPerPageUsd: 0.012, styleDirectionsUsd: 0.015, translateFactor: 1 });
+    // The client builds the same book from it (shared/comic/priceBook.ts).
+    const { priceBookFromSources, sanitizePriceSheet } = await import('../../../shared/comic/priceBook.js');
+    const { createPriceBook } = await import('../comic/models/index.js');
+    const sheet = sanitizePriceSheet(r.body)!;
+    const client = priceBookFromSources(sheet.sources);
+    const server = await createPriceBook({ userId: 'owner-1', catalog });
+    for (const res of ['1K', '2K', '4K'] as const) expect(client.unit('nano-banana-2.1', res, 'page').usd).toBe(server.unit('nano-banana-2.1', res, 'page').usd);
+    expect(client.qcUsd).toBe(server.qcUsd);
+    expect((await get('/api/comic/models/prices')).status).toBe(401);
+  });
+
   it('a catalog failure is an honest 500 without internals', async () => {
     current = { rows: async () => Promise.reject(new Error('secret internals')), model: async () => null, trends: async () => Promise.reject(new Error('x')), priceSources: async () => ({ rows: [] }) };
     try {
@@ -182,7 +204,7 @@ describe('governed users never get dollar text (limits.md; server/src/comic/cost
 
   it('catalog, trends and detail: no "$" anywhere in the answer, the numbers stay, and the view is "usage"', async () => {
     role = 'member';
-    for (const path of ['/api/comic/models/catalog', `/api/comic/models/catalog?projectId=${PROJECT}`, '/api/comic/models/trends?range=90d', '/api/comic/models/nano-banana-2']) {
+    for (const path of ['/api/comic/models/catalog', `/api/comic/models/catalog?projectId=${PROJECT}`, '/api/comic/models/prices', '/api/comic/models/trends?range=90d', '/api/comic/models/nano-banana-2']) {
       const r = await get(path, 'owner-1', gBase);
       expect(r.status, path).toBe(200);
       expect(r.view, path).toBe('usage');

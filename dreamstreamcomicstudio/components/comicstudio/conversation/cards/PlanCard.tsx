@@ -17,6 +17,8 @@ import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import type { PriceBook } from '../../../../shared/comic/modelLock';
+import { useStudioPrices } from '../../usage/useStudioPrices';
 import { TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx, plural } from '../ui';
 import { useAction, useStudioSequenceGuard } from './useAction';
@@ -32,9 +34,9 @@ export const pagesToDraw = (doc: ComicDoc): Page[] => pageTargets(doc);
 /** Lead/support cast on these pages without a usable sheet (drawn first, billed too). */
 export const sheetsNeededFor = (doc: ComicDoc, pages: Page[]): Character[] => missingSheetsFor(doc, pages);
 
-/** The honest quote for "draw everything that needs drawing" (same as the server gate). */
-export const estimatePlanRender = (doc: ComicDoc, byok: boolean): { pages: Page[]; sheets: Character[]; estimate: SpendEstimate } => {
-  const q = quoteRenderPages(doc, { byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
+/** The honest quote for "draw everything that needs drawing" (same as the server gate, at the person's PriceBook). */
+export const estimatePlanRender = (doc: ComicDoc, byok: boolean, prices?: PriceBook): { pages: Page[]; sheets: Character[]; estimate: SpendEstimate } => {
+  const q = quoteRenderPages(doc, { byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride, ...(prices ? { prices } : {}) });
   const pages = q.pageIds.map((id) => doc.pages.find((p) => p.id === id)).filter((p): p is Page => !!p);
   const sheets = q.sheetIds.map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is Character => !!c);
   return { pages, sheets, estimate: { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines } };
@@ -80,12 +82,13 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
   const guard = useStudioSequenceGuard(studio);
   const { run, isPending } = useAction(studio.act, { guard });
   const cost = useCostFormat(studio);
+  const prices = useStudioPrices(studio);
   const [expanded, setExpanded] = useState(false);
   if (!doc) return null;
 
   const pages = [...doc.pages].sort((a, b) => a.n - b.n);
   const panelTotal = pages.reduce((n, p) => n + p.panels.length, 0);
-  const { pages: toDraw, sheets, estimate } = estimatePlanRender(doc, studio.byok);
+  const { pages: toDraw, sheets, estimate } = estimatePlanRender(doc, studio.byok, prices);
   const drawing = pages.filter(isBusy).length;
   const allDrawn = pages.length > 0 && pages.every((p) => p.render.status === 'ready' && !isPageStale(doc, p));
   const approved = doc.planStatus === 'approved';

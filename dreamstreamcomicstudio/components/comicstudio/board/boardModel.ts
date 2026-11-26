@@ -27,6 +27,7 @@ import {
   type ImageModelSpec,
   type SpendEstimate
 } from '../../../shared/comic/models';
+import type { PriceBook } from '../../../shared/comic/modelLock';
 import { estimateDocJobs, missingSheetsFor, pageTargets, quoteLockOf } from '../../../shared/comic/plan';
 import type { StylePreset } from '../../../shared/comic/stylePresets';
 
@@ -102,23 +103,27 @@ export interface DrawPlan {
   estimate: SpendEstimate;
 }
 
-export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean): DrawPlan => {
+/**
+ * What drawing these pages costs (and the sheets they need first). Lock-aware (plan.ts estimateDocJobs): a locked comic
+ * prices on its locked model, as the server draws it; `prices` is the person's PriceBook (the studio's price sheet), so
+ * the button names the price its approval will.
+ */
+export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean, prices?: PriceBook): DrawPlan => {
   const sheets = sheetsNeededFor(doc, pages);
-  // Lock-aware (plan.ts estimateDocJobs): a locked comic prices on its locked model, as the server draws it.
   const estimate = estimateDocJobs(
     doc,
     [
       { kind: 'page', count: pages.length, label: 'pages' },
       { kind: 'sheet', count: sheets.length, label: 'character sheets' }
     ],
-    { byok }
+    { byok, ...(prices ? { prices } : {}) }
   );
   return { pages, sheets, estimate };
 };
 
 /** Estimate for one image job of a kind (edit, cover, a sheet, style options), on the comic's locked model if any. */
-export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1): SpendEstimate =>
-  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok });
+export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1, prices?: PriceBook): SpendEstimate =>
+  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok, ...(prices ? { prices } : {}) });
 
 // ── Models ───────────────────────────────────────────────────────────────────
 
