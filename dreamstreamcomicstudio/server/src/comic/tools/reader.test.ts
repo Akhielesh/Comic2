@@ -68,8 +68,8 @@ describe('set_reader_options', () => {
     const before = session.doc.pages.map((p) => pageSpecHash(session.doc, p));
     const text = await tools().set_reader_options.execute({ turn: 'slide', paperTexture: false, credits: 'Story by the Rao family' });
     expect(text).toMatch(/^Done — readers now get slide page turns; paper texture is off; the End card credits read “Story by the Rao family”\. Free/);
-    expect(readerOf(session.doc)).toEqual({ ...DEFAULT_READER, turn: 'slide', paperTexture: false, credits: 'Story by the Rao family' });
-    expect(opsOf(ctx.events)).toEqual([{ op: 'reader', patch: { turn: 'slide', paperTexture: false, credits: 'Story by the Rao family' } }]);
+    expect(readerOf(session.doc)).toEqual({ ...DEFAULT_READER, turn: 'slide', turnChosen: true, paperTexture: false, credits: 'Story by the Rao family' });
+    expect(opsOf(ctx.events)).toEqual([{ op: 'reader', patch: { turn: 'slide', turnChosen: true, paperTexture: false, credits: 'Story by the Rao family' } }]);
     expect(ctx.events.find((e) => e.type === 'ops')).toMatchObject({ origin: 'director' });
     expect(session.doc.pages.map((p) => pageSpecHash(session.doc, p))).toEqual(before);
     expect(session.doc.spend.totalUsd).toBe(0);
@@ -81,12 +81,23 @@ describe('set_reader_options', () => {
     const { tools, session } = setup(doc);
     expect(await tools().set_reader_options.execute({ dedication: '' })).toMatch(/the dedication is cleared/);
     expect(readerOf(session.doc).dedication).toBeUndefined();
-    expect(await tools().set_reader_options.execute({ turn: 'paper' })).toMatch(/already in place — nothing changed/);
+    expect(await tools().set_reader_options.execute({ turn: 'flip' })).toMatch(/already in place — nothing changed/);
+  });
+
+  it('an old comic’s stored default “paper” reads as the flip; asking for paper makes it the creator’s choice', async () => {
+    const doc = drawnDoc();
+    doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };
+    expect(describeReader(readerOf(doc))).toEqual([]);
+    const { tools, session } = setup(doc);
+    expect(await tools().set_reader_options.execute({ turn: 'paper' })).toMatch(/^Done — readers now get paper page turns/);
+    expect(readerOf(session.doc)).toMatchObject({ turn: 'paper', turnChosen: true });
+    expect(describeReader(readerOf(session.doc))).toEqual(['paper turns']);
+    expect(await tools().set_reader_options.execute({ turn: 'flip' })).toMatch(/^Done — readers now get the page flip/);
   });
 
   it('returns a fixable error for bad args and never commits', async () => {
     const { tools, ctx } = setup();
-    expect(await tools().set_reader_options.execute({ turn: 'spin' })).toMatch(/^Error: Page-turn style must be one of: paper, slide, fade/);
+    expect(await tools().set_reader_options.execute({ turn: 'spin' })).toMatch(/^Error: Page-turn style must be one of: flip, paper, slide, fade/);
     expect(await tools().set_reader_options.execute({ credits: 'x'.repeat(200) })).toMatch(/^Error: Keep the credits line to 140 characters/);
     expect(opsOf(ctx.events)).toEqual([]);
   });

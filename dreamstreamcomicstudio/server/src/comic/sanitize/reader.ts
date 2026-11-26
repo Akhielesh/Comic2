@@ -2,6 +2,10 @@
 //
 //   reader   how the published comic presents in the reader (creator's choice; viewers override locally)
 //
+// The page-turn style is one of flip (the default), paper, slide or fade. `turnChosen: true` marks a creator's pick:
+// comics saved before the flip came back stored 'paper' as the old default, and without the mark that reads as the flip
+// (shared/comic/doc.ts creatorTurnOf).
+//
 // The op is FREE (no spend, no render). The sanitizer rebuilds the patch from known keys only:
 // enums and booleans are checked, credits/dedication are trimmed, stripped of control characters and
 // capped at DOC_LIMITS.readerTextChars (longer text is rejected, never silently cut). `null` (or an
@@ -18,7 +22,7 @@
 // whole (undo.ts restoreFull), so without that an undo of a page-turn change on a comic with reader motion would be
 // refused. RD-1's `design` key is not built in S2 (RD-1 is unscheduled).
 
-import { readerOf, type ComicDoc, type ReaderSettings } from '../../../../shared/comic/doc.js';
+import { PAGE_TURN_STYLES, readerOf, type ComicDoc, type ReaderSettings } from '../../../../shared/comic/doc.js';
 import { PRO_EDIT_OPS_PATCHABLE, type DocOp } from '../../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import type { OpSanitizer } from '../extensions.js';
@@ -27,10 +31,11 @@ import { storableText } from './text.js';
 
 type ReaderOp = Extract<DocOp, { op: 'reader' }>;
 
-export const READER_TURN_STYLES = ['paper', 'slide', 'fade'] as const;
+/** The page-turn styles, the flip first (shared/comic/doc.ts PAGE_TURN_STYLES). */
+export const READER_TURN_STYLES = PAGE_TURN_STYLES;
 const BOOLEAN_KEYS = ['guidedOverview', 'paperTexture', 'ambient'] as const;
 const TEXT_KEYS = ['credits', 'dedication'] as const;
-const KNOWN_KEYS: ReadonlySet<string> = new Set<string>(['turn', ...BOOLEAN_KEYS, ...TEXT_KEYS]);
+const KNOWN_KEYS: ReadonlySet<string> = new Set<string>(['turn', 'turnChosen', ...BOOLEAN_KEYS, ...TEXT_KEYS]);
 /** Reader motion values (Pro Edit): null clears the creator's choice. */
 export const READER_MOTION_VALUES = ['on', 'off'] as const;
 /** Wire value that clears a deep-merge key (contract R4). */
@@ -75,6 +80,12 @@ export function sanitizeReaderPatch(raw: unknown, opts?: ReaderPatchOptions): Pa
   if (raw.turn !== undefined) {
     if (!(READER_TURN_STYLES as readonly unknown[]).includes(raw.turn)) throw bad(`Page-turn style must be one of: ${READER_TURN_STYLES.join(', ')}.`);
     patch.turn = raw.turn as ReaderSettings['turn'];
+  }
+  // The creator's pick of `turn` (the board picker and the director send it with the style); null clears it, as the undo
+  // of a pick on a comic saved before the flip came back does (its stored 'paper' then reads as the flip again).
+  if (raw.turnChosen !== undefined) {
+    if (raw.turnChosen !== true && raw.turnChosen !== null) throw bad('turnChosen must be true (or null to clear it).');
+    patch.turnChosen = raw.turnChosen === null ? CLEAR : true;
   }
   for (const key of BOOLEAN_KEYS) {
     if (raw[key] === undefined) continue;

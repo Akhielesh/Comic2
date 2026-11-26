@@ -1,7 +1,7 @@
 // Reader preferences, reading position, intro and low-power memory (contract §13.5 storage keys).
 // Every storage access is wrapped: private windows and blocked storage simply don't remember.
 
-import { DEFAULT_READER, type ComicKind, type ReaderSettings } from '../../../shared/comic/doc';
+import { DEFAULT_READER, creatorTurnOf, pageTurnStyleOf, type ComicKind, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { layoutPrefFrom, type LayoutPref } from './readerLayout';
 
 export const PREFS_KEY = 'comicstudio.reader.prefs.v1';
@@ -13,10 +13,10 @@ export const LOW_POWER_KEY = 'comicstudio.reader.lowpower';
 
 export type Tri = 'auto' | 'on' | 'off';
 export type RoomLight = 'night' | 'day';
-export type TurnPref = 'auto' | ReaderSettings['turn'];
+export type TurnPref = 'auto' | PageTurnStyle;
 
 export interface ReaderPrefs {
-  /** 'auto' follows the creator's choice (doc.reader.turn). */
+  /** 'auto' follows the creator's choice (doc.reader.turn, creatorTurnOf); flip, paper, slide or fade is the reader's own. */
   turn: TurnPref;
   /** Synthesized page-turn sound (off by default). */
   sound: boolean;
@@ -73,7 +73,7 @@ const tri = (v: unknown): Tri => (v === 'on' || v === 'off' ? v : 'auto');
 export const sanitizePrefs = (raw: unknown): ReaderPrefs => {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   return {
-    turn: r.turn === 'paper' || r.turn === 'slide' || r.turn === 'fade' ? r.turn : 'auto',
+    turn: pageTurnStyleOf(r.turn) ?? 'auto',
     sound: r.sound === true,
     paper: tri(r.paper),
     ambient: tri(r.ambient),
@@ -145,17 +145,24 @@ export const writeMeasuredLowPower = (on: boolean): void => write('session', LOW
 // ── Effective settings ───────────────────────────────────────────────────────
 
 export interface EffectiveReader {
-  turn: ReaderSettings['turn'];
+  turn: PageTurnStyle;
   paper: boolean;
   ambient: boolean;
 }
+
+/**
+ * The page-turn style a reader gets: their own explicit choice, else the creator's (creatorTurnOf: a comic that never
+ * chose, including every comic that stored the old default 'paper', flips), else the flip.
+ */
+export const turnStyleFor = (settings: Partial<ReaderSettings> | undefined, pref: TurnPref): PageTurnStyle =>
+  pref !== 'auto' ? pref : creatorTurnOf(settings);
 
 /** Creator settings (doc.reader) overridden locally by the viewer's prefs; paper is off for webtoon/strip. */
 export const effectiveReader = (settings: ReaderSettings | undefined, prefs: ReaderPrefs, kind: ComicKind): EffectiveReader => {
   const s = settings ?? DEFAULT_READER;
   const pick = (t: Tri, base: boolean) => (t === 'on' ? true : t === 'off' ? false : base);
   return {
-    turn: prefs.turn === 'auto' ? 'paper' : prefs.turn,
+    turn: turnStyleFor(settings, prefs.turn),
     paper: kind === 'webtoon' || kind === 'strip' ? false : pick(prefs.paper, s.paperTexture),
     ambient: pick(prefs.ambient, s.ambient)
   };

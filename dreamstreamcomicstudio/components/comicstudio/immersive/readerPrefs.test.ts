@@ -15,6 +15,7 @@ import {
   readPrefs,
   sanitizePrefs,
   shouldOfferResume,
+  turnStyleFor,
   writeLayoutPref,
   writePosition,
   writePrefs
@@ -67,10 +68,34 @@ describe('prefs', () => {
 
   it('viewer prefs override the creator; paper texture is off for webtoons and strips', () => {
     const creator = { ...DEFAULT_READER, turn: 'fade' as const, paperTexture: true };
-    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'paper', paper: true, ambient: true });
+    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'fade', paper: true, ambient: true });
     expect(effectiveReader(creator, { ...DEFAULT_PREFS, turn: 'paper', paper: 'off', ambient: 'off' }, 'manga')).toMatchObject({ turn: 'paper', paper: false, ambient: false });
     expect(effectiveReader(creator, DEFAULT_PREFS, 'webtoon').paper).toBe(false);
-    expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'paper', paper: false });
+    expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'flip', paper: false });
+  });
+
+  it('the turn style: the reader’s explicit choice, then the creator’s, then the flip', () => {
+    const legacy = { ...DEFAULT_READER, turn: 'paper' as const }; // every comic saved before the flip came back
+    const chose = (turn: 'flip' | 'paper' | 'slide' | 'fade') => ({ ...DEFAULT_READER, turn, turnChosen: true as const });
+    // No choice anywhere: the flip, whatever the comic stored as the old default.
+    expect(turnStyleFor(undefined, 'auto')).toBe('flip');
+    expect(turnStyleFor(DEFAULT_READER, 'auto')).toBe('flip');
+    expect(turnStyleFor(legacy, 'auto')).toBe('flip');
+    // The creator's choice.
+    expect(turnStyleFor(chose('paper'), 'auto')).toBe('paper');
+    expect(turnStyleFor({ ...DEFAULT_READER, turn: 'slide' }, 'auto')).toBe('slide');
+    expect(turnStyleFor({ ...DEFAULT_READER, turn: 'fade' }, 'auto')).toBe('fade');
+    // The reader's own choice wins over both.
+    for (const turn of ['flip', 'paper', 'slide', 'fade'] as const) {
+      expect(turnStyleFor(chose('slide'), turn)).toBe(turn);
+      expect(effectiveReader(legacy, { ...DEFAULT_PREFS, turn }, 'comic').turn).toBe(turn);
+    }
+  });
+
+  it('keeps a stored flip preference and maps anything unknown to auto', () => {
+    expect(sanitizePrefs({ turn: 'flip' }).turn).toBe('flip');
+    expect(sanitizePrefs({ turn: 'curl' }).turn).toBe('auto');
+    expect(sanitizePrefs({}).turn).toBe('auto');
   });
 });
 

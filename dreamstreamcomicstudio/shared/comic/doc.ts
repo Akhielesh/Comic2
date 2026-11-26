@@ -828,10 +828,21 @@ export interface BookSettings {
 }
 export const DEFAULT_BOOK: BookSettings = { titlePage: false, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true };
 
-export type PageTurnStyle = 'paper' | 'slide' | 'fade';
+/**
+ * How a reader turns the page: 'flip' (the new page swings in from the spine; the default), 'paper' (the drag-to-fold
+ * paper turn), 'slide' or 'fade'. Order is the order every picker lists them in.
+ */
+export const PAGE_TURN_STYLES = ['flip', 'paper', 'slide', 'fade'] as const;
+export type PageTurnStyle = (typeof PAGE_TURN_STYLES)[number];
 /** How the published comic presents (creator's choice; viewers override locally). Guided View is never default. */
 export interface ReaderSettings {
   turn: PageTurnStyle;
+  /**
+   * The creator picked `turn` themselves (the board's Page turn picker or the director). Without it, `turn: 'paper'` is
+   * how every comic stores "no choice" (DEFAULT_READER, and what every comic saved before the flip came back holds), and
+   * it reads as the flip (creatorTurnOf). Only ever `true` when present.
+   */
+  turnChosen?: true;
   /** Guided View shows the whole page before zooming into panels. */
   guidedOverview: boolean;
   paperTexture: boolean;
@@ -842,7 +853,28 @@ export interface ReaderSettings {
    *  (COMIC_READER_MOTION); the viewer's own toggle, Calm motion and prefers-reduced-motion always win. */
   motion?: 'on' | 'off';
 }
+/**
+ * A comic's reader settings before the creator changes any. `turn: 'paper'` without `turnChosen` is "no choice", which
+ * reads as the flip (creatorTurnOf): stored docs and their hashes stay byte-for-byte what they were, and every one of
+ * them flips.
+ */
 export const DEFAULT_READER: ReaderSettings = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };
+/** The page-turn style of a comic whose creator never chose one. */
+export const DEFAULT_TURN: PageTurnStyle = 'flip';
+
+const TURN_STYLE_SET: ReadonlySet<string> = new Set(PAGE_TURN_STYLES);
+/** A stored or sent page-turn style, or undefined when it is not one of the four. */
+export const pageTurnStyleOf = (v: unknown): PageTurnStyle | undefined => (typeof v === 'string' && TURN_STYLE_SET.has(v) ? (v as PageTurnStyle) : undefined);
+
+/**
+ * The page-turn style the creator chose. A comic with no reader settings, or one that stored the old default 'paper'
+ * without `turnChosen`, flips; 'slide' and 'fade' (only ever stored by a choice), 'flip' and a chosen 'paper' keep theirs.
+ */
+export const creatorTurnOf = (reader?: Partial<ReaderSettings> | null): PageTurnStyle => {
+  const turn = pageTurnStyleOf(reader?.turn);
+  if (!turn || (turn === 'paper' && reader?.turnChosen !== true)) return DEFAULT_TURN;
+  return turn;
+};
 
 // ── Translations, safety ─────────────────────────────────────────────────────
 
@@ -2538,11 +2570,13 @@ export const pickReader = (raw: unknown): ReaderSettings => {
   const r = isObject(raw) ? raw : {};
   const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, DOC_LIMITS.readerTextChars) : undefined);
   const out: ReaderSettings = {
-    turn: r.turn === 'slide' || r.turn === 'fade' ? r.turn : 'paper',
+    // Stored styles are kept as stored; anything else is "no choice" (DEFAULT_READER's 'paper'), which reads as the flip.
+    turn: pageTurnStyleOf(r.turn) ?? DEFAULT_READER.turn,
     guidedOverview: typeof r.guidedOverview === 'boolean' ? r.guidedOverview : DEFAULT_READER.guidedOverview,
     paperTexture: typeof r.paperTexture === 'boolean' ? r.paperTexture : DEFAULT_READER.paperTexture,
     ambient: typeof r.ambient === 'boolean' ? r.ambient : DEFAULT_READER.ambient
   };
+  if (r.turnChosen === true) out.turnChosen = true;
   const credits = text(r.credits);
   if (credits) out.credits = credits;
   const dedication = text(r.dedication);

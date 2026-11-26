@@ -253,6 +253,8 @@ import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/s
 import {
   DEFAULT_BOOK,
   DEFAULT_READER,
+  PAGE_TURN_STYLES,
+  creatorTurnOf,
   archiveOf,
   castNoun,
   coverSpecHash,
@@ -590,6 +592,30 @@ describe('v5 §16.2 normalizeDoc', () => {
       expect(normalizeDoc(JSON.parse(JSON.stringify(once)))).toEqual(once);
       expect(normalizeDoc(once)).toEqual(once);
     }
+  });
+
+  it('page-turn styles: no reader field flips, stored styles are kept, an unchosen stored "paper" reads as the flip', () => {
+    // Normalizing stores what it always stored ("no choice" is DEFAULT_READER's 'paper'); reading it gives the flip.
+    const noReader = normalizeDoc(ownerLiveDoc());
+    expect(noReader.reader).toEqual(DEFAULT_READER);
+    expect(creatorTurnOf(noReader.reader)).toBe('flip');
+    const stored = (reader: unknown) => {
+      const raw = JSON.parse(JSON.stringify(ownerLiveDoc())) as Record<string, unknown>;
+      raw.reader = reader;
+      return normalizeDoc(raw as unknown as Parameters<typeof normalizeDoc>[0]).reader;
+    };
+    for (const turn of ['flip', 'paper', 'slide', 'fade'] as const) expect(stored({ turn }).turn).toBe(turn);
+    expect(creatorTurnOf(stored({ turn: 'curl' }))).toBe('flip');
+    expect(stored({ turn: 7, turnChosen: 'yes' })).toEqual(DEFAULT_READER);
+    // Every comic saved before the flip came back stored 'paper' as the default: it flips until the creator picks paper.
+    expect(creatorTurnOf(stored({ turn: 'paper' }))).toBe('flip');
+    expect(creatorTurnOf(stored({ turn: 'paper', turnChosen: true }))).toBe('paper');
+    expect(stored({ turn: 'paper', turnChosen: true })).toMatchObject({ turn: 'paper', turnChosen: true });
+    expect(creatorTurnOf(stored({ turn: 'slide' }))).toBe('slide');
+    expect(creatorTurnOf(stored({ turn: 'fade' }))).toBe('fade');
+    expect(creatorTurnOf(undefined)).toBe('flip');
+    expect(creatorTurnOf(DEFAULT_READER)).toBe('flip');
+    expect(PAGE_TURN_STYLES).toEqual(['flip', 'paper', 'slide', 'fade']);
   });
 
   it('old docs get the exact old-doc defaults', () => {

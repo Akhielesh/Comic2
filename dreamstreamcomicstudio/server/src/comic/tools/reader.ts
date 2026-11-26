@@ -11,7 +11,7 @@
 // Results are honest sentences that say exactly what changed (or that nothing needed to), so the
 // director always has something visible to tell the user.
 
-import { readerOf, DEFAULT_READER, type ComicDoc, type Page, type ReaderSettings } from '../../../../shared/comic/doc.js';
+import { creatorTurnOf, readerOf, DEFAULT_READER, DEFAULT_TURN, type ComicDoc, type Page, type ReaderSettings } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
@@ -23,6 +23,7 @@ import { READER_TURN_STYLES, cleanReaderText, sanitizeReaderPatch } from '../san
 
 const FREE_NOTE = 'Free — done by the editor, no AI cost.';
 const TURN_WORD: Record<ReaderSettings['turn'], string> = {
+  flip: 'the page flip (each new page swings in from the spine)',
   paper: 'paper page turns (the page curls like a real book)',
   slide: 'slide page turns',
   fade: 'gentle crossfades between pages'
@@ -53,7 +54,8 @@ export const chaptersOf = (doc: ComicDoc): { n: number; title: string }[] =>
 /** One-line description of the reader settings that differ from the defaults (empty when default). */
 export function describeReader(settings: ReaderSettings): string[] {
   const out: string[] = [];
-  if (settings.turn !== DEFAULT_READER.turn) out.push(`${settings.turn} turns`);
+  const turn = creatorTurnOf(settings);
+  if (turn !== DEFAULT_TURN) out.push(`${turn} turns`);
   if (settings.paperTexture !== DEFAULT_READER.paperTexture) out.push(`paper texture ${settings.paperTexture ? 'on' : 'off'}`);
   if (settings.ambient !== DEFAULT_READER.ambient) out.push(`ambient colour ${settings.ambient ? 'on' : 'off'}`);
   if (settings.credits) out.push(`credits ${quote(settings.credits, 40)}`);
@@ -64,7 +66,8 @@ export function describeReader(settings: ReaderSettings): string[] {
 /** What a change did, in words ("readers now get slide page turns; paper texture is off"). */
 function changeSentence(before: ReaderSettings, after: ReaderSettings): string[] {
   const parts: string[] = [];
-  if (before.turn !== after.turn) parts.push(`readers now get ${TURN_WORD[after.turn]}`);
+  // The style readers get (an old comic's stored 'paper' is the flip until the creator picks it).
+  if (creatorTurnOf(before) !== creatorTurnOf(after)) parts.push(`readers now get ${TURN_WORD[creatorTurnOf(after)]}`);
   if (before.paperTexture !== after.paperTexture) parts.push(`paper texture is ${after.paperTexture ? 'on' : 'off'}`);
   if (before.ambient !== after.ambient) parts.push(`the reading room ${after.ambient ? 'glows with each page’s colours' : 'stays plain dark'}`);
   if (before.credits !== after.credits) parts.push(after.credits ? `the End card credits read ${quote(after.credits, 80)}` : 'the End card credits line is cleared');
@@ -82,11 +85,11 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
   return defineTool(
     'set_reader_options',
     'free',
-    'Choose how the published comic reads: page-turn style (paper curl, slide, or fade), paper texture, ambient room colour from the pages, the End-card credits line and an inside-cover dedication. Use when the user talks about the reading experience.',
+    'Choose how the published comic reads: page-turn style (flip, paper curl, slide, or fade), paper texture, ambient room colour from the pages, the End-card credits line and an inside-cover dedication. Use when the user talks about the reading experience.',
     {
       type: 'object',
       properties: {
-        turn: { type: 'string', enum: [...READER_TURN_STYLES], description: 'paper = realistic page curl (default), slide = pages slide over each other, fade = crossfade.' },
+        turn: { type: 'string', enum: [...READER_TURN_STYLES], description: 'flip = the new page swings in from the spine (default), paper = realistic page curl the reader can drag, slide = pages slide over each other, fade = crossfade.' },
         paperTexture: { type: 'boolean', description: 'Subtle paper grain and page edges.' },
         ambient: { type: 'boolean', description: 'Tint the dark reading room with the colours of the current page.' },
         credits: { type: 'string', description: `End-card credits line (≤ ${DOC_LIMITS.readerTextChars} characters). An empty string clears it.` },
@@ -99,7 +102,11 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
       const askedGuided = args.guidedDefault !== undefined || args.guided_default !== undefined || args.guidedOverview !== undefined;
       const guidedNote = askedGuided ? ' Guided View has been removed. Readers can turn pages or scroll.' : '';
       const raw: Record<string, unknown> = {};
-      if (args.turn !== undefined) raw.turn = typeof args.turn === 'string' ? args.turn.trim().toLowerCase() : args.turn;
+      if (args.turn !== undefined) {
+        raw.turn = typeof args.turn === 'string' ? args.turn.trim().toLowerCase() : args.turn;
+        // The creator asked for this style: it is their choice from now on (an old comic's default 'paper' was not).
+        raw.turnChosen = true;
+      }
       for (const key of ['paperTexture', 'ambient'] as const) {
         if (args[key] !== undefined) raw[key] = bool(args[key]) ?? args[key];
       }
@@ -109,7 +116,7 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
       if (!Object.keys(raw).length) {
         if (askedGuided) return guidedNote.trim();
         const now = describeReader(readerOf(doc));
-        return `No reader setting was given, so nothing changed. Current reader: ${now.length ? now.join(', ') : 'the defaults (paper page turns, paper texture on, ambient colour on)'}.`;
+        return `No reader setting was given, so nothing changed. Current reader: ${now.length ? now.join(', ') : 'the defaults (the page flip, paper texture on, ambient colour on)'}.`;
       }
       // Validation errors come back to the model as "Error: …" with what to fix.
       const patch = sanitizeReaderPatch(raw);
@@ -173,7 +180,7 @@ export const readerToolGroup: ToolGroup = {
   when: (ctx: StudioContext) => ctx.session.doc.pages.length > 0,
   tools: (ctx: StudioContext, _turn: DirectorTurn): DirectorTool[] => [setReaderOptionsTool(ctx), setChapterTool(ctx)],
   promptRules: () =>
-    'READER (free): how the finished comic reads — page-turn style (paper curl / slide / fade), paper texture, ambient colour, End-card credits and an inside-cover dedication — is set with set_reader_options; chapter marks with set_chapter. Confirm every change in one visible sentence.',
+    'READER (free): how the finished comic reads — page-turn style (flip / paper curl / slide / fade), paper texture, ambient colour, End-card credits and an inside-cover dedication — is set with set_reader_options; chapter marks with set_chapter. Confirm every change in one visible sentence.',
   summaryLines: (doc: ComicDoc) => {
     const lines: string[] = [];
     const changed = describeReader(readerOf(doc));
