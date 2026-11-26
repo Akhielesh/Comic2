@@ -64,6 +64,25 @@ describe('ConversationPane — messages', () => {
     expect(studio.send).toHaveBeenCalledWith('Show me 3 styles');
   });
 
+  it('the Director’s answer to each message carries the thumbs; background work and a streaming reply do not', () => {
+    const conv: Msg[] = [
+      ...conversation,
+      msg('p1', 'assistant', 'Drawing pages 1–4.', { runAt: 1 }),
+      msg('u2', 'user', 'Make it funnier'),
+      msg('a2', 'assistant', 'Funnier it is — I punched up page 2.')
+    ];
+    const { container, unmount } = render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation: conv }) })} />);
+    const rated = (words: string) => [...container.querySelectorAll('[data-role="assistant"]')].find((row) => row.textContent?.includes(words));
+    expect(screen.getAllByRole('group', { name: 'Rate this reply' })).toHaveLength(2);
+    expect(rated('Maya')?.querySelector('[data-reply-rating]')?.className).toContain('can-hover:opacity-0');
+    expect(rated('punched up')?.querySelector('[data-reply-rating]')?.className).not.toContain('can-hover:opacity-0');
+    expect(rated('Drawing pages 1–4.')?.querySelector('[data-reply-rating]')).toBeNull();
+    unmount();
+    // While the reply streams in, no thumbs on it yet.
+    render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation: [msg('u1', 'user', 'Hi')] }), messageBusy: true, busy: true, drafts: { a9: 'Thinking about' } })} />);
+    expect(screen.queryByRole('group', { name: 'Rate this reply' })).toBeNull();
+  });
+
   it('suggestions only show under the latest reply, and not while a turn runs', () => {
     const later = [...conversation, msg('u2', 'user', 'Make it funnier')];
     const { unmount } = render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation: later }) })} />);
