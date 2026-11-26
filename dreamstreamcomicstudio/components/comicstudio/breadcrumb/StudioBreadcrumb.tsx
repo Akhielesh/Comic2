@@ -43,7 +43,11 @@ export interface StudioBreadcrumbProps extends StudioTrail {
   room?: CrumbRoom;
 }
 
-/** The comic's name, editable in place; it sizes to its words (a hidden copy sets the width). */
+/**
+ * The comic's name, editable in place; it sizes to its words. A hidden copy of the words sets the width, and the field
+ * lies over it (absolutely placed), so the field's own intrinsic width (a browser gives a text field room for its widest
+ * glyph even at size 1) never widens the name: it ends where its words do.
+ */
 export const TitleField: React.FC<{ title: string; onCommit: (title: string) => void; current?: boolean }> = ({ title, onCommit, current }) => {
   const [draft, setDraft] = useState(title);
   const editing = useRef(false);
@@ -61,8 +65,8 @@ export const TitleField: React.FC<{ title: string; onCommit: (title: string) => 
   };
   const type = 'border border-transparent px-2 py-1 text-[15px] font-semibold tracking-tight coarse:text-base';
   return (
-    <span className="inline-grid min-w-0 max-w-full">
-      <span aria-hidden className={cn('invisible col-start-1 row-start-1 min-w-0 overflow-hidden whitespace-pre', type)}>
+    <span className="relative inline-grid min-w-0 max-w-full">
+      <span aria-hidden className={cn('invisible min-w-0 overflow-hidden whitespace-pre coarse:min-h-[44px]', type)} data-title-copy>
         {`${draft || ' '} `}
       </span>
       <input
@@ -84,14 +88,12 @@ export const TitleField: React.FC<{ title: string; onCommit: (title: string) => 
         aria-label="Comic title"
         aria-current={current ? 'page' : undefined}
         title={draft}
-        // One character wide by itself, so the hidden copy alone sets the width: the name ends where its words do.
-        size={1}
         maxLength={200}
         spellCheck={false}
         enterKeyHint="done"
         // 16 px on touch so focusing the title never zooms the page (iOS); ellipsis when it doesn't fit.
         className={cn(
-          'col-start-1 row-start-1 w-full min-w-0 truncate rounded-lg bg-transparent text-[var(--ds-ink)] outline-none hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px]',
+          'absolute inset-0 h-full w-full min-w-0 truncate rounded-lg bg-transparent text-[var(--ds-ink)] outline-none hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px]',
           type,
           TRANSITION
         )}

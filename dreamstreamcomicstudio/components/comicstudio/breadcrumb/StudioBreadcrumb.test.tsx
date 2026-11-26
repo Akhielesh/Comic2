@@ -106,13 +106,18 @@ describe('StudioBreadcrumb', () => {
     expect(name.className).toContain('truncate');
   });
 
-  it('the name ends where its words do: the field is one character wide by itself, its hidden copy sets the width', () => {
+  it('the name ends where its words do: its hidden copy sets the width and the field lies over it', () => {
     mount();
     const name = within(nav()).getByRole('textbox', { name: 'Comic title' });
-    expect(name).toHaveAttribute('size', '1');
-    expect(name.className.split(' ')).toEqual(expect.arrayContaining(['w-full', 'min-w-0']));
-    const copy = name.parentElement!.querySelector('[aria-hidden]')!;
+    // Placed over the copy, so the field's own intrinsic width never widens the name (the e2e measures the real gap).
+    expect(name.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'inset-0', 'w-full', 'min-w-0']));
+    expect(name.parentElement!.className.split(' ')).toEqual(expect.arrayContaining(['relative', 'inline-grid']));
+    const copy = name.parentElement!.querySelector('[data-title-copy]')!;
+    expect(copy).toHaveAttribute('aria-hidden', 'true');
     expect(copy.textContent).toBe('Salt Road ');
+    // The same type and padding as the field, and the field's 44 px height on touch.
+    expect(copy.className).toContain('coarse:min-h-[44px]');
+    expect(copy.className).toContain('px-2');
   });
 
   it('stays ink: muted words for the way back, ink for where you are', () => {

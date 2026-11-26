@@ -196,8 +196,9 @@ the shell's way to build the trail from the card you are on, which `LiveStudioBr
 
 - **My comics** leaves the studio (the shell's Back).
 - **The comic** is its name field: click to rename, Enter or leaving it saves, Escape puts it back, as before. It sizes
-  to its words (a hidden copy sets its width; the field itself is `size={1}`, so it adds no width of its own), so the
-  crumbs after it sit right beside the name.
+  to its words: a hidden copy sets its width and the field lies over it (absolutely placed, so the field's own
+  intrinsic width, which a browser sizes for its widest glyph, never widens it), so the crumbs after it sit right
+  beside the name.
 - **The area**: the board tab, only while the board is on screen (not in Chat only, not in a phone's chat view). It
   goes back to the top of that area: the page editor closes, the board scrolls up and takes focus.
 - **The part**: the page in the editor (the crumb opens it again), else the card you are on in that area (§6a), which
