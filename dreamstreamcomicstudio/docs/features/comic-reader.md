@@ -1,9 +1,63 @@
-# Comic reader: reader tokens and never-blank turns
+# Comic reader: page turns, reader tokens and never-blank turns
 
 The immersive reader (`components/comicstudio/immersive/`) is the full-screen reader for a comic's pages: book,
-guided view and webtoon. This page is its performance and token contract since Program 3 RD-A (S2a, 2026-11). The
-classic inline reader is `components/comicstudio/reader/ComicReaderView.tsx`. The shared design-system view of the
-reader tokens is in `docs/design/design-system.md` ("Reader tokens").
+guided view and webtoon. This page is its performance and token contract since Program 3 RD-A (S2a, 2026-11), and
+the page-turn contract every reader shares (fx-reader, 2026-11). The inline reader is
+`components/comicstudio/reader/ComicReaderView.tsx`; older (Classic) comics open in `components/ComicReader.tsx`. The
+shared design-system view of the reader tokens is in `docs/design/design-system.md` ("Reader tokens").
+
+## Page turns: flip, paper, slide, fade
+
+Four styles, listed in this order everywhere (`PAGE_TURN_STYLES`, `shared/comic/doc.ts`):
+
+- **Flip** (the default): the new page swings in from the spine. It is the Classic reader's original Page Flip:
+  index.css's `pageFlipNext` / `pageFlipPrev` keyframes through `.animate-page-flip-next` / `-prev`
+  (perspective(1600px) rotateY(∓28deg) scale(0.96) at 0.35 opacity, flat after 0.45 s on cubic-bezier(0.22,1,0.36,1)).
+  Transform and opacity only, no per-frame JS (`reader/pageFlip.ts` puts the class on and takes it off). Right-to-left
+  books mirror it (the classes swap). A spread swings as a pair around its spine.
+- **Paper**: the drag-to-fold paper turn. The only style that follows the finger.
+- **Slide** and **Fade**: the turn engine's slide and crossfade.
+
+Which style a reader gets (`turnStyleFor`, `immersive/readerPrefs.ts`): the reader's own choice (the full-screen
+reader's settings: "Page turn style", stored on the device), else the creator's (`creatorTurnOf`), else the flip.
+
+- The creator picks in the board's Read tab, Reader look → Page turn (or asks the director, `set_reader_options`).
+  A pick stores `reader.turn` with `turnChosen: true`.
+- Past comics keep working with no migration. Every comic saved before the flip came back stored `turn: 'paper'` as the
+  old default (and that is still how "no choice" is stored, so stored docs and their hashes are unchanged): without
+  `turnChosen` it reads as the flip. A comic with no reader settings flips. 'slide' and 'fade' (only ever stored by a
+  choice) keep theirs, and so does a chosen paper turn. Undoing a pick on an old comic brings the flip back.
+- In the reader's settings, picking the creator's own style follows the creator again (the stored preference goes back
+  to 'auto'); choosing Page turn over Scroll never rewrites the style.
+
+Where it applies: the Classic reader (it has no creator style: the flip, unless the reader picked another), the inline
+reader (the board's Read tab, public, shared and embed readers, Studio Originals), the immersive reader and the
+landing's sample comic. Buttons, the arrow keys, Space, PageUp/PageDown, the page edges, a swipe (≥ 45 px, mostly
+horizontal), the scrubber, and Home and End all turn with the style, and the page-turn sound plays when it is on. A
+pinch or a zoomed page never turns. The Classic toolbar reads "Page flip" / "Scroll", and so does its phone menu; on
+phones the art and the dialogue under it swing together. Its stored reading state (`flip` or `scroll`) restores as
+before.
+
+Reduce motion (the device setting, or the reader's own in the full-screen reader's settings) changes the page at once
+in every reader and every style: no swing, no fold.
+
+No blank turn: a flip mounts the incoming page out of sight and swings it in once its pictures have decoded (inline,
+at most 1.8 s, `FLIP_DECODE_MS`). In the immersive reader a tapped turn waits up to 300 ms for the pages themselves,
+then holds on (1.8 s in all, `NEVER_BLANK_MS`) until each page has at least its stand-in; a failed load never holds it.
+A turn pressed right after a zoom waits for the camera to return to the whole page.
+
+Inline reader details: a webtoon (and any fit-to-width page) opens the next page at its top, and the previous one at
+its foot. Below 560 px the toolbar's arrows and counter are pinned outside the scrolling, faded lead, so Next never
+looks disabled at 320 px. Auto-hiding chrome lays the page (and the scroll column) out below the measured toolbar. A
+page is read out as "Page n of N", N being the book's page count. The QA scene `page-flip`
+(`/qa/comic-qa.html?surface=app&scene=page-flip`) shows a live stage in all four styles and both directions, and the
+swing held part-way, at every smoke viewport.
+
+Proof: `reader/pageFlip.test.ts`, `reader/PaperTurnSurface.test.tsx`, `reader/ComicReaderView.flip.test.tsx`,
+`ComicReader.flip.test.tsx`, `immersive/turnPlan.test.ts`, `immersive/leafEngine.test.ts`,
+`immersive/ImmersiveReader.test.tsx`, `immersive/readerGpu.test.tsx` (the gate), `immersive/readerPrefs.test.ts` (the
+chain), `shared/comic/comic.contract.test.ts` (old docs), and the server's `sanitize/reader.test.ts` and
+`tools/reader.test.ts`.
 
 ## Reader tokens and never-blank turns (RD-A)
 
@@ -18,8 +72,9 @@ reader tokens is in `docs/design/design-system.md` ("Reader tokens").
 - A page shows its source, then the cached original, then the fit variant, then the 480w stand-in, and cross-fades in
   over 120 ms (`--ds-reader-standin-swap`). A page with no stand-in (pages stored before variants) stands on the reader
   paper washed 14 % with the nearest cached page palette (`PAPER_TONE_ALPHA`, `ReaderSlot.tsx`), never white.
-- A tapped turn onto undecoded pages waits at most 300 ms (`--ds-reader-turn-gate`), and never for a page whose load
-  failed. Chained turns and drags never wait.
+- A tapped turn onto undecoded pages waits at most 300 ms (`--ds-reader-turn-gate`) for the pages themselves, then
+  holds on (1.8 s in all) until each has at least its stand-in, and never for a page whose load failed. Chained turns
+  and drags never wait.
 - The cache is device-sized (`pageImageCache.ts`): blob bytes 96 / 48 / 24 MB and entries 48 / 16 / 12 (desktop, phone
   or ≤ 4 GB, ≤ 2 GB). It trims back when the reader closes, and the reader raises the cap to its own warm set while
   open.
