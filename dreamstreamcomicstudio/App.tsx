@@ -1177,6 +1177,9 @@ const App: React.FC = () => {
     !!user &&
     projects.some((project) => isStudioV4Project(project) && (project.state as unknown as { shareSlug?: unknown })?.shareSlug === publicComicRoute.slug);
   const publicComicIdentityReady = !authLoading && (!user || projectsLoaded);
+  // The Comic Studio side panel's destinations, the same inside a comic and around Images (components/comicstudio/panel).
+  const comicPanelLinks = { projects, accountId: user?.id, onOpenStudioWork: openComicStudio, onNewComic: handleStartCreating, onImages: () => handleNavigate('images'),
+    onChat: () => handleNavigate('chat'), onLibrary: handleBrowseComicsLibrary, onOpenProject: handleOpenProject };
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -1388,9 +1391,7 @@ const App: React.FC = () => {
               {comicsHost.active ? (
                 // On the comics host Images sits in the same frame and side panel as My comics and New comic.
                 <ComicWorkspaceFrame title="Images" onHome={() => handleNavigate('dashboard')}
-                  navigation={{ projects, accountId: user.id, activeView: 'images', onOpenStudioWork: openComicStudio, onNewComic: handleStartCreating,
-                    onImages: () => handleNavigate('images'), onChat: () => handleNavigate('chat'), onAllComics: () => handleNavigate('dashboard'),
-                    onLibrary: handleBrowseComicsLibrary, onOpenProject: handleOpenProject }}>
+                  navigation={{ ...comicPanelLinks, activeView: 'images', onAllComics: () => handleNavigate('dashboard') }}>
                   <ImageWorkspace key={user.id} userId={user.id} framed onBack={() => handleNavigate('dashboard')} />
                 </ComicWorkspaceFrame>
               ) : (
@@ -1422,8 +1423,7 @@ const App: React.FC = () => {
                 <ComicStudio key={`${user?.id}:${activeProjectId}`} projectId={activeProjectId} onBack={leaveComicStudio}
                   initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
                   onInitialIdeaConsumed={consumeFirstIdea}
-                  panel={{ projects, accountId: user?.id, onOpenStudioWork: openComicStudio, onNewComic: handleStartCreating, onImages: () => handleNavigate('images'),
-                    onChat: () => handleNavigate('chat'), onAllComics: leaveComicStudio, onLibrary: handleBrowseComicsLibrary, onOpenProject: handleOpenProject }} />
+                  panel={{ ...comicPanelLinks, onAllComics: leaveComicStudio }} />
               </StudioErrorBoundary>
             </div>
           )}
