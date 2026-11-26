@@ -100,6 +100,7 @@ import { spendSummary } from './insights/insightsModel';
 import { SpendByKindList } from './insights/OverviewTab';
 import { StageStrip } from './stage/StageStrip';
 import { stageFacts, type StagePlace } from '../../shared/comic/stage';
+import { summarizeComicWork } from '../../shared/comic/workspaceActivity';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -1019,6 +1020,10 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const behind = studio.publication?.behind;
   // Where the comic stands, for the panel's own section and its row in Your comics (the strip reads the same facts).
   const facts = useMemo(() => (doc ? stageFacts(doc, { behind }) : null), [doc, behind]);
+  // Whether this comic needs the person or is working, from the live doc (what the server saves), for its row in Your
+  // comics: the saved rows lag a whole drawing run. Only while the list shows (the panel open, or its drawer).
+  const listShown = !!panel && (navigationOverlay ? navigationOpen : navigationExpanded);
+  const summary = useMemo(() => (listShown && doc ? summarizeComicWork(doc) : null), [listShown, doc]);
 
   // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
   useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
@@ -1207,7 +1212,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
         compact={compact}
         links={links}
         onMyComics={closing(onBack)}
-        comic={{ id: doc.id, title: doc.brief.title || '', facts }}
+        comic={{ id: doc.id, title: doc.brief.title || '', facts, summary }}
         comicSection={
           facts && (
             <ComicSection

@@ -1176,8 +1176,10 @@ const App: React.FC = () => {
     projects.some((project) => isStudioV4Project(project) && (project.state as unknown as { shareSlug?: unknown })?.shareSlug === publicComicRoute.slug);
   const publicComicIdentityReady = !authLoading && (!user || projectsLoaded);
   // The Comic Studio side panel's destinations, the same inside a comic and around Images (components/comicstudio/panel).
-  const comicPanelLinks = { projects, accountId: user?.id, onOpenStudioWork: openComicStudio, onNewComic: handleStartCreating, onImages: () => handleNavigate('images'),
-    onChat: () => handleNavigate('chat'), onLibrary: handleBrowseComicsLibrary, onOpenProject: handleOpenProject };
+  // The project list is the panel's list once it has loaded; a reload (leaving a comic) keeps the one it had.
+  const comicPanelLinks = { projects, projectsLoaded: projectsLoaded || projects.length > 0, accountId: user?.id, onOpenStudioWork: openComicStudio,
+    onNewComic: handleStartCreating, onImages: () => handleNavigate('images'), onChat: () => handleNavigate('chat'), onLibrary: handleBrowseComicsLibrary,
+    onOpenProject: handleOpenProject };
 
   const goToStayUpdated = () => {
     setCurrentView('home');

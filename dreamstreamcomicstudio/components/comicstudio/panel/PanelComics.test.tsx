@@ -20,6 +20,7 @@ const load = vi.mocked(loadComicActivity);
 const recently = () => Date.now() - 60 * 60 * 1000;
 const row = (id: string, title: string, extra: Partial<ComicActivityRow> = {}): ComicActivityRow => ({ v: 1, id, title, working: false, attention: null, finished: [], updatedAt: recently(), ...extra });
 const result = (rows: ComicActivityRow[], hasMore = false) => ({ rows, hasMore, next: 25 });
+const statusLine = () => screen.getByRole('status');
 const mount = (account: string, onOpen = vi.fn()) => (
   <PanelComics key={account} accountId={account} projects={[]} onOpenStudio={onOpen} onOpenProject={vi.fn()} onAllComics={vi.fn()} />
 );
@@ -59,8 +60,13 @@ describe('Your comics: opening, clearing', () => {
     load.mockResolvedValue(result([row('c2', 'Salt Road', { finished })]));
     const first = render(mount('owner'));
     await link(/^Salt Road · 2 pages drawn/);
-    fireEvent.click(screen.getByRole('button', { name: 'Clear finished' }));
+    const clear = screen.getByRole('button', { name: 'Clear finished' });
+    clear.focus();
+    fireEvent.click(clear);
     expect(screen.queryByRole('list', { name: 'Finished' })).toBeNull();
+    // The button that had focus is gone: focus stays at the top of Your comics, and a screen reader hears what happened.
+    expect(screen.getByRole('button', { name: 'Refresh your comics' })).toHaveFocus();
+    expect(statusLine()).toHaveTextContent('Finished cleared');
     expect(within(group('Recent')).getByRole('link', { name: /^Salt Road · Open to see/ })).toBeInTheDocument();
     first.unmount();
     resetPanelActivityForTests();
@@ -145,7 +151,7 @@ describe('Your comics: loading', () => {
     for (const file of sources) expect(readFileSync(path.join(dir, file), 'utf8'), file).not.toMatch(/setInterval|requestAnimationFrame/);
   });
 
-  it('shows the last rows at once when it opens again, without fetching while they are fresh; Check older comics adds the next page', async () => {
+  it('shows the last rows at once when it opens again, without fetching while they are fresh', async () => {
     load.mockResolvedValueOnce(result([row('c1', 'Night ferry')], true));
     const first = render(mount('owner'));
     await link(/^Night ferry/);
@@ -153,12 +159,35 @@ describe('Your comics: loading', () => {
     render(mount('owner'));
     expect(screen.getByRole('link', { name: /^Night ferry/ })).toBeInTheDocument();
     expect(load).toHaveBeenCalledTimes(1);
-    load.mockResolvedValueOnce(result([row('c2', 'Salt Road', { updatedAt: recently() - 1000 })]));
-    fireEvent.click(screen.getByRole('button', { name: 'Check older comics' }));
-    await link(/^Salt Road/);
-    expect(load).toHaveBeenLastCalledWith('owner', 25, expect.any(AbortSignal));
-    expect(screen.getByRole('link', { name: /^Night ferry/ })).toBeInTheDocument();
+    expect(load).toHaveBeenLastCalledWith('owner', 0, expect.any(AbortSignal));
+    // Every comic is listed from App's list; the news comes from the comics changed lately, with no paging chrome.
     expect(screen.queryByRole('button', { name: 'Check older comics' })).toBeNull();
+  });
+
+  it('a load nobody asked for is quiet over rows already shown; the first load and Refresh say they are checking', async () => {
+    let finish!: (value: ReturnType<typeof result>) => void;
+    load.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(mount('owner'));
+    expect(statusLine()).toHaveTextContent('Checking your comics…');
+    await act(async () => finish(result([row('c1', 'Night ferry')])));
+    await link(/^Night ferry/);
+    expect(statusLine()).toHaveTextContent('');
+    // A run settles: the list checks again in the background, silently, and the Refresh icon turns.
+    load.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    fireEvent(window, new CustomEvent(WORK_CHANGED_EVENT, { detail: { accountId: 'owner' } }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    const refresh = screen.getByRole('button', { name: 'Refresh your comics' });
+    expect(refresh.querySelector('svg')?.getAttribute('class')).toContain('animate-spin');
+    expect(refresh).toHaveAttribute('title', 'Checking your comics…');
+    expect(statusLine()).toHaveTextContent('');
+    expect(statusLine().className).toContain('sr-only');
+    await act(async () => finish(result([row('c1', 'Night ferry')])));
+    // Asked for: said.
+    load.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    fireEvent.click(refresh);
+    expect(statusLine()).toHaveTextContent('Checking your comics…');
+    await act(async () => finish(result([row('c1', 'Night ferry')])));
+    expect(statusLine()).toHaveTextContent('');
   });
 
   it('without an account it lists the project list alone, and says so when there is nothing yet', () => {

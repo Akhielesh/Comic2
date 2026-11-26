@@ -13,11 +13,11 @@
 import React from 'react';
 import { ArrowLeft, BookOpen, Bug, CircleHelp, Image as ImageIcon, Layers, MessageCircle, Plus } from 'lucide-react';
 import type { Project } from '../../../types';
-import type { StageFacts } from '../../../shared/comic/stage';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT } from '../../chat/studioDesign';
 import { openFeedbackReport } from '../../../services/openFeedbackReport';
 import { PanelComics } from './PanelComics';
+import type { PanelCurrentComic } from './panelModel';
 import { PANEL_FILL, PANEL_OUTLINE, PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_INK, PANEL_ROW_SHORT, RAIL_ITEM } from './panelStyles';
 
 /** The id the shells' toggles point at (aria-controls). */
@@ -31,6 +31,11 @@ export type PanelPlace = 'all' | 'new' | 'images' | 'comic';
 /** App's destinations and the comic list (App.tsx and ProjectDashboard fill them; every entry uses App's routing). */
 export interface ComicPanelLinks {
   projects: Project[];
+  /**
+   * App's project list has loaded for this account (a reload in flight keeps the list it had): Your comics then lists
+   * only these comics (and the open one), by these names, so a delete or rename on My comics shows in the panel at once.
+   */
+  projectsLoaded?: boolean;
   accountId?: string;
   disabled?: boolean;
   /** Outside a comic, the view that is open. */
@@ -51,8 +56,8 @@ export interface ComicSidePanelProps {
   links?: ComicPanelLinks;
   /** Back to My comics; links.onAllComics by default (the studio passes its own Back). */
   onMyComics?: () => void;
-  /** The comic you are in (place 'comic'). */
-  comic?: { id: string; title: string; facts: StageFacts | null };
+  /** The comic you are in (place 'comic'), from its live doc. */
+  comic?: PanelCurrentComic;
   /** Section 2: the comic's own (ComicSection), built by the studio for this mode. */
   comicSection?: React.ReactNode;
   /** The slim rail. */
@@ -67,6 +72,7 @@ interface Destination {
   icon: React.ReactNode;
   onClick?: () => void;
   href?: string;
+  /** The place you are in: it looks current; only the rail (which has no "Where you are") marks it for screen readers. */
   current?: boolean;
   /** Its own look (New comic's fill or outline); the row's ink otherwise. */
   look?: string;
@@ -159,6 +165,7 @@ export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, 
         {links && (
           <PanelComics
             projects={links.projects}
+            projectsLoaded={links.projectsLoaded}
             accountId={links.accountId}
             disabled={disabled}
             current={comic}
@@ -182,7 +189,7 @@ export function ComicSidePanel({ place, links, onMyComics, comic, comicSection, 
                   type="button"
                   onClick={d.onClick}
                   disabled={disabled}
-                  aria-current={d.current ? 'page' : undefined}
+                  data-panel-current={d.current || undefined}
                   data-panel-fill={d.fill || undefined}
                   className={cn(PANEL_ROW, PANEL_ROW_SHORT, d.look ?? (d.current ? PANEL_ROW_CURRENT : PANEL_ROW_INK))}
                 >

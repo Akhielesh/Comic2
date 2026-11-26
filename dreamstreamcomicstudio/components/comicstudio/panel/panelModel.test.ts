@@ -3,7 +3,7 @@ import type { Project } from '../../../types';
 import type { ComicActivityRow } from '../../../services/comicWorkspaceActivity';
 import { comicActivityRow } from '../../../services/comicWorkspaceActivity';
 import { STAGE_UNKNOWN, type StageFacts } from '../../../shared/comic/stage';
-import { CLASSIC_LABEL, FINISHED_FRESH_MS, IN_PROGRESS_UNKNOWN, STALLED_LABEL, STALLED_MS, comicRowName, isFreshWork, panelComics } from './panelModel';
+import { CLASSIC_LABEL, FINISHED_FRESH_MS, IN_PROGRESS_UNKNOWN, PAGE_STUDIO_LABEL, STALLED_LABEL, STALLED_MS, comicRowName, isFreshWork, panelComics } from './panelModel';
 
 const NOW = Date.UTC(2026, 10, 26, 12);
 const HOUR = 60 * 60 * 1000;
@@ -14,7 +14,7 @@ const planning: StageFacts = { v: 1, stage: 'plan', done: ['story', 'style'], pa
 const row = (id: string, extra: Partial<ComicActivityRow> = {}): ComicActivityRow => ({ v: 1, id, title: id, attention: null, working: false, finished: [], updatedAt: NOW - HOUR, ...extra });
 const studioProject = (id: string, name: string, updatedAt: number): Project =>
   ({ id, name, createdAt: updatedAt - HOUR, updatedAt, state: { studioVersion: 4, studioPages: 0, studioRendered: 0 } }) as unknown as Project;
-const classicProject = (id: string, name: string, updatedAt: number): Project => ({ id, name, createdAt: updatedAt - HOUR, updatedAt, state: {} }) as unknown as Project;
+const classicProject = (id: string, name: string, updatedAt: number, state: Record<string, unknown> = {}): Project => ({ id, name, createdAt: updatedAt - HOUR, updatedAt, state }) as unknown as Project;
 
 const groupsOf = (result: ReturnType<typeof panelComics>) => Object.fromEntries(result.groups.map((g) => [g.group, g.comics.map((c) => c.id)]));
 
@@ -36,13 +36,24 @@ describe('panelComics: grouping', () => {
     expect([recent.status, recent.task]).toEqual(['Planning · 4 of 6 pages planned', undefined]);
   });
 
-  it('lists a comic once when it is both in the project list and the activity, with the activity’s title', () => {
-    const result = panelComics({ projects: [studioProject('a', 'Old name', NOW - 3 * HOUR)], rows: [row('a', { title: 'Night ferry', stage: planning })], now: NOW });
+  it('lists a comic once when it is both in the project list and the activity, by App’s name (a rename on My comics shows at once)', () => {
+    // Renamed on My comics: App's list has the new name; the cached row still has the old title.
+    const result = panelComics({ projects: [studioProject('a', 'Night ferry', NOW - 3 * HOUR)], projectsLoaded: true, rows: [row('a', { title: 'Old name', stage: planning })], now: NOW });
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].comics.map((c) => c.title)).toEqual(['Night ferry']);
-    // The listing's name stands in for a doc that never got a title.
-    const untitled = panelComics({ projects: [studioProject('a', 'Harbour Lights', NOW)], rows: [row('a', { title: 'Untitled comic' })], now: NOW });
-    expect(untitled.groups[0].comics[0].title).toBe('Harbour Lights');
+    // The doc's title stands in for a listing that never got a name, and names a comic App has not listed yet.
+    const untitled = panelComics({ projects: [studioProject('a', 'Untitled comic', NOW)], rows: [row('a', { title: 'Harbour Lights' }), row('b', { title: 'Lantern' })], now: NOW });
+    expect(untitled.groups[0].comics.map((c) => c.title)).toEqual(['Harbour Lights', 'Lantern']);
+  });
+
+  it('once App’s list has loaded, a row whose comic is gone (deleted on My comics) is not listed; the open comic always is', () => {
+    const rows = [row('kept', { stage: planning }), row('deleted', { attention: 'approval' }), row('open', { working: true })];
+    const projects = [studioProject('kept', 'Glass Harbour', NOW)];
+    const loaded = panelComics({ projects, projectsLoaded: true, rows, now: NOW, current: { id: 'open', title: 'Just started', facts: null } });
+    expect(groupsOf(loaded)).toEqual({ working: ['open'], recent: ['kept'] });
+    // Before the list has loaded, the rows stand in for it.
+    const loading = panelComics({ projects: [], projectsLoaded: false, rows, now: NOW });
+    expect(groupsOf(loading)).toEqual({ needs: ['deleted'], working: ['open'], recent: ['kept'] });
   });
 
   it('names a stalled comic in progress, and one saved before stages, without a guess', () => {
@@ -60,7 +71,7 @@ describe('panelComics: ordering', () => {
     const rows = [
       row('n-old', { attention: 'plan', updatedAt: NOW - 5 * HOUR }),
       row('n-new', { attention: 'question', updatedAt: NOW - HOUR }),
-      row('f-early', { finished: [{ kind: 'reply', at: NOW - 6 * HOUR }], updatedAt: NOW - 60_000 }),
+      row('f-early', { finished: [{ kind: 'looks', at: NOW - 6 * HOUR }], updatedAt: NOW - 60_000 }),
       row('f-late', { finished: [{ kind: 'plan', at: NOW - 2 * HOUR }, { kind: 'reply', at: NOW - 9 * HOUR }], updatedAt: NOW - 8 * HOUR })
     ];
     const projects = [studioProject('r-old', 'Older', NOW - 9 * HOUR), classicProject('r-new', 'Newer', NOW - 2 * HOUR)];
@@ -77,6 +88,28 @@ describe('panelComics: ordering', () => {
     const open = panelComics({ projects, rows: [], now: NOW, current: { id: 'p7', title: 'Comic 7', facts: planning } });
     expect(groupsOf(open).recent).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'p7']);
     expect(open.hiddenRecent).toBe(2);
+  });
+
+  it('the open comic takes its news from the live doc: a stale estimate row reads In progress while it draws', () => {
+    // The saved row still says the estimate is waiting; the person approved and the live doc is drawing.
+    const rows = [row('c', { attention: 'approval', updatedAt: NOW - 2 * STALLED_MS, stage: planning })];
+    const live = { v: 1 as const, attention: null, working: true, finished: [], stage: drawing };
+    const [open] = panelComics({ projects: [], rows, now: NOW, current: { id: 'c', title: 'Night ferry', facts: drawing, summary: live } }).groups[0].comics;
+    expect([open.group, open.status, open.task]).toEqual(['working', 'Drawing · 6 of 12 pages drawn', 'conversation']);
+    // A live question, though the row is quiet.
+    const asked = panelComics({ projects: [], rows: [row('c')], now: NOW, current: { id: 'c', title: 'c', facts: drawing, summary: { ...live, working: false, attention: 'question' } } });
+    expect(groupsOf(asked)).toEqual({ needs: ['c'] });
+    expect(asked.groups[0].comics[0].status).toBe('Answer the Director');
+  });
+
+  it('the open comic is never “Finished”: you are looking at it, so it reads its stage', () => {
+    const rows = [row('c', { finished: [{ kind: 'pages', at: NOW - 60_000, count: 6 }] })];
+    const quiet = { v: 1 as const, attention: null, working: false, finished: [{ kind: 'reply' as const, at: NOW }] };
+    for (const summary of [quiet, undefined]) {
+      const result = panelComics({ projects: [], rows, now: NOW, current: { id: 'c', title: 'Night ferry', facts: drawing, summary } });
+      expect(groupsOf(result)).toEqual({ recent: ['c'] });
+      expect(result.groups[0].comics[0]).toMatchObject({ status: 'Drawing · 6 of 12 pages drawn', fresh: [] });
+    }
   });
 
   it('the open comic reads its live stage and title, and is listed before the list has it', () => {
@@ -98,6 +131,14 @@ describe('panelComics: freshly finished, and older comics', () => {
     expect(result.groups[0].comics[0].fresh).toEqual([]);
   });
 
+  it('a Director reply is a message, not finished work: a comic chatted with is Recent, not “Finished · Director replied”', () => {
+    const rows = [row('chat', { finished: [{ kind: 'reply', at: NOW - 60_000 }], stage: planning }), row('both', { finished: [{ kind: 'reply', at: NOW - 60_000 }, { kind: 'cover', at: NOW - HOUR }] })];
+    const result = panelComics({ projects: [], rows, now: NOW });
+    expect(groupsOf(result)).toEqual({ finished: ['both'], recent: ['chat'] });
+    expect(result.groups[0].comics[0]).toMatchObject({ status: 'Cover drawn', fresh: [{ kind: 'cover', at: NOW - HOUR }] });
+    expect(result.groups[1].comics[0].status).toBe('Planning · 4 of 6 pages planned');
+  });
+
   it('finished work older than a week, or cleared by this viewer, is history: the comic is Recent', () => {
     const rows = [
       row('stale', { finished: [{ kind: 'pages', at: NOW - FINISHED_FRESH_MS - 1, count: 3 }], stage: drawing }),
@@ -112,12 +153,13 @@ describe('panelComics: freshly finished, and older comics', () => {
     expect(isFreshWork('x', { kind: 'reply', at: NOW + 60_000 }, NOW)).toBe(true);
   });
 
-  it('a studio comic without a readable stage reads “Open to see” once loaded, nothing before; a classic comic says so', () => {
-    const projects = [studioProject('s', 'Studio comic', NOW), classicProject('k', 'Classic comic', NOW - HOUR)];
+  it('a studio comic without a readable stage reads “Open to see” once loaded, nothing before; a classic or Page Studio comic says where it opens', () => {
+    const projects = [studioProject('s', 'Studio comic', NOW), classicProject('k', 'Classic comic', NOW - HOUR), classicProject('p', 'Page comic', NOW - 2 * HOUR, { pipelineMode: 'pagestudio' })];
     const loading = panelComics({ projects, rows: null, now: NOW });
     expect(loading.groups[0].comics.map((c) => [c.id, c.status, c.studio])).toEqual([
       ['s', null, true],
-      ['k', CLASSIC_LABEL, false]
+      ['k', CLASSIC_LABEL, false],
+      ['p', PAGE_STUDIO_LABEL, false]
     ]);
     const loaded = panelComics({ projects, rows: [], now: NOW });
     expect(loaded.groups[0].comics[0].status).toBe(STAGE_UNKNOWN);

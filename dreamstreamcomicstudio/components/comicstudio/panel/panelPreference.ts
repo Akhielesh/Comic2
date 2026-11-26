@@ -17,8 +17,8 @@ const keyFor = (accountId?: string | null) => (accountId ? `${PANEL_PREFERENCE_K
 /** This session's choices, by key, kept only when storage could not keep them. */
 const session = new Map<string, boolean>();
 
-/** The viewer's choice, or the width's default when there is none (or storage cannot be read). */
-export function readPanelOpen(accountId: string | null | undefined, width: number, openFrom = PANEL_OPEN_BY_DEFAULT_MIN): boolean {
+/** The viewer's own choice (open or closed), or null when there is none yet (or storage cannot be read). */
+export function readPanelChoice(accountId: string | null | undefined): boolean | null {
   const key = keyFor(accountId);
   // A choice storage could not keep is the latest one.
   const unsaved = session.get(key);
@@ -28,9 +28,14 @@ export function readPanelOpen(accountId: string | null | undefined, width: numbe
     if (stored === 'open') return true;
     if (stored === 'closed') return false;
   } catch {
-    /* Storage unavailable: the default. */
+    /* Storage unavailable: no choice. */
   }
-  return width >= openFrom;
+  return null;
+}
+
+/** The viewer's choice, or the width's default when there is none. */
+export function readPanelOpen(accountId: string | null | undefined, width: number, openFrom = PANEL_OPEN_BY_DEFAULT_MIN): boolean {
+  return readPanelChoice(accountId) ?? width >= openFrom;
 }
 
 export function writePanelOpen(accountId: string | null | undefined, open: boolean): void {
@@ -44,17 +49,20 @@ export function writePanelOpen(accountId: string | null | undefined, open: boole
   }
 }
 
-/** The panel's open state for this viewer, read once on mount; setting it remembers the choice. */
+/**
+ * The panel's open state for this viewer. Their choice is read once on mount and only `choose` writes it; with no
+ * choice, the default follows the current width, so a window widened (or an iPad turned) to a wide desktop opens it.
+ */
 export function usePanelOpen(accountId: string | null | undefined, width: number, openFrom = PANEL_OPEN_BY_DEFAULT_MIN): [boolean, (open: boolean) => void] {
-  const [open, setOpen] = useState(() => readPanelOpen(accountId, width, openFrom));
+  const [choice, setChoice] = useState<boolean | null>(() => readPanelChoice(accountId));
   const choose = useCallback(
     (next: boolean) => {
       writePanelOpen(accountId, next);
-      setOpen(next);
+      setChoice(next);
     },
     [accountId]
   );
-  return [open, choose];
+  return [choice ?? width >= openFrom, choose];
 }
 
 /** Tests: forget this session's in-memory choices. */

@@ -177,6 +177,23 @@ describe('the studio stage strip', () => {
     expect(within(here).getByText('Night ferry').closest('li')).toHaveAttribute('aria-current', 'page');
   });
 
+  it('in Your comics the open comic follows its live doc: under Needs you while the estimate waits, In progress once it draws', () => {
+    const links = { projects: [], onNewComic: vi.fn(), onAllComics: vi.fn(), onLibrary: vi.fn(), onOpenProject: vi.fn(), onOpenStudioWork: vi.fn() };
+    const doc = awaitingApproval();
+    const view = render(<FormFactorProvider value={DESK}><ComicStudioShell studio={makeFakeStudio({ doc })} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
+    const nav = screen.getByRole('navigation', { name: 'Project navigation' });
+    const row = within(within(nav).getByRole('list', { name: 'Needs you' })).getByRole('link', { name: /^Night ferry · Review drawing estimate/ });
+    // "Where you are" is the one current-page mark; the comic's own row only looks current.
+    expect(row).not.toHaveAttribute('aria-current');
+    expect(row).toHaveAttribute('data-panel-current', 'true');
+    expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    // Approved: the looks are drawing. No refetch has run, and the row moves with the doc.
+    const drawing: ComicDoc = { ...doc, gate: { ...doc.gate!, status: 'approved' }, style: { ...doc.style, options: [{ id: 'o1', name: 'Ink', spec: 'ink', render: { status: 'rendering', history: [] } }] } };
+    view.rerender(<FormFactorProvider value={DESK}><ComicStudioShell studio={makeFakeStudio({ doc: drawing })} onBack={vi.fn()} panel={links} /></FormFactorProvider>);
+    expect(within(nav).queryByRole('list', { name: 'Needs you' })).toBeNull();
+    expect(within(within(nav).getByRole('list', { name: 'In progress' })).getByRole('link', { name: /^Night ferry/ })).toBeInTheDocument();
+  });
+
   it('the navigation’s list is labelled as the board it is, not as stages', () => {
     // A wide desktop opens the side panel by default (SH-C1); the comic's own section holds the board.
     mountAt(DESK, makeFakeStudio());

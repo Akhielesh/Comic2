@@ -37,9 +37,10 @@
 .comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible { outline:2px solid var(--ds-focus); outline-offset:2px; }
 @media (prefers-contrast: more) { .comic-creation-workspace button:focus-visible, .comic-workspace-drawer button:focus-visible { outline-width:3px; } }
 .comic-creation-workspace button:disabled { opacity:.5; cursor:default; }
-/* The phone drawer: the scrim rung, the sheet rung above it, the overlay shadow (its edge reads in dark too). */
+/* The phone drawer: the scrim rung, the sheet rung above it, the overlay shadow (its edge reads in dark too). Go to sits
+   at its foot, so the drawer stops above the home indicator (the studio's SideSheet pads the same way). */
 .comic-workspace-drawer-backdrop { position:fixed; inset:0; z-index:var(--ds-z-scrim); background:var(--ds-scrim); }
-.comic-workspace-drawer { position:relative; z-index:var(--ds-z-sheet); width:min(300px,calc(100% - 32px)); height:100%; padding-top:calc(var(--sa-top, 0px) + 12px); box-shadow:var(--ds-shadow-overlay); outline:none; }
+.comic-workspace-drawer { position:relative; z-index:var(--ds-z-sheet); width:min(300px,calc(100% - 32px)); height:100%; padding-top:calc(var(--sa-top, 0px) + 12px); padding-bottom:var(--sa-bottom-eff, 0px); box-shadow:var(--ds-shadow-overlay); outline:none; }
 .comic-workspace-drawer-close { margin-left:auto; }
 .comic-idea-entry {
   width: min(calc(100% - 64px), 1080px);

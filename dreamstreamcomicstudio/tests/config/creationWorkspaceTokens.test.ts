@@ -200,7 +200,7 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     expect(PANEL_OUTLINE).toContain('hover:bg-[var(--ds-hover)]');
   });
 
-  it('the phone drawer sits on the z-ladder with the overlay shadow (its edge shows in dark)', () => {
+  it('the phone drawer sits on the z-ladder with the overlay shadow (its edge shows in dark), clear of the home indicator', () => {
     const backdrop = baseDecls('.comic-workspace-drawer-backdrop');
     expect(backdrop.get('z-index')).toBe('var(--ds-z-scrim)');
     expect(backdrop.get('background')).toBe('var(--ds-scrim)');
@@ -208,6 +208,12 @@ describe('comicCreationWorkspace.css: the studio’s frame', () => {
     expect(drawer.get('z-index')).toBe('var(--ds-z-sheet)');
     expect(drawer.get('position')).toBe('relative');
     expect(drawer.get('box-shadow')).toBe('var(--ds-shadow-overlay)');
+    // Go to is pinned at the drawer's foot: it ends above the safe area (index.html sets viewport-fit=cover), as the
+    // studio's SideSheet does, and the sidebar's own zero bottom padding does not undo it.
+    expect(drawer.get('padding-bottom')).toBe('var(--sa-bottom-eff, 0px)');
+    const sidebar = rules.findIndex((r) => r.parents.length === 0 && selectorsOf(r.selector).includes('.comic-workspace-sidebar'));
+    const drawerRule = rules.findIndex((r) => r.parents.length === 0 && selectorsOf(r.selector).includes('.comic-workspace-drawer'));
+    expect(drawerRule).toBeGreaterThan(sidebar);
   });
 
   it('the heading is the studio heading size in the display face, and the error reads in --ds-danger-text', () => {
@@ -248,7 +254,8 @@ describe('ComicCreationWorkspace.tsx: no cobalt on work surfaces', () => {
       expect(tag, String(pattern)).not.toBeNull();
       return tag![0];
     };
-    const newComic = tagOf(/<button[^>]*aria-current="page"[^>]*>(?:(?!<\/button>).)*New comic<\/span><\/button>/);
+    // The current place in Go to (its look; "Where you are" carries the screen readers' current-page mark).
+    const newComic = tagOf(/<button[^>]*data-panel-current="true"[^>]*>(?:(?!<\/button>).)*New comic<\/span><\/button>/);
     expect(newComic).not.toContain('comics-primary-action');
     expect(newComic).not.toContain('data-panel-fill');
     expect(newComic).not.toContain('--ds-accent-fill');

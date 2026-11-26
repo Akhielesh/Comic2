@@ -5,12 +5,17 @@
 //
 // "Finished" means freshly finished: a finished work with a real time (the legacy fallback records an older comic's
 // page count with `at: 0`, which is a count, not a completion), from the last week, that this viewer has not cleared.
+// A Director reply is a message, not finished work (the conversation shows it; "Answer the Director" is the news when
+// the Director asks). The comic you are in reads its news from its live doc and is never Finished: you are looking at it.
+//
+// App's project list says which comics exist and what they are called, once it has loaded: a comic deleted or renamed
+// on My comics changes here at once, while the activity rows (cached, refetched only now and then) add the news.
 
 import type { Project } from '../../../types';
 import type { ComicActivityRow } from '../../../services/comicWorkspaceActivity';
-import type { FinishedWork, WorkAttention } from '../../../shared/comic/workspaceActivity';
+import type { ComicWorkSummary, FinishedKind, FinishedWork, WorkAttention } from '../../../shared/comic/workspaceActivity';
 import { STAGE_UNKNOWN, stageView, type StageFacts, type StageView } from '../../../shared/comic/stage';
-import { isStudioV4Project } from '../../../services/studioDeepLink';
+import { isStudioV4Project, resolveProjectView } from '../../../services/studioDeepLink';
 import { taskDestination, type TaskDestination } from '../home/workspaceTaskTarget';
 
 export const PANEL_GROUPS = ['needs', 'working', 'finished', 'recent'] as const;
@@ -69,8 +74,11 @@ export function finishedLabel(work: FinishedWork): string {
 /** Words for a comic in progress with no readable stage (saved before stages). */
 export const IN_PROGRESS_UNKNOWN = 'Last reported in progress';
 export const STALLED_LABEL = 'Check stalled progress';
-/** A comic made in the classic editor has no stages. */
+/** A comic made in the classic editor (or Page Studio) has no stages: its row names where it opens. */
 export const CLASSIC_LABEL = 'Classic editor';
+export const PAGE_STUDIO_LABEL = 'Page Studio';
+/** Finished kinds that are not news in the list (a reply is a message; the conversation shows it). */
+const NOT_NEWS: ReadonlySet<FinishedKind> = new Set<FinishedKind>(['reply']);
 const UNTITLED = 'Untitled comic';
 
 export interface PanelComic {
@@ -97,15 +105,32 @@ export interface PanelComicsGroup {
   comics: PanelComic[];
 }
 
+/** The comic open in the studio, read from its live doc. */
+export interface PanelCurrentComic {
+  id: string;
+  title: string;
+  facts: StageFacts | null;
+  /**
+   * Its live summary (summarizeComicWork(doc), what the server saves): whether it needs the person or is working right
+   * now, without waiting for the activity rows to be fetched again.
+   */
+  summary?: ComicWorkSummary | null;
+}
+
 export interface PanelComicsInput {
   projects: readonly Project[];
+  /**
+   * App's project list has loaded (a reload in flight keeps the list it had): it is then the list of comics and their
+   * names, and an activity row whose comic is not in it (deleted, or another account's cache) is left out.
+   */
+  projectsLoaded?: boolean;
   /** The loaded activity rows; null until the first page has loaded. */
   rows: readonly ComicActivityRow[] | null;
   now: number;
   /** True when this viewer cleared that finished work (or a later one of its kind). */
   isCleared?: (projectId: string, work: FinishedWork) => boolean;
-  /** The comic open in the studio: always listed, with its live stage. */
-  current?: { id: string; title: string; facts: StageFacts | null };
+  /** The comic open in the studio: always listed, with its live stage and news. */
+  current?: PanelCurrentComic;
   recentLimit?: number;
 }
 
@@ -122,16 +147,20 @@ export interface PanelComics {
 export const isFreshWork = (projectId: string, work: FinishedWork, now: number, isCleared?: PanelComicsInput['isCleared']): boolean =>
   Number.isFinite(work.at) && work.at > 0 && now - work.at <= FINISHED_FRESH_MS && !isCleared?.(projectId, work);
 
+/** App's name for the comic (a rename on My comics shows at once); the doc's title only for a comic App has not listed. */
 const titleOf = (row: ComicActivityRow | undefined, project: Project | undefined): string => {
-  const fromRow = row?.title?.trim();
-  if (fromRow && fromRow !== UNTITLED) return fromRow;
-  return project?.name?.trim() || fromRow || UNTITLED;
+  const fromProject = project?.name?.trim();
+  if (fromProject && fromProject !== UNTITLED) return fromProject;
+  return row?.title?.trim() || fromProject || UNTITLED;
 };
+
+/** What a comic without stages opens in. */
+const unstagedLabel = (project: Project | undefined) => (resolveProjectView(project) === 'pagestudio' ? PAGE_STUDIO_LABEL : CLASSIC_LABEL);
 
 const byAt = (a: PanelComic, b: PanelComic) => b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** Every comic once, in the group that needs the person most, each group in its own order. */
-export function panelComics({ projects, rows, now, isCleared, current, recentLimit = RECENT_LIMIT }: PanelComicsInput): PanelComics {
+export function panelComics({ projects, projectsLoaded = false, rows, now, isCleared, current, recentLimit = RECENT_LIMIT }: PanelComicsInput): PanelComics {
   const rowById = new Map<string, ComicActivityRow>();
   for (const row of rows ?? []) if (row?.id && !rowById.has(row.id)) rowById.set(row.id, row);
   const projectById = new Map<string, Project>();
@@ -146,7 +175,7 @@ export function panelComics({ projects, rows, now, isCleared, current, recentLim
     }
   };
   if (current?.id) add(current.id);
-  for (const id of rowById.keys()) add(id);
+  for (const id of rowById.keys()) if (!projectsLoaded || projectById.has(id)) add(id);
   for (const id of projectById.keys()) add(id);
 
   const loaded = rows !== null;
@@ -159,20 +188,26 @@ export function panelComics({ projects, rows, now, isCleared, current, recentLim
     const stage = facts ? stageView(facts) : null;
     const updatedAt = Math.max(row?.updatedAt ?? 0, project?.updatedAt ?? 0);
     const title = live?.title?.trim() || titleOf(row, project);
-    const fresh = (row?.finished ?? []).filter((work) => isFreshWork(id, work, now, isCleared)).sort((a, b) => b.at - a.at);
+    // The open comic's news is its live doc's (the saved row can be a whole drawing run behind); it has no finished
+    // news, since you are looking at it.
+    const news: Pick<ComicActivityRow, 'attention' | 'working'> | undefined = live?.summary ?? row;
+    const fresh = live
+      ? []
+      : (row?.finished ?? []).filter((work) => !NOT_NEWS.has(work.kind) && isFreshWork(id, work, now, isCleared)).sort((a, b) => b.at - a.at);
     const base = { id, title, stage, studio, fresh };
-    if (row?.attention) {
-      return { ...base, group: 'needs', status: ATTENTION_LABEL[row.attention] ?? STAGE_UNKNOWN, task: taskDestination(row.attention), at: updatedAt };
+    if (news?.attention) {
+      return { ...base, group: 'needs', status: ATTENTION_LABEL[news.attention] ?? STAGE_UNKNOWN, task: taskDestination(news.attention), at: updatedAt };
     }
-    if (row?.working) {
-      const stalled = !!row.updatedAt && now - row.updatedAt > STALLED_MS;
+    if (news?.working) {
+      // Silence means stalled only for a saved row; the open comic's doc is live.
+      const stalled = !live && !!row?.updatedAt && now - row.updatedAt > STALLED_MS;
       return { ...base, group: 'working', status: stalled ? STALLED_LABEL : stage?.summary ?? IN_PROGRESS_UNKNOWN, task: 'conversation', at: updatedAt };
     }
     if (fresh.length) {
       const latest = fresh[0];
       return { ...base, group: 'finished', status: finishedLabel(latest), task: taskDestination(latest.kind), at: latest.at };
     }
-    const status = stage ? stage.summary : !studio ? CLASSIC_LABEL : loaded || live ? STAGE_UNKNOWN : null;
+    const status = stage ? stage.summary : !studio ? unstagedLabel(project) : loaded || live ? STAGE_UNKNOWN : null;
     return { ...base, group: 'recent', status, at: updatedAt };
   });
 

@@ -15,7 +15,7 @@ import { cn } from '../../../lib/utils';
 import { CLIP_TEXT, FOCUS_RING, MUTED, OVERLINE } from '../../chat/studioDesign';
 import { PLACE_HINT } from '../stage/StageStrip';
 import { StageMarks } from './StageMarks';
-import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, RAIL_ITEM } from './panelStyles';
+import { PANEL_ROW, PANEL_ROW_CURRENT, PANEL_ROW_IDLE, PANEL_ROW_INK, RAIL_ITEM } from './panelStyles';
 
 export interface ComicSectionProps {
   doc: ComicDoc;
@@ -101,7 +101,7 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
       onClick={onConversation}
       aria-label="Ask the Director"
       title={compact ? 'Ask the Director' : undefined}
-      className={cn(compact ? RAIL_ITEM : PANEL_ROW, 'text-[var(--ds-ink)]')}
+      className={cn(compact ? RAIL_ITEM : PANEL_ROW, PANEL_ROW_INK)}
     >
       <MessageSquare className="h-4 w-4 shrink-0" aria-hidden />
       {!compact && <span className={CLIP_TEXT}>Ask the Director</span>}
