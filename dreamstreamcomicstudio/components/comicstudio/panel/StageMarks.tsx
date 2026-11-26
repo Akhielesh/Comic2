@@ -1,11 +1,11 @@
-// A comic's five stages as marks, the stage strip's compact glyph (StageStrip StageMark): a check when done, a filled
+// A comic's five stages as marks, the stage strip's compact glyph (stage/stageMarks StageMark): a check when done, a filled
 // dot for the current stage, a ring for the rest. Ink only and decorative: the words beside it carry the meaning.
 
 import React from 'react';
 import type { StageStep } from '../../../shared/comic/stage';
 import { cn } from '../../../lib/utils';
 import { MUTED } from '../../chat/studioDesign';
-import { StageMark } from '../stage/StageStrip';
+import { StageMark } from '../stage/stageMarks';
 
 export function StageMarks({ steps, className }: { steps: readonly StageStep[]; className?: string }) {
   return (

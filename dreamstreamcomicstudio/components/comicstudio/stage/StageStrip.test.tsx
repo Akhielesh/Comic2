@@ -142,7 +142,9 @@ describe('StageStrip', () => {
   it('keyboard: every step and the next step are native buttons in reading order; arrows, Home and End move along the steps', () => {
     mount(drawing(6));
     const buttons = within(strip()).getAllByRole('button');
-    expect(buttons.map((b) => b.tagName)).toEqual(Array(6).fill('BUTTON'));
+    // The five steps, the next step, and the stage map (SH-C2) last.
+    expect(buttons.map((b) => b.tagName)).toEqual(Array(7).fill('BUTTON'));
+    expect(buttons[6]).toHaveAccessibleName('Stage map');
     for (const b of buttons) {
       expect(b).toHaveAttribute('type', 'button');
       expect(b.tabIndex).toBe(0);

@@ -18,27 +18,19 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { comicStage, type StagePlace } from '../../../shared/comic/stage';
+import { stageFacts, stageView, type StagePlace } from '../../../shared/comic/stage';
 import { cn } from '../../../lib/utils';
 import { CLIP_TEXT, FOCUS_RING, MUTED } from '../../chat/studioDesign';
 import { useFormFactor } from '../mobile/useFormFactor';
+import { StageMapButton } from './StageMap';
+import { PLACE_HINT, StageMark } from './stageMarks';
+
+export { PLACE_HINT, StageMark };
 
 /** From this width the named stages and the status share one row. */
 export const STAGE_STRIP_ONE_ROW_MIN = 768;
 /** Below this width a done stage in the opened list shows only its check. */
 export const STAGE_STRIP_FULL_LABELS_MIN = 360;
-
-/** Where each place is, in words: the next step's description (the side panel's next step reads it too). */
-export const PLACE_HINT: Readonly<Record<StagePlace, string>> = {
-  story: 'Opens the Story tab',
-  style: 'Opens the Style tab',
-  pages: 'Opens the Pages tab',
-  read: 'Opens the Read tab',
-  approval: 'Shows the approval in the conversation',
-  draft: 'Shows the Director’s draft in the conversation',
-  composer: 'Opens the message box',
-  share: 'Opens the Share sheet'
-};
 
 export interface StageStripProps {
   doc: ComicDoc;
@@ -50,19 +42,10 @@ export interface StageStripProps {
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-/** One stage as a mark on the compact stage button: a check when done, a filled dot when current, a ring otherwise. */
-export const StageMark = ({ done, current }: { done: boolean; current: boolean }) =>
-  done ? (
-    <Check className="h-2.5 w-2.5" strokeWidth={current ? 3.5 : 2.5} />
-  ) : (
-    <svg viewBox="0 0 8 8" className="h-2 w-2" focusable="false">
-      {current ? <circle cx="4" cy="4" r="4" fill="currentColor" /> : <circle cx="4" cy="4" r="3.5" fill="none" stroke="currentColor" strokeWidth="1" />}
-    </svg>
-  );
-
 export function StageStrip({ doc, behind, onGo }: StageStripProps) {
   const ff = useFormFactor();
-  const view = useMemo(() => comicStage(doc, { behind }), [doc, behind]);
+  const facts = useMemo(() => stageFacts(doc, { behind }), [doc, behind]);
+  const view = useMemo(() => stageView(facts), [facts]);
   const hintId = useId();
   const listId = useId();
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
@@ -206,6 +189,7 @@ export function StageStrip({ doc, behind, onGo }: StageStripProps) {
             </button>
             {hint}
           </p>
+          <StageMapButton facts={facts} onGo={onGo} />
         </div>
       ) : (
         <>
@@ -245,6 +229,7 @@ export function StageStrip({ doc, behind, onGo }: StageStripProps) {
               <span className="inline-flex max-w-full items-center gap-1 font-medium text-[var(--ds-ink)]">{nextWords}</span>
             </button>
             {hint}
+            <StageMapButton facts={facts} onGo={onGo} />
           </div>
           {steps}
         </>
