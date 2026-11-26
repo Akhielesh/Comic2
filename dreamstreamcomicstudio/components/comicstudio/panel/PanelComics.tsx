@@ -89,6 +89,10 @@ function ComicList({ projects, projectsLoaded, accountId, disabled, current, onO
           <span className={cn('flex-1 font-medium text-[var(--ds-ink)]', CLIP_TEXT)}>{comic.title}</span>
           {comic.stage && <StageMarks steps={comic.stage.steps} />}
         </span>
+        {/* A space between the two lines (a flex column draws none): without it their words run together ("Salt
+            RoadClassic editor") and the visible label is no longer inside the row's name ("Salt Road · Classic
+            editor"), which voice control matches against (WCAG 2.5.3, label in name). */}
+        {comic.status && ' '}
         {comic.status && <span className={cn('w-full text-xs leading-4 tabular-nums', MUTED, CLIP_TEXT)}>{comic.status}</span>}
       </>
     );

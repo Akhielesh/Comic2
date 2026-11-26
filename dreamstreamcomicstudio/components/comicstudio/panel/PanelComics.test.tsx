@@ -13,6 +13,7 @@ import { consumeTaskTarget, WORK_CHANGED_EVENT } from '../home/workspaceTaskTarg
 import { comicActivityRow, loadComicActivity, type ComicActivityRow } from '../../../services/comicWorkspaceActivity';
 import { FOCUS_REFRESH_MS, resetPanelActivityForTests } from './usePanelActivity';
 import type { StageFacts } from '../../../shared/comic/stage';
+import type { Project } from '../../../types';
 
 vi.mock('../../../services/comicWorkspaceActivity', async (original) => ({ ...(await original<typeof import('../../../services/comicWorkspaceActivity')>()), loadComicActivity: vi.fn() }));
 const load = vi.mocked(loadComicActivity);
@@ -188,6 +189,22 @@ describe('Your comics: loading', () => {
     expect(statusLine()).toHaveTextContent('Checking your comics…');
     await act(async () => finish(result([row('c1', 'Night ferry')])));
     expect(statusLine()).toHaveTextContent('');
+  });
+
+  it('keeps each row’s visible words, title then status, inside its name in order (label in name)', async () => {
+    load.mockResolvedValue(result([row('c2', 'Salt Road', { finished: [{ kind: 'pages', at: recently(), count: 2 }] })]));
+    const classic = { id: 'k1', name: 'Glass Harbour', createdAt: recently(), updatedAt: recently(), state: {} } as unknown as Project;
+    render(<PanelComics accountId="owner" projects={[classic]} onOpenStudio={vi.fn()} onOpenProject={vi.fn()} onAllComics={vi.fn()} />);
+    const studioRow = await link(/^Salt Road · 2 pages drawn/);
+    const classicRow = screen.getByRole('button', { name: /^Glass Harbour · / });
+    // A text's words as voice control matches them (axe's label-in-name check): letters and digits, in order.
+    const wordsOf = (text: string | null) => ` ${(text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ')} `;
+    for (const row of [studioRow, classicRow]) {
+      // The words it shows, both lines and never run together ("Salt Road2 pages drawn"), sit in its name in order.
+      const shown = wordsOf(row.textContent);
+      expect(shown.trim().split(' ').length).toBeGreaterThan(2);
+      expect(wordsOf(row.getAttribute('aria-label'))).toContain(shown);
+    }
   });
 
   it('without an account it lists the project list alone, and says so when there is nothing yet', () => {

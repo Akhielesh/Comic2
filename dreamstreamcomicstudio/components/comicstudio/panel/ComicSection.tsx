@@ -165,6 +165,9 @@ export function ComicSection({ doc, caps, tab, facts, compact = false, onSelect,
           <span className="font-medium text-[var(--ds-ink)]">{view.word}</span>
           <span className={MUTED}> · {view.progress}</span>
         </span>
+        {/* A space between the two lines (a flex column draws none), so their words stay apart and the visible label
+            stays inside the name (label in name). */}
+        {' '}
         <span className="inline-flex max-w-full items-center gap-1 font-medium text-[var(--ds-ink)]">
           <span className={WRAP_TEXT}>Next: {lowerFirst(view.next.label)}</span>
           <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />

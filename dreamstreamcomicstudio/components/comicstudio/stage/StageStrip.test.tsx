@@ -209,6 +209,10 @@ describe('StageStrip', () => {
     const status = screen.getByRole('button', { name: 'Drawing · 6 of 12 pages drawn · Next: draw the rest' });
     expect(status.className).toContain('min-h-11');
     expect(status).toHaveAccessibleDescription('Opens the Pages tab');
+    // Its two lines, read in order, are that name word for word (never "drawnNext"), so voice control finds it by what
+    // it shows (axe's label-in-name check: letters and digits, in order).
+    const wordsOf = (text: string | null) => (text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ');
+    expect(wordsOf(status.textContent)).toBe(wordsOf('Drawing · 6 of 12 pages drawn · Next: draw the rest'));
     // It is the button's label, so it wraps rather than cut a word (the layout smoke counts a cut label as clutter).
     expect(status.innerHTML).not.toContain('truncate');
     fireEvent.click(status);

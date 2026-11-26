@@ -65,7 +65,9 @@ row on Images and inside a comic.
 - Rows are links (`/?view=studio&id=…&task=…`), so a modified click opens a new tab; a plain click sets the task target
   (`home/workspaceTaskTarget.ts`) and opens the comic. A classic comic opens through App's classic routing.
 - A row's accessible name is its title, status, and stage when the status is something else: "Salt Road · Review
-  drawing estimate · Drawing · 6 of 12 pages drawn". The marks are decorative.
+  drawing estimate · Drawing · 6 of 12 pages drawn". The marks are decorative. The words it shows (title, then status)
+  sit in that name in order, with a space between the two lines, so voice control finds a row by what it shows (label
+  in name); "This comic"'s next-step button and the stage strip's phone button keep their two lines apart the same way.
 
 ## 3. When it fetches (the backend and the database stay idle)
 

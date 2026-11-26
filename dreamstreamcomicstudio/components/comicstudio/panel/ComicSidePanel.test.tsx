@@ -205,6 +205,10 @@ describe('keyboard, focus order and the phone drawer', () => {
     expect(lines).toHaveLength(2);
     for (const el of next.querySelectorAll('span')) expect(el.className.split(' ')).not.toContain('truncate');
     expect(next.querySelectorAll('[class*="overflow-wrap:anywhere"]').length).toBe(2);
+    // The two lines, read in order, are its name word for word (never "drawnNext"), so voice control finds it by what
+    // it shows (axe's label-in-name check: letters and digits, in order).
+    const wordsOf = (text: string | null) => (text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ');
+    expect(wordsOf(next.textContent)).toBe(wordsOf(next.getAttribute('aria-label')));
   });
 
   it('on a phone the panel is a drawer: it takes focus, Escape returns it to the toggle, and a choice closes it', () => {

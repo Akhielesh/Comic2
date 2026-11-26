@@ -15,12 +15,12 @@ spends.
   `comic_docs` select of `project_id,listing` (`STAGE_SELECT`), the owner's rows, newest first, paged 200 at a time
   until they run out. `listing` (`server/sql/comic_docs_listing.sql`) is a small copy, kept in step with `doc` by a
   trigger on every write, of the saved summary `doc->workspaceActivity` and the gate, plan, draft and last-card scalars
-  the side panel's Your comics reads for comics saved before summaries existed. **The read never touches `doc`**: any path into a
-  stored doc (up to several MB) makes Postgres fetch and decompress the whole doc, once per path, and this read covers
-  every comic of the account. Until the SQL file is applied the select fails with `42703` and the read falls back to the
-  same values as scalar paths into `doc` (`STAGE_DOC_SELECT`); any other failure is just a failed read. Rows go through
-  the side panel's own `comicActivityRow`, so a card's "Needs you" is the panel's, and a stage is kept only when
-  `readStageFacts` validates it (`docs/features/comic-stages.md` §4).
+  the side panel's Your comics reads for comics saved before summaries existed. **The read never touches `doc`**: any
+  path into a stored doc (up to several MB) makes Postgres fetch and decompress the whole doc, once per path, and this
+  read covers every comic of the account. Until the SQL file is applied the select fails with `42703` and the read falls
+  back to the same values as scalar paths into `doc` (`STAGE_DOC_SELECT`); any other failure is just a failed read. Rows
+  go through the side panel's own `comicActivityRow`, so a card's "Needs you" is the panel's, and a stage is kept only
+  when `readStageFacts` validates it (`docs/features/comic-stages.md` §4).
 - **When it runs** (`components/comicstudio/home/useComicStages.ts`): when the view opens, again each time the list
   reloads (back from the studio, a new comic), and after a run in this tab settles (studioStreams'
   `WORK_CHANGED_EVENT`, for this account, 700 ms after the last one, the moment the side panel's Your comics beside the

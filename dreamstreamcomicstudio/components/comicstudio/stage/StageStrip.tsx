@@ -186,6 +186,9 @@ export function StageStrip({ doc, behind, onGo }: StageStripProps) {
             className={cn('flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center rounded-[var(--ds-radius-control)] px-1.5 text-left text-[12px] leading-4 hover:bg-[var(--ds-hover)]', FOCUS_RING)}
           >
             {summary}
+            {/* A space between the two lines (a flex column draws none), so their words stay apart and the visible
+                label stays inside the name (label in name). */}
+            {' '}
             <span className="inline-flex max-w-full items-center gap-1 font-medium text-[var(--ds-ink)]">{nextWords}</span>
           </button>
           {hint}
