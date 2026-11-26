@@ -1,6 +1,7 @@
-// The one "Continue" card at the top of My comics in Comic Studio: the comic the member was working on, its cover, where it
-// stands, and one obvious way back in. No fill (the frame's New comic stays the view's one), no price, no request of its
-// own (the cover is the URL the list load already signed).
+// The one "Continue" card at the top of My comics in Comic Studio: the comic the member was working on, its cover, where
+// it stands (its saved stage, the same words as its card and the studio's stage strip) and its next step one tap away.
+// No fill (the frame's New comic stays the view's one), no price, no request of its own (the cover is the URL the list
+// load already signed; the stage comes from the page's one stage read). The next step only opens a place in the studio.
 
 import React, { useId } from 'react';
 import { ArrowRight, BookOpen, MessageSquare } from 'lucide-react';
@@ -11,12 +12,19 @@ import { CARD } from '../../ds/Card';
 import { CLIP_TEXT, HEADING, LIFT, MUTED, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
 import { LoadingState } from '../../ds/LoadingState';
 import { SmartImage } from '../../common/SmartImage';
-import { continueLine, coverCandidates, hasDrawnPage } from './homeModel';
+import { coverCandidates, myComicCard, type CardStageRow as StageRowFacts, type CardStageStatus } from './homeModel';
+import { CardStageRow, NextStep } from './MyComicCard';
+import type { TaskDestination } from './workspaceTaskTarget';
 
 export interface ContinueCardProps {
   project: Project;
-  onOpen(id: string): void;
+  /** Open the comic; at a place in the studio when the next step names one. */
+  onOpen(id: string, destination?: TaskDestination | null): void;
   onRead(id: string): void;
+  /** The comic's row from the page's stage read; absent before stages or until the read answers. */
+  stageRow?: StageRowFacts;
+  /** Whether the stage read has answered: until it does, the stage line is a placeholder. */
+  stageStatus?: CardStageStatus;
   /** For tests and scenes; the card reads the clock when it renders otherwise. */
   now?: number;
   /** The relative time's language; the page's own language by default. */
@@ -30,19 +38,21 @@ const pageLocale = (): string | undefined =>
 const COVER_W = 240;
 const COVER_H = 320;
 
-export function ContinueCard({ project, onOpen, onRead, now, locale }: ContinueCardProps) {
+export function ContinueCard({ project, onOpen, onRead, stageRow, stageStatus = 'settled', now, locale }: ContinueCardProps) {
   const id = useId();
-  const title = project.name.trim() || 'Untitled comic';
+  const model = myComicCard(project, stageRow, stageStatus, now ?? Date.now(), locale ?? pageLocale());
+  const { title } = model;
   const [cover, ...fallbacks] = coverCandidates(project);
-  const line = continueLine(project, now ?? Date.now(), locale ?? pageLocale());
-  const open = () => onOpen(project.id);
+  const open = () => onOpen(project.id, null);
   const only = (action: () => void) => (event: React.MouseEvent) => {
     event.stopPropagation();
     action();
   };
+  // The next step when it names a place in the studio; otherwise the comic opens as it was left.
+  const next = model.next?.destination ? model.next : null;
   return (
     <section aria-labelledby={`${id}-label ${id}-title`} className="mb-6 min-w-0">
-      {/* The whole card is the pointer target; keyboard and screen readers use the Continue button inside it. */}
+      {/* The whole card is the pointer target; keyboard and screen readers use the buttons inside it. */}
       <div
         data-testid="continue-card"
         onClick={open}
@@ -74,13 +84,19 @@ export function ContinueCard({ project, onOpen, onRead, now, locale }: ContinueC
           <h2 id={`${id}-title`} className={cn('m-0 text-[length:var(--ds-text-xl)] leading-7', HEADING, CLIP_TEXT)} title={title}>
             {title}
           </h2>
-          <p className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED)}>{line}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={only(open)}>
-              Continue <ArrowRight aria-hidden />
-            </Button>
-            {hasDrawnPage(project) && (
-              <Button variant="ghost" onClick={only(() => onRead(project.id))}>
+          <CardStageRow model={model} />
+          <p className={cn('m-0 text-[length:var(--ds-text-sm)] leading-5 tabular-nums', MUTED)}>{model.status}</p>
+          {/* Its own controls: a tap on one never also opens the card behind it. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
+            {next ? (
+              <NextStep id={project.id} title={title} next={next} kind={model.kind} onOpen={(comic, destination) => onOpen(comic, destination)} size="default" className="max-w-full" />
+            ) : (
+              <Button variant="outline" onClick={only(open)}>
+                Continue <ArrowRight aria-hidden />
+              </Button>
+            )}
+            {model.canRead && (
+              <Button variant="ghost" aria-label={`Read ${title}`} onClick={only(() => onRead(project.id))}>
                 <BookOpen aria-hidden /> Read
               </Button>
             )}

@@ -59,7 +59,7 @@ const AllComicsStandIn: React.FC = () => (
   <div className="mx-auto max-w-7xl p-4 medium:p-8">
     <div className="mb-8 min-w-0">
       <h1 className={cn(TEXT_3XL, HEADING)}>My comics</h1>
-      <p className={cn('mt-1 text-[length:var(--ds-text-base)] leading-6', MUTED)}>Manage your studio projects</p>
+      <p className={cn('mt-1 text-[length:var(--ds-text-base)] leading-6', MUTED)}>Where each comic stands, and what’s next</p>
     </div>
     <ul className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
       {PROJECTS.map((p) => (

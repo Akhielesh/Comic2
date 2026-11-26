@@ -1,16 +1,12 @@
 /**
- * My comics on a touch screen (AH-5). A comic card's Read / Open / Info row used to show only while the card was
- * hovered. A phone has no hover, so the row stayed at opacity 0 and its invisible buttons still took taps: a tap in
- * the middle of a cover opened the editor.
+ * My comics on a touch screen (AH-5, then SH-B). A comic card's Read / Open / Info row used to show only while the card
+ * was hovered; a phone has no hover, so AH-5 kept that row always shown there, along the bottom of the cover, each
+ * button at least 44 px.
  *
- * Now, on every screen that is not a mouse, the row is always shown, along the bottom of the cover, and each button is
- * at least 44 px. "Not a mouse" is the opposite of the app's own `can-hover` screen (tailwind.config.cjs): a phone or
- * tablet, a phone that claims it can hover, a pen-only screen. What a cover centres (the empty-cover marks, the
- * Generating notice) moves up by the row's height there, so the row never sits on it.
- *
- * With a mouse nothing changes: the row is hidden until the card is hovered. It also shows when the keyboard reaches
- * one of its buttons (`:focus-visible`), so a focused button is never invisible. A mouse click focuses a button too,
- * and that must not hold the row open after the pointer leaves.
+ * SH-B rebuilt the cards and removed the hover row altogether: every card shows its controls at all times, under its
+ * words (the next step and Read), with the ⋯ menu beside the title, on every screen, mouse or finger. So nothing on a
+ * card is ever invisible and still takes a tap, and every control is a 44 px target on a coarse pointer. A press on
+ * the cover is a press on the card: it opens the comic, the one control its heading holds (as the Library's cards do).
  *
  * The page header is part of the same promise. Its title and its New comic button sat on one row that could not
  * wrap, so on a narrow phone the row was wider than the screen: the page scrolled sideways and the browser shrank it
@@ -23,7 +19,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postcss from 'postcss';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
@@ -36,15 +32,7 @@ vi.mock('./common/SmartImage', () => ({
 vi.mock('./modals/ProjectInfoModal', () => ({ ProjectInfoModal: () => null }));
 vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
 
-import { Button } from './ds';
 import { ProjectDashboard } from './ProjectDashboard';
-
-/** The variant that holds every touch-only class: any screen that is not a mouse. */
-const TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:';
-/** The class that shows the row when the keyboard reaches one of its buttons. */
-const KEYBOARD = 'has-[:focus-visible]:opacity-100';
-/** The row as it was before AH-5, and as it must stay with a mouse: centred on a dimmed cover, shown on hover. */
-const MOUSE_ROW = ['absolute', 'inset-0', 'bg-[var(--ds-scrim)]', 'flex', 'items-center', 'justify-center', 'opacity-0', 'group-hover:opacity-100', 'transition-opacity', 'gap-2'];
 
 const baseState = (): ComicState => ({
   step: 0,
@@ -95,33 +83,35 @@ const generatingProject: Project = {
   state: { ...baseState(), pipelineMode: 'classic', generationStatus: { isActive: true, progress: 40, estimatedTimeRemaining: '2 min' } } as ComicState
 };
 
-const tokens = (el: Element): string[] => el.className.split(/\s+/).filter(Boolean);
+const tokens = (el: Element): string[] => (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
 
 const renderDashboard = (projects: Project[]) => {
   const noop = vi.fn();
-  return render(
+  const onOpenProject = vi.fn();
+  const onReadProject = vi.fn();
+  const utils = render(
     <ProjectDashboard
       projects={projects}
       onCreateProject={noop}
-      onOpenProject={noop}
+      onOpenProject={onOpenProject}
       onDeleteProject={noop}
       onDuplicateProject={noop}
-      onReadProject={noop}
+      onReadProject={onReadProject}
       onUpdateProject={noop}
       onNavigate={noop}
     />
   );
+  return { ...utils, onOpenProject, onReadProject };
 };
 
-/** Each card's Read / Open (or Edit) / Info row and its three buttons. */
-const renderRows = () => {
-  renderDashboard([studioProject, classicProject]);
-  return ['Spice Market', 'Old Wizard Comic'].map((name) => {
-    const card = screen.getByRole('heading', { name }).closest('div.group') as HTMLElement;
-    const row = within(card).getByRole('button', { name: /read/i }).parentElement as HTMLElement;
-    const buttons = within(row).getAllByRole('button');
-    return { name, row, buttons };
+/** Each card and every control it holds. */
+const renderCards = (projects: Project[] = [studioProject, classicProject, blankStudioProject, generatingProject]) => {
+  const view = renderDashboard(projects);
+  const cards = projects.map((p) => {
+    const card = screen.getByRole('heading', { name: p.name }).closest('article') as HTMLElement;
+    return { name: p.name, card, controls: [...card.querySelectorAll<HTMLElement>('a[href],button')] };
   });
+  return { ...view, cards };
 };
 
 /** The app folder (this file's parent's parent), where tailwind.config.cjs lives. */
@@ -139,27 +129,16 @@ const compile = async (classes: string[]): Promise<postcss.Root> => {
 
 const squeeze = (text: string): string => text.replace(/\s+/g, '');
 
-/** The small Button's own border and icon padding classes, read from what it renders (components/ds Button). */
-const buttonBorderClass = (el: Element): string => {
-  const found = tokens(el).filter((t) => /^border(?:-\d+)?$/.test(t));
-  expect(found, el.textContent ?? '').toHaveLength(1);
-  return found[0];
-};
-const buttonIconPaddingClass = (el: Element): string => {
-  const found = tokens(el).filter((t) => /^has-\[>svg\]:px-[\d.]+$/.test(t));
-  expect(found, el.textContent ?? '').toHaveLength(1);
-  return found[0];
-};
-
 /** The app's own words for "a mouse": the `can-hover` screen, `(hover: hover) and (pointer: fine)`. */
 const CAN_HOVER = (tailwindConfig.theme.screens['can-hover'] as { raw: string }).raw;
-/** The touch rules' media query: every screen `can-hover` leaves out. */
-const NOT_A_MOUSE = `not all and ${CAN_HOVER}`;
+/** A coarse pointer (a finger): the `coarse` screen. */
+const COARSE = (tailwindConfig.theme.screens.coarse as { raw: string }).raw;
 
+/** Whether a rule sits inside the coarse-pointer media query. */
 const isTouchMedia = (node: postcss.Node | undefined): boolean => {
   if (node?.type !== 'atrule') return false;
   const at = node as postcss.AtRule;
-  return at.name === 'media' && squeeze(at.params) === squeeze(NOT_A_MOUSE);
+  return at.name === 'media' && squeeze(at.params) === squeeze(COARSE);
 };
 
 /** What a screen's main pointer reports to CSS. */
@@ -182,7 +161,7 @@ const mediaMatches = (params: string, device: Pointer): boolean => {
 interface BuiltRule {
   /** What the class declares, as { property: value }. */
   decls: Record<string, string>;
-  /** Whether its rule sits inside the touch media query (every screen that is not a mouse). */
+  /** Whether its rule sits inside the coarse-pointer media query (a finger). */
   touchOnly: boolean;
   /** The media query around its rule, or null when it applies everywhere. */
   media: string | null;
@@ -194,9 +173,10 @@ interface BuiltRule {
 const ruleFor = (root: postcss.Root, className: string): BuiltRule => {
   const found: BuiltRule[] = [];
   root.walkRules((rule) => {
-    // A class written with `has-[>svg]:` builds `.class:has(>svg)`: the rule for that class all the same.
+    // A class written with `has-[>svg]:` builds `.class:has(>svg)`, and one with `before:` builds `.class::before`: the
+    // rule for that class all the same.
     const selector = rule.selector.replace(/\\/g, '');
-    if (selector !== `.${className}` && selector !== `.${className}:has(>svg)`) return;
+    if (selector !== `.${className}` && selector !== `.${className}:has(>svg)` && selector !== `.${className}::before`) return;
     const decls: Record<string, string> = {};
     rule.walkDecls((d) => {
       decls[d.prop] = d.value;
@@ -208,211 +188,72 @@ const ruleFor = (root: postcss.Root, className: string): BuiltRule => {
   return found[0];
 };
 
-/** The selectors, outside any media query, whose rule sets opacity to 1. */
-const showsEverywhere = (root: postcss.Root): string[] => {
-  const selectors: string[] = [];
-  root.walkRules((rule) => {
-    const shows = rule.nodes.some((n) => n.type === 'decl' && n.prop === 'opacity' && n.value === '1');
-    if (shows && rule.parent?.type === 'root') selectors.push(rule.selector.replace(/\\/g, ''));
-  });
-  return selectors;
-};
-
-describe('My comics on a touch screen: Read / Open / Info', () => {
-  it('finds the three buttons on a studio card and on a classic card', () => {
-    const [studio, classic] = renderRows();
-    expect(studio.buttons.map((b) => b.textContent)).toEqual(['Read', 'Open', 'Info']);
-    expect(classic.buttons.map((b) => b.textContent)).toEqual(['Read', 'Edit', 'Info']);
-  });
-
-  it('with a mouse the row is what it was: hidden, centred on the dimmed cover, shown when the card is hovered', () => {
-    for (const { name, row } of renderRows()) {
-      const mouse = tokens(row).filter((t) => !t.startsWith(TOUCH) && t !== KEYBOARD);
-      expect([...mouse].sort(), name).toEqual([...MOUSE_ROW].sort());
-    }
-  });
-
-  it('with a mouse each button is the plain small Button: the card adds touch-only classes and nothing else', () => {
-    const [studio] = renderRows();
-    const plain = render(
-      <div>
-        <Button size="sm">Read</Button>
-        <Button size="sm" variant="secondary">Open</Button>
-        <Button size="sm" variant="outline">Info</Button>
-      </div>
-    );
-    const reference = within(plain.container).getAllByRole('button');
-    studio.buttons.forEach((button, i) => {
-      expect(tokens(button).filter((t) => !t.startsWith(TOUCH)), button.textContent ?? '').toEqual(tokens(reference[i]));
-    });
-  });
-
-  it('the row shows when the keyboard reaches one of its buttons', () => {
-    for (const { name, row } of renderRows()) expect(tokens(row), name).toContain(KEYBOARD);
-  });
-
-  it('a mouse click on a button does not hold the row open: only hover and keyboard focus show it', async () => {
-    const [{ row }] = renderRows();
-    // A click focuses the button (`:focus`, so `:focus-within` on the row) but is not keyboard focus (`:focus-visible`).
-    expect(tokens(row)).not.toContain('focus-within:opacity-100');
-    expect(tokens(row).filter((t) => t.endsWith(':opacity-100') && !t.startsWith(TOUCH)).sort()).toEqual(['group-hover:opacity-100', KEYBOARD].sort());
-
-    const root = await compile(tokens(row));
-    expect(showsEverywhere(root).sort()).toEqual(['.group:hover .group-hover:opacity-100', `.${KEYBOARD}:has(:focus-visible)`].sort());
-  });
-
-  it('on a touch screen the row is always shown, along the bottom of the cover', () => {
-    for (const { name, row } of renderRows()) {
-      expect(tokens(row), name).toContain(`${TOUCH}opacity-100`);
-      expect(tokens(row), name).toContain(`${TOUCH}top-auto`);
-    }
-  });
-
-  it('on a touch screen the scrim behind the row is the theme scrim token, not a raw colour', async () => {
-    const rows = renderRows();
-    for (const { name, row } of rows) {
-      const from = tokens(row).filter((t) => t.startsWith(`${TOUCH}from-`));
-      expect(from, name).toEqual([`${TOUCH}from-[var(--ds-scrim)]`]);
-    }
-    const root = await compile(tokens(rows[0].row));
-    const built = ruleFor(root, `${TOUCH}from-[var(--ds-scrim)]`);
-    expect(built.touchOnly).toBe(true);
-    expect(built.decls['--tw-gradient-from']).toContain('var(--ds-scrim)');
-  });
-
-  it('on a touch screen each button is a target of at least 44 px', () => {
-    for (const { buttons } of renderRows()) {
-      expect(buttons).toHaveLength(3);
-      for (const button of buttons) {
-        expect(tokens(button), button.textContent ?? '').toContain(`${TOUCH}min-h-[44px]`);
-        expect(tokens(button), button.textContent ?? '').toContain(`${TOUCH}min-w-[44px]`);
+describe('My comics on a touch screen: every control always shown, every one a 44 px target', () => {
+  it('a card never hides a control: nothing waits for hover, nothing is invisible and still takes a tap', () => {
+    const { cards } = renderCards();
+    for (const { name, card, controls } of cards) {
+      expect(controls.length, name).toBeGreaterThanOrEqual(3);
+      // No control, nor anything around it, is see-through until hovered or focused.
+      for (const control of controls) {
+        for (let el: HTMLElement | null = control; el; el = el.parentElement) expect(tokens(el), `${name}: ${control.textContent}`).not.toContain('opacity-0');
+      }
+      for (const el of [card, ...card.querySelectorAll<HTMLElement>('*')]) {
+        const hover = tokens(el).filter((t) => /(^|:)group-hover:|has-\[:focus-visible\]:opacity|:opacity-100$/.test(t));
+        expect(hover, `${name}: ${el.tagName}`).toEqual([]);
       }
     }
   });
 
-  it('the touch rules reach every screen that is not a mouse, and never a mouse', async () => {
-    const [{ row, buttons }] = renderRows();
-    const root = await compile([...tokens(row), ...tokens(buttons[0])]);
-    // The class that always shows the row (not the hover one, not the keyboard one) and the one that sizes a button.
-    const always = tokens(row).filter((t) => t.endsWith(':opacity-100') && !/^(group-hover|focus-within|has-\[:focus-visible\]):/.test(t));
-    const sized = tokens(buttons[0]).filter((t) => t.endsWith(':min-h-[44px]'));
-    expect(always).toHaveLength(1);
-    expect(sized).toHaveLength(1);
+  it('a studio card shows its title, ⋯, the next step and Read; a classic card shows Edit; each says which comic', () => {
+    const { cards } = renderCards([studioProject, classicProject]);
+    const names = (controls: HTMLElement[]) => controls.map((c) => c.getAttribute('aria-label') ?? c.textContent);
+    expect(names(cards[0].controls)).toEqual(['Spice Market', 'More for Spice Market', 'Open, Spice Market', 'Read Spice Market']);
+    expect(names(cards[1].controls)).toEqual(['Old Wizard Comic', 'More for Old Wizard Comic', 'Edit, Old Wizard Comic']);
+  });
 
-    for (const cls of [...always, ...sized]) {
-      const media = ruleFor(root, cls).media ?? '';
-      // A mouse or trackpad: the row stays hidden until hover, as before.
-      expect(mediaMatches(media, { hover: 'hover', pointer: 'fine' }), `${cls} on a mouse`).toBe(false);
-      // A phone or tablet.
-      expect(mediaMatches(media, { hover: 'none', pointer: 'coarse' }), `${cls} on a phone`).toBe(true);
-      // A phone that claims it can hover. `(hover: none)` alone misses it and leaves the row invisible.
-      expect(mediaMatches(media, { hover: 'hover', pointer: 'coarse' }), `${cls} on a phone that claims hover`).toBe(true);
-      // A pen-only screen: a fine pointer that cannot hover. `(pointer: coarse)` alone misses it.
-      expect(mediaMatches(media, { hover: 'none', pointer: 'fine' }), `${cls} on a pen-only screen`).toBe(true);
-      // One media query holds them all: the opposite of the app's own `can-hover` screen.
-      expect(squeeze(media)).toBe(squeeze(NOT_A_MOUSE));
-      expect(cls.startsWith(TOUCH)).toBe(true);
-    }
-    // `can-hover` is the mouse case, so the two never overlap and never leave a screen out.
+  it('a press on the cover opens the comic once (the title’s control), never Read', () => {
+    const { cards, onOpenProject, onReadProject } = renderCards([studioProject]);
+    fireEvent.click(cards[0].card.querySelector('[data-slot="my-comic-cover"]') as HTMLElement);
+    expect(onOpenProject).toHaveBeenCalledExactlyOnceWith('studio-1');
+    expect(onReadProject).not.toHaveBeenCalled();
+  });
+
+  it("on a coarse pointer every control is at least 44 px, in rules the app's Tailwind builds for a finger only", async () => {
+    const { cards } = renderCards([studioProject]);
+    const { controls } = cards[0];
+    const title = controls.find((c) => c.hasAttribute('data-card-primary'))!;
+    const rest = controls.filter((c) => c !== title);
+    const classes = [...new Set(controls.flatMap(tokens))];
+    const root = await compile(classes);
+    // Buttons and the next-step link: a 44 px minimum height (the ⋯ button: 44 by 44).
+    for (const control of rest) expect(tokens(control), control.getAttribute('aria-label') ?? '').toContain('coarse:min-h-[var(--ds-density-touch)]');
+    expect(tokens(rest[0])).toContain('coarse:min-w-[var(--ds-density-touch)]');
+    const min = ruleFor(root, 'coarse:min-h-[var(--ds-density-touch)]');
+    expect(min).toMatchObject({ decls: { 'min-height': 'var(--ds-density-touch)' }, touchOnly: true });
+    expect(mediaMatches(min.media ?? '', { hover: 'none', pointer: 'coarse' })).toBe(true);
+    expect(mediaMatches(min.media ?? '', { hover: 'hover', pointer: 'coarse' })).toBe(true);
+    expect(mediaMatches(min.media ?? '', { hover: 'hover', pointer: 'fine' })).toBe(false);
+    // The title's control reaches 44 px through a hit area 12 px past each edge of its (at least 20 px) line.
+    const hit = ruleFor(root, 'coarse:before:-inset-3');
+    expect(hit.touchOnly).toBe(true);
+    expect(hit.decls).toMatchObject({ inset: '-0.75rem' });
+    // A mouse keeps the plain small sizes: the 44 px rules are not in the mouse's media.
     expect(mediaMatches(CAN_HOVER, { hover: 'hover', pointer: 'fine' })).toBe(true);
-    for (const device of [{ hover: 'none', pointer: 'coarse' }, { hover: 'hover', pointer: 'coarse' }, { hover: 'none', pointer: 'fine' }] as Pointer[]) {
-      expect(mediaMatches(CAN_HOVER, device)).toBe(false);
-    }
   });
 
-  it('on the narrowest phone (320 px) each label has room inside its button', async () => {
-    const [{ row, buttons }] = renderRows();
-    const root = await compile([...tokens(row), ...tokens(buttons[0])]);
-    const px = (value: string): number => (value.endsWith('rem') ? parseFloat(value) * 16 : parseFloat(value));
-    /** The side padding an element gets on a touch screen: its one `px-*` class under a media variant. */
-    const touchPadding = (el: Element): BuiltRule => {
-      const found = tokens(el).filter((t) => t.startsWith('[@media') && /:px-[\d.]+$/.test(t));
-      expect(found, el.textContent ?? '').toHaveLength(1);
-      return ruleFor(root, found[0]);
-    };
-
-    // At 320 px a cover is 286 px wide (the page's 16 px side padding, the card's 1 px hairline). The widest label is
-    // "Open": icon 16 + gap 6 (the small Button's gap-1.5) + 34.1 px of IBM Plex Sans 500 at 14 px, measured in
-    // Chromium with the app's own font file; 56.2 px. This test proves the arithmetic, not the layout: re-measure if
-    // the page padding, the card border or the Button font changes.
-    const COVER = 286;
-    const WIDEST_LABEL = 56.2;
-    const rowPadding = px(touchPadding(row).decls['padding-left']);
-    const gap = px(ruleFor(root, 'gap-2').decls.gap);
-    const border = px(ruleFor(root, buttonBorderClass(buttons[0])).decls['border-width']);
-    const buttonPadding = touchPadding(buttons[0]);
-    // Later in the stylesheet than the small Button's own padding with an icon (its has-[>svg]:px-* class), and as
-    // specific, so it wins on a touch screen.
-    expect(root.index(ruleFor(root, buttonIconPaddingClass(buttons[0])).top)).toBeLessThan(root.index(buttonPadding.top));
-
-    // Three equal buttons (flex-1) share the row.
-    const button = (COVER - 2 * rowPadding - 2 * gap) / 3;
-    expect(button).toBeGreaterThanOrEqual(44);
-    expect(button - 2 * border - 2 * px(buttonPadding.decls['padding-left'])).toBeGreaterThanOrEqual(WIDEST_LABEL);
-  });
-
-  it('on a touch screen what a cover centres sits above the row: the empty-cover marks and the Generating notice', async () => {
-    renderDashboard([blankStudioProject, classicProject, generatingProject]);
-    const notice = screen.getByText('Generating...').parentElement as HTMLElement;
-    const centred = [screen.getByText('Nothing drawn yet').parentElement as HTMLElement, ...screen.getAllByRole('img', { name: 'No cover yet' }), notice];
-    expect(centred).toHaveLength(4);
-    for (const el of centred) {
-      expect(tokens(el), el.textContent ?? '').toContain(`${TOUCH}pb-16`);
-      // Nothing else changed on them: with a mouse they are centred in the whole cover, as before.
-      expect(tokens(el).filter((t) => t.startsWith(TOUCH))).toEqual([`${TOUCH}pb-16`]);
-      expect(tokens(el)).toEqual(expect.arrayContaining(['flex', 'items-center', 'justify-center']));
-    }
-
-    // On the smallest phones the notice is short of room: its progress bar keeps its height instead of shrinking to 0.
-    const bar = notice.children[1];
-    expect(tokens(bar).filter((t) => t.startsWith(TOUCH))).toEqual([`${TOUCH}shrink-0`]);
-
-    // The room kept under them (4rem = 64 px) covers the row's buttons (44 px) and the gap under them (0.5rem = 8 px).
-    const row = within(notice.parentElement as HTMLElement).getByRole('button', { name: /read/i }).parentElement as HTMLElement;
-    const root = await compile([...tokens(notice), ...tokens(bar), ...tokens(row), ...tokens(row.children[0])]);
-    const room = ruleFor(root, `${TOUCH}pb-16`);
-    expect(room).toMatchObject({ decls: { 'padding-bottom': '4rem' }, touchOnly: true });
-    expect(ruleFor(root, `${TOUCH}min-h-[44px]`).decls).toEqual({ 'min-height': '44px' });
-    expect(ruleFor(root, `${TOUCH}pb-2`).decls).toEqual({ 'padding-bottom': '0.5rem' });
-    expect(ruleFor(root, `${TOUCH}shrink-0`)).toMatchObject({ decls: { 'flex-shrink': '0' }, touchOnly: true });
-    // Later in the stylesheet than the Generating notice's own padding (p-4), so it wins there.
-    expect(root.index(ruleFor(root, 'p-4').top)).toBeLessThan(root.index(room.top));
-  });
-
-  it("the app's Tailwind builds those classes into rules that apply only on a screen that is not a mouse, and win there", async () => {
-    const [{ row, buttons }] = renderRows();
-    const rowTouch = tokens(row).filter((t) => t.startsWith(TOUCH));
-    const buttonTouch = tokens(buttons[0]).filter((t) => t.startsWith(TOUCH));
-    const root = await compile([...tokens(row), ...tokens(buttons[0])]);
-
-    // With a mouse: hidden, then shown by hover or by keyboard focus. These rules sit outside any media query.
-    expect(ruleFor(root, 'opacity-0')).toMatchObject({ decls: { opacity: '0' }, touchOnly: false, media: null });
-    expect(showsEverywhere(root)).toEqual(expect.arrayContaining(['.group:hover .group-hover:opacity-100', `.${KEYBOARD}:has(:focus-visible)`]));
-
-    // On a touch screen: shown, along the bottom edge (top: auto), with no dim over the whole cover.
-    expect(rowTouch.length).toBeGreaterThan(0);
-    const rowDecls: Record<string, string> = {};
-    for (const cls of rowTouch) {
-      const rule = ruleFor(root, cls);
-      expect(rule.touchOnly, `${cls} applies only on a screen that is not a mouse`).toBe(true);
-      Object.assign(rowDecls, rule.decls);
-    }
-    expect(rowDecls).toMatchObject({ opacity: '1', top: 'auto', 'background-color': 'transparent' });
-
-    // Each button: at least 44 by 44 px.
-    expect(buttonTouch.length).toBeGreaterThan(0);
-    const buttonDecls: Record<string, string> = {};
-    for (const cls of buttonTouch) {
-      const rule = ruleFor(root, cls);
-      expect(rule.touchOnly, `${cls} applies only on a screen that is not a mouse`).toBe(true);
-      Object.assign(buttonDecls, rule.decls);
-    }
-    expect(buttonDecls).toMatchObject({ 'min-height': '44px', 'min-width': '44px' });
-
-    // Same specificity as the mouse rules, so the touch rules must come later in the stylesheet to win.
-    const order = (cls: string) => root.index(ruleFor(root, cls).top);
-    const touchAt = order(`${TOUCH}opacity-100`);
-    for (const base of ['opacity-0', 'inset-0', 'bg-[var(--ds-scrim)]', buttonIconPaddingClass(buttons[0])]) expect(order(base), base).toBeLessThan(touchAt);
+  it('on the narrowest phone (320 px) the buttons share the row and wrap rather than push past the card', () => {
+    const { cards } = renderCards([studioProject]);
+    const { card } = cards[0];
+    const actions = card.querySelector('[data-slot="card-actions"]') as HTMLElement;
+    expect(tokens(actions)).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'min-w-0', 'col-span-2']));
+    const next = within(card).getByRole('link', { name: 'Open, Spice Market' });
+    // The next step takes the rest of the row and may shrink; its label ends in an ellipsis before it pushes.
+    expect(tokens(next)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0']));
+    expect(next.querySelector('[data-slot="button-label"]')).toHaveClass('truncate');
+    // At 320 px the row is 262 px (16 px gutters, a 1 px edge, 12 px padding): Read (about 74 px) and an 8 px gap leave
+    // the next step 180 px, past its 44 px floor.
+    const row = 320 - 2 * 16 - 2 - 2 * 12;
+    expect(row - 74 - 8).toBeGreaterThanOrEqual(44);
   });
 });
 
