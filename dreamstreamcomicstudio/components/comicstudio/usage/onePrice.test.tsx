@@ -10,10 +10,12 @@ import React from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { DEFAULT_CAPS, resolveStudioCaps } from '../../../shared/comic/capabilities';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { resolveImageJob } from '../../../shared/comic/models';
+import type { HealthState, ModelHealth } from '../../../shared/comic/modelHealth';
+import { redrawQuote, redrawResolution } from '../../../shared/comic/modelLock';
+import { PLATFORM_MARKUP, formatUsd, getImageModel, resolveImageJob } from '../../../shared/comic/models';
 import { estimateDocJobs, quoteRenderPages } from '../../../shared/comic/plan';
 import { priceBookFromSources, priceSheetOf } from '../../../shared/comic/priceBook';
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
@@ -24,6 +26,9 @@ import { SAMPLE_NOW, makeSampleDoc, makeStudio } from '../board/__fixtures__/sam
 import { CastCard } from '../conversation/cards/CastCard';
 import { estimatePlanRender } from '../conversation/cards/PlanCard';
 import { makeFakeStudio, makeSampleDoc as makeConversationDoc, resetUsageStatus, showDollarPrices } from '../conversation/testing/fixtures';
+import { ModelStatusBanner } from '../reliability/ModelStatusBanner';
+import { registryPriceBook } from '../reliability/options';
+import { __resetStatusStore, __setStatusFetcherForTests } from '../reliability/statusStore';
 
 const OWNER = 'owner-one-price';
 vi.mock('../../../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner-one-price' } }) }));
@@ -209,5 +214,65 @@ describe('the chat\'s Cast card names the book\'s price and sends it as the quot
     expect(button.textContent).toContain(costFormat(DOLLAR_CONTEXT).approx(real));
     fireEvent.click(button);
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith(expect.objectContaining({ type: 'render_sheets', characterIds: ['c_arjun'], quotedUsd: real })));
+  });
+});
+
+describe('the model-status banner names the book\'s price for "Try X instead"', () => {
+  const NB21 = 'nano-banana-2.1';
+  const PRO = 'nano-banana-pro';
+  const healthOf = (modelId: string, state: HealthState): ModelHealth => ({
+    modelId,
+    state,
+    checkedAt: Date.now(),
+    routes: [
+      {
+        route: 'openrouter',
+        model: getImageModel(modelId)?.routes.openrouter || modelId,
+        state,
+        providers: [{ name: 'Google AI Studio', status: state === 'down' ? -1 : 0, uptime30m: state === 'down' ? 41 : 99, uptime1d: 95 }],
+        ...(state === 'down' ? { reason: 'Every provider reports a problem' } : {}),
+        checkedAt: Date.now(),
+        source: 'openrouter'
+      }
+    ]
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('offline'))));
+    __resetPriceSheetForTests();
+    __resetStatusStore();
+    __setStatusFetcherForTests(async (ids) => ids.map((id) => healthOf(id, id === NB21 ? 'down' : 'ok')));
+    sessionStorage.clear();
+    showDollarPrices();
+  });
+  afterEach(() => {
+    __setStatusFetcherForTests(null);
+    __resetStatusStore();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    __resetPriceSheetForTests();
+    resetUsageStatus();
+  });
+
+  it('before any outage card: the per-image figure and the redraw are the book\'s, as the picker and the approval quote them', async () => {
+    const doc = makeConversationDoc();
+    const res = redrawResolution(doc, PRO, 'page');
+    const sheet = priceSheetOf({ rows: [], observed: [{ modelId: PRO, kind: 'page', res, n: 8, medianUsd: 0.6, minUsd: 0.55, maxUsd: 0.7, scope: 'you' }], qc: null }, SAMPLE_NOW);
+    __seedPriceSheetForTests(OWNER, sheet);
+    const book = priceBookFromSources(sheet.sources);
+    const caps = resolveStudioCaps({ planId: 'pro', byok: false, isAdmin: false });
+    render(<ModelStatusBanner studio={makeFakeStudio({ doc, caps })} compact={false} />);
+    const group = await screen.findByRole('group', { name: /Ways to continue without Nano Banana 2\.1/ });
+    const button = within(group).getByRole('button', { name: /Try Nano Banana Pro instead/ });
+    const fmt = costFormat(DOLLAR_CONTEXT);
+    const round4 = (n: number) => Math.round(n * 10000) / 10000;
+    const real = round4(book.unit(PRO, res, 'page').usd! * PLATFORM_MARKUP);
+    const registry = round4(registryPriceBook().unit(PRO, res, 'page').usd! * PLATFORM_MARKUP);
+    expect(fmt.approx(real)).not.toBe(fmt.approx(registry));
+    expect(button).toHaveTextContent(`${fmt.approx(real)} per image`);
+    expect(button).not.toHaveTextContent(fmt.approx(registry));
+    // The redraw it names is the quote the change_image_model approval recomputes with the same book.
+    const redraw = redrawQuote(doc, PRO, 'pages_cover', book, false).usd!;
+    expect(button.getAttribute('title')).toContain(`≈ ${formatUsd(redraw)}`);
   });
 });

@@ -48,8 +48,10 @@ all, Render selected, page and cover cards, the clip menu's Redraw / Redesign / 
 and Style tabs, the page editor (draw, edit, re-check), the breakdown card, the progress card's Retry, the style
 choice card, notice chips, the plan card, the chat's Cast card ("Draw N sheets"), the photo strip, drawer and card
 ("Make the sheet" / "Redraw sheet", `refs/refsModel.ts` `sheetHint`), the Format panel's redraw and per-page lines, the
-Languages tab's "Redraw N pages" and "Textless cover", the timeline and version stack, History's quoted redraw, and the
-quality and style panels. The model picker's book (`models/priceBook.ts`) takes its numbers from the shared book over
+Languages tab's "Redraw N pages" and "Textless cover", the timeline and version stack, History's quoted redraw, the
+quality and style panels, and the model-status banner's "Try X instead" before any outage card exists (its per-image
+figure and the redraw in its title: `reliability/options.ts` `bannerOptions` with the book, read only while the banner
+prices its own options, so it names what the picker and the change_image_model approval will). The model picker's book (`models/priceBook.ts`) takes its numbers from the shared book over
 the catalog rows. The Approve card (whole-book approval included), chips, the run and MA's credit card were already
 server figures from the same book; translation's completion chips and the director's notes price the overlay redraw
 and the textless cover with it too (`i18n/index.ts` `overlayFix`, `textlessCoverQuote`).
@@ -102,8 +104,10 @@ unit (`standardPageProviderUsd`) stays on the constants: it is a unit both sides
 
 The tags ride on the ledger's existing metadata. The read has its own partial index,
 `server/sql/token_ledger_text_ops.sql` (`created_at desc` where `metadata -> 'textOp'` is not null; additive and
-idempotent, apply by hand): without it, a read across everyone is a sequential scan of the whole ledger. A failed read
-logs `comic_text_rates_read_failed` at error level with the last good read's time.
+idempotent, apply by hand, with `concurrently` on a large ledger): without it, a read across everyone is a sequential
+scan of the whole ledger, and once that outgrows the 5 s bound every read fails, so planning, style ideas and
+translations are quoted at the fixed figures again (never under them, but no longer at what they really cost). A
+failed read logs `comic_text_rates_read_failed` at error level with the last good read's time.
 
 Gates and budget checks read the text rates from their own source (`jobs.ts` `textRatesWithin`, the same bounded call
 the price sheet and the translation quote route make), never through the whole book: on a cold image catalog the
@@ -134,8 +138,8 @@ failed); an unpriced model shows nothing. Muted ink.
 
 - A balance check before a standalone image (credit-safety.md covers comic steps).
 - The board's spent amounts keep their 3-decimal precision; only prices are unified.
-- Insights' cost analysis (what this comic's pages have cost, what the next one would on its model) and the outage
-  banner's switch options keep their own comic-level figures: they are analysis, not a quote for a step.
+- Insights' cost analysis (what this comic's pages have cost, what the next one would on its model) keeps its own
+  comic-level figures: it is analysis, not a quote for a step.
 - Consistency-anchor lines: the client quotes them only where it already did (the breakdown's consistency view); the
   run draws anchors only when `COMIC_CONSISTENCY_ANCHORS` is on, which it is not today.
 
@@ -153,7 +157,7 @@ and `priceImageJobs`, a Render all with a page held back included; translation's
 reads, no timer, account switch, a settle during a read), `components/comicstudio/usage/onePrice.test.tsx` (every
 surface hands its quote helpers the book and never prices from the registry or constants directly; the Pages tab and
 the plan card name the book's figure with a page held back; the chat's Cast card labels and sends the book's figure;
-governed reads a share), `components/comicstudio/board/PagesTab.test.tsx` (held-back pages: the count, the words, the
+the model-status banner's "Try X instead" and its redraw are the book's; governed reads a share), `components/comicstudio/board/PagesTab.test.tsx` (held-back pages: the count, the words, the
 all-held-back line), `components/comicstudio/conversation/cards/cards.test.tsx` (the plan card's held-back page),
 `components/images/ImagePrice.test.tsx` and `ImageWorkspace.test.tsx` (Generate is described by its price only while
 the line is there).
