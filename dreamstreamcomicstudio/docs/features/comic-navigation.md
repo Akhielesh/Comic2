@@ -16,7 +16,8 @@ a breadcrumb (§6).
 2. **This comic** (inside a comic only, `panel/ComicSection.tsx`). The comic's stage (SH-A, `comic-stages.md`): the five
    marks beside "This comic", which open the stage map in place (`comic-stages.md` §5a), and one two-line button,
    "Drawing · 6 of 12 pages drawn" / "Next: draw the rest", which only opens the place (a board tab, the approval or the
-   draft in the conversation, the composer, the Share sheet; its description says which). Then Ask the Director, then
+   draft in the conversation, the composer, the Share sheet; its description says which). Its two lines are its label,
+   so they wrap in the panel's width rather than cut a word. Then Ask the Director, then
    the board as the comic's parts tree (§6: Story, Cast with each character, Style, Pages with each page, the Cover,
    Read and the registry tabs), with "Find a page" on a book over 10 pages. The slim rail keeps the board's tabs as
    icons.
