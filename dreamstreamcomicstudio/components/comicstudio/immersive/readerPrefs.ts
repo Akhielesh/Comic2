@@ -1,9 +1,9 @@
 // Reader preferences, reading position, intro and low-power memory (contract §13.5 storage keys).
 // Every storage access is wrapped: private windows and blocked storage simply don't remember.
 
-import { DEFAULT_READER, PAGE_TURN_STYLES, creatorTurnOf, pageTurnStyleOf, type ComicKind, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
+import { DEFAULT_READER, PAGE_TURN_STYLES, creatorTurnOf, type ComicKind, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { layoutPrefFrom, type LayoutPref } from './readerLayout';
-import { PREFS_KEY } from './readerMotionPref';
+import { PREFS_KEY, storedTurnPick } from './readerMotionPref';
 
 export { PREFS_KEY };
 export const LAYOUT_KEY = 'comicstudio.reader.mode';
@@ -79,12 +79,11 @@ const tri = (v: unknown): Tri => (v === 'on' || v === 'off' ? v : 'auto');
 /** Validate stored prefs (unknown keys and bad values fall back to the defaults). */
 export const sanitizePrefs = (raw: unknown): ReaderPrefs => {
   const r = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const picked = r.turnPicked === true;
-  const stored = pageTurnStyleOf(r.turn);
-  const turn: TurnPref = stored && (stored !== 'paper' || picked) ? stored : 'auto';
+  // The reader's own pick (storedTurnPick: an unmarked 'paper' was never one), else 'auto'.
+  const turn: TurnPref = storedTurnPick(r) ?? 'auto';
   return {
     turn,
-    ...(picked && turn !== 'auto' ? { turnPicked: true as const } : {}),
+    ...(r.turnPicked === true && turn !== 'auto' ? { turnPicked: true as const } : {}),
     sound: r.sound === true,
     paper: tri(r.paper),
     ambient: tri(r.ambient),

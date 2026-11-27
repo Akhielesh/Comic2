@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { clampIndex, isWithheld, keyDelta, readerItems, swipeDelta, tapDelta, viewOfItem } from './readerModel';
+import { bookPageTotal, clampIndex, isWithheld, keyDelta, readerItems, swipeDelta, tapDelta, viewOfItem } from './readerModel';
 
 const withCover = () =>
   makeSampleDoc((d) => {
@@ -112,5 +112,27 @@ describe('v5 helpers: deep links, chapters, withheld pages', () => {
     expect(isWithheld(items[1])).toBe(false);
     items[1] = { ...items[1], asset: { ...items[1].asset, safety: { assessed: 'X', at: 1 } } };
     expect(isWithheld(items[1])).toBe(true);
+  });
+});
+
+// fx-readerchrome: "Page N of M" counts to the book, not to what is drawn so far.
+describe('bookPageTotal', () => {
+  it('is the book’s page count, drawn or not (six pages, two drawn → 6)', () => {
+    const doc = makeSampleDoc();
+    expect(readerItems(doc).filter((i) => i.kind === 'page')).toHaveLength(2);
+    expect(bookPageTotal(doc)).toBe(6);
+  });
+
+  it('a snapshot that kept only its drawn pages counts to the last page number (pages 1, 2, 5 and 11 → 11)', () => {
+    const doc = makeSampleDoc();
+    doc.pages = [1, 2, 5, 11].map((n) => ({ ...doc.pages[0], id: `pg_${n}`, n }));
+    expect(bookPageTotal(doc)).toBe(11);
+  });
+
+  it('never less than the pages there are, and 0 for an empty book', () => {
+    const doc = makeSampleDoc();
+    doc.pages = doc.pages.map((p) => ({ ...p, n: Number.NaN }));
+    expect(bookPageTotal(doc)).toBe(6);
+    expect(bookPageTotal({ pages: [] })).toBe(0);
   });
 });

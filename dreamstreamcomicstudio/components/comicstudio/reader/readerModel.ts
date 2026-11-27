@@ -141,3 +141,11 @@ export const chapterStarts = (items: ReaderItem[]): { index: number; title: stri
 /** A blocked or withheld image is never shown or fetched: the reader draws a neutral "withheld" tile instead. */
 export const isWithheld = (item: ReaderItem): boolean =>
   !!item.withheld || (item.asset ? !item.asset.path || !canServeToOwner(item.asset) : artModeOf(item.page) !== 'panels');
+
+/**
+ * The book's page count for "Page N of M" (fx-readerchrome): every page in the book, drawn or not, or the last page's
+ * number when the numbering runs past them (a public snapshot keeps only its drawn pages). A 12-page book with 7 pages
+ * drawn reads "Page 11 of 12", never "of 7": the total is never less than a number the reader shows.
+ */
+export const bookPageTotal = (doc: Pick<ComicDoc, 'pages'>): number =>
+  doc.pages.reduce((max, page) => Math.max(max, Number.isFinite(page.n) ? page.n : 0), doc.pages.length);

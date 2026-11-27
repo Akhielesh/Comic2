@@ -2,7 +2,8 @@
 // validated; the creator's settings are overridden locally; resume is offered only when useful; the
 // Page and language URL params round-trip, including when older links specify Guided View.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_READER } from '../../../shared/comic/doc';
+import { DEFAULT_READER, PAGE_TURN_STYLES } from '../../../shared/comic/doc';
+import { STORED_TURN_STYLES, readReduceMotionPref, readTurnPick } from './readerMotionPref';
 import {
   DEFAULT_PREFS,
   effectiveReader,
@@ -112,6 +113,26 @@ describe('prefs', () => {
     expect(sanitizePrefs({ turn: 'flip' }).turn).toBe('flip');
     expect(sanitizePrefs({ turn: 'curl' }).turn).toBe('auto');
     expect(sanitizePrefs({}).turn).toBe('auto');
+  });
+
+  it('the landing sample reads the same pick and Reduce motion on its own (readerMotionPref), by the same rule', () => {
+    // The light reader keeps its own copy of the four names: the same list, in the same order.
+    expect(STORED_TURN_STYLES).toEqual([...PAGE_TURN_STYLES]);
+    expect(readTurnPick()).toBeUndefined();
+    expect(readReduceMotionPref()).toBe(false);
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"paper","fancyTurns":"auto"}');
+    expect(readTurnPick(), 'an unmarked paper was never a pick').toBeUndefined();
+    writePrefs({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true, reduceMotion: true });
+    expect(readTurnPick()).toBe('paper');
+    expect(readReduceMotionPref()).toBe(true);
+    for (const turn of ['flip', 'slide', 'fade'] as const) {
+      writePrefs({ ...DEFAULT_PREFS, turn });
+      expect(readTurnPick()).toBe(turn);
+      expect(readTurnPick()).toBe(readPrefs().turn);
+    }
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"curl"');
+    expect(readTurnPick(), 'junk storage reads as no pick').toBeUndefined();
+    expect(readReduceMotionPref()).toBe(false);
   });
 });
 

@@ -63,13 +63,23 @@ export interface PlanInput {
   riffle?: number;
 }
 
+/**
+ * The simple motion a style turns with (any style but the paper, or the paper on a low-power device, a strip or a
+ * hinge). The flip is transform and opacity on the compositor (index.css), so it stays on low-power devices and hinges;
+ * a low-power device slides instead of folding or crossfading.
+ */
+export const simpleTurnKind = (style: TurnStyle, lowPower: boolean): TurnKind =>
+  style === 'flip' ? 'flip' : style === 'fade' && !lowPower ? 'fade' : 'slide';
+
+/** A low-power device turns this style with a lighter motion (the paper and the fade slide). */
+export const lighterOnLowPower = (style: TurnStyle): boolean => simpleTurnKind(style, true) !== style;
+
 export const planTurn = (p: PlanInput): TurnPlan => {
   const dir: 1 | -1 = p.to > p.from ? 1 : -1;
   const base = { dir, from: p.from, to: p.to, staticKeys: [] as string[], underKeys: [] as string[], incomingKeys: [] as string[], outgoingKeys: [] as string[] };
   const simple = p.style !== 'paper' || p.lowPower || p.layout === 'strip' || p.geomFrom.gap > 2;
   if (simple) {
-    // The flip is transform and opacity on the compositor (index.css), so it stays on low-power devices and hinges.
-    const kind: TurnKind = p.style === 'flip' ? 'flip' : p.style === 'fade' && !p.lowPower ? 'fade' : 'slide';
+    const kind = simpleTurnKind(p.style, p.lowPower);
     return {
       ...base,
       kind,

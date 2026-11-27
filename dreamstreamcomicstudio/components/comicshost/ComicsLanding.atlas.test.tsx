@@ -214,6 +214,30 @@ describe('Comics landing', () => {
     expect(await turnOnce()).toBeNull();
   });
 
+  it('the sample turns with the reader’s own pick from the full-screen settings, else the flip', () => {
+    const styleOf = () => screen.getByRole('figure', { name: 'The Last Tram' }).querySelector('[data-paper-turn-surface]')?.getAttribute('data-turn-style');
+    const withPrefs = (prefs: Record<string, unknown>) => {
+      localStorage.setItem('comicstudio.reader.prefs.v1', JSON.stringify(prefs));
+      return renderLanding();
+    };
+    let view = withPrefs({ turn: 'fade' });
+    expect(styleOf()).toBe('fade');
+    view.unmount();
+    view = withPrefs({ turn: 'slide' });
+    expect(styleOf()).toBe('slide');
+    view.unmount();
+    view = withPrefs({ turn: 'paper', turnPicked: true });
+    expect(styleOf()).toBe('paper');
+    view.unmount();
+    // An unmarked paper (release #316 wrote it without a pick) is no pick: the house flip.
+    view = withPrefs({ turn: 'paper' });
+    expect(styleOf()).toBe('flip');
+    view.unmount();
+    view = withPrefs({ turn: 'auto' });
+    expect(styleOf()).toBe('flip');
+    view.unmount();
+  });
+
   it('turns the sample page, announces the scene, and preserves the page across look changes', () => {
     renderLanding();
     fireEvent.click(screen.getByRole('button', { name: 'Preview Ligne claire' }));

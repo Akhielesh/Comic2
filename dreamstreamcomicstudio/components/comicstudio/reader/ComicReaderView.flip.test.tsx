@@ -177,6 +177,17 @@ describe('reader-turn fixes', () => {
     scroller.scrollTop = 500;
     press('Home');
     expect(scroller.scrollTop).toBe(0);
+    // Home from the second view is a jump too, not one step back: the first page opens at its top, not its foot.
+    press('ArrowRight');
+    expect(shownKeys()).not.toEqual(['cover']);
+    scroller.scrollTop = 600;
+    press('Home');
+    expect(shownKeys()).toEqual(['cover']);
+    expect(scroller.scrollTop).toBe(0);
+    // And the step after a jump is read as usual: one step back from the second view opens the first at its foot.
+    press('ArrowRight');
+    press('ArrowLeft');
+    expect(scroller.scrollTop).toBe(2400);
   });
 
   it('a webtoon page taller than its window swings about the middle of what shows: its top going forward, its foot one step back', async () => {

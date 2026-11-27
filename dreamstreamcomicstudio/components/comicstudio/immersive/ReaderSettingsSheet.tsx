@@ -8,6 +8,7 @@ import type { PageTurnStyle } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
 import { PAGE_TURN_OPTIONS, pageTurnLabel, turnStyleFor, type ReaderPrefs, type RoomLight } from './readerPrefs';
 import { HudButton } from './ReaderHud';
+import { lighterOnLowPower } from './turnPlan';
 
 export interface ReaderSettingsSheetProps {
   open: boolean;
@@ -79,7 +80,8 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
   let modeHint = turn === 'paper' ? 'Drag a page edge or use the arrows to turn the page.' : 'Swipe, tap a page edge or use the arrows to turn the page.';
   if (p.layout.pref === 'scroll') modeHint = 'Read down the comic.';
   else if (reduced) modeHint = 'Use the arrows or swipe. Reduced motion is on.';
-  else if (p.lowPower) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
+  // Only a style that low power lightens (the paper and the fade slide) says so; the flip and the slide play unchanged.
+  else if (p.lowPower && lighterOnLowPower(turn)) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
   return (
     <div
       ref={ref}

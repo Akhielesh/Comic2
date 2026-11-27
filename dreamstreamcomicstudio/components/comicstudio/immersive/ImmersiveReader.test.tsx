@@ -161,7 +161,8 @@ describe('ImmersiveReader', () => {
     expect(counter()).toBe('Page 3 of 6');
     unmount();
     render(<ImmersiveReader doc={makeSampleDoc()} urlFor={fakeUrlFor} intro={false} initialPage={3} onExit={() => undefined} />);
-    expect(counter()).toBe('Page 1 of 2');
+    // Two of the book's six pages are drawn: the total is still the book's (never "of 2").
+    expect(counter()).toBe('Page 1 of 6');
     expect(screen.getByRole('status')).toHaveTextContent('Page 3 isn’t drawn yet — showing page 1.');
   });
 

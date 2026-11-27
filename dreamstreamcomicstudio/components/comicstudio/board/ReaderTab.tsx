@@ -161,12 +161,16 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
       <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
         <span className="text-[12px] text-[var(--ds-muted)]">Page turn</span>
         {/* The creator's choice for every reader of this comic (a reader can still pick their own). A comic that never
-            chose flips; picking marks the choice, so it sticks (doc.ts creatorTurnOf). */}
+            chose flips; picking marks the choice, so it sticks (doc.ts creatorTurnOf). Tapping the style readers already
+            get stores nothing, as the director's set_reader_options does: no undo step, and a published comic never
+            looks changed for an Update nobody would see. */}
         <Segmented<PageTurnStyle>
           label="Page turn"
           size="xs"
           value={creatorTurnOf(r)}
-          onChange={(turn) => set({ turn, turnChosen: true }, 'Change page turn')}
+          onChange={(turn) => {
+            if (turn !== creatorTurnOf(r)) set({ turn, turnChosen: true }, 'Change page turn');
+          }}
           options={PAGE_TURN_OPTIONS.map(({ value, label, creatorTitle }) => ({ value, label, title: creatorTitle }))}
         />
       </div>

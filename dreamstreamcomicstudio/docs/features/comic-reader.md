@@ -22,7 +22,9 @@ Which style a reader gets (`turnStyleFor`, `immersive/readerPrefs.ts`): the read
 reader's settings: "Page turn style", stored on the device), else the creator's (`creatorTurnOf`), else the flip.
 
 - The creator picks in the board's Read tab, Reader look → Page turn (or asks the director, `set_reader_options`).
-  A pick stores `reader.turn` with `turnChosen: true`.
+  A pick stores `reader.turn` with `turnChosen: true`. Picking the style readers already get (the checked one, such as
+  Flip on an old comic) stores nothing, in the board as with the director: no undo step, and a published comic never
+  shows a change to update that no reader would see.
 - Past comics keep working with no migration. Every comic saved before the flip came back stored `turn: 'paper'` as the
   old default (and that is still how "no choice" is stored, so stored docs and their hashes are unchanged): without
   `turnChosen` it reads as the flip. A comic with no reader settings flips. 'slide' and 'fade' (only ever stored by a
@@ -36,7 +38,7 @@ reader's settings: "Page turn style", stored on the device), else the creator's 
 
 Where it applies: the Classic reader (it has no creator style: the flip, unless the reader picked another), the inline
 reader (the board's Read tab, public, shared and embed readers, Studio Originals), the immersive reader and the
-landing's sample comic. Buttons, the arrow keys, Space, PageUp/PageDown, the page edges, a swipe (≥ 45 px, mostly
+landing's sample comic (no creator style either: the reader's own pick on this device, else the flip). Buttons, the arrow keys, Space, PageUp/PageDown, the page edges, a swipe (≥ 45 px, mostly
 horizontal, `FLIP_SWIPE_PX`), the scrubber, and Home and End all turn with the style, and the page-turn sound plays
 when it is on (Home and End included). A
 pinch or a zoomed page never turns. The Classic toolbar reads "Page flip" / "Scroll", and so does its phone menu; on
@@ -44,8 +46,13 @@ phones the art and the dialogue under it swing together. Its stored reading stat
 before.
 
 Reduce motion (the device setting, or the reader's own in the full-screen reader's settings) changes the page at once
-in every reader and every style: no swing, no fold. The landing's sample reads the reader's setting through
-`immersive/readerMotionPref.ts` alone, so the landing's first load carries none of the reader's preference model.
+in every reader and every style: no swing, no fold. The landing's sample reads the reader's Reduce motion and own
+page-turn pick through `immersive/readerMotionPref.ts` alone, so the landing's first load carries none of the reader's
+preference model; `readerPrefs.ts` validates the stored pick with the same rule (`storedTurnPick`).
+
+On a low-power device (measured or forced) the paper turn and the fade slide instead (`simpleTurnKind`,
+`immersive/turnPlan.ts`), and the settings' Reading mode hint says a lighter transition plays. The flip and the slide
+play unchanged there, so their hint stays their own.
 
 No blank turn: a flip mounts the incoming page out of sight and swings it in once its pictures have decoded (inline,
 at most 1.8 s, `FLIP_DECODE_MS`). In the immersive reader a tapped turn waits up to 300 ms for the pages themselves,
@@ -56,14 +63,17 @@ same commit that its swing class goes on (`BookStage.tsx`, `swinging`), so it ne
 called back while it waits never shows the new page.
 
 Inline reader details: a webtoon (and any fit-to-width page) opens the next page at its top, and the previous one at
-its foot. A page taller than its window swings about the middle of what shows of it (`flipOriginY`), never the middle
+its foot. Home, End and the End card's Read again are jumps: their page opens at its top, even when it is the view just
+before (Home from the second view). A page taller than its window swings about the middle of what shows of it (`flipOriginY`), never the middle
 of the whole tall page, so the visible slice swings from the spine instead of shearing. Below 560 px the toolbar's
 arrows and counter are pinned outside the scrolling, faded lead, so Next never looks disabled at 320 px. Below 400 px
 the row still fits with them: the counter shows just "3/12" (the whole "Page 2 · 3/12" is still read out), Share
 moves into the More menu, and when four controls would still trail the row (an embed's link, the language picker,
 More and Full screen) Full screen joins the menu too. The Classic stage keeps its padding for a slide or fade preview,
 so those land at the page's own size. Auto-hiding chrome lays the page (and the scroll column) out below the measured toolbar. A
-page is read out as "Page n of N", N being the book's page count. The QA scene `page-flip`
+page is read out as "Page n of N", N being the book's page count, drawn or not (`bookPageTotal`,
+`reader/readerModel.ts`); the full-screen reader's counter counts the same way, so both readers agree while pages are
+still being drawn. The QA scene `page-flip`
 (`/qa/comic-qa.html?surface=app&scene=page-flip`) shows a live stage in all four styles and both directions, and the
 swing held part-way, at every smoke viewport.
 
@@ -72,7 +82,10 @@ Proof: `reader/pageFlip.test.ts`, `reader/PaperTurnSurface.test.tsx`, `reader/Co
 `immersive/ImmersiveReader.test.tsx`, `immersive/readerGpu.test.tsx` (the gate), `immersive/readerPrefs.test.ts` (the
 chain and the unmarked 'paper'), `shared/comic/comic.contract.test.ts` (old docs), `comicshost/ComicsLanding.atlas.test.tsx`
 (the sample's Reduce motion), `reader/ComicReaderView.test.tsx` (the phone-narrow toolbar),
-`tests/e2e/public.reader.spec.ts` (the row fits on every device), and the server's `sanitize/reader.test.ts` and
+`tests/e2e/public.reader.spec.ts` (the row fits on every device), `tests/e2e/reader.turns.spec.ts` (the default flip
+lands on art on a throttled phone), `tests/e2e/perf.spec.ts` (the paper turn's frame rate: the reader picks Paper there,
+since the flip runs no per-frame JS to sample), `immersive/ReaderSettingsSheet.test.tsx` (the low-power hint),
+`board/tabs.test.tsx` (re-picking stores nothing), and the server's `sanitize/reader.test.ts` and
 `tools/reader.test.ts` (asking for the flip a comic already gets stores nothing).
 
 ## Reader tokens and never-blank turns (RD-A)

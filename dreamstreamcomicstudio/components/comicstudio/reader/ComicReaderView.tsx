@@ -58,7 +58,7 @@ import {
   shouldShowIosFullscreenNote
 } from '../../../services/fullscreen';
 import { PaperTurnSurface, type PaperTurnHandle, type PaperTurnDirection } from './PaperTurnSurface';
-import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
+import { bookPageTotal, chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 import { pageProgress, pageVisualStatus } from '../board/boardModel';
 
 import { FOCUS_ITEM, FOCUS_RING } from '../../chat/studioDesign';
@@ -365,8 +365,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const t = useCallback((key: Parameters<typeof readerString>[1], vars?: Record<string, string | number>) => readerString(chromeLang, key, vars), [chromeLang]);
   const fallback = useMemo(() => (localized !== doc ? fallbackLineIds(localized) : []), [localized, doc]);
   const drawnPages = items.filter(item => item.kind === 'page').length;
-  // "Page 9 of 12": the book's page count (pages are numbered in the book, drawn or not), never just the drawn ones.
-  const bookPages = Math.max(localized.pages.length, ...items.map((item) => item.page?.n ?? 0));
+  // "Page N of M" names the book's page count (drawn or not), never the number drawn so far.
+  const totalPages = bookPageTotal(localized);
   const rtl = localized.format.readingDirection === 'rtl';
   const kind = localized.format.kind;
   const trim = useMemo(() => trimAspect(items, aspectNumber(localized.format.pageAspect)), [items, localized.format.pageAspect]);
@@ -486,6 +486,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const atEnd = !!currentView && !currentView.items.length;
 
   const turnRef = useRef<PaperTurnHandle>(null);
+  /** The next view change is a jump (Home, End, Read again), never one step back: the scroll reset below reads it. */
+  const jumped = useRef(false);
   const goToView = useCallback(
     (v: number) => {
       const target = views[clampIndex(v, views.length)];
@@ -625,6 +627,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         if (target === viewIdx) return;
         const move = () => {
           setNote(null);
+          // A jump, never one step back: even from the second view, Home opens the first page at its top.
+          jumped.current = true;
           goToView(target);
           hideChromeNow();
           // The page-turn sound, as on every other turn.
@@ -828,21 +832,23 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   }, [stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
   const geo = useMemo(() => currentView && layout !== 'scroll' ? geometryFor(currentView) : null, [currentView, layout, geometryFor]);
   // Fit to width, the page scrolls inside the stage box: a new page opens at its top, and the page before it (one step
-  // back) at its foot, where you left it; never mid-page where the last one was scrolled to. Home and End open at the top.
+  // back) at its foot, where you left it; never mid-page where the last one was scrolled to. Home and End (and Read
+  // again) open at the top: they mark their turn a jump, so Home from the second view is not taken for one step back.
+  // Read in the render that shows the new page: lastView is the page before it until the reset runs.
   const lastView = useRef(viewIdx);
+  const stepBack = !jumped.current && viewIdx === lastView.current - 1;
   useLayoutEffect(() => {
-    const back = viewIdx === lastView.current - 1;
+    jumped.current = false;
     lastView.current = viewIdx;
     const box = stageScroller.current;
     if (!box || decision.fit !== 'width' || layout === 'scroll') return;
-    box.scrollTop = back ? box.scrollHeight : 0;
+    box.scrollTop = stepBack ? box.scrollHeight : 0;
   }, [currentView?.key, decision.fit, layout]);
   // A page taller than its window (fit to width) swings about the middle of what shows of it, where the reset above
   // opens it (its top, or one step back its foot), never about the middle of the whole tall page: otherwise the visible
-  // slice shears instead of swinging in from the spine. Read in the render that shows the new page (lastView is the
-  // page before it until the reset runs).
+  // slice shears instead of swinging in from the spine.
   const flipOriginY = decision.fit === 'width' && geo && geo.book.h > stageH + 1
-    ? Math.round(Math.max(0, Math.min(geo.book.h, viewIdx === lastView.current - 1 ? geo.book.h + 12 - stageH / 2 : stageH / 2 - geo.book.y)))
+    ? Math.round(Math.max(0, Math.min(geo.book.h, stepBack ? geo.book.h + 12 - stageH / 2 : stageH / 2 - geo.book.y)))
     : undefined;
   /** The zoomable canvases: one over the stage, or one per segment on a dual-screen device. */
   const panes = useMemo(() => {
@@ -1004,7 +1010,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         active={atEnd}
         chapters={chapterStarts(items).map((c) => ({ n: c.n, title: c.title }))}
         language={language}
-        onReadAgain={() => goToView(0)}
+        onReadAgain={() => {
+          // Read again opens the first page at its top, however short the book.
+          if (viewIdx !== 0) jumped.current = true;
+          goToView(0);
+        }}
         onShare={onShare}
         onDownload={allowDownload || hostDownload ? () => void download() : undefined}
         downloadBusy={downloading}
@@ -1173,7 +1183,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       const c = slot.content;
       if (c.kind === 'blank') return null;
       const item = c.kind === 'item' ? items[c.index] : undefined;
-      const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: bookPages })) : undefined;
+      const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: totalPages })) : undefined;
       return (
         <div
           key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
