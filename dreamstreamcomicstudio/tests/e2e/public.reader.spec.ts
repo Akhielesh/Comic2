@@ -46,3 +46,76 @@ test.describe('public reader', () => {
     });
   }
 });
+
+// fx-reader: the inline reader's turn fixes, measured in a real browser. At its narrowest the toolbar keeps the page
+// arrows outside its scrolling, faded lead (Next reads as enabled on an iPhone SE), and auto-hiding chrome lays the
+// first page out below the toolbar; a webtoon's next page opens at its top.
+test.describe('inline reader turns', () => {
+  test('the page arrows stay unmasked and the first page clears an overlaying toolbar', async ({ qa, page }) => {
+    await qa.open({ surface: 'public', fixture: 'heist-12p' }, { settle: 800 });
+    const m = await page.evaluate(() => {
+      const root = document.querySelector('[data-testid="public-comic-reader"] [data-testid="comic-reader"]');
+      const toolbar = root?.querySelector<HTMLElement>('[data-testid="reader-toolbar"]');
+      const lead = root?.querySelector<HTMLElement>('[data-testid="reader-toolbar-lead"]');
+      const nav = root?.querySelector<HTMLElement>('[data-testid="reader-page-nav"]');
+      const next = nav?.querySelectorAll<HTMLButtonElement>('button')[1];
+      const first = root?.querySelector<HTMLElement>('[data-testid="reader-page"]');
+      if (!root || !toolbar || !nav || !next || !first) return null;
+      const r = next.getBoundingClientRect();
+      const actions = root.querySelector<HTMLElement>('[data-testid="reader-toolbar-actions"]');
+      const outside = [...(actions?.querySelectorAll<HTMLElement>('button, a[href]') ?? [])]
+        .filter((el) => {
+          const b = el.getBoundingClientRect();
+          return b.width > 0 && (b.left < -0.5 || b.right > innerWidth + 0.5);
+        })
+        .map((el) => el.getAttribute('aria-label') || el.textContent || el.tagName);
+      const masked = (el: Element | null): boolean => {
+        for (let n = el; n && n !== root; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if ((cs.maskImage && cs.maskImage !== 'none') || ((cs as unknown as { webkitMaskImage?: string }).webkitMaskImage ?? 'none') !== 'none') return true;
+        }
+        return false;
+      };
+      return {
+        leadScrolls: !!lead && getComputedStyle(lead).overflowX === 'auto',
+        navInLead: !!lead && lead.contains(nav),
+        nextMasked: masked(next),
+        nextEnabled: !next.disabled,
+        nextInside: r.left >= 0 && r.right <= innerWidth + 0.5 && r.width > 0,
+        rowOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+        outside,
+        overlays: getComputedStyle(toolbar).position === 'absolute',
+        toolbarH: toolbar.offsetHeight,
+        firstTop: first.getBoundingClientRect().top - root.getBoundingClientRect().top
+      };
+    });
+    expect(m, 'the public reader shows its toolbar and a page').not.toBeNull();
+    if (!m) return;
+    if (m.leadScrolls) expect(m.navInLead, 'one row: the arrows are pinned outside the scrolling lead').toBe(false);
+    expect(m.nextMasked, 'no fade mask over Next').toBe(false);
+    expect(m.nextEnabled, 'Next is enabled on the cover').toBe(true);
+    expect(m.nextInside, 'Next sits inside the viewport').toBe(true);
+    // The pinned arrows never push the trailing controls (More, Full screen) off the row or the screen.
+    expect(m.rowOverflow, 'the toolbar row fits its box').toBeLessThanOrEqual(1);
+    expect(m.outside, 'every trailing control sits inside the viewport').toEqual([]);
+    if (m.overlays) expect(m.firstTop, `the first page starts below the ${m.toolbarH} px toolbar`).toBeGreaterThanOrEqual(m.toolbarH - 1);
+  });
+
+  test('a webtoon’s next page opens at its top', async ({ qa, page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' }); // the turn lands at once: the scroll position is under test
+    await qa.open({ surface: 'classic-reader', fixture: 'webtoon-20p', img: 'svg' }, { settle: 800 });
+    const box = page.getByTestId('reader-stage-box');
+    const scrolls = await box.evaluate((el) => el.scrollHeight > el.clientHeight + 4);
+    test.skip(!scrolls, 'the page fits the stage here: nothing to scroll');
+    await box.evaluate((el) => {
+      el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2);
+    });
+    expect(await box.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    const counter = page.getByTestId('reader-counter');
+    const before = await counter.textContent();
+    await page.getByTestId('reader-page-nav').getByRole('button').nth(1).click();
+    await expect(counter).not.toHaveText(before ?? '');
+    await expect.poll(() => box.evaluate((el) => el.scrollTop), { message: 'the next page opens at its top' }).toBe(0);
+  });
+});
+

@@ -3,7 +3,8 @@
 // sanitizePatchOps path (the same validator the UI's "Reader look" panel uses).
 import { describe, expect, it } from 'vitest';
 import { applyOps } from '../../../../shared/comic/ops.js';
-import { DEFAULT_READER, pageSpecHash, readerOf } from '../../../../shared/comic/doc.js';
+import { DEFAULT_READER, creatorTurnOf, pageSpecHash, readerOf } from '../../../../shared/comic/doc.js';
+import { inverseOps } from '../../../../shared/comic/undo.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { plannedDoc } from '../orchestrator.fakes.js';
@@ -37,8 +38,25 @@ describe('registry', () => {
 describe('sanitizeReaderPatch', () => {
   it('keeps only the keys that were sent, with clean values', () => {
     expect(sanitizeReaderPatch({ turn: 'slide' })).toEqual({ turn: 'slide' });
+    expect(sanitizeReaderPatch({ turn: 'flip', turnChosen: true })).toEqual({ turn: 'flip', turnChosen: true });
     expect(sanitizeReaderPatch({ paperTexture: false, ambient: true, guidedOverview: false })).toEqual({ paperTexture: false, ambient: true, guidedOverview: false });
     expect(sanitizeReaderPatch({ credits: '  Written by   Asha\nand Ravi  ' })).toEqual({ credits: 'Written by Asha and Ravi' });
+  });
+
+  it('a creator’s pick of the paper turn sticks; undoing it on an old comic brings the flip back', () => {
+    // Comics saved before the flip came back stored 'paper' as the default: that reads as the flip.
+    const doc = plannedDoc();
+    doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };
+    expect(creatorTurnOf(readerOf(doc))).toBe('flip');
+    const ops = sanitizePatchOps(doc, [{ op: 'reader', patch: { turn: 'paper', turnChosen: true } }], sctx);
+    const picked = applyOps(doc, ops);
+    expect(readerOf(picked)).toMatchObject({ turn: 'paper', turnChosen: true });
+    expect(creatorTurnOf(readerOf(picked))).toBe('paper');
+    const inverse = inverseOps(doc, ops);
+    expect(inverse).toEqual([{ op: 'reader', patch: expect.objectContaining({ turn: 'paper', turnChosen: null }) }]);
+    const undone = applyOps(picked, sanitizePatchOps(picked, inverse, sctx));
+    expect(readerOf(undone).turnChosen).toBeUndefined();
+    expect(creatorTurnOf(readerOf(undone))).toBe('flip');
   });
 
   it('null and empty text clear a key (deep-merge op: null = clear)', () => {
@@ -47,7 +65,9 @@ describe('sanitizeReaderPatch', () => {
   });
 
   it('rejects bad enums, non-booleans, non-text, too-long text, unknown keys and empty patches', () => {
-    rejects(() => sanitizeReaderPatch({ turn: 'curl' }), /paper, slide, fade/);
+    rejects(() => sanitizeReaderPatch({ turn: 'curl' }), /flip, paper, slide, fade/);
+    rejects(() => sanitizeReaderPatch({ turnChosen: 'yes' }), /turnChosen must be true/);
+    rejects(() => sanitizeReaderPatch({ turnChosen: false }), /turnChosen must be true/);
     rejects(() => sanitizeReaderPatch({ ambient: 'yes' }), /ambient must be true or false/);
     rejects(() => sanitizeReaderPatch({ credits: 42 }), /credits line must be text/);
     rejects(() => sanitizeReaderPatch({ credits: 'x'.repeat(DOC_LIMITS.readerTextChars + 1) }), /to 140 characters \(it has 141\)/);

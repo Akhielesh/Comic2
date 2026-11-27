@@ -676,11 +676,45 @@ describe('ReaderTab', () => {
     render(<ReaderTab studio={studio} doc={studio.doc!} />);
     fireEvent.click(screen.getByRole('button', { name: 'Reader look' }));
     const panel = screen.getByRole('region', { name: 'Reader look' });
-    expect(within(panel).queryByRole('radio', { name: 'Fade' })).toBeNull();
+    // The creator's page turn: Flip first; a comic that never chose (its stored 'paper' is the old default) shows Flip.
+    expect(within(within(panel).getByRole('radiogroup', { name: 'Page turn' })).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Flip', 'Paper', 'Slide', 'Fade']);
+    expect(within(panel).getByRole('radio', { name: 'Flip' })).toBeChecked();
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Fade' }));
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { turn: 'fade', turnChosen: true } }], { label: 'Change page turn' });
     fireEvent.click(within(panel).getByRole('switch', { name: 'Paper texture' }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { paperTexture: false } }], { label: 'Change reader look' });
     edit(within(panel).getByLabelText('End card line'), 'By the Rao family');
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { credits: 'By the Rao family' } }], { label: 'Change reader look' });
+  });
+
+  it('tapping the page turn readers already get stores nothing; picking the paper turn on an old comic stores it', () => {
+    // An old comic: the stored 'paper' without turnChosen is no choice, and reads as the flip.
+    const legacy = makeSampleDoc((d) => {
+      d.reader = { ...d.reader!, turn: 'paper' };
+      delete d.reader.turnChosen;
+    });
+    const studio = makeStudio(legacy);
+    const { unmount } = render(<ReaderTab studio={studio} doc={legacy} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reader look' }));
+    let panel = screen.getByRole('region', { name: 'Reader look' });
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Flip' }));
+    expect(studio.patch, 'no undo step and no change to republish').not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Paper' }));
+    expect(studio.patch).toHaveBeenCalledTimes(1);
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'reader', patch: { turn: 'paper', turnChosen: true } }], { label: 'Change page turn' });
+    unmount();
+    // An old comic that stored slide (always a choice) keeps it unmarked: tapping Slide adds no mark either.
+    const slide = makeSampleDoc((d) => {
+      d.reader = { ...d.reader!, turn: 'slide' };
+      delete d.reader.turnChosen;
+    });
+    const studio2 = makeStudio(slide);
+    render(<ReaderTab studio={studio2} doc={slide} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reader look' }));
+    panel = screen.getByRole('region', { name: 'Reader look' });
+    expect(within(panel).getByRole('radio', { name: 'Slide' })).toBeChecked();
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Slide' }));
+    expect(studio2.patch).not.toHaveBeenCalled();
   });
 
   it('switches the reading language when the comic has editions, and exports that edition', () => {

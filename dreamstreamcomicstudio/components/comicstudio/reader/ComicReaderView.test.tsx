@@ -675,8 +675,12 @@ describe('ComicReaderView on devices', () => {
     const lead = within(toolbar).getByTestId('reader-toolbar-lead');
     expect(lead.className).toMatch(/\boverflow-x-auto\b/);
     expect(lead.className).toContain('[&>*]:shrink-0');
-    expect(lead).toContainElement(within(toolbar).getByTestId('reader-counter'));
     expect(lead).toContainElement(within(toolbar).getByRole('radiogroup', { name: 'Reading mode' }));
+    // The arrows and the counter are pinned beside the lead, never under its fade (320 px: Next reads as enabled).
+    const nav = within(toolbar).getByTestId('reader-page-nav');
+    expect(lead).not.toContainElement(nav);
+    expect(nav).toContainElement(within(toolbar).getByTestId('reader-counter'));
+    expect(nav.className).toMatch(/\bshrink-0\b/);
     const actions = within(toolbar).getByTestId('reader-toolbar-actions');
     expect(actions.className).toMatch(/\bshrink-0\b/);
     expect(actions).toContainElement(within(toolbar).getByRole('button', { name: 'More' }));
@@ -695,6 +699,51 @@ describe('ComicReaderView on devices', () => {
     expect(screen.getByTestId('reader-rtl-chip')).not.toHaveClass('sr-only');
     expect(screen.getByTestId('reader-fallback-chip')).not.toHaveClass('sr-only');
     expect(screen.getByTestId('reader-toolbar-lead')).toHaveClass('contents');
+  });
+
+  it('phone-narrow (under 400 px) the pinned arrows always fit: a bare counter, Share in More, and Full screen too when four controls would trail', () => {
+    const embedLink = <a href="/c/qa">Open on DreamStream</a>;
+    const share = vi.fn();
+    const open = (w: number, extra: { language?: typeof teluguSlot } = {}) => {
+      size(w, 740);
+      return render(
+        <FormFactorProvider value={formFactorFor({ w, h: 740, coarse: true })}>
+          <ComicReaderView doc={extra.language ? teluguDraft(false) : drawnDoc()} urlFor={fakeUrlFor} initialMode="page" onShare={share} toolbarExtra={embedLink} immersiveEntry {...extra} />
+        </FormFactorProvider>
+      );
+    };
+    const menuNames = () => {
+      fireEvent.click(within(screen.getByTestId('reader-toolbar-actions')).getByRole('button', { name: 'More' }));
+      const names = within(screen.getByRole('menu', { name: 'More' })).getAllByRole('menuitem').map((b) => b.textContent);
+      fireEvent.click(within(screen.getByTestId('reader-toolbar-actions')).getByRole('button', { name: 'More' }));
+      return names;
+    };
+    // An embed at 360: the counter shows just "1/n" (the whole label is still read out); Share moves into More.
+    const embed = open(360);
+    const counter = screen.getByTestId('reader-counter');
+    expect(counter.querySelector('[aria-hidden]')?.textContent).toMatch(/^1\/\d+$/);
+    expect(counter.querySelector('.sr-only')?.textContent).toMatch(/^Cover · 1\/\d+$/);
+    expect(counter.className).not.toMatch(/min-w-/);
+    const actions = screen.getByTestId('reader-toolbar-actions');
+    expect(within(actions).queryByRole('button', { name: 'Share' })).toBeNull();
+    expect(within(actions).getByRole('button', { name: 'Full screen' })).toHaveAttribute('data-action', 'read');
+    expect(menuNames()).toContain('Share');
+    fireEvent.click(within(actions).getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Share' }));
+    expect(share).toHaveBeenCalledTimes(1);
+    embed.unmount();
+    // A translated embed at 320: link, language, More and Full screen would not fit beside the arrows: Full screen
+    // joins the menu (still one tap away), and the language picker keeps its place.
+    const translated = open(320, { language: teluguSlot });
+    const row = screen.getByTestId('reader-toolbar-actions');
+    expect(within(row).queryByRole('button', { name: /Full screen|పూర్తి/ })).toBeNull();
+    expect(within(row).getByRole('button', { name: /Language|భాష/ })).toBeInTheDocument();
+    expect(within(row).getAllByRole('button').length).toBe(2);
+    translated.unmount();
+    // A wider box keeps every control on the row and the counter whole.
+    open(600);
+    expect(within(screen.getByTestId('reader-toolbar-actions')).getByRole('button', { name: 'Share' })).toBeInTheDocument();
+    expect(screen.getByTestId('reader-counter').textContent).toMatch(/^Cover · 1\/\d+$/);
   });
 
   it('the sideways-scrolling lead fades the edge that has more', () => {

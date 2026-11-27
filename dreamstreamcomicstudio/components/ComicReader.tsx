@@ -3,6 +3,7 @@ import { Project, ComicPanel, DialogueBlock, TextLayout, PageStudioPage } from '
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles, MoreHorizontal, Library, LayoutDashboard, Info, Rows3, LogIn } from 'lucide-react';
 import { PaperTurnSurface, type PaperTurnDirection, type PaperTurnHandle } from './comicstudio/reader/PaperTurnSurface';
+import { readPrefs, turnStyleFor } from './comicstudio/immersive/readerPrefs';
 import { PanelDialogue } from './PanelDialogue';
 import { derivePanelTitle } from '../services/panelDescription';
 import { readerDialogueBlocks } from '../services/dialogueUtils';
@@ -318,6 +319,11 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   };
 
   const [pageIndex, setPageIndex] = useState(0);
+  // Page Flip: the new page swings in from the spine (index.css's page-flip classes, through PaperTurnSurface). A Classic
+  // comic has no creator's style, so it flips unless the reader picked another style in the reader settings; their
+  // Reduce motion (and the OS setting) changes the page at once.
+  const [readerPrefs] = useState(readPrefs);
+  const turnStyle = turnStyleFor(undefined, readerPrefs.turn);
   const turnSurface = useRef<PaperTurnHandle>(null);
   const sheetElement = useRef<HTMLDivElement>(null);
   const restoredProject = useRef<string | null>(null);
@@ -679,8 +685,15 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       if (readerMode === 'flip') {
         if (e.key === (rtl ? 'ArrowLeft' : 'ArrowRight') || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
         else if (e.key === (rtl ? 'ArrowRight' : 'ArrowLeft') || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
-        else if (e.key === 'Home') { e.preventDefault(); turnSurface.current?.cancel(); modeChosen.current = true; setPageIndex(0); }
-        else if (e.key === 'End') { e.preventDefault(); turnSurface.current?.cancel(); modeChosen.current = true; setPageIndex(Math.max(pages.length - 1, 0)); }
+        else if (e.key === 'Home' || e.key === 'End') {
+          e.preventDefault();
+          // Home and End flip too: the first page swings in backwards, the last one forwards.
+          const target = e.key === 'Home' ? 0 : Math.max(pages.length - 1, 0);
+          if (target === pageIndex) return;
+          const move = () => { if (soundOn) playPageTurnSound(); modeChosen.current = true; setPageIndex(target); };
+          if (turnSurface.current) turnSurface.current.jump(target > pageIndex ? 1 : -1, move, renderFlipPage(target, true));
+          else move();
+        }
       } else {
         const el = scrollRef.current;
         if (!el) return;
@@ -696,7 +709,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode, rtl]);
+  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode, rtl, soundOn]);
 
   // The reading mode's Back-stack layer ('fullscreen') comes and goes with readingMode: entering pushes its entry,
   // leaving with a control pops it (useBackLayer above).
@@ -895,7 +908,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           </button>
           <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => chooseMode(readerMode === 'scroll' ? 'flip' : 'scroll'))}>
             {readerMode === 'scroll' ? <BookOpen className="h-4 w-4 shrink-0" aria-hidden /> : <Rows3 className="h-4 w-4 shrink-0" aria-hidden />}
-            {readerMode === 'scroll' ? 'Page turn' : 'Scroll'}
+            {readerMode === 'scroll' ? 'Page flip' : 'Scroll'}
           </button>
           <button type="button" role="menuitemcheckbox" aria-checked={fxOn} className={PHONE_MENU_ITEM} onClick={toggleFx}>
             <Sparkles className="h-4 w-4 shrink-0" aria-hidden /> Paper texture
@@ -980,7 +993,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             <MessageSquareText className="w-4 h-4" /> Comments
           </button>
           <div role="group" aria-label="Reading mode" className="inline-flex gap-1">
-            <button type="button" aria-pressed={readerMode==='flip'} onClick={()=>chooseMode('flip')} className={readerMode==='flip' ? TOOL_BTN_ON : TOOL_BTN}>Page turn</button>
+            <button type="button" aria-pressed={readerMode==='flip'} onClick={()=>chooseMode('flip')} className={readerMode==='flip' ? TOOL_BTN_ON : TOOL_BTN}>Page flip</button>
             <button type="button" aria-pressed={readerMode==='scroll'} onClick={()=>chooseMode('scroll')} className={readerMode==='scroll' ? TOOL_BTN_ON : TOOL_BTN}>Scroll</button>
           </div>
           <details className="shrink-0">
@@ -1095,6 +1108,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     className="classic-paper-stage flex-1 min-h-0 overflow-hidden select-none bg-[var(--ds-well)]"
                     paperElement={()=>sheetElement.current}
                     pageKey={project.id+':'+pageIndex} rtl={rtl} isZoomed={isViewportZoomed}
+                    turnStyle={turnStyle} reducedMotion={readerPrefs.reduceMotion}
                     onClick={event => {
                       if (!event.detail || isViewportZoomed() || menuOpen || (event.target instanceof Element && event.target.closest('button,a,[data-no-page-turn]'))) return;
                       const box = event.currentTarget.getBoundingClientRect();
@@ -1136,7 +1150,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                 )}
               </div>
-              {!phoneUi && <div className={`mt-1.5 hidden text-[11px] sm:block ${MUTED}`}>Drag or click a page edge to turn · ← → or Space · Home/End to jump</div>}
+              {!phoneUi && <div className={`mt-1.5 hidden text-[11px] sm:block ${MUTED}`}>{turnStyle === 'paper' ? 'Drag or click a page edge to turn' : 'Click a page edge to turn'} · ← → or Space · Home/End to jump · Esc to close · swipe on touch</div>}
             </div>
           )}
         </div>

@@ -25,6 +25,13 @@ const drawnDoc = (): ComicDoc =>
     });
   });
 
+/** A comic whose creator picked the paper turn (a stored 'paper' alone is the old default, which flips). */
+const paperDoc = (): ComicDoc => {
+  const doc = drawnDoc();
+  doc.reader = { ...doc.reader, turn: 'paper', turnChosen: true };
+  return doc;
+};
+
 let reduce = false;
 const realMatchMedia = window.matchMedia;
 const setViewport = (w: number, h: number) => {
@@ -154,7 +161,8 @@ describe('ImmersiveReader', () => {
     expect(counter()).toBe('Page 3 of 6');
     unmount();
     render(<ImmersiveReader doc={makeSampleDoc()} urlFor={fakeUrlFor} intro={false} initialPage={3} onExit={() => undefined} />);
-    expect(counter()).toBe('Page 1 of 2');
+    // Two of the book's six pages are drawn: the total is still the book's (never "of 2").
+    expect(counter()).toBe('Page 1 of 6');
     expect(screen.getByRole('status')).toHaveTextContent('Page 3 isn’t drawn yet — showing page 1.');
   });
 
@@ -211,10 +219,27 @@ describe('ImmersiveReader', () => {
     fireEvent.click(screen.getByLabelText('Page-turn sound'));
     expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ sound: true });
     expect(screen.getByRole('radio', { name: 'Page turn' })).toBeChecked();
+    // The page-turn style: the flip first; a comic that never chose shows its flip as the creator's.
+    const style = within(screen.getByRole('group', { name: 'Page turn style' }));
+    expect(style.getAllByRole('radio').map((r) => r.closest('label')!.textContent)).toEqual(['Flip', 'Paper', 'Slide', 'Fade']);
+    expect(style.getByRole('radio', { name: 'Flip' })).toBeChecked();
+    expect(style.getByRole('radio', { name: 'Flip' }).closest('label')).toHaveAttribute('title', expect.stringMatching(/this comic’s own style/));
+    // Said on screen too (touch screens show no tooltips) and read with the group.
+    const group = screen.getByRole('group', { name: 'Page turn style' });
+    expect(group).toHaveAccessibleDescription(/^Flip is this comic’s own style\./);
+    fireEvent.click(style.getByRole('radio', { name: 'Paper' }));
+    // The reader's own pick carries its mark, so it is never read as #316's mode-switch 'paper'.
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'paper', turnPicked: true });
     fireEvent.click(screen.getByRole('radio', { name: 'Scroll' }));
     expect(screen.getByRole('radio', { name: 'Scroll' })).toBeChecked();
+    expect(screen.queryByRole('group', { name: 'Page turn style' })).toBeNull();
+    // Back to turning pages: the style the reader picked stays.
     fireEvent.click(screen.getByRole('radio', { name: 'Page turn' }));
     expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'paper' });
+    // Picking the creator's own style follows the creator again.
+    fireEvent.click(within(screen.getByRole('group', { name: 'Page turn style' })).getByRole('radio', { name: 'Flip' }));
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'auto' });
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).not.toHaveProperty('turnPicked');
     press('Escape');
     expect(screen.queryByRole('dialog', { name: 'Reader settings' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
@@ -354,8 +379,46 @@ describe('ImmersiveReader', () => {
     expect((document.querySelector('[data-slot="ep-front"]') as HTMLElement).dataset.visible).toBe('true');
   });
 
-  it('a real paper turn folds the page, lands, and leaves no styles behind', async () => {
+  it('the page flip (a comic that never chose): the new page swings in from the spine, never folds, then lands', async () => {
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    expect(counter()).toBe('Page 1 of 6');
+    const page1 = document.querySelector('[data-slot="i1"]') as HTMLElement;
+    const page2 = document.querySelector('[data-slot="i2"]') as HTMLElement;
+    press('ArrowRight');
+    await waitFor(() => expect(page2.classList.contains('animate-page-flip-next')).toBe(true), { timeout: 3000, interval: 5 });
+    // The page you were on goes; the new one swings in over the desk (the Classic reader's Page Flip).
+    expect(page2.dataset.visible).toBe('true');
+    expect(page1.dataset.visible).toBe('false');
+    expect(page1.style.clipPath).toBe('');
+    expect(screen.queryByTestId('paper-back')).toBeNull();
+    await waitFor(() => expect(counter()).toBe('Page 2 of 6'), { timeout: 3000 });
+    expect(page2.className).not.toMatch(/animate-page-flip/);
+    // Back: the previous page swings in from the other edge.
+    press('ArrowLeft');
+    await waitFor(() => expect(page1.classList.contains('animate-page-flip-prev')).toBe(true), { timeout: 3000, interval: 5 });
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 3000 });
+  });
+
+  it('the page flip: a swipe turns it (no leaf follows the finger); reduced motion changes the page at once', async () => {
+    const { unmount } = render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    const stage = () => screen.getByTestId('book-stage');
+    const page2 = () => document.querySelector('[data-slot="i2"]') as HTMLElement;
+    fireEvent.pointerDown(stage(), { clientX: 300, clientY: 400, pointerId: 3, pointerType: 'touch' });
+    fireEvent.pointerMove(stage(), { clientX: 240, clientY: 402, pointerId: 3, pointerType: 'touch' });
+    expect(page2().dataset.visible).toBe('false');
+    fireEvent.pointerUp(stage(), { clientX: 200, clientY: 402, pointerId: 3, pointerType: 'touch' });
+    await waitFor(() => expect(page2().classList.contains('animate-page-flip-next')).toBe(true), { timeout: 3000, interval: 5 });
+    await waitFor(() => expect(counter()).toBe('Page 2 of 6'), { timeout: 3000 });
+    unmount();
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    press('ArrowRight');
+    expect(counter()).toBe('Page 2 of 6');
+    expect(document.querySelector('.animate-page-flip-next, .animate-page-flip-prev')).toBeNull();
+  });
+
+  it('a real paper turn (the creator’s choice) folds the page, lands, and leaves no styles behind', async () => {
+    render(<ImmersiveReader doc={paperDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
     expect(counter()).toBe('Page 1 of 6');
     const page1 = document.querySelector('[data-slot="i1"]') as HTMLElement;
     const page2 = document.querySelector('[data-slot="i2"]') as HTMLElement;
@@ -371,9 +434,9 @@ describe('ImmersiveReader', () => {
     expect(screen.queryByTestId('paper-back')).toBeNull();
   });
 
-  it('reduced motion: dragging a page is a crossfade that follows the finger — no fold, no paper back', async () => {
+  it('reduced motion: dragging a paper page is a crossfade that follows the finger — no fold, no paper back', async () => {
     reduce = true;
-    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    render(<ImmersiveReader doc={paperDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
     const stage = screen.getByTestId('book-stage');
     const page1 = document.querySelector('[data-slot="i1"]') as HTMLElement;
     const page2 = document.querySelector('[data-slot="i2"]') as HTMLElement;

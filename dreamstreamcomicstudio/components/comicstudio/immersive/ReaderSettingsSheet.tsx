@@ -4,9 +4,11 @@
 
 import React from 'react';
 import { Download, Keyboard, Share2, X } from 'lucide-react';
+import type { PageTurnStyle } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
-import type { ReaderPrefs, RoomLight } from './readerPrefs';
+import { PAGE_TURN_OPTIONS, pageTurnLabel, turnStyleFor, type ReaderPrefs, type RoomLight } from './readerPrefs';
 import { HudButton } from './ReaderHud';
+import { lighterOnLowPower } from './turnPlan';
 
 export interface ReaderSettingsSheetProps {
   open: boolean;
@@ -15,6 +17,8 @@ export interface ReaderSettingsSheetProps {
   onPrefs(patch: Partial<ReaderPrefs>): void;
   layout: { pref: LayoutPref; canTurnPages: boolean };
   onLayout(pref: LayoutPref): void;
+  /** The creator's page-turn style (creatorTurnOf): marked in the picker, and picking it follows the creator again. */
+  creatorTurn: PageTurnStyle;
   lowPower: boolean;
   osReducedMotion: boolean;
   onShortcuts(): void;
@@ -72,10 +76,12 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
   if (!p.open) return null;
   const { prefs } = p;
   const reduced = prefs.reduceMotion || p.osReducedMotion;
-  let modeHint = 'Drag a page edge or use the arrows to turn the page.';
+  const turn = turnStyleFor({ turn: p.creatorTurn, turnChosen: true }, prefs.turn);
+  let modeHint = turn === 'paper' ? 'Drag a page edge or use the arrows to turn the page.' : 'Swipe, tap a page edge or use the arrows to turn the page.';
   if (p.layout.pref === 'scroll') modeHint = 'Read down the comic.';
   else if (reduced) modeHint = 'Use the arrows or swipe. Reduced motion is on.';
-  else if (p.lowPower) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
+  // Only a style that low power lightens (the paper and the fade slide) says so; the flip and the slide play unchanged.
+  else if (p.lowPower && lighterOnLowPower(turn)) modeHint = 'Use the arrows or swipe. A lighter transition keeps pages responsive.';
   return (
     <div
       ref={ref}
@@ -103,13 +109,25 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             label="Reading mode"
             value={p.layout.pref === 'scroll' ? 'scroll' : 'turn'}
             onChange={(mode) => {
-              if (mode === 'turn') p.onPrefs({ turn: 'paper', fancyTurns: 'auto' });
+              // Back to turning pages: the turn style the reader picked (or the creator's) stays as it is.
+              if (mode === 'turn') p.onPrefs({ fancyTurns: 'auto' });
               p.onLayout(mode === 'scroll' ? 'scroll' : 'auto');
             }}
             options={[{ value: 'turn', label: 'Page turn' }, { value: 'scroll', label: 'Scroll' }]}
             hint={modeHint}
           />
         ) : <p className="text-[13px]">Scroll down to read this continuous page.</p>}
+        {p.layout.canTurnPages && p.layout.pref !== 'scroll' && (
+          <Choice<PageTurnStyle>
+            label="Page turn style"
+            value={turn}
+            // Picking the creator's own style follows the creator again ('auto'), so a later change of theirs reaches you.
+            onChange={(next) => p.onPrefs(next === p.creatorTurn ? { turn: 'auto' } : { turn: next, turnPicked: true })}
+            options={PAGE_TURN_OPTIONS.map(({ value, label, title }) => ({ value, label, title: value === p.creatorTurn ? `${title} (this comic’s own style)` : title }))}
+            // Said on screen (and read with the group): which style is the comic's own, so a phone shows it too.
+            hint={`${pageTurnLabel(p.creatorTurn)} is this comic’s own style.${reduced ? ' Reduced motion is on: pages change at once.' : ''}`}
+          />
+        )}
         {p.onCopyPageLink && !!p.pageNumber && p.pageNumber > 0 && (
           <button type="button" onClick={() => p.onCopyPageLink?.(p.pageNumber!)} className="press min-h-11 w-full rounded-xl bg-[var(--ds-reader-hud-hover)] text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
             Copy link to page {p.pageNumber}

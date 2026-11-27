@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { bookOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
+import { bookOf, creatorTurnOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
 import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
@@ -25,7 +25,7 @@ import { aspectNumber } from '../board/balloonGeometry';
 import { cx, useElementSize } from '../board/ui';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { usePrefersReducedMotion } from '../../studio/kit/motion';
-import { chapterOf, chapterStarts, readerItems, resolvePageN, type ReaderItem } from '../reader/readerModel';
+import { bookPageTotal, chapterOf, chapterStarts, readerItems, resolvePageN, type ReaderItem } from '../reader/readerModel';
 import { averagePalette, roomBackground, themeColorFor, type Palette } from './ambient';
 import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
@@ -529,8 +529,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const current = views[view];
   const firstItem = current?.items[0];
   const isEnd = !!current?.slots.some((s) => s.kind === 'end');
-  const drawnPages = items.filter((i) => i.kind === 'page');
-  const totalPages = drawnPages.length;
+  // "Page N of M": M is the book's page count (drawn or not), never the number drawn so far, as the inline reader says.
+  const totalPages = bookPageTotal(localized);
   const labelOf = useCallback(
     (v: number) => {
       const vv = views[v];
@@ -861,7 +861,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               endCard={endCardNode}
               hinge={hinge}
               sound={prefs.sound}
-              peel={ff.hover && !ff.coarse && !reduced}
+              // The corner peel is the paper's teaser: only the paper turn folds.
+              peel={ff.hover && !ff.coarse && !reduced && eff.turn === 'paper'}
               onCommand={onCommand}
               onFrames={(deltas) => low.reportFrames(deltas)}
               onImageError={props.onImageError}
@@ -951,6 +952,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
         prefs={prefs}
         onPrefs={onPrefs}
         layout={{ pref: layoutPref, canTurnPages }}
+        creatorTurn={creatorTurnOf(creator)}
         onLayout={onLayout}
         lowPower={low.lowPower}
         osReducedMotion={osReduced}

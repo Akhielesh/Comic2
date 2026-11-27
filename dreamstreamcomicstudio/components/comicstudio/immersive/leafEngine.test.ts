@@ -201,3 +201,57 @@ describe('timing and perf', () => {
     expect((window as unknown as { __comicReaderPerf: { blankTurns: number } }).__comicReaderPerf.blankTurns).toBe(before + 1);
   });
 });
+
+describe('flip', () => {
+  const flipPlan = (over: Partial<TurnPlan> = {}) => plan({ kind: 'flip', leafSide: 'center', frontKey: undefined, backKey: undefined, staticKeys: [], underKeys: [], ...over });
+
+  it('swings the incoming page in with index.css’s class, no frame loop, and lands once it ends', () => {
+    const incoming = part();
+    const outgoing = part();
+    const raf = vi.spyOn(globalThis, 'requestAnimationFrame');
+    const { engine, onDone } = setup(flipPlan({ incomingKeys: ['i3'], outgoingKeys: ['i2'] }), { incoming: [incoming], outgoing: [outgoing] });
+    engine.startAuto();
+    expect(incoming.root!.classList.contains('animate-page-flip-next')).toBe(true);
+    // Transform and opacity are the CSS animation's: the engine writes nothing per frame.
+    expect(incoming.root!.style.transform).toBe('');
+    expect(outgoing.root!.style.cssText).toBe('');
+    expect(raf).not.toHaveBeenCalled();
+    incoming.root!.dispatchEvent(new Event('animationend'));
+    expect(onDone).toHaveBeenCalledWith('commit');
+    expect(incoming.root!.className).toBe('');
+    expect(durationFor('flip', true, true)).toBe(450);
+  });
+
+  it('mirrors in RTL; a spread swings as a pair around its spine; a reversal drops the swing', async () => {
+    const left = part();
+    const right = part();
+    const slotX = new Map([[left.root!, 0], [right.root!, W]]);
+    const p = flipPlan({ dir: -1, mirrored: true, incomingKeys: ['i2', 'i3'] });
+    const onDone = vi.fn();
+    const engine = new TurnEngine({ plan: p, W, H, spineX: 0, bookW: 2 * W, slotX, flipSpineX: W, durationMs: 450 }, { incoming: [left, right], outgoing: [] }, { onDone });
+    engine.startAuto();
+    expect(left.root!.classList.contains('animate-page-flip-next')).toBe(true);
+    expect(left.root!.style.transformOrigin).toBe(`${W}px 50%`);
+    expect(right.root!.style.transformOrigin).toBe('0px 50%');
+    engine.springBack();
+    expect(left.root!.className).toBe('');
+    expect(right.root!.style.transformOrigin).toBe('');
+    await Promise.resolve();
+    expect(onDone).toHaveBeenCalledWith('cancel');
+  });
+
+  it('lands on its own when no animation runs, and destroy() leaves the pages as React rendered them', () => {
+    const incoming = part();
+    const { engine, onDone } = setup(flipPlan({ incomingKeys: ['i3'] }), { incoming: [incoming] });
+    engine.startAuto();
+    vi.advanceTimersByTime(600);
+    expect(onDone).toHaveBeenCalledWith('commit');
+    const again = part();
+    const second = setup(flipPlan({ incomingKeys: ['i3'] }), { incoming: [again] });
+    second.engine.startAuto();
+    second.engine.destroy();
+    expect(again.root!.className).toBe('');
+    vi.advanceTimersByTime(600);
+    expect(second.onDone).not.toHaveBeenCalled();
+  });
+});

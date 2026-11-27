@@ -8,7 +8,8 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { isWithheld, type ReaderItem } from '../reader/readerModel';
+import { isWithheld, swipeDelta, type ReaderItem } from '../reader/readerModel';
+import { FLIP_DECODE_MS, FLIP_SWIPE_PX } from '../reader/pageFlip';
 import { cubicBezier, decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
 import { cameraDuration, IDENTITY_CAMERA, type Camera } from './guidedModel';
@@ -63,6 +64,12 @@ export interface BookStageProps {
 
 const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [data-no-turn]';
 const DRAG_SLOP = 6;
+/**
+ * Never blank (reader.md §8.2): after the turn gate (≤ turnGate for the pages themselves), a tapped turn keeps waiting,
+ * this long in all at most (the inline flip's own decode wait), until each page has at least its stand-in decoded, so it
+ * never lands on bare paper on a slow phone. A failed load never holds it.
+ */
+export const NEVER_BLANK_MS = FLIP_DECODE_MS;
 /** The page-block edge: its thickest (px at layout scale 1) and how much each view adds. */
 export const EDGE_MAX = 6;
 export const edgeThickness = (views: number): number => Math.min(EDGE_MAX, 0.6 * Math.max(0, views));
@@ -106,7 +113,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   const engine = useRef<TurnEngine | null>(null);
   const engineMotion = useRef<unknown>(null);
   const drag = useRef<DragInfo | null>(null);
-  const down = useRef<{ id: number; x: number; y: number; t: number; type: string; lx: number; ly: number } | null>(null);
+  const down = useRef<{ id: number; x: number; y: number; t: number; type: string; lx: number; ly: number; swipe?: boolean } | null>(null);
   const pointers = useRef(new Map<number, Vec>());
   const pinch = useRef<{ d0: number; s0: number; mid: Vec; cam0: Camera } | null>(null);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
@@ -122,6 +129,13 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   /** A tapped turn waiting (≤ 300 ms) for its pages to decode: which corner shows the progress arc. */
   const [gate, setGate] = useState<{ dir: 1 | -1 } | null>(null);
   const gateCancel = useRef<(() => void) | null>(null);
+  /**
+   * The flip whose swing has begun (its motion). Until then (the turn gate, the camera easing back from a zoom) its pages
+   * keep their idle roles: the page you are on stays, and the new one waits hidden while it decodes. It shows in the
+   * same commit that its swing class goes on (the layout effect below), so it never sits flat first.
+   */
+  const [swinging, setSwinging] = useState<unknown>(null);
+  const flipToStart = useRef<TurnEngine | null>(null);
   const cancelGate = () => {
     gateCancel.current?.();
     gateCancel.current = null;
@@ -214,6 +228,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   }, [views, state.view, plan, props.warmViews, geomAt]);
 
   const currentKeys = useMemo(() => geom1.slots.filter((s) => s.content.kind !== 'blank').map((s) => contentKey(s.content)), [geom1]);
+  /** The plan the layers follow: a flip that has not begun to swing (or was called back) leaves them as they were. */
+  const rolePlan = plan && plan.kind === 'flip' && swinging !== motion ? null : plan;
 
   useEffect(() => {
     props.onVisibleItems?.(views[state.view]?.items ?? []);
@@ -286,6 +302,10 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
     if (engine.current && engineMotion.current === motion) return;
     if (!ready) return; // Wait until manual zoom returns to the fit layout.
+    // A key pressed right after a zoom notch: the camera starts easing back to the whole page in this same commit
+    // (cameraIdle has not caught up yet). The page turns once it is there, never under a zoomed camera.
+    const cam = camera.current.current;
+    if (!state.zoom && !pinch.current && (Math.abs(cam.s - 1) > 1e-3 || Math.abs(cam.tx) > 0.5 || Math.abs(cam.ty) > 0.5)) return;
     cancelGate();
     if (engine.current) {
       engine.current.destroy();
@@ -336,6 +356,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         spineX,
         bookW: geom1.book.w,
         slotX,
+        // A spread flips as a pair around the target view's spine; a single page swings from its own spine edge.
+        flipSpineX: plan.kind === 'flip' && layout === 'spread' ? geomAt(plan.to).spineX : undefined,
         durationMs: durationFor(plan.kind, layout === 'spread', chained, tokens.current),
         grabY: motion.kind === 'drag' ? motion.grab.y : undefined,
         tokens: tokens.current
@@ -359,6 +381,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       const start = () => {
         if (engine.current !== eng) return;
         setGate(null);
+        if (plan.kind === 'flip') {
+          flipToStart.current = eng;
+          setSwinging(motion);
+          return;
+        }
         eng.startAuto();
         // The swish plays as the paper lifts (not when it lands).
         if (sound && !reduced) playPageTurn(plan.kind === 'board' ? 'heavy' : 'turn');
@@ -366,18 +393,29 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       // Never blank (reader.md §8.2): a tapped turn whose pages are not decoded yet waits up to 300 ms for
       // them (asked for at once, at top priority), then turns anyway onto the stand-in or the paper. A
       // chained turn (flipping fast) and a drag never wait.
+      // Past the gate it holds on (≤ NEVER_BLANK_MS in all) until each page has at least its stand-in (or, with none,
+      // the page): the turn — a flip above all, whose new page swings in — never lands on bare paper.
       const needs = chained ? [] : viewNeeds(plan.to);
       if (!needs.length) start();
       else {
         for (const n of needs) if (n.source?.url) void pageImageCache.ensure(n.source.path, n.source.url, 'now');
         let went = false;
-        const cancel = holdUntilDecoded(pageImageCache, needs.map((n) => n.alts), tokens.current.turnGate, () => {
+        let cancelArt: (() => void) | null = null;
+        const go = () => {
+          if (went) return;
           went = true;
           gateCancel.current = null;
           start();
+        };
+        const art = needs.map((n) => (n.standIn ? [...n.alts, n.standIn] : n.alts));
+        const cancelSharp = holdUntilDecoded(pageImageCache, needs.map((n) => n.alts), tokens.current.turnGate, () => {
+          if (!went) cancelArt = holdUntilDecoded(pageImageCache, art, Math.max(0, NEVER_BLANK_MS - tokens.current.turnGate), go);
         });
         if (!went) {
-          gateCancel.current = cancel;
+          gateCancel.current = () => {
+            cancelSharp();
+            cancelArt?.();
+          };
           setGate({ dir: plan.dir });
         }
       }
@@ -396,6 +434,17 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, motion, ready]);
+
+  // The flip's swing starts once its pages have their turn roles on screen (before the browser paints that commit).
+  useLayoutEffect(() => {
+    const eng = flipToStart.current;
+    if (!eng || swinging !== engineMotion.current) return;
+    flipToStart.current = null;
+    if (engine.current !== eng) return;
+    eng.startAuto();
+    if (sound && !reduced) playPageTurn('turn');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swinging]);
 
   useEffect(
     () => () => {
@@ -572,7 +621,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       return;
     }
     const dn = down.current;
-    if (!dn || dn.id !== e.pointerId) return;
+    if (!dn || dn.id !== e.pointerId || dn.swipe) return;
     const dx = e.clientX - dn.x;
     const dy = e.clientY - dn.y;
     // Zoomed: one finger pans.
@@ -588,6 +637,16 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     if (Math.abs(dy) > 1.4 * Math.abs(dx) || !canTurn()) {
       // Vertical intent (or not turnable): not a tap any more, not a turn.
       if (Math.abs(dy) > 1.4 * Math.abs(dx)) down.current = null;
+      return;
+    }
+    // The flip never follows a finger: the swipe turns the page when it is released (onPointerUp).
+    if (turnStyle === 'flip') {
+      dn.swipe = true;
+      try {
+        stageRef.current?.setPointerCapture?.(e.pointerId);
+      } catch {
+        /* capture unsupported */
+      }
       return;
     }
     // Horizontal: lift the leaf. Moving toward the backward edge turns forward.
@@ -653,6 +712,12 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     const dn = down.current;
     down.current = null;
     if (!dn || dn.id !== e.pointerId) return;
+    if (dn.swipe) {
+      // A flip swipe: one step that way (the reader's machine bumps at either end, and lands at once under reduced motion).
+      const delta = swipeDelta(e.clientX - dn.x, e.clientY - dn.y, rtl, FLIP_SWIPE_PX);
+      if (delta && !(state.zoom && state.zoom.s > 1.05)) props.onCommand({ type: 'step', delta });
+      return;
+    }
     if (Math.hypot(e.clientX - dn.x, e.clientY - dn.y) >= DRAG_SLOP || performance.now() - dn.t > 600) return;
     // Double-tap resets a zoomed page. Otherwise the outer zones turn and the middle toggles the HUD.
     const tap = { t: performance.now(), x: e.clientX, y: e.clientY };
@@ -872,7 +937,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
             const g = geomAt(m.view, L);
             const s = g.slots[m.slotIdx];
             if (!s) return null;
-            const role = roleOf(key, currentKeys, plan);
+            const role = roleOf(key, currentKeys, rolePlan);
             const visible = role !== 'hidden';
             const isCurrent = currentKeys.includes(key);
             const itemIndex = s.content.kind === 'item' ? s.content.index : -1;
@@ -914,7 +979,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
               />
             );
           })}
-          {plan && plan.kind !== 'slide' && plan.kind !== 'fade' && (
+          {plan && plan.kind !== 'slide' && plan.kind !== 'fade' && plan.kind !== 'flip' && (
             <PageLeaf
               key={`${plan.from}-${plan.to}-${plan.kind}`}
               refs={leafRefs}

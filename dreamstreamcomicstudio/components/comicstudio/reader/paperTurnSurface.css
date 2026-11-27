@@ -17,6 +17,8 @@
 }
 .paper-turn-surface[data-turning] > .paper-turn-face {
   background: var(--paper-turn-ground, var(--ds-surface));
+}
+.paper-turn-surface[data-turn-kind='paper'] > .paper-turn-face {
   will-change: clip-path;
 }
 .paper-turn-preview,
@@ -86,6 +88,27 @@
     padding: 0.75rem;
   }
 }
-.classic-paper-stage > .paper-turn-preview {
+/* The paper turn sizes its preview to the sheet's own box, so it drops the stage's padding. Slide and fade size theirs to
+   the whole stage, like the face, so they keep it and land at the face's size. */
+.classic-paper-stage[data-turn-kind='paper'] > .paper-turn-preview {
   padding: 0;
+}
+/* Flip (pageFlip.ts): the incoming page decodes out of sight, then the host shows it and it swings in from the spine. */
+.paper-turn-preview[data-decode] {
+  visibility: hidden;
+}
+/* Slide and fade: the incoming page comes in over the current one (a slide back slides the current page away over it).
+   Their start state is set here, so nothing flashes before the engine's first frame. */
+.paper-turn-surface[data-turn-kind='fade'] > .paper-turn-preview,
+.paper-turn-surface[data-turn-kind='slide'][data-turn-dir='1'] > .paper-turn-preview {
+  z-index: 3;
+}
+.paper-turn-surface[data-turn-kind='fade'] > .paper-turn-preview {
+  opacity: 0;
+}
+.paper-turn-surface[data-turn-kind='slide'][data-turn-dir='1'] > .paper-turn-preview {
+  transform: translate3d(100%, 0, 0);
+}
+.paper-turn-surface[data-turn-kind='slide'][data-turn-dir='1'][data-rtl] > .paper-turn-preview {
+  transform: translate3d(-100%, 0, 0);
 }

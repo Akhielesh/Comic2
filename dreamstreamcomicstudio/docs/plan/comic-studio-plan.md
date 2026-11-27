@@ -4,8 +4,8 @@ This is the living plan for Comic Studio's current programme of work. It is upda
 production (`Dreamstrream-v1`), so a new session can pick the work up from here. The repository is public: this page
 holds no keys, no security details and no one's personal data.
 
-Last updated: 2026-11-26, with the money release: runs that stop when a key runs out, a balance check before
-spending, your real balance, and one true price everywhere.
+Last updated: 2026-11-27, with the page flip release: the page swings in from the spine again, in every reader and
+for past comics.
 
 ## How work ships
 
@@ -38,23 +38,17 @@ spending, your real balance, and one true price everywhere.
 | #320 | This plan brought up to date; a timing-dependent test steadied. |
 | #321 | Studio Originals' artwork is protected from the publication cleanup (the database guard is applied). |
 | #322 | Every comic knows its stage (Story, Style, Plan, Draw, Publish) with a strip and a status line; My comics rebuilt with calm cards and the next step one tap away; one side panel everywhere; inside a comic, a parts tree, a breadcrumb and a stage map. Optional SQL to apply: `server/sql/comic_docs_listing.sql`. |
+| #323 | A drawing run stops at once when a key runs out of credit, with one card that says what to do; a balance check before any paid step; your own key's real balance in the header and Settings (a percent for people on DreamStream's allowance); one price from one price book on every surface; chained runs never close a newer question; thumbs up or down on the Director's replies. Optional SQL to apply: `server/sql/token_ledger_text_ops.sql`. |
 
-## In this release (money)
+## In this release (page flip)
 
 | Package | What the person sees |
 | --- | --- |
-| MA | A drawing run stops at once when a key runs out of credit, with one card that says what to do (top up or switch key); the comic's stage, My comics and the side panel all say "Top up or switch key". A balance check runs on the server before any paid step, with a "Not enough credit" card. The real balance of your own OpenRouter key shows in the studio header and Settings; people on DreamStream's allowance see a percent, never dollars. |
-| MB | One price, from one price book, on every surface: approvals, progress, the header, draw and redraw, and the Images workspace (which showed no price before). Planning, checks and translation are priced from what is really paid. |
-| FU | A chained or retried drawing run never closes a newer question; the "drawn" alert counts only real drawings; thumbs up or down on the Director's replies, with a comment shared only when you tick the box. |
+| fx-reader | The page flip is back as the default in every reader (the board's Read tab, public, shared and embed readers, Studio Originals, full screen, the classic reader for older comics, and the landing sample). Past comics need no change: a comic that never chose a style flips, and one that chose Paper, Slide or Fade keeps it. Readers can pick their own style; Reduce motion turns the page at once; a flip waits for the next picture so no turn is blank; webtoon pages open at the top; both readers count pages to the whole book. |
 
-Optional SQL to apply after this release: `server/sql/token_ledger_text_ops.sql` (an index that makes the text-rate
-read faster).
+No SQL in this release.
 
 ## Building now
-
-**The page flip, restored.** The page swings in from the spine again, as it did before #316, in every reader and for
-past comics; comics that chose Paper, Slide or Fade keep their choice. With it: the reader's own Reduce motion is
-honoured, webtoons open each page at the top, and no blank turn on small phones.
 
 **Handmade books.** A family photographs a child's handmade book. The child's real cover becomes the comic's cover,
 cleaned but never redrawn; the handwritten story is read (with the family checking every word), and the comic is drawn
@@ -62,9 +56,10 @@ in the child's own style with the child's own words. Private by default; shared 
 packages: pages from photos at no cost (NB-1), reading the book (NB-2), cast, look and storyboard from the child's art
 (NB-3), drawing page 1 first then the rest (NB-4), and private-by-default sharing (NB-5).
 
-**Customization (designing now).** Originals-grade custom page layouts members can generate; kid-simple creation with
-almost no questions and a Director that adapts its voice; strict style from uploaded drawings and use of library
-images; visual ways to customize beyond text; publishing with series, collections and magazine-style editions.
+**Customization (designed; builds next).** Eight releases, listed under Next, that take Comic Studio from one rigid
+layout and a long list of questions to comics made your way: custom page layouts, creation for young makers with almost
+no questions, art that follows your own drawings, visual direction beyond text, and publishing as series and
+magazine-style editions.
 
 **Fixes.** A sweep of the whole product found and independently confirmed over a hundred problems. The fixes release
 covers every serious one: the backend's ability to sleep, stopping a chat really stops its spending, money never shown
@@ -73,36 +68,37 @@ screen size from small phones to very wide screens.
 
 ## Next
 
-**Wave 2: the agent and Approve**
-- AG-ASK: questions from the agent look designed and readable, with clear structure and type.
-- AG-TALK: the agent can just talk (replies up to about 220 words) and refuses less.
-- AG-STOPS: far fewer stops. A new comic has one Approve before planning ("Plan and draw" or "Plan only first"), then
-  no further stop unless the plan grows. Small paid steps asked for directly start at once and say their cost; the
-  balance check still stops them.
-- AG-APPROVE, MN-6, MN-7, MN-8: one Approve card per request with the price once and what you have left; an old
-  approval is closed when a new request replaces it; the Director says the cost before it spends.
+The customization programme ships as eight releases, in this order, each one built from production after the one before
+it merges. Editions needs only releases 1 to 4, so it may build alongside 5 and 6. The earlier Wave 2 items (the
+agent and Approve; the Director sees and finishes; finish and feel) are placed inside these releases.
 
-Also in this release: work receipts (what the Director changed and why, with an Undo for each), and talking to the
-Director while it works.
+1. **A Director that talks your way and asks less.** One Approve before planning ("Plan and draw" or "Plan only
+   first"), then no further stop unless the plan grows; small paid steps asked for directly start at once and say their
+   cost. The Director can simply talk, adapts its voice to the person (a simpler voice for young makers), refuses less,
+   and asks at most one real question per reply, designed and readable, with a recommended answer and "You decide".
+   One Approve card per request with the price once; work receipts with an Undo for each change.
+2. **Make my comic in two taps.** A young maker's comic starts from a sentence or a drawing, picks a 4, 6 or 8 page
+   book, and gets a free storyboard read-through before anything is drawn. Read to me: free narration on the device in
+   every reader. A premiere when a book is finished, with the next steps. Young makers share with a family link by
+   default.
+3. **Your drawings lead.** Uploaded drawings are read for their style, and "Exactly like mine" holds the comic to it,
+   pausing after page 1 if the style missed. A drawing tray, figures from your drawings, looks from your own earlier
+   comics, and Studio Original looks as a starting point.
+4. **Originals-grade layouts.** Fixing one panel without redrawing the page. Page designs like the Studio Originals
+   (splashes, insets, wide and tall frames), chosen per page so no two pages in a row look the same; a Picture book
+   design for young makers. Existing comics keep their layout.
+5. **Direct it with pictures.** A Panel sheet to change a panel by pointing at it, sound words and effects by tap or by
+   asking, and the Director looks at the art when asked.
+6. **Point, sketch and pose.** One motion and haptics grammar, then sketching over a panel and posing figures to guide
+   a redraw.
+7. **Publishing and editions.** Series and collections, issue and set covers with lettered titles, magazine-style
+   editions, a keepsake print edition (handmade books included), and scheduled releases.
+8. **Studio reach.** Talking to the Director while it works, picking a running turn back up after a reload or a
+   crash, a Director dock in the thumb zone on phones, a first-comic coach, and Chat and Comic Studio as one.
 
-**The Director sees and finishes**
-- Picking a running turn back up after a reload or a crash.
-- A free storyboard read-through before anything is drawn.
-- Fixing one panel without redrawing the page.
-- The Director looks at the art when asked, plus a free whole-comic review screen.
-- A Director dock in the thumb zone on phones.
-- Chat and Comic Studio as one: Chat knows the comic you are in and can turn an idea into a comic.
+**After the customization releases**
 
-**Finish and feel**
-- One motion and haptics grammar.
-- A first-comic coach.
-- A premiere when a book is finished, with the next steps.
-- Read to me: free narration on the device in every reader.
-- Sound words and effects by tap or by asking.
-
-**Wave 3**
-- Pages: the Director picks each page's shape from its beats (a splash, one to seven panels, wide, tall or inset),
-  and no two pages in a row look the same; a "Your book" plan card with a shape picker; a better board.
+- Pages: a "Your book" plan card with a shape picker for each page, and a better board.
 - Components that chain: each page card's footer always shows the next step; balloon and panel actions one tap away;
   a calmer editor.
 - Models: clearer model choice in Settings and a smaller picker in Chat; new comics start on Nano Banana 2.1.
@@ -111,7 +107,7 @@ Director while it works.
 - Thinking: one live line while working, then two or three sentences of what was done and why, with detail on tap.
 - Typing help: fixes after a pause, "fixed N words · Undo", free and with no AI call; on by default on desktop.
 - Comic Studio alerts (a reply, a question, a plan waiting, a drawing run that finished), live status in the panel,
-  re-attaching to a running turn after a reload, and the free whole-comic review with its own screen.
+  and the free whole-comic review with its own screen.
 
 ## Known follow-ups
 

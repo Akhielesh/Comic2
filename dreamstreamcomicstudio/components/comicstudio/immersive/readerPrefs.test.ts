@@ -2,7 +2,8 @@
 // validated; the creator's settings are overridden locally; resume is offered only when useful; the
 // Page and language URL params round-trip, including when older links specify Guided View.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_READER } from '../../../shared/comic/doc';
+import { DEFAULT_READER, PAGE_TURN_STYLES } from '../../../shared/comic/doc';
+import { STORED_TURN_STYLES, readReduceMotionPref, readTurnPick } from './readerMotionPref';
 import {
   DEFAULT_PREFS,
   effectiveReader,
@@ -15,6 +16,7 @@ import {
   readPrefs,
   sanitizePrefs,
   shouldOfferResume,
+  turnStyleFor,
   writeLayoutPref,
   writePosition,
   writePrefs
@@ -67,10 +69,70 @@ describe('prefs', () => {
 
   it('viewer prefs override the creator; paper texture is off for webtoons and strips', () => {
     const creator = { ...DEFAULT_READER, turn: 'fade' as const, paperTexture: true };
-    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'paper', paper: true, ambient: true });
+    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'fade', paper: true, ambient: true });
     expect(effectiveReader(creator, { ...DEFAULT_PREFS, turn: 'paper', paper: 'off', ambient: 'off' }, 'manga')).toMatchObject({ turn: 'paper', paper: false, ambient: false });
     expect(effectiveReader(creator, DEFAULT_PREFS, 'webtoon').paper).toBe(false);
-    expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'paper', paper: false });
+    expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'flip', paper: false });
+  });
+
+  it('the turn style: the reader’s explicit choice, then the creator’s, then the flip', () => {
+    const legacy = { ...DEFAULT_READER, turn: 'paper' as const }; // every comic saved before the flip came back
+    const chose = (turn: 'flip' | 'paper' | 'slide' | 'fade') => ({ ...DEFAULT_READER, turn, turnChosen: true as const });
+    // No choice anywhere: the flip, whatever the comic stored as the old default.
+    expect(turnStyleFor(undefined, 'auto')).toBe('flip');
+    expect(turnStyleFor(DEFAULT_READER, 'auto')).toBe('flip');
+    expect(turnStyleFor(legacy, 'auto')).toBe('flip');
+    // The creator's choice.
+    expect(turnStyleFor(chose('paper'), 'auto')).toBe('paper');
+    expect(turnStyleFor({ ...DEFAULT_READER, turn: 'slide' }, 'auto')).toBe('slide');
+    expect(turnStyleFor({ ...DEFAULT_READER, turn: 'fade' }, 'auto')).toBe('fade');
+    // The reader's own choice wins over both.
+    for (const turn of ['flip', 'paper', 'slide', 'fade'] as const) {
+      expect(turnStyleFor(chose('slide'), turn)).toBe(turn);
+      expect(effectiveReader(legacy, { ...DEFAULT_PREFS, turn }, 'comic').turn).toBe(turn);
+    }
+  });
+
+  it('a stored paper without the reader’s mark (#316’s Reading mode switch wrote it) follows the creator, else the flip', () => {
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"paper","fancyTurns":"auto","sound":true}');
+    const legacy = readPrefs();
+    expect(legacy).toEqual({ ...DEFAULT_PREFS, sound: true });
+    expect(effectiveReader(DEFAULT_READER, legacy, 'comic').turn).toBe('flip');
+    expect(effectiveReader({ ...DEFAULT_READER, turn: 'slide' }, legacy, 'comic').turn).toBe('slide');
+    expect(effectiveReader({ ...DEFAULT_READER, turn: 'paper', turnChosen: true }, legacy, 'comic').turn).toBe('paper');
+    // Picked in "Page turn style" (marked): the reader's paper wins, and the mark survives a round trip.
+    writePrefs({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true });
+    expect(readPrefs()).toEqual({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true });
+    expect(effectiveReader(DEFAULT_READER, readPrefs(), 'comic').turn).toBe('paper');
+    // Slide and fade could only ever be picked: kept without the mark. Back to 'auto', the mark goes.
+    expect(sanitizePrefs({ turn: 'fade' }).turn).toBe('fade');
+    expect(sanitizePrefs({ turn: 'auto', turnPicked: true })).toEqual(DEFAULT_PREFS);
+  });
+
+  it('keeps a stored flip preference and maps anything unknown to auto', () => {
+    expect(sanitizePrefs({ turn: 'flip' }).turn).toBe('flip');
+    expect(sanitizePrefs({ turn: 'curl' }).turn).toBe('auto');
+    expect(sanitizePrefs({}).turn).toBe('auto');
+  });
+
+  it('the landing sample reads the same pick and Reduce motion on its own (readerMotionPref), by the same rule', () => {
+    // The light reader keeps its own copy of the four names: the same list, in the same order.
+    expect(STORED_TURN_STYLES).toEqual([...PAGE_TURN_STYLES]);
+    expect(readTurnPick()).toBeUndefined();
+    expect(readReduceMotionPref()).toBe(false);
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"paper","fancyTurns":"auto"}');
+    expect(readTurnPick(), 'an unmarked paper was never a pick').toBeUndefined();
+    writePrefs({ ...DEFAULT_PREFS, turn: 'paper', turnPicked: true, reduceMotion: true });
+    expect(readTurnPick()).toBe('paper');
+    expect(readReduceMotionPref()).toBe(true);
+    for (const turn of ['flip', 'slide', 'fade'] as const) {
+      writePrefs({ ...DEFAULT_PREFS, turn });
+      expect(readTurnPick()).toBe(turn);
+      expect(readTurnPick()).toBe(readPrefs().turn);
+    }
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"curl"');
+    expect(readTurnPick(), 'junk storage reads as no pick').toBeUndefined();
+    expect(readReduceMotionPref()).toBe(false);
   });
 });
 

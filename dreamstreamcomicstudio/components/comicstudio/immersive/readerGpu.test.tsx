@@ -201,8 +201,8 @@ describe('loading states are still paper, never a shimmer (transform / opacity o
   }, 20_000);
 });
 
-describe('the turn gate (reader.md §8.2): a tapped turn waits for its pages, at most 300 ms', () => {
-  it('pages not decoded → the progress arc shows, then the turn goes anyway; a blank landing is counted', async () => {
+describe('the turn gate (reader.md §8.2): a tapped turn waits ≤ 300 ms for its pages, then ≤ 1.8 s in all for at least a stand-in', () => {
+  it('nothing ever arrives → the progress arc shows, then the turn goes anyway; a blank landing is counted', async () => {
     hang = true; // nothing ever arrives
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
     const blanks = blankTurnCount();
@@ -212,6 +212,72 @@ describe('the turn gate (reader.md §8.2): a tapped turn waits for its pages, at
     await waitFor(() => expect(screen.queryByTestId('turn-gate')).toBeNull(), { timeout: 3000 });
     await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 8000 });
     expect(blankTurnCount()).toBe(blanks + 1);
+  }, 20_000);
+
+  it('a flip held at the gate keeps the page you are on: the new page waits hidden, then shows and swings in one commit', async () => {
+    hang = true; // nothing ever arrives
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    const slot = (key: string) => root().querySelector(`[data-slot="${key}"]`) as HTMLElement;
+    press('ArrowRight');
+    expect(screen.getByTestId('turn-gate')).toBeInTheDocument();
+    // Held: the cover stays on screen, page 1 is mounted (decoding) but hidden, and nothing swings yet.
+    expect(slot('i0').getAttribute('data-visible')).toBe('true');
+    expect(slot('i1').getAttribute('data-visible')).toBe('false');
+    expect(slot('i1').className).not.toMatch(/animate-page-flip/);
+    await act(async () => void (await new Promise((r) => setTimeout(r, 700))));
+    expect(screen.getByTestId('turn-gate')).toBeInTheDocument();
+    expect(slot('i0').getAttribute('data-visible')).toBe('true');
+    expect(slot('i1').getAttribute('data-visible')).toBe('false');
+    // The gate lets go: page 1 is visible exactly when its swing class is on, and the cover hides.
+    await waitFor(() => expect(screen.queryByTestId('turn-gate')).toBeNull(), { timeout: 3000 });
+    expect(slot('i1').getAttribute('data-visible')).toBe('true');
+    expect(slot('i1').className).toMatch(/animate-page-flip-next/);
+    expect(slot('i0').getAttribute('data-visible')).toBe('false');
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 8000 });
+  }, 20_000);
+
+  it('a flip called back while it is held never shows the new page', async () => {
+    hang = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    const slot = (key: string) => root().querySelector(`[data-slot="${key}"]`) as HTMLElement;
+    const here = counter();
+    press('ArrowRight');
+    expect(screen.getByTestId('turn-gate')).toBeInTheDocument();
+    press('ArrowLeft');
+    await waitFor(() => expect(screen.queryByTestId('turn-gate')).toBeNull());
+    expect(counter()).toBe(here);
+    const visible = [...root().querySelectorAll('[data-slot][data-visible="true"]')].map((el) => el.getAttribute('data-slot'));
+    expect(visible).toEqual(['i1']);
+    expect(slot('i1').className).not.toMatch(/animate-page-flip/);
+  }, 20_000);
+
+  it('the page is slow but its stand-in arrives after the 300 ms gate: the turn holds for it and lands on art (no blank turn)', async () => {
+    // Page 1 itself never arrives; its stand-in takes 900 ms; everything else is quick.
+    const ok = () => new Response(new Uint8Array(16), { status: 200 });
+    let standIn = 0;
+    vi.stubGlobal('fetch', vi.fn((url: RequestInfo | URL) => new Promise<Response>((resolve) => {
+      const u = String(url);
+      if (u.includes('p1_w480')) {
+        standIn += 1;
+        setTimeout(() => resolve(ok()), 900);
+      } else if (u.includes('/u/p1')) hanging.push(resolve);
+      else resolve(ok());
+    })));
+    // A 2× phone screen: the page shows its 1080 px variant, and the 480 px one is its stand-in.
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+    render(<ImmersiveReader doc={variantDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    const blanks = blankTurnCount();
+    press('ArrowRight');
+    expect(screen.getByTestId('turn-gate')).toBeInTheDocument();
+    await act(async () => void (await new Promise((r) => setTimeout(r, 700))));
+    // Past the 300 ms gate, still holding: the page would land on bare paper.
+    expect(screen.getByTestId('turn-gate')).toBeInTheDocument();
+    expect(counter()).toBe('Cover');
+    expect(standIn).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.queryByTestId('turn-gate')).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 8000 });
+    expect(blankTurnCount()).toBe(blanks);
+    Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
   }, 20_000);
 
   it('pages already decoded → no wait, no arc', async () => {

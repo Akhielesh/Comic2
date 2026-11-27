@@ -7,7 +7,7 @@
 // throttled-network LCP would measure the harness, not the reader route.)
 
 import { test, expect } from './helpers/harness';
-import { LAYOUT_KEY } from '../../components/comicstudio/immersive/readerPrefs';
+import { LAYOUT_KEY, PREFS_KEY } from '../../components/comicstudio/immersive/readerPrefs';
 
 test.describe('performance on a mid-range phone', () => {
   // Frame timing is sensitive to whatever else the runner is doing; a real regression fails every attempt.
@@ -39,6 +39,10 @@ test.describe('performance on a mid-range phone', () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    // The frame log is the turn engine's own rAF loop, which the paper turn runs. The default style is the page flip,
+    // a CSS swing with no per-frame JS to sample, so this reader picks Paper in their settings first, as a reader can
+    // (readerPrefs: a picked 'paper' carries turnPicked). The flip landing on a throttled phone is reader.turns.spec.ts.
+    await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ turn: 'paper', turnPicked: true })), PREFS_KEY);
     await qa.open({ surface: 'reader', fixture: 'heist-12p', page: 2, still: false }, { settle: 900 });
     await page.locator('[data-testid="immersive-reader"]').focus();
     // Forward through paper turns and spreads, then back (board turns at the cover end).
